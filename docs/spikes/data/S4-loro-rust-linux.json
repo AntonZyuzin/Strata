@@ -1,0 +1,117 @@
+{
+  "convergence": {
+    "converged": true,
+    "elapsed_ms": 383.293147,
+    "ops": 10000,
+    "replicas": 3,
+    "rounds": 200,
+    "state_hash": "3ac2f43c5b623563acfd759ddffa686fbfdfa46d1310cb8cbe966ab5f645c744"
+  },
+  "engine": "loro (Rust crate)",
+  "host": {
+    "arch": "x86_64",
+    "cpus": 4,
+    "os": "linux"
+  },
+  "index": [
+    {
+      "build_ms": 187.812965,
+      "field_edit_ms": {
+        "max": 6.598915000000001,
+        "p50": 0.0029349999999999997,
+        "p95": 0.003801
+      },
+      "import_ms": 7.0612,
+      "import_rss_delta_mib_in_process": 6.171875,
+      "memory_fresh_process": {
+        "entries_read": 73044,
+        "import_ms": 6.929704,
+        "materialise_fields_ms": 43.138412,
+        "rss_after_import_mib": 17.76171875,
+        "rss_after_read_mib": 43.203125,
+        "rss_base_mib": 8.70703125,
+        "rss_index_mib": 34.49609375,
+        "shards": 1
+      },
+      "names_read": 10000,
+      "nodes": 10000,
+      "read_all_names_ms": 6.272657,
+      "shallow_snapshot_bytes": 4342210,
+      "shards": 1,
+      "snapshot_bytes": 6469265,
+      "snapshot_bytes_per_node": 646.9265
+    },
+    {
+      "build_ms": 3416.216901,
+      "field_edit_ms": {
+        "max": 72.413773,
+        "p50": 0.002989,
+        "p95": 0.004775
+      },
+      "import_ms": 42.916111,
+      "import_rss_delta_mib_in_process": 0.0,
+      "memory_fresh_process": {
+        "entries_read": 730791,
+        "import_ms": 71.50724699999999,
+        "materialise_fields_ms": 637.080194,
+        "rss_after_import_mib": 134.69140625,
+        "rss_after_read_mib": 333.92578125,
+        "rss_base_mib": 67.22265625,
+        "rss_index_mib": 266.703125,
+        "shards": 1
+      },
+      "names_read": 100000,
+      "nodes": 100000,
+      "read_all_names_ms": 72.771411,
+      "shallow_snapshot_bytes": 46016002,
+      "shards": 1,
+      "snapshot_bytes": 67778038,
+      "snapshot_bytes_per_node": 677.78038
+    },
+    {
+      "build_ms": 2956.300534,
+      "field_edit_ms": {
+        "max": 4.48094,
+        "p50": 0.002618,
+        "p95": 0.007202
+      },
+      "import_ms": 54.050666,
+      "import_rss_delta_mib_in_process": 5.3203125,
+      "memory_fresh_process": {
+        "entries_read": 730791,
+        "import_ms": 91.420861,
+        "materialise_fields_ms": 497.249339,
+        "rss_after_import_mib": 138.5625,
+        "rss_after_read_mib": 342.62109375,
+        "rss_base_mib": 67.0234375,
+        "rss_index_mib": 275.59765625,
+        "shards": 16
+      },
+      "names_read": 100000,
+      "nodes": 100000,
+      "read_all_names_ms": 59.22126,
+      "shallow_snapshot_bytes": 45570092,
+      "shards": 16,
+      "snapshot_bytes": 67569350,
+      "snapshot_bytes_per_node": 675.6935
+    }
+  ],
+  "interop_from_wasm": {
+    "hash_equal": true,
+    "imported": true,
+    "js_hash": "859148234ad362eedc55f92f6c5cd05d111d0cc81e1807c6acabb5fa1f92f5a9",
+    "js_snapshot_found": true,
+    "rust_hash": "859148234ad362eedc55f92f6c5cd05d111d0cc81e1807c6acabb5fa1f92f5a9"
+  },
+  "spike": "4-loro",
+  "text": {
+    "bytes": 1000000,
+    "insert_1mb_ms": 5.2991150000000005,
+    "keystroke_ms": {
+      "max": 0.507522,
+      "p50": 0.003123,
+      "p95": 0.020729
+    },
+    "snapshot_bytes": 28996
+  }
+}

@@ -1,0 +1,83 @@
+{
+  "spike": "4-loro",
+  "engine": "loro-crdt (WASM) in Node",
+  "node": "v22.22.0",
+  "interop_from_rust": {
+    "rust_snapshot_found": true,
+    "hash_equal": true,
+    "wasm_hash": "766e90f2a5911b310ca86865cf3e28ab308ed765c8b2e492c930cadc35925c1e",
+    "rust_hash": "766e90f2a5911b310ca86865cf3e28ab308ed765c8b2e492c930cadc35925c1e"
+  },
+  "wrote_for_rust": {
+    "written": true,
+    "nodes": 1000
+  },
+  "index": [
+    {
+      "dir": "rust-index-10000-k1",
+      "shards": 1,
+      "snapshot_mib": 6.2,
+      "import_ms": 7.330510000000004,
+      "names": 10000,
+      "count_names_ms": 8.434693999999809,
+      "materialise_fields_ms": 153.85925399999974,
+      "entries": 73044,
+      "rss_after_import_mib": 153.4,
+      "rss_index_after_import_mib": 0.9,
+      "rss_after_read_mib": 158.3,
+      "rss_index_after_read_mib": 5.7,
+      "field_edit_ms": {
+        "p50": 0.007241000000249187,
+        "p95": 0.011014000000159285,
+        "max": 11.026625999999851
+      }
+    },
+    {
+      "dir": "rust-index-100000-k1",
+      "shards": 1,
+      "snapshot_mib": 64.6,
+      "import_ms": 121.80248800000027,
+      "names": 100000,
+      "count_names_ms": 125.97956999999997,
+      "materialise_fields_ms": 2141.41852,
+      "entries": 730791,
+      "rss_after_import_mib": 348,
+      "rss_index_after_import_mib": 125.3,
+      "rss_after_read_mib": 396.2,
+      "rss_index_after_read_mib": 173.4,
+      "field_edit_ms": {
+        "p50": 0.00847299999986717,
+        "p95": 0.011619999999311403,
+        "max": 115.66854899999998
+      }
+    },
+    {
+      "dir": "rust-index-100000-k16",
+      "shards": 16,
+      "snapshot_mib": 64.4,
+      "import_ms": 91.57708100000036,
+      "names": 100000,
+      "count_names_ms": 68.79175200000009,
+      "materialise_fields_ms": 1311.8232869999993,
+      "entries": 730791,
+      "rss_after_import_mib": 447.1,
+      "rss_index_after_import_mib": 47.8,
+      "rss_after_read_mib": 501.2,
+      "rss_index_after_read_mib": 101.8,
+      "field_edit_ms": {
+        "p50": 0.009186000000227068,
+        "p95": 0.025140000000646978,
+        "max": 5.614493000000039
+      }
+    }
+  ],
+  "text": {
+    "chars": 1000025,
+    "insert_1mb_ms": 19.494431000000077,
+    "keystroke_ms": {
+      "p50": 0.010334000000511878,
+      "p95": 0.026217999999971653,
+      "max": 5.848440000000664
+    }
+  }
+}

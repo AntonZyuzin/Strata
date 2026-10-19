@@ -1,0 +1,16 @@
+[package]
+name = "spike-loro-index"
+description = "Spike 4 (ADR-0003): Loro index documents — size, import time, memory, convergence, Rust↔WASM format"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+loro = "1.16"
+serde_json.workspace = true
+sha2.workspace = true
+strata-model.workspace = true
+
+[lints]
+workspace = true

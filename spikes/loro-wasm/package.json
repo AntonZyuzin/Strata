@@ -1,0 +1,12 @@
+{
+  "name": "@strata/spike-loro-wasm",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "bench": "node --expose-gc bench.mjs ../../bench-results/loro"
+  },
+  "dependencies": {
+    "loro-crdt": "1.16.4"
+  }
+}

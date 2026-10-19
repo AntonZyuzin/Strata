@@ -5,9 +5,11 @@ members = [
     "crates/strata-core",
     "crates/strata-cli",
     "crates/strata-desktop",
+    "spikes/loro-index",
 ]
 # strata-desktop needs WebView system libraries (WebKitGTK on Linux);
-# it is built by CI on macOS, Windows and Linux runners.
+# it is built by CI on macOS, Windows and Linux runners. Spikes are run by hand
+# and report into docs/spikes/.
 default-members = [
     "crates/strata-model",
     "crates/strata-core",

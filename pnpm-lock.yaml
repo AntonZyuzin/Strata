@@ -79,6 +79,12 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(vite@8.3.4)
 
+  spikes/loro-wasm:
+    dependencies:
+      loro-crdt:
+        specifier: 1.16.4
+        version: 1.16.4
+
 packages:
 
   '@biomejs/biome@2.5.15':
@@ -590,6 +596,9 @@ packages:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
 
+  loro-crdt@1.16.4:
+    resolution: {integrity: sha512-UPufMpHSEMLRVjWfCjhVbOD8nkCDwxdfVk4Uer6xTEFAcNn+X+oGYWGgIIYuAgofc8UiI0ERZUIMnP7ib/kh6w==}
+
   magic-string@1.4.3:
     resolution: {integrity: sha512-z12OxmaPGE0F4xlpGdjuAUckipLpQlTAuAmyGhNoD7ODpYUzvDfvtxUbjM/jwznyP178oju/KDdyi220wNJ0RQ==}
 
@@ -1051,6 +1060,8 @@ snapshots:
       lightningcss-linux-x64-musl: 1.33.0
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
+
+  loro-crdt@1.16.4: {}
 
   magic-string@1.4.3:
     dependencies:

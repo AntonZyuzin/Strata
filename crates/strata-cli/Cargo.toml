@@ -1,0 +1,21 @@
+[package]
+name = "strata-cli"
+description = "The strata command: server, headless core, MCP launcher, diagnostics"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "strata"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+strata-core.workspace = true
+strata-model.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,8 @@
+{
+  "name": "@strata/desktop",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.3"
+  }
+}

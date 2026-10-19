@@ -1,0 +1,24 @@
+{
+  "name": "strata",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @strata/ui dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "desktop:dev": "pnpm --dir crates/strata-desktop exec tauri dev",
+    "desktop:build": "pnpm --dir crates/strata-desktop exec tauri build"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@tauri-apps/cli": "2.12.3",
+    "typescript": "7.0.2"
+  }
+}

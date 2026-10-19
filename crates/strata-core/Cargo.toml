@@ -1,0 +1,15 @@
+[package]
+name = "strata-core"
+description = "Strata core: domain operations, invariants, storage, projection"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+strata-model.workspace = true
+
+[lints]
+workspace = true

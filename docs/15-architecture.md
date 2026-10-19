@@ -53,8 +53,8 @@ flowchart TB
   end
   BE -->|"TauriBackend: invoke, channels,<br/>ipc::Response"| CORE
   BE -->|"RemoteBackend: HTTPS + WSS"| SCORE
-  CORE <-->|"WSS /sync, этап 3"| SCORE
-  LAU["strata mcp (stdio)"] -->|"сокет 0600 + токен"| CORE
+  CORE <-->|"WSS /sync, этап 2–3"| SCORE
+  LAU["strata mcp (stdio), MVP+ 1.1"] -->|"сокет 0600 + токен"| CORE
   AGT["Claude Code, Codex,<br/>Claude Desktop, Cursor"] --> LAU
   AGT -.->|"HTTPS + токен, этап 3"| SCORE
 ```
@@ -99,13 +99,13 @@ flowchart LR
 | Доски | Excalidraw, закреплённый снапшот `next` | 0.18.0-43a92e6, MIT | [R5](research/R5-board-engine.md) | [0006](adr/0006-board-engine.md) |
 | CRDT | Loro: crate в ядре, `loro-crdt` (WASM) в UI; `loro-codemirror` | 1.16.x, MIT; 0.3.3 | [R3](research/R3-crdt-sync.md) §4, §8 | [0003](adr/0003-sync-engine.md) |
 | Хранилище и проекция | SQLite через rusqlite (`bundled`) | 0.40.2, MIT | [R4](research/R4-app-shell-rendering.md) §7 | [0003](adr/0003-sync-engine.md) |
-| Полнотекст | tantivy, русский стеммер | 0.26.2, MIT | [R4](research/R4-app-shell-rendering.md) §7 | — |
+| Полнотекст (MVP+ 1.1, [16](16-roadmap.md) §5.2) | tantivy, русский стеммер | 0.26.2, MIT | [R4](research/R4-app-shell-rendering.md) §7 | — |
 | Вотчер (зеркало, этап 2) | notify + notify-debouncer-full | 8.2.0 CC0-1.0; 0.7.0 | [R4](research/R4-app-shell-rendering.md) §7 | — |
-| MCP | rmcp, ревизии `2025-11-25` и `2026-07-28` | 3.5.1, Apache-2.0 | [R6](research/R6-mcp-ai.md) §1.6 | [0008](adr/0008-mcp-architecture.md) |
+| MCP (MVP+ 1.1) | rmcp, ревизии `2025-11-25` и `2026-07-28` | 3.5.1, Apache-2.0 | [R6](research/R6-mcp-ai.md) §1.6 | [0008](adr/0008-mcp-architecture.md) |
 | Сервер | axum на tokio + серверная часть `loro-protocol` | версии не проверялись | [R3](research/R3-crdt-sync.md) рек. §8, [11](11-server-selfhost.md) §2 | [0003](adr/0003-sync-engine.md) |
 | AI (этап 2) | fastembed, sqlite-vec; LLM — свой трейт поверх `genai` | 7.1.1 Apache-2.0; 0.1.9 MIT OR Apache-2.0; 0.6.5 MIT OR Apache-2.0 | [R6](research/R6-mcp-ai.md) §5 | [0008](adr/0008-mcp-architecture.md) |
 | Картинки и иконки | DOMPurify, `@thi.ng/pixel-dither`, `stackblur-canvas` в воркере | 3.4.17 MPL-2.0 OR Apache-2.0; Apache-2.0; 3.0.1 MIT | [R7](research/R7-retro-design-assets.md) §4–5, [07](07-design-system.md) §6–7 | — |
-| Текст на Сцене | BitmapText Pixi (пиксельный, экранный), MSDF-атласы `msdf-atlas-gen` (мировой) | MIT | [R4](research/R4-app-shell-rendering.md) §2.7 | [0005](adr/0005-rendering.md) |
+| Текст на Сцене | Подписи баблов, нитей и бейджи — пиксельный `BitmapText` Pixi в экранном пространстве с округлением позиции до физического пикселя ([07](07-design-system.md) §3.4); MSDF-атласы `msdf-atlas-gen` — для мирового текста (стикеры, заголовки рамок) и всех подписей в режиме читаемости | MIT | [R4](research/R4-app-shell-rendering.md) §2.7, [07](07-design-system.md) §3.4 | [0005](adr/0005-rendering.md) |
 
 ### 1.4. Принципы
 
@@ -163,13 +163,13 @@ strata/
 
 | Крейт | Отвечает за | Зависит от | Цели |
 |---|---|---|---|
-| `strata-model` | ID (UUIDv7), `NodeKind`, поля, `DomainOp`, `Changeset`, форматы выписок | — | native, wasm32 |
+| `strata-model` | ID (UUIDv7, текстовая форма — 05 §4.1), `NodeKind`, поля, `DomainOp`, `Changeset` (структура и откат — [10](10-storage-sync-collab.md) §9.1, §9.3), форматы выписок | — | native, wasm32 |
 | `strata-core` | Доменные операции и инварианты; `DocEngine` над Loro; `store.sqlite`, `projection.sqlite`, tantivy; ассеты; журнал и откат наборов; актор пространства; компактирование, перешардирование, миграции, сверка ([10](10-storage-sync-collab.md)) | model, markdown, search, layout | native |
-| `strata-markdown` | Извлечение `[[ссылок]]`, embed, тегов, свойств, задач из Markdown для нитей с происхождением `text` и импорта. Rust-библиотека разбора не выбиралась (не исследовалось) | model | native |
+| `strata-markdown` | Извлечение `[[ссылок]]`, embed, тегов, свойств, задач из Markdown для нитей с происхождением `text` и импорта. Rust-библиотеки разбора Markdown и YAML не выбирались (не исследовалось): выбор — спайк 11 (§2.6, §7) | model | native |
 | `strata-search` | Нормализация, ступени сопоставления, ранжирование ([09](09-search-navigation.md) §2) | model | native, wasm32 |
 | `strata-layout` | Слоистый DAG, радиальное дерево, силовая раскладка с ограничениями, раздвигание соседей ([06](06-canvas-ux.md) §9) | model | native, wasm32 |
 | `strata-sync` | Фреймы [10](10-storage-sync-collab.md) §8.1 поверх `loro-protocol`; клиент реплики; серверный ретранслятор | core | native |
-| `strata-interop` | Импорт Obsidian, JSON Canvas, `.excalidraw.md` (LZString — `lz-string` под MIT, [R2](research/R2-obsidian-format.md)); экспорт; зеркало ([13](13-interop.md)) | core, markdown, layout | native |
+| `strata-interop` | Импорт Obsidian, JSON Canvas, `.excalidraw.md` (сжатие — формат JS-библиотеки `lz-string` 1.5.0, MIT, [R2](research/R2-obsidian-format.md); Rust-крейт — спайк 11, §2.6); экспорт (MVP+ 1.2); зеркало (этап 2) ([13](13-interop.md)) | core, markdown, layout | native |
 | `strata-mcp` | rmcp, две ревизии; слои ToolRouter → Policy → DomainOps → ResponseFormatter ([12](12-mcp-ai.md) §2.4); IPC-сервер | core | native |
 | `strata-ai` | Этап 2: fastembed, `VectorIndex` на sqlite-vec, `LlmProvider`, `ImageProvider` ([12](12-mcp-ai.md) §8–10) | core | native |
 | `strata-server` | HTTP и WebSocket, аккаунты, сессии, роли, токены, `server.sqlite`, акторы пространств ([11](11-server-selfhost.md)) | core, sync, mcp, ai | native |
@@ -233,7 +233,7 @@ flowchart BT
 | `extract(kind, sinceSeq)` | `invoke` → `tauri::ipc::Response` с ArrayBuffer ([R4](research/R4-app-shell-rendering.md) §1.4) | HTTPS `GET /api/v1/extract/{kind}` → ArrayBuffer |
 | `networkView(net)` | `invoke` → ArrayBuffer | HTTPS + комната `net/*` |
 | `openDoc(doc)` | `DocHandle`: `LoroDoc` в WASM + комната через канал Tauri | `DocHandle` + комната по WSS |
-| `presence` | Канал Tauri (локально — только свои окна и агенты) | Комната `eph` |
+| `presence` | Канал Tauri (локально — только свои окна и агенты) | Эфемерные комнаты `loro-protocol`: `ws/{ws}/eph` и `ws/{ws}/eph/{nodeId}` ([10](10-storage-sync-collab.md) §8.3); свой фрейм `eph` — резерв ([10](10-storage-sync-collab.md) §8.1) |
 | `assets` | Свой протокол Tauri или ArrayBuffer → `blob:` URL — выбор в спайке 1 | HTTPS, ассеты по хешу |
 | `status` | Канал Tauri | Состояние сокета и очереди |
 
@@ -277,9 +277,10 @@ interface SceneStore {
 | Хранилище ключей ОС ([11](11-server-selfhost.md) §6.2, [12](12-mcp-ai.md) §8.6) | Трейт `SecretStore`, реализация — крейт `keyring` | Keychain, Credential Manager, Secret Service ([R6](research/R6-mcp-ai.md) §5.6) | Версия и лицензия `keyring`, работа Secret Service под Hyprland. Запасной путь — файл с правами 0600 и предупреждением |
 | LLM-клиент, этап 2 ([12](12-mcp-ai.md) §8.5) | Трейт `LlmProvider`, первая реализация на `genai` 0.6.5 (MIT OR Apache-2.0, мультипровайдер, [R6](research/R6-mcp-ai.md) §5.6) | Один клиент на Anthropic и OpenAI | Поддержка Ollama в `genai`; запасной — прямой HTTP к Ollama. `ollama-rs` не берём: лицензия «non-standard» |
 | S3, этап 3 ([11](11-server-selfhost.md) §3.3) | Трейт `AssetBackend`; в v1 — диск | Выбор клиента не нужен до этапа 3 | Клиентские библиотеки S3 не исследовались |
-| Глубокие ссылки `strata://`, один экземпляр приложения ([09](09-search-navigation.md) §5.4) | Механизмы Tauri | — | Не проверено; пункт спайка 1 |
+| Глубокие ссылки `strata://` (MVP+ 1.4), один экземпляр приложения ([09](09-search-navigation.md) §5.4) | Механизмы Tauri | — | Не проверено; пункт спайка 1 |
 | Типы TS из Rust | Генерация из `strata-model` | Один источник типов для `Backend` и выписок | Кандидаты `ts-rs` и `specta` не проверялись |
-| Просмотр PDF и видео | — | — | Не исследовалось; решить до работ над видом «Медиа» |
+| Разбор Markdown, YAML, LZString и JSON Canvas в Rust ([13](13-interop.md) §7.3 п. 7) | Выбор — в спайке 11 (§7) | Нужны ядру: нити `text`, импорт и экспорт без UI (§2.2) | Из исследований известен только крейт `jsoncanvas` ([R2](research/R2-obsidian-format.md)); остальные крейты, их версии и лицензии не исследовались. Критерии выбора — белый список лицензий §8.4 и корпус NFR-122 |
+| Просмотр PDF, видео и аудио для вида «Медиа» ([06](06-canvas-ux.md) §13.1) | — | Вид «Медиа» — в MVP ([16](16-roadmap.md) §4.2); выбор просмотрщика — зависимость MVP ([16](16-roadmap.md) §4.10) | Не исследовалось. Решить до вехи 1C ([16](16-roadmap.md) §4.7): библиотека PDF или средства WebView, кодеки видео и аудио в трёх WebView, лицензия по §8.4. Код — в пакете `media` (§2.1) |
 
 ## 3. Потоки данных
 
@@ -328,7 +329,7 @@ sequenceDiagram
     participant C as strata-core
     participant DB as store.sqlite
     participant P as Проектор
-    participant S as Сервер, этап 3
+    participant S as Сервер, этап 2–3
     U->>CV: тянет X над нитью A→B
     CV->>CV: rbush, точный тест, кандидат держится 200 мс
     CV-->>S: эфемерный drag соавторам, до 30 Гц
@@ -420,12 +421,12 @@ sequenceDiagram
 |---|---|---|
 | 1 | UI | Выбор папки (системный диалог), предпросмотр: число заметок, вложений, `.canvas`, `.excalidraw.md` ([04](04-personas-scenarios.md) S1) |
 | 2 | Ядро | Фоновая задача: обход, `strata-markdown`, разрешение ссылок, призраки ([13](13-interop.md)) |
-| 3 | Ядро | Запись пачками по сетям: каждая пачка — своя транзакция; все пачки несут один ID набора изменений с источником `import` и статусом «в процессе» |
+| 3 | Ядро | Запись пачками по сетям: каждая пачка — своя транзакция; все пачки несут один ID набора изменений с источником `import` и статусом `in-progress` ([10](10-storage-sync-collab.md) §3.3, §9.1) |
 | 4 | Ядро | Раскладка новых сетей `strata-layout` один раз ([06](06-canvas-ux.md) §9.3) |
 | 5 | UI | Сети появляются пачками по дельтам проекции; прогресс в статусной строке |
-| 6 | Ядро | Конец: набор помечается завершённым; отчёт |
+| 6 | Ядро | Конец: набор получает статус `applied`; отчёт |
 
-💡 После сбоя на середине при следующем старте — диалог «Импорт прерван: продолжить или откатить частичный». Так «один импорт — один набор изменений» ([10](10-storage-sync-collab.md) §9.1) совмещается с живым холстом во время импорта. Бюджеты — [14](14-nfr.md) §6.
+💡 После сбоя на середине при следующем старте — диалог «Импорт прерван: продолжить или откатить частичный» ([13](13-interop.md) §3.3). Так «один импорт — один набор изменений» ([10](10-storage-sync-collab.md) §3.3, §9.1) совмещается с живым холстом во время импорта. Бюджеты — [14](14-nfr.md) §6.
 
 ## 4. Горячий путь
 
@@ -514,7 +515,7 @@ Event system Tauri «is not designed for low latency or high throughput» — д
 
 ### 5.2. Процессная модель десктопа
 
-💡 Ядро живёт в процессе, который первым открыл пространство; лок пространства исключает второго писателя ([10](10-storage-sync-collab.md) §3.6, [12](12-mcp-ai.md) §2.3).
+💡 Ядро живёт в процессе, который первым открыл пространство: в окне Strata или, если окна нет, в `strata core --headless`. Лок — файл `.lock` в папке пространства (pid, хост, время открытия, [10](10-storage-sync-collab.md) §3.1, §3.6) — исключает второго писателя ([12](12-mcp-ai.md) §2.3).
 
 ```mermaid
 flowchart LR
@@ -541,6 +542,8 @@ flowchart LR
 | Окна нет, стартует агент | `strata mcp` поднимает `strata core --headless` (тот же код ядра в бинарнике CLI) за ≤ 5 с ([12](12-mcp-ai.md) §2.3) |
 | Окно открывают при работающем headless-ядре | Передача: окно просит headless-ядро сбросить данные и снять лок, затем открывает пространство; лаунчеры переподключаются (до 3 попыток, [12](12-mcp-ai.md) §2.3) |
 | Второй запуск или ссылка `strata://` | Аргументы передаются уже запущенному экземпляру; механизм — не проверено, спайк 1 |
+
+💡 **Сокеты и поиск ядра.** IPC-сокет — один на процесс ядра, а не на пользователя ОС: если два пространства открыты в разных процессах (два окна или окно и headless-ядро), у каждого процесса свой сокет. Имя — путь из [12](12-mcp-ai.md) §2.3 с суффиксом PID (`core-<pid>.sock`, на Windows — канал `strata-<пользователь>-<pid>`); путь сокета процесс записывает в `.lock` пространства рядом с pid. Лаунчер `strata mcp --workspace …` и CLI находят папку пространства и читают `.lock`: процесс жив — подключаются к сокету из лока и называют `workspaceId` в рукопожатии; лока нет или процесс мёртв — поднимают `strata core --headless`. Процесс с несколькими пространствами держит один сокет и различает их по `workspaceId`. Проверяет спайк 7 ([12](12-mcp-ai.md) §11.2 п. 2).
 
 Трей и фоновая работа после закрытия окна по умолчанию — вопрос Q-12-9 (он же Q-R4-9); модель выше работает при любом ответе. CLI `strata` поставляется вместе с десктопом как sidecar (`bundle.externalBin` с суффиксом целевой платформы, [R4](research/R4-app-shell-rendering.md) §1.4) и отдельными архивами для сервера.
 
@@ -624,7 +627,7 @@ flowchart TD
 
 ## 7. Спайки перед фиксацией
 
-💡 До фиксации ADR-0003…0008 и начала MVP. Двое разработчиков проходят их за 4–6 недель.
+💡 До фиксации ADR-0003…0007 и начала MVP; ADR-0008 — до MVP+ 1.1 ([16](16-roadmap.md) §3.3). Двое разработчиков проходят спайки 1–7, 9 и 10 за 4–6 недель; спайки 8 и 11 в этот срок не входят.
 
 | # | Спайк | Срок | Что проверяем | Критерий | Решает |
 |---|---|---|---|---|---|
@@ -634,12 +637,13 @@ flowchart TD
 | 4 | **Loro** | 2–3 нед. | Пункты 1–8 [10](10-storage-sync-collab.md) §15: CM6 + `loro-codemirror`, биндинг Excalidraw, индекс 100 000 нод в Chrome и Safari, 1 000 комнат, Rust ↔ WASM, офлайн 30 дней, перешардирование, офлайн-очередь веба | Критерии [10](10-storage-sync-collab.md) §15; иначе — план Б | [ADR-0003](adr/0003-sync-engine.md) |
 | 5 | **Excalidraw-биндинг** | 1–2 нед. | Пункты 1–4 [R5](research/R5-board-engine.md) «Спайк до ADR-0006»: `next` с `ui={false}` в окне Strata, B-2k, биндинг `onIncrement` ↔ Loro на 3 клиентах, виджет to-do, импорт трёх реальных `.excalidraw.md` | NFR-30, NFR-52; панорама p95 ≤ 16,7 мс; сходимость; экспорт открывается в Obsidian | [ADR-0006](adr/0006-board-engine.md) |
 | 6 | **Редактор** | 1 нед. | CM6 live preview + `[[wikilinks]]` + `loro-codemirror`; реальный vault: открыть → сохранить без правок → `diff`; русский ввод и IME рядом со скрытым синтаксисом; T-1M | `diff` пуст ([R4](research/R4-app-shell-rendering.md) спайк п. 4); NFR-29, NFR-33 | [ADR-0007](adr/0007-text-editor.md) |
-| 7 | **MCP с живыми клиентами** | ~1 нед. | Пункты 1, 2, 6 [12](12-mcp-ai.md) §11.2: rmcp с Claude Code, Claude Desktop, Codex, Cursor; лаунчер и IPC; откат текста при чужих правках | Все клиенты подключаются; NFR-37; ядро без окна ≤ 5 с | [ADR-0008](adr/0008-mcp-architecture.md) |
+| 7 | **MCP с живыми клиентами** | ~1 нед. | Пункты 1, 2, 6 [12](12-mcp-ai.md) §11.2: rmcp с Claude Code, Claude Desktop, Codex, Cursor; лаунчер и IPC; откат текста при чужих правках | Все клиенты подключаются; NFR-37; ядро без окна ≤ 5 с; лаунчер находит ядро нужного пространства (§5.2) | [ADR-0008](adr/0008-mcp-architecture.md) — к MVP+ 1.1; на старт MVP не влияет, но проверяет IPC ядра ([16](16-roadmap.md) §3.2) |
 | 8 | **Эмбеддинги на русском** | 3–5 дн. | Пункт 3 [12](12-mcp-ai.md) §11.2: 50 запросов владельца, bge-m3, Qwen3-Embedding-0.6B, multilingual-e5-small, BM25 как база | Критерий [12](12-mcp-ai.md) §11.2 п. 3. Не блокирует MVP: функция этапа 2 | [12](12-mcp-ai.md) |
 | 9 | **Дизайн-прототип** | 1 нед. | Пункты 1–4 [R7](research/R7-retro-design-assets.md) §8: 200 баблов на трёх фонах, ретро-окно на DPR 1 / 1,25 / 1,5 / 2, стилизация 20 картинок, кадр на 5 000 нодах | Контраст [07](07-design-system.md) §11.1; NFR-118; NFR-09 | [07](07-design-system.md) |
 | 10 | **Раскладка** | 3–5 дн. | `strata-layout`: слоистый DAG, радиальная, силовая на реальных сетях из vault; WASM в воркере | NFR-08 | [06](06-canvas-ux.md) Q-06-9 |
+| 11 | **Совместимость с Obsidian** | 1 нед. | 7 пунктов [13](13-interop.md) §7.3, в том числе выбор Rust-крейтов для Markdown, YAML, LZString и JSON Canvas (§2.6) | Каждый пункт закрыт ответом; крейты выбраны, лицензии — по §8.4, корпус NFR-122 зелёный | [13](13-interop.md), §2.6 |
 
-**Порядок.** Неделя 1–2: спайки 1–3 и 9 параллельно, старт 4. Неделя 3: 5 и 6 (зависят от Loro). Неделя 4: 7 и 10. Спайк 8 — перед этапом 2. Каждый спайк заканчивается отчётом с замерами и статусом ADR: «Принято» или новый ADR с альтернативой.
+**Порядок.** Неделя 1–2: спайки 1–3 и 9 параллельно, старт 4. Неделя 3: 5 и 6 (зависят от Loro). Неделя 4: 7 и 10. Спайк 8 — перед этапом 2. Спайк 11 — в ходе этапа 1 ([16](16-roadmap.md) §3.2): 💡 выбор крейтов — до работ над `strata-markdown` и импортом (веха 1B, [16](16-roadmap.md) §4.7), остальные пункты — до MVP+ 1.2. Каждый спайк заканчивается отчётом с замерами и статусом ADR: «Принято» или новый ADR с альтернативой.
 
 ## 8. Сборка, тесты, CI, релизы
 
@@ -665,7 +669,7 @@ flowchart TD
 | Форматы | Пространства прошлых версий из `corpus/` открываются (NFR-78) | CPU | Каждый PR |
 | Контракт MCP | Каждый инструмент × две ревизии, размер ответа (NFR-125) | CPU | Каждый PR |
 | Безопасность | XSS-корпус для SVG и HTML (NFR-83), маркеры секретов в выходах (NFR-85, NFR-92) | CPU, браузер | Каждый PR |
-| e2e | Сценарии [04](04-personas-scenarios.md) S1–S6 и S8, клавиатура без мыши (NFR-101), reduced motion | Три WebView, позже браузеры | Каждую ночь |
+| e2e | Сценарии [04](04-personas-scenarios.md) S1–S6 и S8 (S8 — с MVP+ 1.1), клавиатура без мыши (NFR-101), reduced motion | Три WebView, позже браузеры | Каждую ночь |
 | Скриншоты | Хром на DPR 1 / 1,25 / 1,5 / 2, оттенки серого (NFR-105, NFR-118) | GPU-раннеры | Каждую ночь |
 | «Рубильник» | 1 000 аварийных завершений (NFR-69–NFR-72) | CPU | Каждую ночь |
 
@@ -730,7 +734,7 @@ flowchart TD
 | Свои нити-шейдеры и хит-тест ([R4](research/R4-app-shell-rendering.md), риск 9) | Большой объём кода в ядре ощущения «как в Houdini» | Спайк 1 с реальными нитями, бюджет NFR-09 |
 | React на горячем пути ([R4](research/R4-app-shell-rendering.md), риск 8) | Падение fps | Правило §4.1 п. 1, линтер импортов, бенчи на PR |
 | Ядро в двух процессах (окно и headless) | Два писателя, «забытый» фон | Лок пространства, передача §5.2, авто-выход |
-| Объём своего кода: сервер, биндинги, граф-undo, проекция ([R3](research/R3-crdt-sync.md), риск 7) | Сроки MVP | Сервер — этап 3; спайки до начала; MVP — локальный десктоп |
+| Объём своего кода: сервер, биндинги, граф-undo, проекция ([R3](research/R3-crdt-sync.md), риск 7) | Сроки MVP | Сервер для своих устройств — этап 2 (если так решится Q-04-4), сервер команды — этап 3 ([16](16-roadmap.md) §4.6); спайки до начала; MVP — локальный десктоп |
 | Лицензии ([R4](research/R4-app-shell-rendering.md), риск 12) | Несвободный код в свободном проекте | Белый список §8.4, проверка в CI |
 
 ## Открытые вопросы

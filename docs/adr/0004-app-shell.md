@@ -2,7 +2,7 @@
 
 - Статус: Предложено (до спайка 1 и ответа на B2, [15 §7](../15-architecture.md))
 - Дата: 2026-10-14
-- Связано: [15-architecture.md](../15-architecture.md) (§1, §2.5, §4.4, §5, §6, §8.6), [14-nfr.md](../14-nfr.md) (§2, §3, §7, §15), [10-storage-sync-collab.md](../10-storage-sync-collab.md) (§4, §5), [11-server-selfhost.md](../11-server-selfhost.md), [08-view-3d.md](../08-view-3d.md) §8.4, [03-vision.md](../03-vision.md), [ADR-0003](0003-sync-engine.md), [ADR-0005](0005-rendering.md), [ADR-0006](0006-board-engine.md), [ADR-0008](0008-mcp-architecture.md); исследования [R4](../research/R4-app-shell-rendering.md) (главное), [R3](../research/R3-crdt-sync.md), [R5](../research/R5-board-engine.md), [R6](../research/R6-mcp-ai.md)
+- Связано: [15-architecture.md](../15-architecture.md) (§1, §2.5, §4.4, §5, §6, §8.6), [14-nfr.md](../14-nfr.md) (§2, §3, §7, §15), [10-storage-sync-collab.md](../10-storage-sync-collab.md) (§4, §5), [11-server-selfhost.md](../11-server-selfhost.md), [16-roadmap.md](../16-roadmap.md) (§4.5, §4.6), [08-view-3d.md](../08-view-3d.md) §8.4, [03-vision.md](../03-vision.md), [ADR-0003](0003-sync-engine.md), [ADR-0005](0005-rendering.md), [ADR-0006](0006-board-engine.md), [ADR-0008](0008-mcp-architecture.md); исследования [R4](../research/R4-app-shell-rendering.md) (главное), [R3](../research/R3-crdt-sync.md), [R5](../research/R5-board-engine.md), [R6](../research/R6-mcp-ai.md)
 
 ## Контекст
 
@@ -31,9 +31,9 @@
 
    | Роль | Где живёт `strata-core` | Вход |
    |---|---|---|
-   | Десктоп | В процессе Tauri, который первым открыл пространство; лок пространства исключает второго писателя | Команды и каналы Tauri |
-   | Сервер | `strata serve` — один бинарник: ядро, авторизация, синхронизация, `/mcp` ([11](../11-server-selfhost.md)) | HTTPS и WSS |
-   | MCP | `strata mcp` подключается к работающему ядру по сокету 0600 с токеном; если окна нет — поднимает `strata core --headless` | stdio ([ADR-0008](0008-mcp-architecture.md)) |
+   | Десктоп | В процессе Tauri, который первым открыл пространство; лок — `.lock` в папке пространства ([10](../10-storage-sync-collab.md) §3.1) — исключает второго писателя | Команды и каналы Tauri |
+   | Сервер | `strata serve` — один бинарник: ядро, авторизация, синхронизация, `/mcp` ([11](../11-server-selfhost.md)); сервер для своих устройств — этап 2 (если так решится Q-04-4), команда — этап 3 ([16](../16-roadmap.md) §4.6) | HTTPS и WSS |
+   | MCP (MVP+ 1.1, [16](../16-roadmap.md) §4.5) | `strata mcp` находит ядро по `.lock` пространства и подключается к сокету этого процесса (0600, токен); если окна нет — поднимает `strata core --headless`; при открытии окна headless-ядро передаёт ему лок ([15](../15-architecture.md) §5.2). Сокет и CLI `doctor`, `backup`, `reproject` — с MVP | stdio ([ADR-0008](0008-mcp-architecture.md)) |
 
    Доменные операции, инварианты 05 §14 и наборы изменений реализованы один раз. `strata-core` не зависит от `tauri`, `axum` и `rmcp` — это проверяет граф крейтов ([15](../15-architecture.md) §2.3). CLI `strata` поставляется с десктопом как sidecar (`bundle.externalBin`).
 2. **Одна SPA для десктопа и веба.** Vite собирает один артефакт. Tauri отдаёт его своим протоколом без localhost-сервера, `strata serve` — с того же домена, что API ([R4](../research/R4-app-shell-rendering.md) §1.7, [15](../15-architecture.md) §5.4).
@@ -90,7 +90,7 @@
 
 - ➕ Модель данных, инварианты и правила «Скрыть от AI» реализованы один раз — для десктопа, сервера и MCP ([ADR-0008](0008-mcp-architecture.md)).
 - ➕ Веб и десктоп — одна сборка SPA; различается только реализация `Backend`.
-- ➕ Малый дистрибутив: минимальное приложение Tauri — меньше 600 КБ ([R4](../research/R4-app-shell-rendering.md) §1.2), цель NFR-54 достижима. Подписанный апдейтер встроен. Путь к мобильным через Tauri 2 mobile остаётся открытым.
+- ➕ Малый дистрибутив: минимальное приложение Tauri — меньше 600 КБ ([R4](../research/R4-app-shell-rendering.md) §1.2), цель NFR-54 для плана А достижима; на ступенях 1–2 лестницы и в запасном стеке бюджет пересматривается (❓ Q-15-2, Q-15-3). Подписанный апдейтер встроен. Путь к мобильным через Tauri 2 mobile остаётся открытым.
 - ➖ WebKitGTK — риск №1: холст и карта могут «молча» работать медленно, а изнутри это не определить. Снижаем: гейт и лестница; Canvas-фолбэк; пресет качества выбирается по времени кадра, а не по строке рендерера ([08](../08-view-3d.md) §8.4).
 - ➖ Три движка WebView плюс Firefox для веба — дорогая матрица тестов (NFR-127, [R4](../research/R4-app-shell-rendering.md), риск 4). Снижаем: свои GPU-раннеры под Linux, Windows и macOS (❓ Q-15-12).
 - ➖ WKWebView обновляется только с ОС и может держать потолок 60 Гц. Цель — 60 fps, а не 120 (NFR-119, ❓ Q-14-2). Минимум — macOS 13, как у Electron 44, чтобы запасной путь не сузил поддержку ([14](../14-nfr.md) §15).

@@ -649,7 +649,7 @@ Electron остаётся только **ступенью 2 лестницы о�
 | Что | Чем |
 |---|---|
 | Rust | Cargo workspace; `rustfmt`, `clippy` с запретом предупреждений; `wasm32` для `strata-model`, `strata-search`, `strata-layout` |
-| TypeScript | pnpm workspaces, Vite (один артефакт сборки для Tauri и веба, [R4](research/R4-app-shell-rendering.md) §1.7), `tsc` в строгом режиме, ESLint с правилами импортов §2.3 |
+| TypeScript | pnpm workspaces, Vite (один артефакт сборки для Tauri и веба, [R4](research/R4-app-shell-rendering.md) §1.7), `tsc` в строгом режиме, Biome (`biome.json`, в CI — `pnpm lint`); проверка правил импортов §2.3 — правило Biome или свой скрипт, не выбрано |
 | Шрифты и атласы | `msdf-atlas-gen` с явным charset ([R4](research/R4-app-shell-rendering.md) §2.7); CI-тест кириллицы ([07](07-design-system.md) §3.5) |
 | Десктоп | Tauri CLI; CLI `strata` — sidecar |
 | Сервер | Бинарники Linux x86_64 и aarch64, macOS, Windows; Docker-образ ([11](11-server-selfhost.md) §3.1) |
@@ -702,7 +702,7 @@ Electron остаётся только **ступенью 2 лестницы о�
 |---|---|---|---|
 | Десктоп macOS — основная | Раннер macOS, universal (`universal-apple-darwin`: arm64 + x64 в одном файле). Если размер станет проблемой — две сборки arm64 и x64 | `.app` в образе диска; обновление — `.app.tar.gz` | `tauri-plugin-updater` 2.13.3 со статическим JSON; подпись обновлений обязательна, отключить нельзя ([R4](research/R4-app-shell-rendering.md) §1.5) |
 | Десктоп Windows — основная | Раннер Windows, x64 (`x86_64-pc-windows-msvc`) | NSIS; MSI — по необходимости | То же |
-| Десктоп Linux — только CI | Раннер Ubuntu, x64 (`x86_64-unknown-linux-gnu`) | AppImage и архив (☑ Q-15-11); AUR, Flatpak и пакеты дистрибутивов — по запросу пользователей | AppImage — апдейтер ([R4](research/R4-app-shell-rendering.md) §1.5) |
+| Десктоп Linux — только CI | Раннер Ubuntu, x64 (`x86_64-unknown-linux-gnu`) | AppImage и архив (☑ Q-15-11; в текущем `ci.yml` — пока только AppImage); AUR, Flatpak и пакеты дистрибутивов — по запросу пользователей | AppImage — апдейтер ([R4](research/R4-app-shell-rendering.md) §1.5) |
 | CLI `strata` | Вместе с десктопом; архивы — для тех же целей и Linux aarch64 | В составе десктопа (sidecar) и архивами | Вместе с десктопом |
 | Сервер | Linux x86_64 и aarch64 | Бинарники и Docker-образ | Замена бинарника или образа, миграции при старте ([11](11-server-selfhost.md) §8.1) |
 

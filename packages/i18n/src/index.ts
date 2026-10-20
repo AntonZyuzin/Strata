@@ -15,6 +15,7 @@ const ru = {
   'about.web': 'веб, без ядра',
   'about.language': 'Язык',
   'window.close': 'Закрыть',
+  'window.reopen': 'Открыть окно',
   'nodes.count': ['{n} нода', '{n} ноды', '{n} нод'],
 } as const;
 
@@ -33,6 +34,7 @@ const en: Catalog = {
   'about.web': 'web, no core',
   'about.language': 'Language',
   'window.close': 'Close',
+  'window.reopen': 'Open window',
   'nodes.count': ['{n} node', '{n} nodes'],
 };
 

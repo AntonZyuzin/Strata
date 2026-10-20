@@ -8,7 +8,7 @@ export interface BuildInfo {
   shell: string;
 }
 
-function isTauri(): boolean {
+export function isTauri(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
 }
 
@@ -16,4 +16,15 @@ export async function loadBuildInfo(): Promise<BuildInfo | null> {
   if (!isTauri()) return null;
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<BuildInfo>('build_info');
+}
+
+/**
+ * Closes the application window on desktop. Returns false in a browser,
+ * where a page cannot close its own tab; the caller hides the panel instead.
+ */
+export async function closeAppWindow(): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  await getCurrentWindow().close();
+  return true;
 }

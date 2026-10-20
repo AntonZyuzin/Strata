@@ -28,7 +28,7 @@ type Catalog = {
 const en: Catalog = {
   'app.title': 'Strata',
   'app.stage': 'Stage 0 · scaffold and spikes',
-  'app.tagline': 'A node-based base for knowledge and projects',
+  'app.tagline': 'Node-based knowledge and projects',
   'about.core': 'Core',
   'about.shell': 'Shell',
   'about.web': 'web, no core',

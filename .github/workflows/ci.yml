@@ -40,6 +40,17 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm --filter @strata/ui build
+      - name: Playwright browsers (Chromium ≈ WebView2, WebKit ≈ WKWebView)
+        run: pnpm --filter @strata/ui exec playwright install --with-deps chromium webkit
+      - name: Layout tests (RU/EN, DPR 1 and 2)
+        run: pnpm --filter @strata/ui e2e
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: ui-layout-screenshots
+          path: packages/ui/test-results
+          if-no-files-found: ignore
+          retention-days: 14
 
   desktop:
     name: Desktop · ${{ matrix.name }}

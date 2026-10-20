@@ -13,7 +13,11 @@ export function isTauri(): boolean {
 }
 
 export async function loadBuildInfo(): Promise<BuildInfo | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) {
+    // Layout tests pass the longest real core string through `?core=`.
+    const mock = new URLSearchParams(window.location.search).get('core');
+    return mock ? { core: mock, shell: 'web' } : null;
+  }
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<BuildInfo>('build_info');
 }

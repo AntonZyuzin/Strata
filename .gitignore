@@ -21,3 +21,7 @@ Thumbs.db
 # Local data
 *.strata/
 /bench-results/
+
+# Playwright
+packages/ui/test-results/
+packages/ui/playwright-report/

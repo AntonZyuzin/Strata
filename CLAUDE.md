@@ -17,12 +17,13 @@
 | `packages/ui` | SPA на React 19 + Vite, общая для десктопа и веба |
 | `packages/design-tokens` | Токены темы → CSS-переменные и числа для сцены |
 | `packages/i18n` | Строки RU + EN (✅ R2) |
+| `packages/bench` | Харнесс бенчмарка шага 0.3: сценарии холста (Pixi) и Loro в WebView, формат отчёта (`docs/spikes/S1-canvas.md`) |
 
 Команды:
 
 ```sh
 cargo fmt --all && cargo clippy --all-targets -- -D warnings && cargo test   # Rust (без десктопа)
-cargo clippy -p strata-desktop -- -D warnings                               # десктоп (нужен WebKitGTK на Linux и собранный UI)
+cargo clippy -p strata-desktop -- -D warnings && cargo test -p strata-desktop  # десктоп (нужен WebKitGTK на Linux и собранный UI)
 pnpm install && pnpm lint && pnpm typecheck && pnpm test                     # TypeScript
 pnpm dev                                                                     # UI в браузере, http://localhost:5173
 pnpm desktop:dev / pnpm desktop:build                                        # десктоп
@@ -34,6 +35,8 @@ pnpm desktop:dev / pnpm desktop:build                                        # �
 - Видимые строки интерфейса — только через `@strata/i18n`, в обоих каталогах.
 - Хром не меняет размеры при смене языка и масштаба: фиксированная ширина окон, колонка подписей под самый длинный язык, однострочные значения с многоточием и подсказкой. Каждое новое окно или панель получает тест в `packages/ui/e2e` (RU и EN, DPR 1 и 2, Chromium и WebKit); тест сверяет рамки до и после смены языка и ищет обрезанный текст. Локально: `PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers pnpm --filter @strata/ui e2e --project=chromium`.
 - Горячий путь холста и 3D — вне React (`docs/15-architecture.md` §4).
+- CSP десктопа (`tauri.conf.json`) отдаёт и `vite preview`, поэтому e2e ловят то, что заблокирует WebView: без `'unsafe-eval'`, WASM — через `'wasm-unsafe-eval'`. Для Pixi подключать `pixi.js/unsafe-eval`.
+- WebKit округляет `performance.now()` до 1 мс: субмиллисекундные операции мерить сериями и делить на число операций.
 - Лицензия — AGPL-3.0-or-later (ADR-0009); зависимости — только совместимые (MIT, Apache-2.0, BSD, ISC, MPL-2.0; для ассетов — OFL, CC BY, CC0). GPL-2.0-only не берём.
 - CI (`.github/workflows/ci.yml`) должен быть зелёным: fmt, clippy `-D warnings`, тесты, Biome, typecheck; десктоп собирается под macOS, Windows и Linux без подписи.
 - Процессы в shell не убивать через `pkill -f <шаблон>`: шаблон совпадает с командной строкой самой оболочки.

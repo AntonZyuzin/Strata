@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectLocale, pluralIndex, t } from './index';
+import { detectLocale, formatNumber, pluralIndex, t } from './index';
 
 describe('i18n', () => {
   it('uses Russian plural rules', () => {
@@ -14,6 +14,19 @@ describe('i18n', () => {
   it('uses English plural rules', () => {
     expect(t('en', 'nodes.count', { n: 1 })).toBe('1 node');
     expect(t('en', 'nodes.count', { n: 7 })).toBe('7 nodes');
+  });
+
+  it('formats numbers in the locale notation', () => {
+    expect(formatNumber('ru', 0.025, 3)).toBe('0,025');
+    expect(formatNumber('en', 0.025, 3)).toBe('0.025');
+    expect(formatNumber('ru', 58.34)).toBe('58,3');
+    expect(formatNumber('en', 1234.5)).toBe('1,234.5');
+  });
+
+  it('fills placeholders', () => {
+    expect(t('ru', 'bench.progress', { done: 2, total: 6, name: 'Холст 5 тыс.' })).toBe(
+      '2 из 6 · Холст 5 тыс.',
+    );
   });
 
   it('detects the locale from system languages', () => {

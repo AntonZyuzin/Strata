@@ -1,18 +1,30 @@
+import type { Profile } from '@strata/bench/report';
 import { detectLocale, type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
-import { closeAppWindow, loadBuildInfo } from './backend';
+import { BenchWindow } from './BenchWindow';
+import { type BuildInfo, closeAppWindow, loadBuildInfo } from './backend';
+
+/** `?bench` opens the benchmark at start; `?bench=quick` is the e2e profile. */
+function benchFromUrl(): Profile | null {
+  const v = new URLSearchParams(window.location.search).get('bench');
+  if (v === null) return null;
+  return v === 'quick' ? 'quick' : 'full';
+}
 
 export function App() {
   const [locale, setLocale] = useState<Locale>(() => detectLocale(navigator.languages));
-  const [core, setCore] = useState<string | null>(null);
+  // `undefined` while loading; `null` in a browser without the core.
+  const [info, setInfo] = useState<BuildInfo | null | undefined>(undefined);
+  const core = info?.core ?? null;
   const [open, setOpen] = useState(true);
+  const [bench, setBench] = useState<Profile | null>(benchFromUrl);
 
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
 
   useEffect(() => {
-    loadBuildInfo().then((info) => setCore(info?.core ?? null));
+    loadBuildInfo().then(setInfo);
   }, []);
 
   const close = async () => {
@@ -25,6 +37,20 @@ export function App() {
         <button type="button" onClick={() => setOpen(true)}>
           {t(locale, 'window.reopen')}
         </button>
+      </main>
+    );
+  }
+
+  if (bench) {
+    return (
+      <main className="scene">
+        <BenchWindow
+          locale={locale}
+          app={info ?? { core: null, shell: 'web' }}
+          profile={bench}
+          autorun={info !== undefined && new URLSearchParams(window.location.search).has('autorun')}
+          onBack={() => setBench(null)}
+        />
       </main>
     );
   }
@@ -63,6 +89,11 @@ export function App() {
               />
             </dd>
           </dl>
+          <div className="window-actions">
+            <button type="button" onClick={() => setBench('full')}>
+              {t(locale, 'bench.open')}
+            </button>
+          </div>
         </div>
       </section>
     </main>

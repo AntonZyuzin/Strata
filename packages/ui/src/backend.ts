@@ -6,6 +6,8 @@
 export interface BuildInfo {
   core: string;
   shell: string;
+  webview?: string | null;
+  machine?: unknown;
 }
 
 export function isTauri(): boolean {

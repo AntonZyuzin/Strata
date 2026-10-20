@@ -100,6 +100,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Clippy and tests of the shell (the UI is embedded at compile time)
+        shell: bash
+        run: |
+          pnpm --filter @strata/ui build
+          cargo clippy -p strata-desktop -- -D warnings
+          cargo test -p strata-desktop
       - name: Build (unsigned)
         run: pnpm desktop:build --target ${{ matrix.target }}
       - uses: actions/upload-artifact@v7

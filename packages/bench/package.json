@@ -1,0 +1,23 @@
+{
+  "name": "@strata/bench",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./report": "./src/report.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@strata/design-tokens": "workspace:*",
+    "loro-crdt": "1.16.4",
+    "pixi.js": "8.22.0"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

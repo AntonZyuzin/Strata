@@ -1,30 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-
-/** The longest core string a release build can show (15 §2.2). */
-const LONGEST_CORE = 'strata-core 0.0.1 (windows-x86_64)';
-
-const VIEWPORTS = [
-  { width: 800, height: 500 },
-  { width: 1280, height: 800 },
-];
-const SCALES = [1, 2];
-
-async function box(page: Page, selector: string) {
-  const b = await page.locator(selector).boundingBox();
-  if (!b) throw new Error(`${selector} is not visible`);
-  return b;
-}
-
-/** Elements whose text overflows its box (truncated by ellipsis or clipped). */
-async function overflowing(page: Page): Promise<string[]> {
-  return page.$$eval('.window *', (els) =>
-    els
-      .filter((el) => el.children.length === 0 && (el.textContent ?? '').trim() !== '')
-      .filter((el) => !el.classList.contains('sr-only'))
-      .filter((el) => el.scrollWidth > el.clientWidth + 1)
-      .map((el) => `${el.tagName.toLowerCase()}.${el.className}: «${el.textContent}»`),
-  );
-}
+import { box, LONGEST_CORE, overflowing, SCALES, VIEWPORTS } from './helpers';
 
 async function switchTo(page: Page, short: 'RU' | 'EN') {
   await page.locator('.segmented label', { hasText: short }).click();

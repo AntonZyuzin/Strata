@@ -16,7 +16,7 @@ export function TabMenu(props: {
   x: number;
   y: number;
   /** Right and bottom edges the menu stays within; the viewport by default. */
-  bounds?: { right: number; bottom: number };
+  bounds?: { right: number; bottom: number } | undefined;
   initialQuery: string;
   nodes: readonly MenuNode[];
   recent: readonly string[];

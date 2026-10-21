@@ -904,3 +904,122 @@ button:focus-visible {
   background: var(--st-color-selection-bg);
   color: var(--st-color-selection-fg);
 }
+
+/* «Гравюра» (spike 9): each picture, its three bubbles, controls and the verdict. */
+.window-engraving {
+  width: min(112ch, calc(100vw - 32px));
+  height: min(92vh, calc(100vh - 32px));
+  display: flex;
+  flex-direction: column;
+}
+
+.window-engraving .window-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.engraving-actions {
+  margin-top: 0;
+  flex-wrap: nowrap;
+}
+
+.engraving-summary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.engraving-status {
+  min-height: var(--st-font-ui-line);
+  margin: calc(2 * var(--u)) 0 0;
+  color: var(--st-color-text-muted);
+}
+
+.engraving-drop {
+  flex: 1 1 auto;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  color: var(--st-color-text-muted);
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--st-color-divider) 0 calc(2 * var(--u)),
+      transparent 0 calc(4 * var(--u))
+    )
+    top / 100% var(--u) no-repeat;
+}
+
+.engraving-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.engraving-row {
+  display: grid;
+  grid-template-columns: 72px 232px minmax(0, 1fr) 12ch;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  padding: calc(3 * var(--u)) 0;
+  border-bottom: var(--u) dashed var(--st-color-divider);
+}
+
+.engraving-original {
+  width: 72px;
+  height: 72px;
+  object-fit: contain;
+  background: var(--st-color-surface-sunken);
+}
+
+.engraving-previews {
+  display: flex;
+  gap: calc(2 * var(--u));
+  background: var(--st-scene-bg);
+}
+
+.engraving-preview {
+  width: 72px;
+  height: 72px;
+}
+
+.engraving-meta {
+  display: grid;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+}
+
+.engraving-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.engraving-controls {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  min-width: 0;
+}
+
+.engraving-controls select.field {
+  width: 16ch;
+}
+
+.engraving-threshold {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--st-color-text);
+}
+
+.engraving-verdict {
+  display: grid;
+  gap: calc(2 * var(--u));
+}

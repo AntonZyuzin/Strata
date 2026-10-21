@@ -171,8 +171,8 @@ function formatHeadline(locale: Locale, h: Headline): string {
     case 'index':
       return t(locale, 'bench.r.index', {
         importMs: n(h.importMs, 0),
-        memoryMib: n(h.memoryMib, 0),
-        editMean: n(h.editMean, 3),
+        memoryMib: h.memoryMib === null ? t(locale, 'bench.pending') : n(h.memoryMib, 0),
+        firstEdit: n(h.firstEdit),
       });
     case 'text':
       return t(locale, 'bench.r.text', {

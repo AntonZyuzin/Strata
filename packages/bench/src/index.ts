@@ -1,5 +1,6 @@
 import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
+import { describeError } from './errors';
 import { runLoroIndex, runLoroText } from './loro';
 import {
   type AppInfo,
@@ -21,14 +22,15 @@ export interface Scenario {
   run(stage: HTMLElement, env: Environment): Promise<unknown>;
 }
 
-/**
- * `name: message` and the stack. JavaScriptCore's `stack` has only the frames,
- * V8's starts with the message, so the message is added when it is missing.
- */
-function describeError(e: unknown): string {
-  if (!(e instanceof Error)) return String(e);
-  const head = `${e.name}: ${e.message}`;
-  return e.stack?.startsWith(head) ? e.stack : `${head}\n${e.stack ?? ''}`;
+async function requestWakeLock(): Promise<{ release(): Promise<void> } | null> {
+  const nav = navigator as Navigator & {
+    wakeLock?: { request(type: 'screen'): Promise<{ release(): Promise<void> }> };
+  };
+  try {
+    return (await nav.wakeLock?.request('screen')) ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
@@ -70,16 +72,35 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
   ];
 }
 
+type ProgressFn = (current: Scenario | null, done: readonly ScenarioOutcome[]) => void;
+
 export async function runBench(opts: {
   stage: HTMLElement;
   app: AppInfo;
   profile?: Profile;
   only?: readonly ScenarioId[];
   /** Called before each scenario with its id, and after each with its outcome. */
-  onProgress?: (current: Scenario | null, done: readonly ScenarioOutcome[]) => void;
+  onProgress?: ProgressFn;
 }): Promise<BenchReport> {
   const profile = opts.profile ?? 'full';
   const list = scenarios(profile).filter((s) => !opts.only || opts.only.includes(s.id));
+  // Keep the display on: on battery a Mac sleeps it after 2 minutes, the run takes 3.
+  // Asked first, while the click on «Запустить» still counts as user activation.
+  // Runs that stall anyway are voided by runFrames.
+  const wakeLock = await requestWakeLock();
+  try {
+    return await runList(list, opts, profile, wakeLock !== null);
+  } finally {
+    await wakeLock?.release().catch(() => undefined);
+  }
+}
+
+async function runList(
+  list: readonly Scenario[],
+  opts: { stage: HTMLElement; app: AppInfo; onProgress?: ProgressFn },
+  profile: Profile,
+  wakeLock: boolean,
+): Promise<BenchReport> {
   const env = await collectEnvironment();
   const outcomes: ScenarioOutcome[] = [];
   const startedAt = new Date().toISOString();
@@ -108,9 +129,12 @@ export async function runBench(opts: {
     await new Promise((r) => setTimeout(r, 300));
   }
   opts.onProgress?.(null, outcomes);
-  const workers = outcomes
-    .filter((o) => o.id.startsWith('loro-index') && o.ok)
-    .every((o) => (o.result as { isolated?: boolean }).isolated === true);
+  // `null` when no index scenario ran; `true` only if every one ran in workers.
+  const index = outcomes.filter((o) => o.id.startsWith('loro-index'));
+  const workers =
+    index.length === 0
+      ? null
+      : index.every((o) => o.ok && (o.result as { isolated?: boolean }).isolated === true);
   return {
     report: 'strata-bench',
     version: 1,
@@ -120,6 +144,7 @@ export async function runBench(opts: {
       workers,
     },
     app: opts.app,
+    wakeLock,
     startedAt,
     env,
     outcomes,

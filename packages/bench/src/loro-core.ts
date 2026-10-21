@@ -22,21 +22,68 @@ const wasmMib = () => round((wasm?.memory.buffer.byteLength ?? 0) / 1048576, 1);
 
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
-/** 26-character time-ordered ids in the Crockford base32 form of 05 §4.1. */
-function ids(n: number, seed: number): string[] {
+/**
+ * 26-character time-ordered ids in the Crockford base32 form of 05 §4.1.
+ * Built as flat strings (join), not by concatenation: 100 000 rope strings
+ * would keep the JS heap five times larger and put GC pauses into the timings.
+ */
+export function ids(n: number, seed: number): string[] {
   const r = rng(seed);
   const out: string[] = [];
+  const chars = new Array<string>(26);
   for (let i = 0; i < n; i++) {
-    let s = '';
     let ms = 1_760_000_000_000 + i;
-    for (let k = 0; k < 10; k++) {
-      s = ALPHABET[ms % 32] + s;
+    for (let k = 9; k >= 0; k--) {
+      chars[k] = ALPHABET[ms % 32] ?? '0';
       ms = Math.floor(ms / 32);
     }
-    for (let k = 0; k < 16; k++) s += ALPHABET[Math.floor(r() * 32)];
-    out.push(s);
+    for (let k = 10; k < 26; k++) chars[k] = ALPHABET[Math.floor(r() * 32)] ?? '0';
+    out.push(chars.join(''));
   }
   return out;
+}
+
+/**
+ * Wire key: 128 uniformly spread bits of (from, to) as 26 base32 characters,
+ * like `h(from ‖ to)` of 10 §2.5 (strata-model uses SHA-256; a sync
+ * non-cryptographic hash keeps the same key shape and spread for the bench).
+ */
+export function edgeKey(from: string, to: string): string {
+  const s = `${from}>${to}`;
+  // cyrb128: four 32-bit lanes.
+  let h1 = 1779033703;
+  let h2 = 3144134277;
+  let h3 = 1013904242;
+  let h4 = 2773480762;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = h2 ^ Math.imul(h1 ^ c, 597399067);
+    h2 = h3 ^ Math.imul(h2 ^ c, 2869860233);
+    h3 = h4 ^ Math.imul(h3 ^ c, 951274213);
+    h4 = h1 ^ Math.imul(h4 ^ c, 2716044179);
+  }
+  h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+  h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+  h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+  h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+  const lanes = [h1 ^ h2 ^ h3 ^ h4, h2 ^ h1, h3 ^ h1, h4 ^ h1].map((x) => x >>> 0);
+  // 128 bits -> 26 characters of 5 bits (the last two bits are zero, as in a 16-byte key).
+  const chars = new Array<string>(26);
+  let acc = 0;
+  let bits = 0;
+  let lane = 0;
+  for (let k = 0; k < 26; k++) {
+    if (bits < 5) {
+      const next = lanes[lane++] ?? 0;
+      acc = acc * 2 ** 32 + next;
+      bits += 32;
+    }
+    bits -= 5;
+    const v = Math.floor(acc / 2 ** bits) % 32;
+    acc = acc % 2 ** bits;
+    chars[k] = ALPHABET[v] ?? '0';
+  }
+  return chars.join('');
 }
 
 /**
@@ -181,7 +228,7 @@ export async function buildIndex(
     for (let j = Math.floor(r() * 4); j > 0; j--) {
       const target = pick(keys);
       if (target === k) continue;
-      const ek = `${k.slice(0, 13)}${target.slice(13)}`;
+      const ek = edgeKey(k, target);
       d.edge.set(ek, `${k}>${target}`);
       d.edgeOrigin.set(`${ek}|${r() < 0.33 ? 'text' : 'manual'}`, TS + i);
     }
@@ -246,6 +293,8 @@ export async function measureIndex(
   shards: number,
 ): Promise<IndexMeasure> {
   await ready();
+  // Keys first, so neither their allocation nor a GC of it lands in the timed part.
+  const keys = ids(n, SEED);
   warmUp();
   const baseMemoryMib = wasmMib();
   let t = performance.now();
@@ -262,7 +311,6 @@ export async function measureIndex(
   const countNamesMs = performance.now() - t;
   if (count !== n) throw new Error(`expected ${n} names, got ${count}`);
 
-  const keys = ids(n, SEED);
   const edit = (k: string, value: string) => {
     const doc = docs[shardOf(k, shards)];
     doc?.getMap('status').set(k, value);

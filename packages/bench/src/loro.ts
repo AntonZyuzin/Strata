@@ -16,6 +16,15 @@ export interface LoroIndexResult extends IndexMeasure {
 /** The worker could not start: fall back to the main thread and say so in the report. */
 class WorkerUnavailable extends Error {}
 
+/** A task failed inside the worker; the text is already `name: message` and the stack. */
+class WorkerTaskError extends Error {
+  constructor(text: string) {
+    super(text);
+    this.name = 'WorkerTaskError';
+    this.stack = `${this.name}: ${text}`;
+  }
+}
+
 // A commit per node makes the 100k build slow on a weak CPU; the build is not measured.
 const WORKER_TIMEOUT_MS = 300_000;
 
@@ -39,7 +48,7 @@ function inWorker<T>(task: LoroTask, transfer: Transferable[] = []): Promise<T> 
     worker.onmessage = (e: MessageEvent<LoroReply>) => {
       done();
       if (e.data.ok) resolve(e.data.value as T);
-      else reject(new Error(e.data.error));
+      else reject(new WorkerTaskError(e.data.error));
     };
     // Errors inside a task come back as messages; `error` means the worker did not load.
     worker.onerror = (e) => {

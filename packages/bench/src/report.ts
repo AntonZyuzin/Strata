@@ -50,9 +50,11 @@ export interface BenchReport {
   version: 1;
   profile: Profile;
   /** First in the JSON so it reads at a glance: verdict per scenario, Loro workers used. */
-  summary: { verdicts: Partial<Record<ScenarioId, Verdict>>; workers: boolean };
+  summary: { verdicts: Partial<Record<ScenarioId, Verdict>>; workers: boolean | null };
   /** From the desktop core over IPC; `null` core in a plain browser. */
   app: AppInfo;
+  /** The screen wake lock was granted for the run. */
+  wakeLock: boolean;
   startedAt: string;
   env: Environment;
   outcomes: ScenarioOutcome[];
@@ -61,7 +63,14 @@ export interface BenchReport {
 /** The numbers the results table shows; the UI formats them through i18n. */
 export type Headline =
   | { kind: 'canvas'; fps: number; p95: number }
-  | { kind: 'index'; importMs: number; memoryMib: number; editMean: number; firstEdit: number }
+  | {
+      kind: 'index';
+      importMs: number;
+      /** `null` when measured on the main thread: there it is the build's peak, not the import. */
+      memoryMib: number | null;
+      editMean: number;
+      firstEdit: number;
+    }
   | { kind: 'text'; insertMs: number; keyMean: number; keyMax: number }
   | { kind: 'error'; message: string };
 
@@ -76,7 +85,7 @@ export function headline(o: ScenarioOutcome): Headline {
     return {
       kind: 'index',
       importMs: r.importMs,
-      memoryMib: r.importMemoryMib ?? r.wasmMemoryMib ?? 0,
+      memoryMib: r.isolated === false ? null : (r.importMemoryMib ?? null),
       editMean: r.editMeanMs,
       firstEdit: r.firstEditMs ?? 0,
     };
@@ -129,7 +138,7 @@ export function verdict(o: ScenarioOutcome, timerResolutionMs = 0): Verdict {
     }
     case 'index':
       return h.importMs < THRESHOLDS.indexImportMs &&
-        h.memoryMib < THRESHOLDS.indexMemoryMib &&
+        (h.memoryMib === null || h.memoryMib < THRESHOLDS.indexMemoryMib) &&
         h.editMean < THRESHOLDS.editMs &&
         h.firstEdit <= THRESHOLDS.firstEditMs + slack
         ? 'pass'

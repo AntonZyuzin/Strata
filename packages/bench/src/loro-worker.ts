@@ -1,3 +1,4 @@
+import { describeError } from './errors';
 import { buildIndex, measureIndex } from './loro-core';
 
 /**
@@ -34,6 +35,6 @@ scope.onmessage = async (e) => {
       });
     }
   } catch (err) {
-    scope.postMessage({ ok: false, error: String((err as Error)?.stack ?? err) });
+    scope.postMessage({ ok: false, error: describeError(err) });
   }
 };

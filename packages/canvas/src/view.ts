@@ -3,6 +3,8 @@ import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-token
 import { Application, Container, Graphics, Sprite } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
 import 'pixi.js/unsafe-eval';
+import type { Pixels } from './backdrop';
+import { BackgroundLayer } from './background';
 import { Camera } from './camera';
 import { Decor, type DecorNode, type Interaction } from './decor';
 import { createIconAtlas, type IconAtlas, iconScale } from './icons';
@@ -60,7 +62,7 @@ export class CanvasView {
   readonly camera = new Camera();
   readonly overlay = new Graphics();
   /** Screen-space layer under the world: the background of 07 §7. */
-  readonly backdrop = new Container();
+  readonly background = new BackgroundLayer();
   private readonly world = new Container({ isRenderGroup: true });
   private readonly wires = new WireLayer();
   private readonly layer = {
@@ -77,8 +79,6 @@ export class CanvasView {
   private lastZoom = Number.NaN;
   /** Called every frame before rendering; the editor draws its overlay here. */
   onFrame: ((now: number) => void) | null = null;
-  /** Called every frame after the camera is set; the background follows it here. */
-  onCamera: ((cam: Camera) => void) | null = null;
   /** Style of a wire, asked every frame; the editor highlights active wires. */
   wireStyle: (from: string, to: string) => WireStyle = () => NORMAL_WIRE;
   /** Hover and selection, asked every frame; set by the editor. */
@@ -93,7 +93,7 @@ export class CanvasView {
     const dpr = app.renderer.resolution;
     this.decor = new Decor(pixelUnit(dpr), dpr, uiFontPx(dpr));
     this.world.addChild(this.wires.mesh, this.layer.halos, this.layer.bodies, this.layer.icons);
-    app.stage.addChild(this.backdrop, this.world, this.decor.container, this.overlay);
+    app.stage.addChild(this.background.container, this.world, this.decor.container, this.overlay);
   }
 
   static async create(host: HTMLElement): Promise<CanvasView> {
@@ -145,6 +145,14 @@ export class CanvasView {
   set reducedMotion(on: boolean) {
     this.motionReduced = on;
     this.decor.reducedMotion = on;
+    this.background.reducedMotion = on;
+  }
+
+  /** Shows a processed background picture (07 §7) and redraws; returns its p95 luminance. */
+  setBackground(px: Pixels): number {
+    const p95 = this.background.setPicture(px);
+    this.invalidate();
+    return p95;
   }
 
   /** Shows `graph` and follows its changes. */
@@ -196,6 +204,7 @@ export class CanvasView {
   destroy(): void {
     this.wires.destroy();
     this.decor.destroy();
+    this.background.destroy();
     this.textures.destroy();
     this.icons.destroy();
     this.app.destroy({ removeView: true }, { children: true, texture: true, textureSource: true });
@@ -222,7 +231,7 @@ export class CanvasView {
       this.lastZoom = cam.zoom;
       for (const v of this.views.values()) this.applyLevel(v);
     }
-    this.onCamera?.(cam);
+    this.background.follow(cam, this.width, this.height);
     this.wires.setZoom(cam.zoom);
     this.wires.setTime(now / 1000);
     this.writeWires();

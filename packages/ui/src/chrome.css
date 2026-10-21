@@ -406,7 +406,7 @@ button:focus-visible {
   position: absolute;
   top: calc(6 * var(--u));
   left: calc(6 * var(--u));
-  width: 44ch;
+  width: 56ch;
 }
 
 .proto-controls {
@@ -865,4 +865,42 @@ button:focus-visible {
   background: var(--st-color-surface-sunken);
   box-shadow: var(--st-bevel-sunken);
   -webkit-font-smoothing: auto;
+}
+
+/* Background picker and the contrast of the Scene to it (07 §7, §2.2). */
+.proto-top .proto-bg label {
+  min-width: 0;
+}
+
+.contrast {
+  flex: 1 0 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--u) calc(6 * var(--u));
+}
+
+.contrast-cell {
+  display: flex;
+  justify-content: space-between;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+}
+
+.contrast-cell dt {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.contrast-cell dd {
+  flex: none;
+  color: var(--st-color-text);
+  font-variant-numeric: tabular-nums;
+}
+
+.contrast-cell.is-low dd {
+  /* Not red: red is overdue only (07 §1.5 rule 4); a low pair is an inverse plate. */
+  padding: 0 var(--u);
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
 }

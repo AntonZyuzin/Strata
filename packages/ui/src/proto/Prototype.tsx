@@ -1,12 +1,20 @@
-import { type ChangeLabel, type Graph, seedGraph } from '@strata/backend';
+import { type ChangeLabel, GALLERY_SIZE, type Graph, seedGraph } from '@strata/backend';
 import {
+  BACKDROP_SIDE,
   CanvasView,
   Editor,
   type EditorEvents,
+  fitSize,
+  generatePreset,
   type HintKey,
+  type Pixels,
+  PRESETS,
+  type PresetId,
+  processBackdrop,
+  sceneContrast,
   type WheelMode,
 } from '@strata/canvas';
-import { type Locale, type MessageKey, t } from '@strata/i18n';
+import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
 import { type MenuItem, type MenuNode, remember } from './menu';
@@ -27,6 +35,54 @@ interface Toast {
 }
 
 const RECENT_KEY = 'strata.tabmenu.recent';
+/** Procedural presets are blurred anyway: half the photo size looks the same (07 §7.1). */
+const PRESET_W = BACKDROP_SIDE / 2;
+const PRESET_H = Math.round((BACKDROP_SIDE / 2) * 0.625);
+
+type Backdrop = PresetId | 'photo';
+
+/** A processed preset, generated on first use and kept (07 §7.3). */
+const presetCache = new Map<PresetId, { px: Pixels; p95: number }>();
+
+function preset(id: PresetId): { px: Pixels; p95: number } {
+  let hit = presetCache.get(id);
+  if (!hit) {
+    const px = generatePreset(id, PRESET_W, PRESET_H);
+    hit = { px, p95: processBackdrop(px) };
+    presetCache.set(id, hit);
+  }
+  return hit;
+}
+
+/**
+ * Shows the gallery of looks (the seed's last nodes) at zoom 1.25, where S
+ * bubbles are 40 px and draw their icons and labels (07 §4.9), just below the
+ * top window at `topPx` from the canvas top.
+ */
+function frameGallery(view: CanvasView, graph: Graph, topPx: number): void {
+  const gallery = [...graph.nodes.values()].slice(-GALLERY_SIZE);
+  const zoom = 1.25;
+  view.camera.zoom = zoom;
+  view.camera.x = Math.min(...gallery.map((n) => n.x)) - 60 - 24 / zoom;
+  view.camera.y = Math.min(...gallery.map((n) => n.y)) - 40 - topPx / zoom;
+  view.invalidate();
+}
+
+/** A user's photo through the pipeline of 07 §7.1: decode, downscale, process. */
+async function photo(file: File): Promise<{ px: Pixels; p95: number }> {
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const { w, h } = fitSize(bitmap.width, bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas is not available');
+  ctx.drawImage(bitmap, 0, 0, w, h);
+  bitmap.close();
+  const img = ctx.getImageData(0, 0, w, h);
+  const px: Pixels = { width: w, height: h, data: img.data };
+  return { px, p95: processBackdrop(px) };
+}
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
@@ -47,6 +103,10 @@ export function Prototype(props: {
   const { locale } = props;
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
+  const viewRef = useRef<CanvasView | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [backdrop, setBackdrop] = useState<Backdrop>('fog');
+  const [p95, setP95] = useState<number | null>(null);
   const graph = useRef<Graph | null>(null);
   const [menu, setMenu] = useState<{ sx: number; sy: number; query: string } | null>(null);
   const [name, setName] = useState<{ id: string; sx: number; sy: number; name: string } | null>(
@@ -91,7 +151,15 @@ export function Prototype(props: {
         return;
       }
       view = v;
+      viewRef.current = v;
       v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // `?proto&plain`: no background, for gesture e2e on software WebGL in CI,
+      // where two full-screen layers make every frame several times slower.
+      if (new URLSearchParams(window.location.search).has('plain')) {
+        v.background.container.visible = false;
+      } else {
+        setP95(v.setBackground(preset('fog').px));
+      }
       const g = seedGraph({ locale: seedLocale.current });
       graph.current = g;
       const ed = new Editor(v, g, events);
@@ -100,6 +168,12 @@ export function Prototype(props: {
       (window as unknown as { __strataProto: unknown }).__strataProto = { view: v, graph: g };
       setWheel(ed.wheelMode);
       ed.fitAll();
+      // The design check opens on the gallery of looks, big enough for icons
+      // (07 §4.9: ≥ 32 px) and clear of the top window; `plain` keeps «show all».
+      if (!new URLSearchParams(window.location.search).has('plain')) {
+        const top = document.querySelector('.proto-top')?.getBoundingClientRect().bottom ?? 0;
+        frameGallery(v, g, top - v.canvas.getBoundingClientRect().top);
+      }
       v.canvas.focus();
       setVersion((x) => x + 1);
     });
@@ -107,6 +181,7 @@ export function Prototype(props: {
       cancelled = true;
       editor.current?.destroy();
       editor.current = null;
+      viewRef.current = null;
       view?.destroy();
     };
   }, []);
@@ -131,6 +206,16 @@ export function Prototype(props: {
     },
     [recent],
   );
+
+  const showBackdrop = (id: Backdrop, bg: { px: Pixels }) => {
+    const v = viewRef.current;
+    if (!v) return;
+    setBackdrop(id);
+    setP95(v.setBackground(bg.px));
+  };
+
+  const contrast = p95 === null ? [] : sceneContrast(p95);
+  const ratio = (v: number) => formatNumber(locale, v, v >= 10 ? 0 : 1);
 
   const g = graph.current;
   const nodes: MenuNode[] = g
@@ -188,6 +273,66 @@ export function Prototype(props: {
               </label>
             ))}
           </fieldset>
+          <fieldset className="segmented proto-bg">
+            <legend className="sr-only">{t(locale, 'proto.bg')}</legend>
+            {PRESETS.map((id) => (
+              <label key={id} className={backdrop === id ? 'is-active' : undefined}>
+                <input
+                  type="radio"
+                  name="backdrop"
+                  value={id}
+                  checked={backdrop === id}
+                  onChange={() => showBackdrop(id, preset(id))}
+                />
+                <span>{t(locale, `proto.bg.${id}` as const)}</span>
+              </label>
+            ))}
+          </fieldset>
+          <button
+            type="button"
+            className={backdrop === 'photo' ? 'is-default' : undefined}
+            title={t(locale, 'proto.bg.photoHint')}
+            onClick={() => fileInput.current?.click()}
+          >
+            {t(locale, 'proto.bg.photo')}
+          </button>
+          <input
+            ref={fileInput}
+            className="sr-only"
+            type="file"
+            accept="image/*"
+            tabIndex={-1}
+            aria-label={t(locale, 'proto.bg.photoHint')}
+            onChange={(e) => {
+              const file = e.currentTarget.files?.[0];
+              e.currentTarget.value = '';
+              if (file) photo(file).then((bg) => showBackdrop('photo', bg));
+            }}
+          />
+          <dl className="contrast" aria-label={t(locale, 'proto.contrast')}>
+            {contrast
+              .filter((c) => c.id !== 'overdue')
+              .map((c) => {
+                const name = t(locale, `contrast.${c.id}` as MessageKey);
+                const ok = c.ratio >= c.min;
+                return (
+                  <div
+                    key={c.id}
+                    className={ok ? 'contrast-cell' : 'contrast-cell is-low'}
+                    title={t(locale, 'contrast.hint', { name, ratio: ratio(c.ratio), min: c.min })}
+                  >
+                    <dt>{name}</dt>
+                    <dd>
+                      {t(locale, 'contrast.value', { ratio: ratio(c.ratio), mark: ok ? '✓' : '✗' })}
+                    </dd>
+                  </div>
+                );
+              })}
+            <div className="contrast-cell">
+              <dt>{t(locale, 'contrast.p95')}</dt>
+              <dd>{p95 === null ? '—' : formatNumber(locale, p95, 3)}</dd>
+            </div>
+          </dl>
         </div>
       </section>
       <footer className="proto-status">

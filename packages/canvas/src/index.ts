@@ -1,3 +1,14 @@
+export {
+  BACKDROP_SIDE,
+  type ContrastRow,
+  fitSize,
+  generatePreset,
+  type Pixels,
+  PRESETS,
+  type PresetId,
+  processBackdrop,
+  sceneContrast,
+} from './backdrop';
 export { Camera } from './camera';
 export * from './curve';
 export type { Interaction } from './decor';

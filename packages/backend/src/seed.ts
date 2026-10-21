@@ -182,8 +182,9 @@ export function seedGraph(
           name: opts.locale === 'en' ? g.en : g.ru,
           cls: null,
           icon: g.icon,
-          x: (k % 10) * SEED_SPACING.x * 1.4,
-          y: (Math.floor(k / 10) - 2.4) * SEED_SPACING.y,
+          // 5 × 4 above the network: one screen at zoom ~1 shows every look.
+          x: (k % 5) * 150,
+          y: -550 + Math.floor(k / 5) * 120,
           ...g.node,
         }),
       );

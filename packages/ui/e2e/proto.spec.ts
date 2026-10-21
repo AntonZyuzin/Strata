@@ -54,8 +54,9 @@ declare global {
   }
 }
 
-async function open(page: Page) {
-  await page.goto('/?proto');
+/** Gestures run on the plain scene: no background, so software WebGL keeps up. */
+async function open(page: Page, plain = true) {
+  await page.goto(plain ? '/?proto&plain' : '/?proto');
   await page.waitForFunction(() => window.__strataProto !== undefined);
   await expect(page.locator('.proto')).toHaveAttribute('data-nodes', '220');
   await installProbe(page);
@@ -69,7 +70,7 @@ async function openIn(
 ) {
   const context = await browser.newContext({ locale, viewport, deviceScaleFactor });
   const page = await context.newPage();
-  await open(page);
+  await open(page, false);
   return { context, page };
 }
 
@@ -223,6 +224,44 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
     await en.context.close();
   });
 }
+
+test('backgrounds keep the Scene readable: every preset and a white photo (07 §7, §2.2)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await open(page, false);
+  const p95 = () =>
+    page.evaluate(
+      () =>
+        (window.__strataProto as unknown as { view: { background: { p95: number } } }).view
+          .background.p95,
+    );
+  for (const id of ['depth', 'dusk', 'dust', 'fog']) {
+    await page.locator(`.proto-bg label:has(input[value="${id}"])`).click();
+    await expect(page.locator(`.proto-bg input[value="${id}"]`)).toBeChecked();
+    expect(await p95(), id).toBeLessThan(0.13);
+    await expect(page.locator('.contrast-cell.is-low')).toHaveCount(0);
+  }
+  // A plain white photo is the worst case for the brightness normalisation.
+  const before = await p95();
+  await page.evaluate(async () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 400;
+    canvas.height = 300;
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, 400, 300);
+    const blob = await new Promise<Blob>((ok) => canvas.toBlob((b) => ok(b as Blob), 'image/png'));
+    const input = document.querySelector('.proto-top input[type=file]') as HTMLInputElement;
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'white.png', { type: 'image/png' }));
+    input.files = dt.files;
+    input.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  await expect.poll(p95).not.toBe(before);
+  expect(await p95()).toBeLessThan(0.13);
+  await expect(page.locator('.contrast-cell.is-low')).toHaveCount(0);
+});
 
 test.describe('gestures', () => {
   test.use({ viewport: { width: 1280, height: 800 }, locale: 'ru-RU' });

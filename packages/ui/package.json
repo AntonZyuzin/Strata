@@ -12,7 +12,9 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@strata/backend": "workspace:*",
     "@strata/bench": "workspace:*",
+    "@strata/canvas": "workspace:*",
     "@strata/design-tokens": "workspace:*",
     "@strata/i18n": "workspace:*",
     "@tauri-apps/api": "2.12.4",

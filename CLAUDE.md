@@ -14,7 +14,9 @@
 | `crates/strata-core` | Ядро: доменные операции, инварианты, хранилище, проекция |
 | `crates/strata-cli` | Бинарник `strata` |
 | `crates/strata-desktop` | Десктоп на Tauri 2 (ADR-0004); не входит в `default-members`, нужен WebView |
-| `packages/ui` | SPA на React 19 + Vite, общая для десктопа и веба |
+| `packages/ui` | SPA на React 19 + Vite, общая для десктопа и веба; `src/proto` — Хром прототипа холста (`?proto`) |
+| `packages/backend` | Пока — граф в памяти для прототипа: правила `05 §8`, наборы изменений, отмена; потом `Backend` к ядру (`15 §1.4`) |
+| `packages/canvas` | Холст на Pixi вне React: сцена, нити-шейдер, хит-тест на rbush, камера, машина жестов (`06 §5–6`) |
 | `packages/design-tokens` | Токены темы → CSS-переменные и числа для сцены |
 | `packages/i18n` | Строки RU + EN (✅ R2) |
 | `packages/bench` | Харнесс бенчмарка шага 0.3: сценарии холста (Pixi) и Loro в WebView, формат отчёта (`docs/spikes/S1-canvas.md`) |

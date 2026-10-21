@@ -15,12 +15,17 @@ export async function box(page: Page, selector: string) {
   return b;
 }
 
-/** Elements whose text overflows its box (truncated by ellipsis or clipped). */
-export async function overflowing(page: Page): Promise<string[]> {
-  return page.$$eval('.window *', (els) =>
+/**
+ * Elements under `scope` whose text overflows its box (truncated by ellipsis or
+ * clipped). A one-line value whose tooltip repeats it in full may be cut
+ * (CLAUDE.md, «Хром не меняет размеры»); everything else must fit.
+ */
+export async function overflowing(page: Page, scope = '.window'): Promise<string[]> {
+  return page.$$eval(`:is(${scope}) *`, (els) =>
     els
       .filter((el) => el.children.length === 0 && (el.textContent ?? '').trim() !== '')
       .filter((el) => !el.classList.contains('sr-only'))
+      .filter((el) => el.getAttribute('title') !== el.textContent)
       .filter((el) => el.scrollWidth > el.clientWidth + 1)
       .map((el) => `${el.tagName.toLowerCase()}.${el.className}: «${el.textContent}»`),
   );

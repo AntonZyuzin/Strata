@@ -252,3 +252,248 @@ button:disabled {
   border: 1px solid var(--st-color-paper);
   pointer-events: none;
 }
+
+/* Canvas prototype (16 §3.2 step 0.3): the canvas fills the window, the Chrome floats over it. */
+.proto {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+}
+
+.proto-canvas {
+  position: absolute;
+  inset: 0 0 32px;
+  /* Ends above the status bar: an opaque full-width layer over the WebGL canvas
+     made headless Chromium leave a black band of the same height at the top. */
+}
+
+.proto-canvas canvas:focus {
+  outline: none;
+}
+
+.proto-top {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  width: 300px;
+}
+
+.proto-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 10px 12px;
+}
+
+.proto-controls .counts {
+  flex: 1 0 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.7;
+}
+
+.proto-status {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  /* Fixed columns: nothing in the bar moves when the language or the hint changes. */
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 12ch 12ch;
+  align-items: center;
+  column-gap: 12px;
+  height: 32px;
+  padding: 0 12px;
+  background: var(--st-color-chrome-bg);
+  border-top: 1px solid var(--st-color-paper);
+}
+
+.proto-status .hint,
+.proto-status .last-step {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The last step is a value with a tooltip; below 1100 px it lives in the Undo tooltip only. */
+.proto-status .last-step {
+  display: none;
+  opacity: 0.7;
+}
+
+@media (min-width: 1100px) {
+  .proto-status {
+    grid-template-columns: minmax(0, 1fr) 280px 12ch 12ch;
+  }
+
+  .proto-status .last-step {
+    display: block;
+  }
+}
+
+.proto-status button {
+  width: 100%;
+}
+
+.toasts {
+  position: absolute;
+  bottom: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 420px;
+  padding: 6px 10px;
+  background: var(--st-color-chrome-bg);
+  border: 1px solid var(--st-color-paper);
+  box-shadow: 4px 4px 0 #000;
+}
+
+.toast span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.menu-backdrop {
+  position: fixed;
+  inset: 0;
+}
+
+.tab-menu {
+  position: fixed;
+  background: var(--st-color-chrome-bg);
+  border: 1px solid var(--st-color-paper);
+  box-shadow: 4px 4px 0 #000;
+}
+
+.tab-menu-prompt {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--st-color-paper);
+}
+
+.tab-menu-prompt input,
+.name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  color: var(--st-color-chrome-fg);
+  background: transparent;
+  border: 0;
+  outline: none;
+}
+
+.tab-menu-list {
+  margin: 0;
+  padding: 2px 0;
+  list-style: none;
+}
+
+.tab-menu-header {
+  padding: 4px 8px 0;
+  font-size: 0.75em;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.6;
+}
+
+.tab-menu-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 0 8px;
+  cursor: pointer;
+}
+
+.tab-menu-row.is-current {
+  background: var(--st-color-paper);
+  color: var(--st-color-ink);
+}
+
+.tab-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab-menu-detail {
+  flex: none;
+  max-width: 10ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  opacity: 0.6;
+}
+
+.tab-menu-empty,
+.tab-menu-footer {
+  padding: 4px 8px;
+  opacity: 0.7;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab-menu-footer {
+  border-top: 1px solid var(--st-color-paper);
+  font-size: 0.85em;
+}
+
+/* Kind icons: 1-bit pixel marks until the icon set of spike 9. */
+.kind-icon {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid currentColor;
+}
+
+.kind-network {
+  border-radius: 50%;
+}
+
+.kind-note {
+  border-width: 2px 2px 6px;
+}
+
+.kind-board {
+  border-style: double;
+  border-width: 3px;
+}
+
+.kind-checklist {
+  border-width: 2px 2px 2px 6px;
+}
+
+.kind-media {
+  background: currentColor;
+}
+
+.name-input {
+  position: absolute;
+  width: 160px;
+  transform: translateX(-50%);
+  padding: 1px 4px;
+  text-align: center;
+  background: var(--st-color-chrome-bg);
+  border: 1px solid var(--st-color-paper);
+}

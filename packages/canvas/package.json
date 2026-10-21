@@ -1,0 +1,24 @@
+{
+  "name": "@strata/canvas",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@strata/backend": "workspace:*",
+    "@strata/design-tokens": "workspace:*",
+    "pixi.js": "8.22.0",
+    "rbush": "4.0.1"
+  },
+  "devDependencies": {
+    "@types/rbush": "^4.0.0",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

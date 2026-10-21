@@ -399,14 +399,29 @@ test.describe('gestures', () => {
     const p = await screenOf(page, pick.id);
     await page.mouse.move(p.x, p.y);
     await page.mouse.down();
-    // Four reversals of 40 px and more, fast (06 §6.5): one event per swing, so
-    // the reversals land within 600 ms even when software WebGL in CI renders a
-    // frame per event slowly. Holding 8 keeps the node from being dropped back
-    // onto the healed wire.
+    // Four reversals of 40 px and more within 600 ms (06 §6.5). The swings are
+    // synthetic pointer events dispatched at once: the detector reads their
+    // timestamps, so the gesture no longer depends on how fast software WebGL
+    // in CI renders a frame per event. Press, drag start and release are real.
+    // Holding 8 keeps the node from being dropped back onto the healed wire.
     await page.keyboard.down('8');
-    for (let i = 0; i < 6; i++) {
-      await page.mouse.move(p.x + (i % 2 === 0 ? 45 : -45), p.y);
-    }
+    await page.mouse.move(p.x + 10, p.y, { steps: 2 });
+    await page.evaluate(({ x, y }) => {
+      const canvas = (window.__strataProto as Hook).view.canvas;
+      for (let i = 0; i < 6; i++) {
+        canvas.dispatchEvent(
+          new PointerEvent('pointermove', {
+            clientX: x + (i % 2 === 0 ? 45 : -45),
+            clientY: y,
+            pointerId: 1,
+            pointerType: 'mouse',
+            isPrimary: true,
+            buttons: 1,
+            bubbles: true,
+          }),
+        );
+      }
+    }, p);
     await page.mouse.move(p.x, p.y - 60, { steps: 3 });
     await page.mouse.up();
     await page.keyboard.up('8');

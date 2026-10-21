@@ -57,7 +57,7 @@ declare global {
 async function open(page: Page) {
   await page.goto('/?proto');
   await page.waitForFunction(() => window.__strataProto !== undefined);
-  await expect(page.locator('.proto')).toHaveAttribute('data-nodes', '200');
+  await expect(page.locator('.proto')).toHaveAttribute('data-nodes', '220');
   await installProbe(page);
 }
 
@@ -360,11 +360,13 @@ test.describe('gestures', () => {
     const p = await screenOf(page, pick.id);
     await page.mouse.move(p.x, p.y);
     await page.mouse.down();
-    // Four reversals of 40 px and more, fast (06 §6.5). Holding 8 keeps the
-    // node from being dropped back onto the healed wire.
+    // Four reversals of 40 px and more, fast (06 §6.5): one event per swing, so
+    // the reversals land within 600 ms even when software WebGL in CI renders a
+    // frame per event slowly. Holding 8 keeps the node from being dropped back
+    // onto the healed wire.
     await page.keyboard.down('8');
     for (let i = 0; i < 6; i++) {
-      await page.mouse.move(p.x + (i % 2 === 0 ? 45 : -45), p.y, { steps: 2 });
+      await page.mouse.move(p.x + (i % 2 === 0 ? 45 : -45), p.y);
     }
     await page.mouse.move(p.x, p.y - 60, { steps: 3 });
     await page.mouse.up();

@@ -8,6 +8,7 @@ import {
   type NodeClass,
   type NodeKind,
   newId,
+  newNode,
   shake,
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
@@ -174,6 +175,11 @@ export class Editor {
   ) {
     view.wireStyle = (from, to) => this.styleOf(from, to);
     view.onFrame = (now) => this.drawOverlay(now);
+    view.interaction = () => {
+      const h = this.hover;
+      const hover = this.mode.t === 'idle' && (h.t === 'node' || h.t === 'port') ? h.id : null;
+      return { hover, selection: this.selection, current: this.current };
+    };
     this.detach.push(
       view.setGraph(graph),
       graph.subscribe(() => {
@@ -235,19 +241,17 @@ export class Editor {
       this.select([choice.id]);
       return;
     }
-    const r = radiusOf({ kind: choice.kind, key: false } as GraphNode);
+    const r = radiusOf({ kind: choice.kind, key: false });
     const place = this.placeNew(m, r);
-    const node: GraphNode = {
+    const node = newNode({
       id: newId(),
       name: choice.name,
       kind: choice.kind,
       cls: choice.cls,
       icon: Math.floor(Math.random() * 200),
-      key: false,
-      deadline: false,
       x: place.x,
       y: place.y,
-    };
+    });
     const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
     this.graph.transaction({ key: 'proto.change.create', params: { name: node.name } }, (tx) => {
       tx.add(node);
@@ -724,17 +728,15 @@ export class Editor {
     }
     // Released on empty space: a note at once, then its name (06 §5.5, ☑ Q-06-2).
     const w = this.view.camera.toWorld(sx, sy);
-    const node: GraphNode = {
+    const node = newNode({
       id: newId(),
       name: '',
       kind: 'note',
       cls: null,
       icon: Math.floor(Math.random() * 200),
-      key: false,
-      deadline: false,
       x: w.x,
       y: w.y,
-    };
+    });
     this.graph.transaction({ key: 'proto.change.create', params: { name: '' } }, (tx) => {
       tx.add(node);
       for (const s of m.sources) tx.connect(s, node.id);
@@ -1211,37 +1213,15 @@ export class Editor {
       const s = cam.toScreen(p.x, p.y);
       return { x: s.x, y: s.y, r: p.r * zoom };
     };
-    // Hover: 1 px ring at r + 9 (07 §4.5).
+    // Hover and selection rings are the Decor's (07 §4.5); the port is a gesture (07 §4.8).
     const h = this.hover;
-    if (this.mode.t === 'idle' && (h.t === 'node' || h.t === 'port')) {
+    if (this.mode.t === 'idle' && h.t === 'port') {
       const s = screen(h.id);
-      if (s) g.circle(s.x, s.y, s.r + 9).stroke({ color: PAPER, width: 1, alpha: 0.8 });
-      if (s && h.t === 'port') {
+      if (s) {
         const px = s.x + Math.cos(h.angle) * (s.r + 1);
         const py = s.y + Math.sin(h.angle) * (s.r + 1);
         g.circle(px, py, 4).fill(PAPER).stroke({ color: INK, width: 1 });
       }
-    }
-    // Selection: 2 px ring and pixel corners.
-    for (const id of this.selection) {
-      const s = screen(id);
-      if (!s) continue;
-      g.circle(s.x, s.y, s.r + 10).stroke({ color: PAPER, width: 2 });
-      const k = s.r + 12;
-      const arm = 4;
-      for (const [cx, cy] of [
-        [-1, -1],
-        [1, -1],
-        [1, 1],
-        [-1, 1],
-      ] as const) {
-        const x = s.x + cx * k;
-        const y = s.y + cy * k;
-        g.moveTo(x, y - cy * arm)
-          .lineTo(x, y)
-          .lineTo(x - cx * arm, y);
-      }
-      g.stroke({ color: PAPER, width: 1 });
     }
     const m = this.mode;
     if (m.t === 'wire') {

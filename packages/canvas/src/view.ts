@@ -1,33 +1,22 @@
 import type { Graph, GraphNode } from '@strata/backend';
-import { fog } from '@strata/design-tokens';
-import { Application, BitmapText, Container, Graphics, Sprite } from 'pixi.js';
+import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-tokens';
+import { Application, Container, Graphics, Sprite } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
 import 'pixi.js/unsafe-eval';
 import { Camera } from './camera';
-import {
-  createTextures,
-  ICON_SCALE,
-  installLabelFont,
-  LABEL_FONT,
-  type SceneTextures,
-  SIZE,
-} from './textures';
+import { Decor, type DecorNode, type Interaction } from './decor';
+import { createIconAtlas, type IconAtlas, iconScale } from './icons';
+import { dotColor, isClosed, levelOf, nodeAlpha } from './looks';
+import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
 
-/** Labels once an M bubble is at least 32 px across (07 §4.9). */
-const LABEL_ZOOM = 0.67;
 /** Structure animations: insert, shifts, autoplace, undo (06 §1.4). */
 export const STRUCTURE_MS = 200;
 
-interface NodeView {
-  bubble: Sprite;
+interface NodeView extends DecorNode {
+  body: Sprite;
   icon: Sprite;
-  ring: Sprite | null;
-  label: BitmapText;
-  /** Rendered position: equals the graph's, except while animating or dragging. */
-  x: number;
-  y: number;
-  r: number;
+  halo: Sprite | null;
 }
 
 interface Tween {
@@ -39,11 +28,24 @@ interface Tween {
   start: number;
 }
 
-/** Radius of a bubble: networks M, other kinds S, key nodes one step up (06 §4.2). */
-export function radiusOf(node: GraphNode): number {
+/** Radius of a bubble: networks M, other kinds S, key nodes one step up (07 §4.2). */
+export function radiusOf(node: Pick<GraphNode, 'kind' | 'key'>): number {
   const base = node.kind === 'network' ? 'm' : 's';
   const d = node.key ? (base === 'm' ? SIZE.l : SIZE.m) : SIZE[base];
   return d / 2;
+}
+
+const PAPER = hex(palette.paper);
+const INK = hex(palette.ink850);
+
+/** Device size of the `ui` font as the Chrome has it: one source for both layers. */
+function uiFontPx(dpr: number): number {
+  const css = Number.parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue('--st-font-ui-size'),
+  );
+  return Number.isFinite(css) && css > 0
+    ? Math.round(css * dpr)
+    : pixelMetrics(dpr).font.ui.physical;
 }
 
 /**
@@ -51,42 +53,47 @@ export function radiusOf(node: GraphNode): number {
  * groups, the camera is their transform (15 §4.1 rule 6a). Rendering is on
  * demand: `invalidate()` asks for one frame, idle costs nothing (NFR-04).
  * Pixi's own event system is off: input goes through the editor's hit test
- * (15 §4.1 rule 5).
+ * (15 §4.1 rule 5). Above the world, the screen-space Decor draws rims,
+ * rings, glyphs and labels in pixel units (07 §4).
  */
 export class CanvasView {
   readonly camera = new Camera();
   readonly overlay = new Graphics();
+  /** Screen-space layer under the world: the background of 07 §7. */
+  readonly backdrop = new Container();
   private readonly world = new Container({ isRenderGroup: true });
   private readonly wires = new WireLayer();
   private readonly layer = {
-    bubbles: new Container({ isRenderGroup: true }),
+    halos: new Container({ isRenderGroup: true }),
+    bodies: new Container({ isRenderGroup: true }),
     icons: new Container({ isRenderGroup: true }),
-    rings: new Container({ isRenderGroup: true }),
-    labels: new Container({ isRenderGroup: true }),
   };
+  private readonly decor: Decor;
   private readonly views = new Map<string, NodeView>();
   private wireList: [string, string][] = [];
   private tweens: Tween[] = [];
   private scheduled = false;
   private graph: Graph | null = null;
+  private lastZoom = Number.NaN;
   /** Called every frame before rendering; the editor draws its overlay here. */
   onFrame: ((now: number) => void) | null = null;
+  /** Called every frame after the camera is set; the background follows it here. */
+  onCamera: ((cam: Camera) => void) | null = null;
   /** Style of a wire, asked every frame; the editor highlights active wires. */
   wireStyle: (from: string, to: string) => WireStyle = () => NORMAL_WIRE;
-  reducedMotion = false;
+  /** Hover and selection, asked every frame; set by the editor. */
+  interaction: () => Interaction = () => ({ hover: null, selection: new Set(), current: null });
+  private motionReduced = false;
 
   private constructor(
     private readonly app: Application,
-    private readonly textures: SceneTextures,
+    private readonly textures: ReturnType<typeof createBodyTextures>,
+    private readonly icons: IconAtlas,
   ) {
-    this.world.addChild(
-      this.wires.mesh,
-      this.layer.bubbles,
-      this.layer.icons,
-      this.layer.rings,
-      this.layer.labels,
-    );
-    app.stage.addChild(this.world, this.overlay);
+    const dpr = app.renderer.resolution;
+    this.decor = new Decor(pixelUnit(dpr), dpr, uiFontPx(dpr));
+    this.world.addChild(this.wires.mesh, this.layer.halos, this.layer.bodies, this.layer.icons);
+    app.stage.addChild(this.backdrop, this.world, this.decor.container, this.overlay);
   }
 
   static async create(host: HTMLElement): Promise<CanvasView> {
@@ -105,8 +112,9 @@ export class CanvasView {
     });
     host.replaceChildren(app.canvas);
     app.canvas.style.display = 'block';
-    installLabelFont();
-    const view = new CanvasView(app, createTextures(app));
+    // Labels are Departure Mono rasterised at their device size (07 §3.4).
+    await document.fonts.load(`11px ${fog.font.ui}`, 'AaЖж');
+    const view = new CanvasView(app, createBodyTextures(), await createIconAtlas());
     new ResizeObserver(() => {
       app.resize();
       view.invalidate();
@@ -118,12 +126,25 @@ export class CanvasView {
     return this.app.canvas;
   }
 
+  get renderer(): Application['renderer'] {
+    return this.app.renderer;
+  }
+
   get width(): number {
     return this.app.screen.width;
   }
 
   get height(): number {
     return this.app.screen.height;
+  }
+
+  get reducedMotion(): boolean {
+    return this.motionReduced;
+  }
+
+  set reducedMotion(on: boolean) {
+    this.motionReduced = on;
+    this.decor.reducedMotion = on;
   }
 
   /** Shows `graph` and follows its changes. */
@@ -174,7 +195,9 @@ export class CanvasView {
 
   destroy(): void {
     this.wires.destroy();
+    this.decor.destroy();
     this.textures.destroy();
+    this.icons.destroy();
     this.app.destroy({ removeView: true }, { children: true, texture: true, textureSource: true });
   }
 
@@ -195,18 +218,32 @@ export class CanvasView {
     const cam = this.camera;
     this.world.scale.set(cam.zoom);
     this.world.position.set(-cam.x * cam.zoom, -cam.y * cam.zoom);
+    if (cam.zoom !== this.lastZoom) {
+      this.lastZoom = cam.zoom;
+      for (const v of this.views.values()) this.applyLevel(v);
+    }
+    this.onCamera?.(cam);
     this.wires.setZoom(cam.zoom);
     this.wires.setTime(now / 1000);
-    this.layer.labels.visible = cam.zoom >= LABEL_ZOOM;
     this.writeWires();
     this.overlay.clear();
     this.onFrame?.(now);
+    const animating = this.decor.draw(
+      this.views.values(),
+      cam,
+      this.width,
+      this.height,
+      this.interaction(),
+      now,
+    );
     this.app.render();
-    if (moving) this.invalidate();
+    if (moving || animating) this.invalidate();
   }
 
   private writeWires() {
     const list = this.wireList;
+    // Far zoom: wires become texture, 1 px at 40 % (07 §4.9), unless highlighted.
+    const far = SIZE.m * this.camera.zoom < 12;
     this.wires.setCount(list.length);
     for (let i = 0; i < list.length; i++) {
       const [from, to] = list[i] as [string, string];
@@ -214,7 +251,8 @@ export class CanvasView {
       const b = this.views.get(to);
       if (!a || !b) continue;
       this.wires.set(i, { ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r + 1, rb: b.r + 1 });
-      this.wires.setStyle(i, this.wireStyle(from, to));
+      const style = this.wireStyle(from, to);
+      this.wires.setStyle(i, far && style === NORMAL_WIRE ? FAR_WIRE : style);
     }
     this.wires.upload();
   }
@@ -222,10 +260,27 @@ export class CanvasView {
   private setPosition(v: NodeView, x: number, y: number) {
     v.x = x;
     v.y = y;
-    v.bubble.position.set(x, y);
+    v.body.position.set(x, y);
     v.icon.position.set(x, y);
-    v.ring?.position.set(x, y);
-    v.label.position.set(x, y + v.r + 4);
+    v.halo?.position.set(x, y);
+  }
+
+  /**
+   * Body, icon and halo for the zoom level (07 §4.9) and the node's states
+   * (07 §4.5): dots below 12 px, kind glyphs (drawn by Decor) to 32 px, icons above.
+   */
+  private applyLevel(v: NodeView) {
+    const n = v.node;
+    const lv = levelOf(2 * v.r * this.camera.zoom);
+    const a = nodeAlpha(n);
+    const closed = isClosed(n);
+    v.body.visible = !n.ghost || lv === 'dot';
+    v.body.tint = lv === 'dot' ? dotColor(n) : closed ? hex(fog.scene.doneFill) : PAPER;
+    v.body.alpha = lv === 'dot' ? Math.max(a, 0.6) : a;
+    v.icon.visible = lv !== 'dot' && lv !== 'glyph' && !n.ghost;
+    v.icon.tint = closed ? hex(fog.scene.doneInk) : INK;
+    v.icon.alpha = a;
+    if (v.halo) v.halo.visible = lv !== 'dot';
   }
 
   /** Creates, updates and removes sprites to match the graph. */
@@ -234,10 +289,9 @@ export class CanvasView {
     if (!graph) return;
     for (const [id, v] of this.views) {
       if (!graph.nodes.has(id)) {
-        v.bubble.destroy();
+        v.body.destroy();
         v.icon.destroy();
-        v.ring?.destroy();
-        v.label.destroy();
+        v.halo?.destroy();
         this.views.delete(id);
       }
     }
@@ -248,7 +302,10 @@ export class CanvasView {
         this.views.set(node.id, this.createView(node));
         continue;
       }
-      if (v.label.text !== node.name) v.label.text = node.name;
+      if (v.node !== node) {
+        v.node = node;
+        this.applyLevel(v);
+      }
       if (v.x !== node.x || v.y !== node.y) moved.push(node.id);
     }
     this.wireList = graph.edges();
@@ -259,33 +316,46 @@ export class CanvasView {
   private createView(node: GraphNode): NodeView {
     const r = radiusOf(node);
     const t = this.textures;
-    const bubble = new Sprite({ texture: t.bubble, anchor: 0.5 });
-    bubble.scale.set((2 * r) / SIZE.l);
+    const body = new Sprite({ texture: t.body, anchor: 0.5 });
+    body.scale.set((2 * r) / BODY_DIAMETER);
     const icon = new Sprite({
-      texture: t.icons[node.icon % t.icons.length] ?? t.bubble,
+      texture: this.icons.textures[node.icon % this.icons.textures.length] ?? t.body,
       anchor: 0.5,
     });
-    icon.scale.set(2 * r * ICON_SCALE);
-    const ring = node.deadline
-      ? new Sprite({ texture: t.ring, anchor: 0.5, tint: fog.scene.attention })
+    icon.scale.set(iconScale(2 * r));
+    // «Срок скоро»: a static yellow halo up to 1.5 r (07 §4.5), not on paused or closed nodes.
+    const soon = node.due === 'soon' && !node.pause && !isClosed(node);
+    const halo = soon
+      ? new Sprite({
+          texture: t.halo,
+          anchor: 0.5,
+          tint: hex(fog.scene.attention),
+          alpha: fog.scene.haloAlpha,
+        })
       : null;
-    ring?.scale.set((2 * r) / SIZE.l);
-    const label = new BitmapText({
-      text: node.name,
-      style: { fontFamily: LABEL_FONT, fontSize: 11 },
-    });
-    label.anchor.set(0.5, 0);
-    this.layer.bubbles.addChild(bubble);
+    halo?.scale.set((3 * r) / t.halo.width);
+    this.layer.bodies.addChild(body);
     this.layer.icons.addChild(icon);
-    if (ring) this.layer.rings.addChild(ring);
-    this.layer.labels.addChild(label);
-    const v: NodeView = { bubble, icon, ring, label, x: 0, y: 0, r };
+    if (halo) this.layer.halos.addChild(halo);
+    const v: NodeView = { id: node.id, node, body, icon, halo, x: 0, y: 0, r };
     this.setPosition(v, node.x, node.y);
+    this.applyLevel(v);
     return v;
   }
 }
 
-export const NORMAL_WIRE: WireStyle = { color: 0xf2efe6, alpha: 0.6, width: 1.5, dot: false };
+export const NORMAL_WIRE: WireStyle = {
+  color: PAPER,
+  alpha: fog.scene.edgeAlpha,
+  width: fog.scene.edgeWidth,
+  dot: false,
+};
+const FAR_WIRE: WireStyle = {
+  color: PAPER,
+  alpha: fog.scene.edgeAlphaFar,
+  width: fog.scene.edgeWidthFar,
+  dot: false,
+};
 
 /** cubic-bezier(.2,.8,.2,1) of 06 §1.4, close enough as an ease-out cubic. */
 function easeOut(k: number): number {

@@ -1,6 +1,6 @@
 /**
- * Own 1-bit glyphs of 07 §6.2: kinds on a 16 × 16 grid, states and flags on
- * 8 × 8, stroke of one picture pixel, no anti-aliasing. One bitmap feeds both
+ * Own 1-bit glyphs of 07 §6.2: kinds on 16 × 16 (Chrome) and 8 × 8 (bubble
+ * rim), states and flags on 8 × 8, stroke of one picture pixel, no anti-aliasing. One bitmap feeds both
  * layers: the Chrome draws it as an SVG of squares (`glyphSvg`), the Scene as a
  * texture scaled by whole pixel units (07 §2.3). Licence: the repository's,
  * AGPL-3.0-or-later (☑ Q-07-11). Spike 9 subset; the full set of ~40 is MVP.
@@ -101,6 +101,60 @@ const K16 = {
     '.##############.',
     '................',
     '................',
+  ],
+} as const;
+
+/** Kinds at 8 × 8 for the 6 o'clock mark on a bubble (07 §4.4). */
+const K8 = {
+  'network-8': [
+    '########',
+    '#......#',
+    '#.####.#',
+    '#.#..#.#',
+    '#.#..#.#',
+    '#.####.#',
+    '#......#',
+    '########',
+  ],
+  'note-8': [
+    '.####...',
+    '.#..##..',
+    '.#...#..',
+    '.#.###..',
+    '.#...#..',
+    '.#.###..',
+    '.#...#..',
+    '.#####..',
+  ],
+  'board-8': [
+    '...##...',
+    '########',
+    '#......#',
+    '#.#....#',
+    '#...#..#',
+    '#..###.#',
+    '#......#',
+    '########',
+  ],
+  'checklist-8': [
+    '###.....',
+    '#.#.####',
+    '###.....',
+    '........',
+    '###.....',
+    '#.#.####',
+    '###.....',
+    '........',
+  ],
+  'media-8': [
+    '########',
+    '#....#.#',
+    '#......#',
+    '#..#...#',
+    '#.###..#',
+    '########',
+    '........',
+    '........',
   ],
 } as const;
 
@@ -228,10 +282,11 @@ const S8 = {
 } as const;
 
 export type KindGlyph = keyof typeof K16;
+export type SmallKindGlyph = keyof typeof K8;
 export type StateGlyph = keyof typeof S8;
-export type GlyphName = KindGlyph | StateGlyph;
+export type GlyphName = KindGlyph | SmallKindGlyph | StateGlyph;
 
-export const GLYPHS: Record<GlyphName, readonly string[]> = { ...K16, ...S8 };
+export const GLYPHS: Record<GlyphName, readonly string[]> = { ...K16, ...K8, ...S8 };
 
 /** Side of a glyph in picture pixels: 16 for kinds, 8 for states. */
 export function glyphSize(name: GlyphName): number {

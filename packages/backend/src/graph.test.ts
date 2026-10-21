@@ -6,23 +6,15 @@ import {
   Graph,
   type GraphNode,
   insertIntoWire,
+  newNode,
   shake,
   UNDO_DEPTH,
 } from './graph';
 import { newId } from './ids';
-import { seedGraph } from './seed';
+import { GALLERY_SIZE, seedGraph } from './seed';
 
-const node = (id: string, x = 0, y = 0): GraphNode => ({
-  id,
-  name: id,
-  kind: 'note',
-  cls: null,
-  icon: 0,
-  key: false,
-  deadline: false,
-  x,
-  y,
-});
+const node = (id: string, x = 0, y = 0): GraphNode =>
+  newNode({ id, name: id, kind: 'note', cls: null, icon: 0, x, y });
 
 /** A graph with nodes a…h and the given wires, history cleared. */
 function graph(wires: string[]): Graph {
@@ -183,7 +175,7 @@ describe('ids and seed', () => {
 
   it('seeds about 200 nodes and 1.5 wires per node, without history', () => {
     const g = seedGraph();
-    expect(g.nodes.size).toBe(200);
+    expect(g.nodes.size).toBe(200 + GALLERY_SIZE);
     expect(g.edges().length).toBeGreaterThan(200);
     expect(g.canUndo).toBe(false);
     expect([...g.nodes.keys()].some((id) => g.inputs(id).length >= 2)).toBe(true);

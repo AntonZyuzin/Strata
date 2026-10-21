@@ -1,120 +1,143 @@
-import { fog } from '@strata/design-tokens';
-import { type Application, BitmapFont, Graphics, Rectangle, Texture } from 'pixi.js';
+import { fog, GLYPHS, type GlyphName, palette } from '@strata/design-tokens';
+import { BitmapFont, CanvasSource, Texture } from 'pixi.js';
 
-/** Bubble diameters S, M, L in world units (06 §4.2). */
-export const SIZE = { s: 32, m: 48, l: 72 } as const;
-export const ICONS = 200;
-const ICON_CELL = 32;
-export const LABEL_FONT = 'StrataLabel';
+/** Bubble diameters S, M, L, XL in world units (07 §4.2, 06 §4.2). */
+export const SIZE = { s: 32, m: 48, l: 72, xl: 108 } as const;
 
-let fontInstalled = false;
+/** Body texture radius: drawn once, large, with mips for every zoom. */
+const BODY_R = 128;
 
-/**
- * Bitmap font for labels from the system monospace, with Cyrillic. MSDF and
- * the OFL pixel fonts come with spike 9 (07 §3.4); this is the bench's font.
- */
-export function installLabelFont(): void {
-  if (fontInstalled) return;
-  BitmapFont.install({
-    name: LABEL_FONT,
-    style: { fontFamily: fog.font.ui, fontSize: 24, fill: fog.scene.paper },
-    chars: [['a', 'z'], ['A', 'Z'], ['0', '9'], ['а', 'я'], ['А', 'Я'], ' ёЁ.,:;-—«»№!?()/+#&'],
-    resolution: 2,
+function canvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  if (!ctx) throw new Error('2D canvas is not available');
+  return [c, ctx];
+}
+
+/** White disc for bubble bodies (tinted paper or grey by state) and a soft halo. */
+export function createBodyTextures(): { body: Texture; halo: Texture; destroy(): void } {
+  const [bc, b] = canvas(2 * BODY_R + 4, 2 * BODY_R + 4);
+  b.fillStyle = '#ffffff';
+  b.beginPath();
+  b.arc(BODY_R + 2, BODY_R + 2, BODY_R, 0, Math.PI * 2);
+  b.fill();
+  const body = new Texture({
+    source: new CanvasSource({ resource: bc, autoGenerateMipmaps: true, scaleMode: 'linear' }),
   });
-  fontInstalled = true;
-}
-
-function texture(app: Application, g: Graphics, frame?: Rectangle): Texture {
-  const tex = app.renderer.generateTexture({
-    target: g,
-    resolution: 2,
-    antialias: true,
-    ...(frame ? { frame } : {}),
+  // «Срок скоро»: a static halo up to 1.5 r (07 §4.3), a sprite, not a filter (07 §10.1).
+  const size = 256;
+  const [hc, h] = canvas(size, size);
+  const grad = h.createRadialGradient(size / 2, size / 2, size / 6, size / 2, size / 2, size / 2);
+  grad.addColorStop(0, 'rgba(255,255,255,1)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  h.fillStyle = grad;
+  h.fillRect(0, 0, size, size);
+  const halo = new Texture({
+    source: new CanvasSource({ resource: hc, autoGenerateMipmaps: true, scaleMode: 'linear' }),
   });
-  g.destroy();
-  return tex;
-}
-
-export interface SceneTextures {
-  bubble: Texture;
-  ring: Texture;
-  icons: Texture[];
-  destroy(): void;
-}
-
-/** Bubble body (07 §4.1: paper with an ink rim), deadline ring and the icon atlas. */
-export function createTextures(app: Application): SceneTextures {
-  const bubble = texture(
-    app,
-    new Graphics()
-      .circle(0, 0, SIZE.l / 2)
-      .fill(fog.scene.paper)
-      .circle(0, 0, SIZE.l / 2 - 1.5)
-      .stroke({ color: fog.scene.ink, width: 1.5, alpha: 0.25 }),
-  );
-  const ring = texture(
-    app,
-    new Graphics().circle(0, 0, SIZE.l / 2 + 6).stroke({ color: 0xffffff, width: 3 }),
-  );
-  const icons = iconAtlas(app);
   return {
-    bubble,
-    ring,
-    icons,
+    body,
+    halo,
     destroy() {
-      for (const t of icons) t.destroy();
-      bubble.destroy(true);
-      ring.destroy(true);
+      body.destroy(true);
+      halo.destroy(true);
     },
   };
 }
 
-function rng(seed: number): () => number {
-  let x = seed | 0 || 1;
-  return () => {
-    x ^= x << 13;
-    x ^= x >>> 17;
-    x ^= x << 5;
-    return (x >>> 0) / 4294967296;
-  };
-}
+/** Diameter of the body texture's disc, for sprite scaling. */
+export const BODY_DIAMETER = 2 * BODY_R;
+export const BODY_TEXTURE = 2 * BODY_R + 4;
+
+export type Plate = 'none' | 'ink' | 'attention' | 'overdue' | 'paper';
 
 /**
- * 200 procedural 1-bit glyphs in one atlas, standing in for the game-icons
- * of spike 9; one texture keeps all bubbles in a few batches.
+ * Pixel glyphs on the Scene (07 §3.4, §4.5): drawn at whole device pixels, one
+ * picture pixel = u device px, nearest scaling. With a plate the glyph sits on
+ * a 12u square with a 1u frame: ink on yellow or red, paper on ink.
  */
-function iconAtlas(app: Application): Texture[] {
-  const perRow = 20;
-  const rows = Math.ceil(ICONS / perRow);
-  const g = new Graphics();
-  const px = 3;
-  for (let k = 0; k < ICONS; k++) {
-    const r = rng(1000 + k);
-    const ox = (k % perRow) * ICON_CELL + 1;
-    const oy = Math.floor(k / perRow) * ICON_CELL + 1;
-    for (let y = 0; y < 10; y++) {
-      for (let x = 0; x < 5; x++) {
-        if (r() > 0.5) {
-          g.rect(ox + x * px, oy + y * px, px, px).rect(ox + (9 - x) * px, oy + y * px, px, px);
-        }
-      }
+export class GlyphTextures {
+  private readonly cache = new Map<string, Texture>();
+
+  constructor(
+    readonly u: number,
+    readonly dpr: number,
+  ) {}
+
+  /** `paper` draws the glyph itself in paper, for the ghost's «?» on the bare Scene. */
+  get(name: GlyphName, plate: Plate = 'none', scale = 1, paper = plate === 'ink'): Texture {
+    const key = `${name}:${plate}:${scale}:${paper}`;
+    const hit = this.cache.get(key);
+    if (hit) return hit;
+    const rows = GLYPHS[name];
+    const n = rows.length;
+    const px = this.u * scale;
+    const border = plate === 'none' ? 0 : 2 * this.u;
+    const side = n * px + 2 * border;
+    const [c, ctx] = canvas(side, side);
+    if (plate !== 'none') {
+      const frame = plate === 'ink' ? palette.paper : palette.ink850;
+      const fill =
+        plate === 'ink'
+          ? palette.ink850
+          : plate === 'paper'
+            ? palette.paper
+            : plate === 'attention'
+              ? palette.yellow500
+              : palette.red500;
+      ctx.fillStyle = frame;
+      ctx.fillRect(0, 0, side, side);
+      ctx.fillStyle = fill;
+      ctx.fillRect(this.u, this.u, side - 2 * this.u, side - 2 * this.u);
     }
+    ctx.fillStyle = paper ? palette.paper : palette.ink850;
+    rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        if (row[x] === '#') ctx.fillRect(border + x * px, border + y * px, px, px);
+      }
+    });
+    const tex = new Texture({
+      source: new CanvasSource({ resource: c, resolution: this.dpr, scaleMode: 'nearest' }),
+    });
+    this.cache.set(key, tex);
+    return tex;
   }
-  g.fill(fog.scene.ink);
-  const atlas = texture(app, g, new Rectangle(0, 0, perRow * ICON_CELL, rows * ICON_CELL));
-  return Array.from(
-    { length: ICONS },
-    (_, k) =>
-      new Texture({
-        source: atlas.source,
-        frame: new Rectangle(
-          (k % perRow) * ICON_CELL,
-          Math.floor(k / perRow) * ICON_CELL,
-          ICON_CELL,
-          ICON_CELL,
-        ),
-      }),
-  );
+
+  destroy(): void {
+    for (const t of this.cache.values()) t.destroy(true);
+    this.cache.clear();
+  }
 }
 
-export const ICON_SCALE = 0.55 / ICON_CELL; // icon is 0.55 · d (07 §4.1)
+const LABEL_CHARS: (string | string[])[] = [
+  ['a', 'z'],
+  ['A', 'Z'],
+  ['0', '9'],
+  ['а', 'я'],
+  ['А', 'Я'],
+  ' ёЁ.,:;-—–«»“”‘’№!?()/+#&…↗×%',
+];
+
+const installed = new Set<string>();
+
+/**
+ * Departure Mono as a bitmap font at an exact device size (07 §3.4): glyphs
+ * are rasterised at `devicePx` and sampled nearest, so labels stay on the
+ * font's pixel grid. Returns the font name; a size is installed once.
+ */
+export function labelFont(devicePx: number, dpr: number): string {
+  const name = `StrataLabel${devicePx}`;
+  if (!installed.has(name)) {
+    BitmapFont.install({
+      name,
+      style: { fontFamily: fog.font.ui, fontSize: devicePx / dpr, fill: palette.paper },
+      chars: LABEL_CHARS,
+      resolution: dpr,
+      textureStyle: { scaleMode: 'nearest' },
+    });
+    installed.add(name);
+  }
+  return name;
+}

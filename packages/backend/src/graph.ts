@@ -9,18 +9,70 @@
 export type NodeKind = 'network' | 'note' | 'board' | 'checklist' | 'media';
 export type NodeClass = 'task' | 'project' | 'references' | 'checklist';
 
+/**
+ * Deadline state of 07 §4.6. The core derives it from the date and the viewer's
+ * day (05 §6.3); the prototype stores the state to show every look.
+ */
+export type Due = 'none' | 'far' | 'soon' | 'today' | 'overdue';
+export type Status = 'open' | 'done' | 'cancelled';
+
+/** Roll-up of a network (05 §6.4): finished of all, and whether something inside burns. */
+export interface Fold {
+  done: number;
+  total: number;
+  burning: 'soon' | 'overdue' | null;
+}
+
 export interface GraphNode {
   id: string;
   name: string;
   kind: NodeKind;
   cls: NodeClass | null;
-  /** Index into the icon atlas. */
+  /** Index into the icon presets (07 §6.3). */
   icon: number;
+  /** Flag «Ключевая» (05 §7). */
   key: boolean;
-  deadline: boolean;
+  due: Due;
+  status: Status;
+  /** Flag «Пауза» (05 §7). */
+  pause: boolean;
+  /** Flag «Шаблон» (05 §7). */
+  template: boolean;
+  /** `[[X]]` without a node yet (05 §8.5). */
+  ghost: boolean;
+  /** This placement is not the node's primary one (05 §5). */
+  appearance: boolean;
+  /** Wires to nodes not placed in this network (05 §8.3). */
+  external: number;
+  /** Assignees as indices into the people palette (07 §2.2). */
+  assignees: number[];
+  /** Node colour, an index into the people palette (05 §4.1, ☑ Q-05-8). */
+  color: number | null;
+  /** Roll-up for networks, null for other kinds. */
+  fold: Fold | null;
   /** Placement in this network, world units (05 §9.2). */
   x: number;
   y: number;
+}
+
+/** A plain node: open, no deadline, no flags. */
+export function newNode(
+  base: Pick<GraphNode, 'id' | 'name' | 'kind' | 'cls' | 'icon' | 'x' | 'y'> & Partial<GraphNode>,
+): GraphNode {
+  return {
+    key: false,
+    due: 'none',
+    status: 'open',
+    pause: false,
+    template: false,
+    ghost: false,
+    appearance: false,
+    external: 0,
+    assignees: [],
+    color: null,
+    fold: null,
+    ...base,
+  };
 }
 
 export type Op =

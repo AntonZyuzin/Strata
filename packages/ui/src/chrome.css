@@ -815,3 +815,54 @@ button:focus-visible {
   white-space: nowrap;
   text-overflow: ellipsis;
 }
+
+/* «Благодарности»: the same wide window, one-line rows with tooltips, the OFL text folded. */
+.window-credits {
+  width: min(112ch, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+}
+
+.window-credits .window-body {
+  overflow-y: auto;
+}
+
+.credits-line {
+  margin: 0 0 calc(4 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.credits-list {
+  grid-template-columns: 22ch minmax(0, 1fr);
+}
+
+.credits-list dd {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+.credits-ofl {
+  margin-top: calc(4 * var(--u));
+}
+
+.credits-ofl summary {
+  min-height: var(--st-size-control);
+  cursor: pointer;
+}
+
+.credits-ofl pre {
+  max-height: 40vh;
+  overflow: auto;
+  margin: calc(4 * var(--u)) 0 0;
+  padding: calc(4 * var(--u));
+  font: 12px / 1.4 var(--st-font-mono);
+  white-space: pre-wrap;
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+  -webkit-font-smoothing: auto;
+}

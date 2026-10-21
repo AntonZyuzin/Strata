@@ -3,6 +3,7 @@ import { detectLocale, type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
 import { BenchWindow } from './BenchWindow';
 import { type BuildInfo, closeAppWindow, loadBuildInfo } from './backend';
+import { CreditsWindow } from './CreditsWindow';
 import { FontsWindow } from './FontsWindow';
 import { LocaleSwitch } from './LocaleSwitch';
 import { loadPixelPrefs, type PixelPrefs } from './pixel';
@@ -22,14 +23,15 @@ function onlyFromUrl(): ScenarioId[] | undefined {
   return ids.length > 0 ? ids : undefined;
 }
 
-type Screen = 'about' | 'proto' | 'bench' | 'fonts';
+type Screen = 'about' | 'proto' | 'bench' | 'fonts' | 'credits';
 
-/** `?proto`, `?bench` and `?fonts` open a screen at start (e2e and quick checks). */
+/** `?proto`, `?bench`, `?fonts` and `?credits` open a screen at start (e2e and quick checks). */
 function screenFromUrl(): Screen {
   const q = new URLSearchParams(window.location.search);
   if (q.has('proto')) return 'proto';
   if (q.has('bench')) return 'bench';
   if (q.has('fonts')) return 'fonts';
+  if (q.has('credits')) return 'credits';
   return 'about';
 }
 
@@ -98,6 +100,14 @@ export function App() {
     );
   }
 
+  if (screen === 'credits') {
+    return (
+      <main className="scene">
+        <CreditsWindow locale={locale} onBack={() => setScreen('about')} />
+      </main>
+    );
+  }
+
   return (
     <main className="scene">
       <section className="window" aria-labelledby="about-title">
@@ -156,6 +166,13 @@ export function App() {
               }}
             >
               {t(locale, 'bench.open')}
+            </button>
+            <button
+              type="button"
+              title={t(locale, 'credits.open')}
+              onClick={() => setScreen('credits')}
+            >
+              {t(locale, 'credits.open')}
             </button>
           </div>
         </div>

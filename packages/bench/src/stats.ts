@@ -27,6 +27,14 @@ export function summarize(samples: readonly number[]): Summary {
   };
 }
 
+/** Median; the mean of the two middle values for an even count. */
+export function median(xs: readonly number[]): number {
+  if (xs.length === 0) return 0;
+  const s = [...xs].sort((a, b) => a - b);
+  const mid = s.length >> 1;
+  return round(s.length % 2 ? (s[mid] ?? 0) : ((s[mid - 1] ?? 0) + (s[mid] ?? 0)) / 2);
+}
+
 export function round(x: number, digits = 3): number {
   const k = 10 ** digits;
   return Math.round(x * k) / k;

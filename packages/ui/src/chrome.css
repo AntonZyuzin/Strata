@@ -192,7 +192,7 @@ button:disabled {
 }
 
 .bench-table {
-  grid-template-columns: 24ch minmax(0, 1fr);
+  grid-template-columns: 26ch minmax(0, 1fr);
 }
 
 .bench-row {

@@ -21,7 +21,7 @@ export const SCENARIO_IDS = [
   'canvas-drag-n5k',
   'canvas-pan-zoom-n10k',
   'loro-index-20k',
-  'loro-index-100k',
+  'loro-index-100k-k16',
   'loro-text-1mb',
 ] as const;
 
@@ -49,6 +49,8 @@ export interface BenchReport {
   report: 'strata-bench';
   version: 1;
   profile: Profile;
+  /** First in the JSON so it reads at a glance: verdict per scenario, Loro workers used. */
+  summary: { verdicts: Partial<Record<ScenarioId, Verdict>>; workers: boolean };
   /** From the desktop core over IPC; `null` core in a plain browser. */
   app: AppInfo;
   startedAt: string;
@@ -59,22 +61,24 @@ export interface BenchReport {
 /** The numbers the results table shows; the UI formats them through i18n. */
 export type Headline =
   | { kind: 'canvas'; fps: number; p95: number }
-  | { kind: 'index'; importMs: number; editMean: number; editMax: number }
+  | { kind: 'index'; importMs: number; memoryMib: number; editMean: number; firstEdit: number }
   | { kind: 'text'; insertMs: number; keyMean: number; keyMax: number }
   | { kind: 'error'; message: string };
 
 export function headline(o: ScenarioOutcome): Headline {
   if (!o.ok) return { kind: 'error', message: firstLine(o.error) };
   const r = o.result as Partial<CanvasResult & LoroIndexResult & LoroTextResult>;
-  if (r.fps !== undefined && r.intervalMs)
-    return { kind: 'canvas', fps: r.fps, p95: r.intervalMs.p95 };
+  // The gate reads the median of the runs' p95 (14 §1.4).
+  if (r.fps !== undefined && r.p95Ms !== undefined)
+    return { kind: 'canvas', fps: r.fps, p95: r.p95Ms };
   // Means, not p95: WebKit timers are 1 ms coarse, sub-millisecond p95 reads as 0.
   if (r.importMs !== undefined && r.editMs && r.editMeanMs !== undefined)
     return {
       kind: 'index',
       importMs: r.importMs,
+      memoryMib: r.importMemoryMib ?? r.wasmMemoryMib ?? 0,
       editMean: r.editMeanMs,
-      editMax: Math.max(r.editMs.max, r.firstEditMs ?? 0),
+      firstEdit: r.firstEditMs ?? 0,
     };
   if (r.insert1MbMs !== undefined && r.keystrokeMs && r.keystrokeMeanMs !== undefined)
     return {
@@ -87,3 +91,54 @@ export function headline(o: ScenarioOutcome): Headline {
 }
 
 const firstLine = (s = '') => s.split('\n')[0] ?? '';
+
+/**
+ * Thresholds of the gate: frames from 14 §2 (NFR-01, NFR-02, NFR-03),
+ * Loro from the spike 4 criterion (16 §3.2).
+ */
+export const THRESHOLDS = {
+  frameP95Ms: {
+    'canvas-pan-zoom-n5k': 1000 / 60,
+    'canvas-drag-n5k': 1000 / 60,
+    'canvas-pan-zoom-n10k': 1000 / 30,
+  },
+  indexImportMs: 500,
+  indexMemoryMib: 200,
+  editMs: 5,
+  /** The first write after the lazy import must fit in a frame (S4: the reason to shard). */
+  firstEditMs: 1000 / 60,
+  textInsertMs: 200,
+  keystrokeMs: 16,
+} as const;
+
+export type Verdict = 'pass' | 'fail';
+
+/**
+ * Pass or fail of one scenario. Frame limits get the timer's slack, at least
+ * 0.5 ms: WebKit floors timestamps to 1 ms (a perfect 60 Hz run reads p95 = 17)
+ * and Chromium clamps them to 0.1 ms with jitter (16.8–17.1). Counting in
+ * vsync periods instead would pass WKWebView's uneven 18–22 ms frames.
+ */
+export function verdict(o: ScenarioOutcome, timerResolutionMs = 0): Verdict {
+  const h = headline(o);
+  const slack = Math.max(timerResolutionMs, 0.5);
+  switch (h.kind) {
+    case 'canvas': {
+      const limit = THRESHOLDS.frameP95Ms[o.id as keyof typeof THRESHOLDS.frameP95Ms];
+      return limit !== undefined && h.p95 <= limit + slack ? 'pass' : 'fail';
+    }
+    case 'index':
+      return h.importMs < THRESHOLDS.indexImportMs &&
+        h.memoryMib < THRESHOLDS.indexMemoryMib &&
+        h.editMean < THRESHOLDS.editMs &&
+        h.firstEdit <= THRESHOLDS.firstEditMs + slack
+        ? 'pass'
+        : 'fail';
+    case 'text':
+      return h.insertMs <= THRESHOLDS.textInsertMs && h.keyMean <= THRESHOLDS.keystrokeMs
+        ? 'pass'
+        : 'fail';
+    case 'error':
+      return 'fail';
+  }
+}

@@ -13,6 +13,8 @@ export default defineConfig({
   envPrefix: ['VITE_', 'TAURI_ENV_'],
   // Pre-bundling would break the `new URL('…wasm', import.meta.url)` of loro-crdt/web.
   optimizeDeps: { exclude: ['loro-crdt'] },
+  // Module workers: the Loro bench worker imports the wasm glue as ESM.
+  worker: { format: 'es' },
   build: {
     target: ['es2022', 'safari16'],
     sourcemap: true,

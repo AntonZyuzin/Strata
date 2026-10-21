@@ -10,6 +10,8 @@ export interface Environment {
   deviceMemoryGb: number | null;
   webgl: { version: string; vendor: string; renderer: string } | null;
   refreshHzEstimate: number | null;
+  /** Mean refresh period, ms (see `estimateVsyncMs`). */
+  vsyncMs: number;
   /** Smallest step of `performance.now()`: about 1 ms in WebKit, 0.1 ms or less in Chromium. */
   timerResolutionMs: number;
 }
@@ -30,20 +32,25 @@ function webglInfo(): Environment['webgl'] {
   return info;
 }
 
-/** Median rAF interval over ~0.5 s with nothing to draw: the display refresh rate. */
-export function estimateRefreshHz(): Promise<number | null> {
+/**
+ * Display refresh period: the mean rAF interval over 120 idle frames (2 s at
+ * 60 Hz). Not the median: WebKit rounds timestamps to 1 ms, so at 60 Hz the
+ * intervals read 16 or 17 and only their mean is 16.7.
+ */
+export function estimateVsyncMs(frames = 120): Promise<number> {
   return new Promise((resolve) => {
     const stamps: number[] = [];
     const tick = (t: number) => {
       stamps.push(t);
-      if (stamps.length < 40) requestAnimationFrame(tick);
+      if (stamps.length <= frames) requestAnimationFrame(tick);
       else {
+        // Drop the slowest tenth: a stray long frame should not shift the period.
         const d = stamps
           .slice(1)
           .map((s, i) => s - (stamps[i] ?? s))
-          .sort((a, b) => a - b);
-        const median = d[Math.floor(d.length / 2)] ?? 0;
-        resolve(median > 0 ? Math.round(1000 / median) : null);
+          .sort((a, b) => a - b)
+          .slice(0, Math.ceil(frames * 0.9));
+        resolve(d.reduce((a, b) => a + b, 0) / Math.max(1, d.length));
       }
     };
     requestAnimationFrame(tick);
@@ -64,6 +71,7 @@ export function timerResolution(): number {
 }
 
 export async function collectEnvironment(): Promise<Environment> {
+  const vsyncMs = await estimateVsyncMs();
   const nav = navigator as Navigator & { deviceMemory?: number };
   return {
     userAgent: navigator.userAgent,
@@ -75,7 +83,8 @@ export async function collectEnvironment(): Promise<Environment> {
     hardwareConcurrency: navigator.hardwareConcurrency,
     deviceMemoryGb: nav.deviceMemory ?? null,
     webgl: webglInfo(),
-    refreshHzEstimate: await estimateRefreshHz(),
+    refreshHzEstimate: vsyncMs > 0 ? Math.round(1000 / vsyncMs) : null,
+    vsyncMs: Math.round(vsyncMs * 1000) / 1000,
     timerResolutionMs: timerResolution(),
   };
 }

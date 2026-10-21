@@ -4,7 +4,6 @@ import {
   BitmapFont,
   BitmapText,
   Container,
-  Culler,
   Graphics,
   Rectangle,
   Sprite,
@@ -13,7 +12,7 @@ import {
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
 import 'pixi.js/unsafe-eval';
 import { type FrameReport, runFrames } from './frame-loop';
-import { rng } from './stats';
+import { rng, type Summary, summarize } from './stats';
 import { createWireLayer } from './wires';
 
 /**
@@ -27,7 +26,40 @@ export interface CanvasScenario {
   mode: 'pan-zoom' | 'drag';
   nodes: number;
   wires: number;
-  durationMs: number;
+  /** Frame method of 14 §1.4: warmup, then `runs` runs of `runMs` each. */
+  warmupMs: number;
+  runMs: number;
+  runs: number;
+  vsyncMs: number;
+}
+
+/**
+ * Counts WebGL draw calls per frame (NFR-11) by wrapping the context's draw
+ * functions; the wrapper costs one increment per call.
+ */
+function countDrawCalls(gl: WebGL2RenderingContext | undefined): { take(): number } {
+  let calls = 0;
+  if (gl) {
+    for (const name of [
+      'drawArrays',
+      'drawElements',
+      'drawArraysInstanced',
+      'drawElementsInstanced',
+    ] as const) {
+      const original = gl[name].bind(gl) as (...args: unknown[]) => void;
+      (gl as unknown as Record<string, unknown>)[name] = (...args: unknown[]) => {
+        calls++;
+        original(...args);
+      };
+    }
+  }
+  return {
+    take() {
+      const n = calls;
+      calls = 0;
+      return n;
+    },
+  };
 }
 
 export interface CanvasResult extends FrameReport {
@@ -36,6 +68,8 @@ export interface CanvasResult extends FrameReport {
   wires: number;
   icons: number;
   dragged: number;
+  /** Draw calls per frame (NFR-11: ≤ 20 on N-5k). */
+  drawCalls: Summary;
   setupMs: number;
   renderer: string;
 }
@@ -54,6 +88,16 @@ const DRAG_BLOCK = 10; // 10 × 10 = 100 selected bubbles (NFR-03)
 const LABEL_ZOOM = 0.67;
 const FONT = 'StrataLabel';
 const ICON_CELL = 32; // atlas cell, world units at zoom 1
+/**
+ * Scene structure, as measured in spike 1 (S1-canvas.md): the world and each
+ * of its four layers are Pixi 8 render groups. A camera move then changes one
+ * transform on the GPU instead of every bubble's on the CPU, and showing or
+ * hiding the labels rebuilds only the world's list of five children. Nothing
+ * is culled per object: at 10 000 bubbles the GPU drops off-screen geometry
+ * cheaper than any CPU pass (Pixi's Culler cost 10–20 ms per frame), and one
+ * group per layer keeps draw calls at 4–5 (NFR-11). Tiles as render groups
+ * were tried too: no CPU gain, 25–127 draw calls.
+ */
 
 let fontInstalled = false;
 
@@ -159,186 +203,222 @@ export async function runCanvasScenario(
     autoStart: false,
     sharedTicker: false,
   });
-  stage.appendChild(app.canvas);
-  installFont();
+  // A canvas left by a failed run must not push this one off screen.
+  stage.replaceChildren(app.canvas);
+  // Numbers from a run that lost the GPU context (driver reset, GPU switch) are void.
+  let lost = false;
+  app.canvas.addEventListener('webglcontextlost', () => {
+    lost = true;
+  });
+  const teardown: (() => void)[] = [];
+  try {
+    installFont();
 
-  const world = new Container({ cullableChildren: true });
-  app.stage.addChild(world);
-  const bubbleTex = bubbleTexture(app);
-  const ringTex = ringTexture(app);
-  const icons = iconAtlas(app);
-
-  // Grid layout with jitter: one big network seen from above.
-  const n = sc.nodes;
-  const cols = Math.ceil(Math.sqrt(n));
-  const rows = Math.ceil(n / cols);
-  const r = rng(7);
-  const x = new Float32Array(n);
-  const y = new Float32Array(n);
-  const diameter = new Float32Array(n);
-  for (let i = 0; i < n; i++) {
-    x[i] = (i % cols) * SPACING + (r() - 0.5) * SPACING * 0.5;
-    y[i] = Math.floor(i / cols) * SPACING + (r() - 0.5) * SPACING * 0.5;
-    const network = r() < NETWORK_SHARE;
-    const key = r() < KEY_SHARE;
-    diameter[i] = key ? (network ? SIZE.l : SIZE.m) : network ? SIZE.m : SIZE.s;
-  }
-
-  // Wires: mostly to bubbles one to three rows below, a few anywhere.
-  const from = new Uint32Array(sc.wires);
-  const to = new Uint32Array(sc.wires);
-  for (let e = 0; e < sc.wires; e++) {
-    const a = Math.floor(r() * n);
-    let b: number;
-    if (r() < FAR_WIRES) b = Math.floor(r() * n);
-    else {
-      const col = Math.min(cols - 1, Math.max(0, (a % cols) + Math.round((r() - 0.5) * 6)));
-      const row = Math.min(rows - 1, Math.floor(a / cols) + 1 + Math.floor(r() * 3));
-      b = Math.min(n - 1, row * cols + col);
-    }
-    from[e] = a;
-    to[e] = b === a ? (a + 1) % n : b;
-  }
-  const wires = createWireLayer(sc.wires, { width: 1.5, color: [0.95, 0.94, 0.9, 0.6] });
-  for (let e = 0; e < sc.wires; e++) {
-    wires.radii.set([(diameter[from[e] ?? 0] ?? 0) / 2, (diameter[to[e] ?? 0] ?? 0) / 2], e * 2);
-  }
-  const writeWire = (e: number) => {
-    const a = from[e] ?? 0;
-    const b = to[e] ?? 0;
-    wires.ends.set([x[a] ?? 0, y[a] ?? 0, x[b] ?? 0, y[b] ?? 0], e * 4);
-  };
-  for (let e = 0; e < sc.wires; e++) writeWire(e);
-  wires.upload();
-  world.addChild(wires.mesh);
-
-  // Draw order of 07 §4.1, reduced to four layers: body, icon, deadline ring, label.
-  const rings = new Container({ cullableChildren: true });
-  const bubbles = new Container({ cullableChildren: true });
-  const glyphs = new Container({ cullableChildren: true });
-  const labels = new Container({ cullableChildren: true });
-  world.addChild(bubbles, glyphs, rings, labels);
-  const ringOf = new Map<number, Sprite>();
-  const bubbleSprites: Sprite[] = [];
-  const glyphSprites: Sprite[] = [];
-  const labelTexts: BitmapText[] = [];
-  for (let i = 0; i < n; i++) {
-    const d = diameter[i] ?? SIZE.s;
-    const px = x[i] ?? 0;
-    const py = y[i] ?? 0;
-    if (r() < DEADLINE_SHARE) {
-      const ring = new Sprite({ texture: ringTex, anchor: 0.5, tint: fog.color.attention });
-      ring.scale.set(d / SIZE.l);
-      ring.position.set(px, py);
-      ring.cullable = true;
-      rings.addChild(ring);
-      ringOf.set(i, ring);
-    }
-    const b = new Sprite({ texture: bubbleTex, anchor: 0.5 });
-    b.scale.set(d / SIZE.l);
-    b.position.set(px, py);
-    b.cullable = true;
-    bubbles.addChild(b);
-    bubbleSprites.push(b);
-    const g = new Sprite({ texture: icons[i % ICONS] ?? Texture.EMPTY, anchor: 0.5 });
-    g.scale.set((d * 0.55) / ICON_CELL); // icon is 0.55 · d (07 §4.1)
-    g.position.set(px, py);
-    g.cullable = true;
-    glyphs.addChild(g);
-    glyphSprites.push(g);
-    const l = new BitmapText({
-      text: `${WORDS[i % WORDS.length]} ${i}`,
-      style: { fontFamily: FONT, fontSize: 11 },
+    const world = new Container({ isRenderGroup: true });
+    app.stage.addChild(world);
+    const bubbleTex = bubbleTexture(app);
+    const ringTex = ringTexture(app);
+    const icons = iconAtlas(app);
+    teardown.push(() => {
+      for (const t of icons) t.destroy();
     });
-    l.anchor.set(0.5, 0);
-    l.position.set(px, py + d / 2 + 4);
-    l.cullable = true;
-    labels.addChild(l);
-    labelTexts.push(l);
-  }
 
-  // Drag: a 10 × 10 block of selected bubbles in the middle of the network.
-  const dragged: number[] = [];
-  if (sc.mode === 'drag') {
-    const r0 = Math.floor(rows / 2 - DRAG_BLOCK / 2);
-    const c0 = Math.floor(cols / 2 - DRAG_BLOCK / 2);
-    for (let i = 0; i < DRAG_BLOCK; i++) {
-      for (let j = 0; j < DRAG_BLOCK; j++) dragged.push((r0 + i) * cols + c0 + j);
+    // Grid layout with jitter: one big network seen from above.
+    const n = sc.nodes;
+    const cols = Math.ceil(Math.sqrt(n));
+    const rows = Math.ceil(n / cols);
+    const r = rng(7);
+    const x = new Float32Array(n);
+    const y = new Float32Array(n);
+    const diameter = new Float32Array(n);
+    for (let i = 0; i < n; i++) {
+      x[i] = (i % cols) * SPACING + (r() - 0.5) * SPACING * 0.5;
+      y[i] = Math.floor(i / cols) * SPACING + (r() - 0.5) * SPACING * 0.5;
+      const network = r() < NETWORK_SHARE;
+      const key = r() < KEY_SHARE;
+      diameter[i] = key ? (network ? SIZE.l : SIZE.m) : network ? SIZE.m : SIZE.s;
     }
-  }
-  const isDragged = new Uint8Array(n);
-  for (const i of dragged) isDragged[i] = 1;
-  const draggedWires: number[] = [];
-  for (let e = 0; e < sc.wires; e++) {
-    if (isDragged[from[e] ?? 0] || isDragged[to[e] ?? 0]) draggedWires.push(e);
-  }
-  const baseX = x.slice();
-  const baseY = y.slice();
-  const setupMs = performance.now() - t0;
 
-  const worldW = cols * SPACING;
-  const worldH = rows * SPACING;
-  const camera = (zoom: number, cx: number, cy: number) => {
-    world.scale.set(zoom);
-    world.position.set(app.screen.width / 2 - cx * zoom, app.screen.height / 2 - cy * zoom);
-    wires.setZoom(zoom);
-    labels.visible = zoom >= LABEL_ZOOM;
-  };
-
-  const panZoom = (p: number) => {
-    // Zoomed out at the start and the end, a close-up in the middle.
-    const zoom = Math.exp(
-      Math.log(0.12) + (Math.log(1.6) - Math.log(0.12)) * (0.5 - 0.5 * Math.cos(2 * Math.PI * p)),
-    );
-    camera(
-      zoom,
-      worldW * (0.5 + 0.35 * Math.sin(2 * Math.PI * p)),
-      worldH * (0.5 + 0.35 * Math.sin(4 * Math.PI * p)),
-    );
-  };
-
-  const drag = (p: number) => {
-    camera(0.75, worldW / 2, worldH / 2);
-    // The cursor path: a Lissajous figure a few bubbles wide.
-    const dx = Math.sin(2 * Math.PI * 3 * p) * SPACING * 3;
-    const dy = Math.sin(2 * Math.PI * 2 * p) * SPACING * 2;
-    for (const i of dragged) {
-      const px = (baseX[i] ?? 0) + dx;
-      const py = (baseY[i] ?? 0) + dy;
-      x[i] = px;
-      y[i] = py;
-      bubbleSprites[i]?.position.set(px, py);
-      glyphSprites[i]?.position.set(px, py);
-      ringOf.get(i)?.position.set(px, py);
-      labelTexts[i]?.position.set(px, py + (diameter[i] ?? 0) / 2 + 4);
+    // Wires: mostly to bubbles one to three rows below, a few anywhere.
+    const from = new Uint32Array(sc.wires);
+    const to = new Uint32Array(sc.wires);
+    for (let e = 0; e < sc.wires; e++) {
+      const a = Math.floor(r() * n);
+      let b: number;
+      if (r() < FAR_WIRES) b = Math.floor(r() * n);
+      else {
+        const col = Math.min(cols - 1, Math.max(0, (a % cols) + Math.round((r() - 0.5) * 6)));
+        const row = Math.min(rows - 1, Math.floor(a / cols) + 1 + Math.floor(r() * 3));
+        b = Math.min(n - 1, row * cols + col);
+      }
+      from[e] = a;
+      to[e] = b === a ? (a + 1) % n : b;
     }
-    for (const e of draggedWires) writeWire(e);
+    const wires = createWireLayer(sc.wires, { width: 1.5, color: [0.95, 0.94, 0.9, 0.6] });
+    teardown.push(() => wires.destroy());
+    for (let e = 0; e < sc.wires; e++) {
+      wires.radii.set([(diameter[from[e] ?? 0] ?? 0) / 2, (diameter[to[e] ?? 0] ?? 0) / 2], e * 2);
+    }
+    // No allocations in the frame loop (15 §4.1 rule 8): plain stores into the buffer.
+    const ends = wires.ends;
+    const writeWire = (e: number) => {
+      const a = from[e] ?? 0;
+      const b = to[e] ?? 0;
+      ends[e * 4] = x[a] ?? 0;
+      ends[e * 4 + 1] = y[a] ?? 0;
+      ends[e * 4 + 2] = x[b] ?? 0;
+      ends[e * 4 + 3] = y[b] ?? 0;
+    };
+    for (let e = 0; e < sc.wires; e++) writeWire(e);
     wires.upload();
-  };
+    world.addChild(wires.mesh);
 
-  const frame = (p: number) => {
-    if (sc.mode === 'drag') drag(p);
-    else panZoom(p);
-    wires.setTime((performance.now() - t0) / 1000);
-    // Off-screen bubbles are skipped, as the real canvas does. Transforms are
-    // refreshed first: the camera has just moved (CullerPlugin would use last frame's).
-    Culler.shared.cull(world, app.renderer.screen, false);
+    // Draw order of 07 §4.1, reduced to four layers: body, icon, deadline ring, label.
+    const layer = () => world.addChild(new Container({ isRenderGroup: true }));
+    const bubbles = layer();
+    const glyphs = layer();
+    const rings = layer();
+    const labels = layer();
+    const ringOf = new Map<number, Sprite>();
+    const bubbleSprites: Sprite[] = [];
+    const glyphSprites: Sprite[] = [];
+    const labelTexts: BitmapText[] = [];
+    for (let i = 0; i < n; i++) {
+      const d = diameter[i] ?? SIZE.s;
+      const px = x[i] ?? 0;
+      const py = y[i] ?? 0;
+      if (r() < DEADLINE_SHARE) {
+        const ring = new Sprite({ texture: ringTex, anchor: 0.5, tint: fog.color.attention });
+        ring.scale.set(d / SIZE.l);
+        ring.position.set(px, py);
+        rings.addChild(ring);
+        ringOf.set(i, ring);
+      }
+      const b = new Sprite({ texture: bubbleTex, anchor: 0.5 });
+      b.scale.set(d / SIZE.l);
+      b.position.set(px, py);
+      bubbles.addChild(b);
+      bubbleSprites.push(b);
+      const g = new Sprite({ texture: icons[i % ICONS] ?? Texture.EMPTY, anchor: 0.5 });
+      g.scale.set((d * 0.55) / ICON_CELL); // icon is 0.55 · d (07 §4.1)
+      g.position.set(px, py);
+      glyphs.addChild(g);
+      glyphSprites.push(g);
+      const l = new BitmapText({
+        text: `${WORDS[i % WORDS.length]} ${i}`,
+        style: { fontFamily: FONT, fontSize: 11 },
+      });
+      l.anchor.set(0.5, 0);
+      l.position.set(px, py + d / 2 + 4);
+      labels.addChild(l);
+      labelTexts.push(l);
+    }
+
+    // Drag: a 10 × 10 block of selected bubbles in the middle of the network.
+    const dragged: number[] = [];
+    if (sc.mode === 'drag') {
+      const r0 = Math.floor(rows / 2 - DRAG_BLOCK / 2);
+      const c0 = Math.floor(cols / 2 - DRAG_BLOCK / 2);
+      for (let i = 0; i < DRAG_BLOCK; i++) {
+        for (let j = 0; j < DRAG_BLOCK; j++) dragged.push((r0 + i) * cols + c0 + j);
+      }
+    }
+    const isDragged = new Uint8Array(n);
+    for (const i of dragged) isDragged[i] = 1;
+    const draggedWires: number[] = [];
+    for (let e = 0; e < sc.wires; e++) {
+      if (isDragged[from[e] ?? 0] || isDragged[to[e] ?? 0]) draggedWires.push(e);
+    }
+    // The selection being dragged moves to its own render group, in the same
+    // layer order, and follows the cursor as one transform: the big layers'
+    // buffers are not touched, only the wires of the selection are rewritten.
+    const selection = world.addChild(new Container({ isRenderGroup: true }));
+    const selBodies = selection.addChild(new Container());
+    const selIcons = selection.addChild(new Container());
+    const selRings = selection.addChild(new Container());
+    const selLabels = selection.addChild(new Container());
+    for (const i of dragged) {
+      const b = bubbleSprites[i];
+      const g = glyphSprites[i];
+      const ring = ringOf.get(i);
+      const l = labelTexts[i];
+      if (b) selBodies.addChild(b);
+      if (g) selIcons.addChild(g);
+      if (ring) selRings.addChild(ring);
+      if (l) selLabels.addChild(l);
+    }
+    const baseX = x.slice();
+    const baseY = y.slice();
+    // Build every layer's draw list once, labels included, as the app would when a
+    // network loads; otherwise the first zoom past LABEL_ZOOM pays for all labels in one frame.
     app.render();
-  };
+    const setupMs = performance.now() - t0;
 
-  const report = await runFrames(sc.durationMs, frame);
-  const renderer = app.renderer.name;
-  wires.destroy();
-  for (const t of icons) t.destroy();
-  app.destroy({ removeView: true }, { children: true, texture: true, textureSource: true });
-  return {
-    ...report,
-    mode: sc.mode,
-    nodes: n,
-    wires: sc.wires,
-    icons: ICONS,
-    dragged: dragged.length,
-    setupMs: Math.round(setupMs),
-    renderer,
-  };
+    const worldW = cols * SPACING;
+    const worldH = rows * SPACING;
+    const camera = (zoom: number, cx: number, cy: number) => {
+      world.scale.set(zoom);
+      world.position.set(app.screen.width / 2 - cx * zoom, app.screen.height / 2 - cy * zoom);
+      wires.setZoom(zoom);
+      labels.visible = zoom >= LABEL_ZOOM;
+      selLabels.visible = labels.visible;
+    };
+
+    const panZoom = (p: number) => {
+      // Zoomed out at the start and the end, a close-up in the middle.
+      const zoom = Math.exp(
+        Math.log(0.12) + (Math.log(1.6) - Math.log(0.12)) * (0.5 - 0.5 * Math.cos(2 * Math.PI * p)),
+      );
+      camera(
+        zoom,
+        worldW * (0.5 + 0.35 * Math.sin(2 * Math.PI * p)),
+        worldH * (0.5 + 0.35 * Math.sin(4 * Math.PI * p)),
+      );
+    };
+
+    const drag = (p: number) => {
+      camera(0.75, worldW / 2, worldH / 2);
+      // The cursor path: a Lissajous figure a few bubbles wide.
+      const dx = Math.sin(2 * Math.PI * 3 * p) * SPACING * 3;
+      const dy = Math.sin(2 * Math.PI * 2 * p) * SPACING * 2;
+      selection.position.set(dx, dy);
+      for (const i of dragged) {
+        x[i] = (baseX[i] ?? 0) + dx;
+        y[i] = (baseY[i] ?? 0) + dy;
+      }
+      for (const e of draggedWires) writeWire(e);
+      wires.upload();
+    };
+
+    const draws = countDrawCalls((app.renderer as unknown as { gl?: WebGL2RenderingContext }).gl);
+    const drawCalls: number[] = [];
+    const frame = (p: number, timed: boolean) => {
+      if (sc.mode === 'drag') drag(p);
+      else panZoom(p);
+      wires.setTime((performance.now() - t0) / 1000);
+      app.render();
+      const calls = draws.take();
+      if (timed) drawCalls.push(calls);
+    };
+
+    const report = await runFrames(
+      { warmupMs: sc.warmupMs, runMs: sc.runMs, runs: sc.runs, vsyncMs: sc.vsyncMs },
+      frame,
+    );
+    if (lost) throw new Error('WebGL context was lost during the run; its numbers are void');
+    return {
+      ...report,
+      mode: sc.mode,
+      nodes: n,
+      wires: sc.wires,
+      icons: ICONS,
+      dragged: dragged.length,
+      drawCalls: summarize(drawCalls),
+      setupMs: Math.round(setupMs),
+      renderer: app.renderer.name,
+    };
+  } finally {
+    for (const f of teardown) f();
+    app.destroy({ removeView: true }, { children: true, texture: true, textureSource: true });
+  }
 }

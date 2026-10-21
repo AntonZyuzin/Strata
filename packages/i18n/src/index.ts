@@ -20,7 +20,7 @@ const ru = {
   'bench.open': 'Бенчмарк',
   'bench.title': 'Бенчмарк',
   'bench.back': 'Назад',
-  'bench.hint': 'Около минуты. Окно не сворачивать и не трогать.',
+  'bench.hint': 'Около трёх минут. Окно не сворачивать и не трогать.',
   'bench.run': 'Запустить',
   'bench.copy': 'Копировать отчёт',
   'bench.copied': 'Отчёт скопирован',
@@ -28,16 +28,18 @@ const ru = {
   'bench.failed': 'Не запустился: {message}',
   'bench.progress': '{done} из {total} · {name}',
   'bench.pending': '—',
+  'bench.pass': '✓ {result}',
+  'bench.fail': '✗ {result}',
   'bench.running': 'идёт…',
   'bench.s.canvas-pan-zoom-n5k': 'Холст 5 тыс., зум',
   'bench.s.canvas-drag-n5k': 'Холст 5 тыс., тянем 100',
   'bench.s.canvas-pan-zoom-n10k': 'Холст 10 тыс., зум',
   'bench.s.loro-index-20k': 'Индекс 20 тыс.',
-  'bench.s.loro-index-100k': 'Индекс 100 тыс.',
+  'bench.s.loro-index-100k-k16': 'Индекс 100 тыс., 16 шардов',
   'bench.s.loro-text-1mb': 'Текст 1 МБ',
   'bench.r.canvas': '{fps} fps · p95 {p95} мс',
-  'bench.r.index': 'импорт {importMs} мс · правка {editMean} мс (макс. {editMax})',
-  'bench.r.text': '1 МБ за {insertMs} мс · клавиша {keyMean} мс (макс. {keyMax})',
+  'bench.r.index': 'импорт {importMs} мс · {memoryMib} МБ · правка {editMean} мс',
+  'bench.r.text': '1 МБ за {insertMs} мс · клавиша {keyMean} мс',
   'bench.r.error': 'ошибка: {message}',
 } as const;
 
@@ -61,7 +63,7 @@ const en: Catalog = {
   'bench.open': 'Benchmark',
   'bench.title': 'Benchmark',
   'bench.back': 'Back',
-  'bench.hint': 'About a minute. Keep the window in front, hands off.',
+  'bench.hint': 'About three minutes. Keep the window in front, hands off.',
   'bench.run': 'Run',
   'bench.copy': 'Copy report',
   'bench.copied': 'Report copied',
@@ -69,16 +71,18 @@ const en: Catalog = {
   'bench.failed': 'Failed to start: {message}',
   'bench.progress': '{done} of {total} · {name}',
   'bench.pending': '—',
+  'bench.pass': '✓ {result}',
+  'bench.fail': '✗ {result}',
   'bench.running': 'running…',
   'bench.s.canvas-pan-zoom-n5k': 'Canvas 5k, zoom',
   'bench.s.canvas-drag-n5k': 'Canvas 5k, drag 100',
   'bench.s.canvas-pan-zoom-n10k': 'Canvas 10k, zoom',
   'bench.s.loro-index-20k': 'Index 20k',
-  'bench.s.loro-index-100k': 'Index 100k',
+  'bench.s.loro-index-100k-k16': 'Index 100k, 16 shards',
   'bench.s.loro-text-1mb': 'Text 1 MB',
   'bench.r.canvas': '{fps} fps · p95 {p95} ms',
-  'bench.r.index': 'import {importMs} ms · edit {editMean} ms (max {editMax})',
-  'bench.r.text': '1 MB in {insertMs} ms · key {keyMean} ms (max {keyMax})',
+  'bench.r.index': 'import {importMs} ms · {memoryMib} MB · edit {editMean} ms',
+  'bench.r.text': '1 MB in {insertMs} ms · key {keyMean} ms',
   'bench.r.error': 'error: {message}',
 };
 
@@ -103,7 +107,9 @@ export function t(
   key: MessageKey,
   params: Record<string, string | number> = {},
 ): string {
-  const entry = catalogs[locale][key];
+  const entry = catalogs[locale][key] as Catalog[MessageKey] | undefined;
+  // Unreachable through the types; a key built at run time shows itself instead of crashing.
+  if (entry === undefined) return key;
   let text: string;
   if (typeof entry === 'string') {
     text = entry;

@@ -29,6 +29,10 @@ describe('i18n', () => {
     );
   });
 
+  it('shows the key itself for a key missing at run time', () => {
+    expect(t('en', 'no.such.key' as never)).toBe('no.such.key');
+  });
+
   it('detects the locale from system languages', () => {
     expect(detectLocale(['ru-RU', 'en-US'])).toBe('ru');
     expect(detectLocale(['en-GB'])).toBe('en');

@@ -1,0 +1,221 @@
+{
+  "report": "strata-bench",
+  "version": 1,
+  "profile": "full",
+  "app": {
+    "core": "strata-core 0.0.1 (macos-aarch64)",
+    "shell": "tauri 2.11.6",
+    "webview": "20621.3.11.11.3",
+    "machine": {
+      "os": "macOS 15.7.4 Sequoia",
+      "arch": "arm64",
+      "cpu": "Apple M1",
+      "physicalCores": 8,
+      "logicalCores": 8,
+      "memoryGib": 16
+    }
+  },
+  "startedAt": "2026-10-21T11:29:42.521Z",
+  "env": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+    "platform": "MacIntel",
+    "language": "ru",
+    "devicePixelRatio": 2,
+    "screen": {
+      "width": 1440,
+      "height": 900
+    },
+    "viewport": {
+      "width": 1280,
+      "height": 772
+    },
+    "hardwareConcurrency": 8,
+    "deviceMemoryGb": null,
+    "webgl": {
+      "version": "WebGL 2.0",
+      "vendor": "Apple Inc.",
+      "renderer": "Apple GPU"
+    },
+    "refreshHzEstimate": 59,
+    "timerResolutionMs": 1
+  },
+  "outcomes": [
+    {
+      "id": "canvas-pan-zoom-n5k",
+      "spike": 1,
+      "ok": true,
+      "result": {
+        "durationMs": 10000,
+        "frames": 547,
+        "fps": 54.7,
+        "intervalMs": {
+          "n": 547,
+          "mean": 18.282,
+          "p50": 18,
+          "p95": 22,
+          "p99": 24,
+          "max": 46
+        },
+        "workMs": {
+          "n": 547,
+          "mean": 12.47,
+          "p50": 12,
+          "p95": 15,
+          "p99": 16,
+          "max": 32
+        },
+        "over16ms": 0.565,
+        "over33ms": 0.002,
+        "mode": "pan-zoom",
+        "nodes": 5000,
+        "wires": 7500,
+        "icons": 200,
+        "dragged": 0,
+        "setupMs": 455,
+        "renderer": "webgl"
+      },
+      "wallMs": 10861
+    },
+    {
+      "id": "canvas-drag-n5k",
+      "spike": 1,
+      "ok": true,
+      "result": {
+        "durationMs": 10000,
+        "frames": 600,
+        "fps": 60,
+        "intervalMs": {
+          "n": 600,
+          "mean": 16.667,
+          "p50": 17,
+          "p95": 17,
+          "p99": 18,
+          "max": 23
+        },
+        "workMs": {
+          "n": 600,
+          "mean": 9.248,
+          "p50": 9,
+          "p95": 11,
+          "p99": 11,
+          "max": 12
+        },
+        "over16ms": 0.035,
+        "over33ms": 0,
+        "mode": "drag",
+        "nodes": 5000,
+        "wires": 7500,
+        "icons": 200,
+        "dragged": 100,
+        "setupMs": 118,
+        "renderer": "webgl"
+      },
+      "wallMs": 10415
+    },
+    {
+      "id": "canvas-pan-zoom-n10k",
+      "spike": 1,
+      "ok": true,
+      "result": {
+        "durationMs": 10026,
+        "frames": 312,
+        "fps": 31.1,
+        "intervalMs": {
+          "n": 312,
+          "mean": 32.135,
+          "p50": 31,
+          "p95": 40,
+          "p99": 41,
+          "max": 48
+        },
+        "workMs": {
+          "n": 312,
+          "mean": 25.907,
+          "p50": 25,
+          "p95": 31,
+          "p99": 32,
+          "max": 35
+        },
+        "over16ms": 1,
+        "over33ms": 0.151,
+        "mode": "pan-zoom",
+        "nodes": 10000,
+        "wires": 15000,
+        "icons": 200,
+        "dragged": 0,
+        "setupMs": 157,
+        "renderer": "webgl"
+      },
+      "wallMs": 10669
+    },
+    {
+      "id": "loro-index-20k",
+      "spike": 4,
+      "ok": true,
+      "result": {
+        "nodes": 20000,
+        "commitEvery": 1,
+        "buildMs": 494,
+        "snapshotMib": 10.1,
+        "importMs": 8,
+        "countNamesMs": 12,
+        "firstEditMs": 14,
+        "editMs": {
+          "n": 500,
+          "mean": 0.004,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 1
+        },
+        "editMeanMs": 0.004,
+        "wasmMemoryMib": 101.9
+      },
+      "wallMs": 919
+    },
+    {
+      "id": "loro-index-100k",
+      "spike": 4,
+      "ok": true,
+      "result": {
+        "nodes": 100000,
+        "commitEvery": 25,
+        "buildMs": 2335,
+        "snapshotMib": 51.8,
+        "importMs": 24,
+        "countNamesMs": 41,
+        "firstEditMs": 60,
+        "editMs": {
+          "n": 500,
+          "mean": 0.004,
+          "p50": 0,
+          "p95": 0,
+          "p99": 0,
+          "max": 1
+        },
+        "editMeanMs": 0.004,
+        "wasmMemoryMib": 477.9
+      },
+      "wallMs": 4340
+    },
+    {
+      "id": "loro-text-1mb",
+      "spike": 4,
+      "ok": true,
+      "result": {
+        "chars": 1000025,
+        "insert1MbMs": 31,
+        "keystrokeMs": {
+          "n": 1000,
+          "mean": 0.017,
+          "p50": 0,
+          "p95": 0,
+          "p99": 1,
+          "max": 1
+        },
+        "keystrokeMeanMs": 0.017
+      },
+      "wallMs": 52
+    }
+  ]
+}

@@ -7,8 +7,9 @@ import {
   SCENARIO_IDS,
   type ScenarioId,
   type ScenarioOutcome,
+  verdict,
 } from '@strata/bench/report';
-import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
+import { formatNumber, type Locale, t } from '@strata/i18n';
 import { useEffect, useRef, useState } from 'react';
 import { copyText } from './clipboard';
 
@@ -26,6 +27,8 @@ export function BenchWindow(props: {
   locale: Locale;
   app: AppInfo;
   profile: Profile;
+  /** Run only these scenarios (`?only=a,b`): re-checking one scenario without the full minute. */
+  only?: readonly ScenarioId[] | undefined;
   /** Start at once: smoke runs of a desktop build, where nobody clicks (`?autorun`). */
   autorun?: boolean;
   onBack: () => void;
@@ -45,6 +48,7 @@ export function BenchWindow(props: {
         stage: el,
         app: props.app,
         profile: props.profile,
+        ...(props.only ? { only: props.only } : {}),
         onProgress: (current, done) =>
           setRun({ state: 'running', current: current?.id ?? null, outcomes: [...done] }),
       });
@@ -74,11 +78,16 @@ export function BenchWindow(props: {
     run.state === 'idle' ? [] : run.state === 'done' ? run.report.outcomes : run.outcomes;
   const cell = (id: ScenarioId): string => {
     const o = outcomes.find((x) => x.id === id);
+    if (o && run.state === 'done') {
+      const result = formatHeadline(locale, headline(o));
+      const v = verdict(o, run.report.env.timerResolutionMs);
+      return t(locale, v === 'pass' ? 'bench.pass' : 'bench.fail', { result });
+    }
     if (o) return formatHeadline(locale, headline(o));
     if (run.state === 'running' && run.current === id) return t(locale, 'bench.running');
     return t(locale, 'bench.pending');
   };
-  const name = (id: ScenarioId) => t(locale, `bench.s.${id}` as MessageKey);
+  const name = (id: ScenarioId) => t(locale, `bench.s.${id}` as const);
   const statusText =
     run.state === 'idle' && run.failed
       ? t(locale, 'bench.failed', { message: run.failed })
@@ -127,7 +136,8 @@ export function BenchWindow(props: {
               {statusText}
             </span>
           </div>
-          {run.state === 'done' && run.copy === 'failed' ? (
+          {/* Shown when copying failed, and after unattended runs where nobody clicks. */}
+          {run.state === 'done' && (run.copy === 'failed' || props.autorun) ? (
             <textarea
               className="report"
               readOnly
@@ -143,7 +153,7 @@ export function BenchWindow(props: {
           <p className="bench-hud">
             {t(locale, 'bench.progress', {
               done: run.outcomes.length + 1,
-              total: SCENARIO_IDS.length,
+              total: props.only?.length ?? SCENARIO_IDS.length,
               name: run.current ? name(run.current) : '',
             })}
           </p>
@@ -161,14 +171,13 @@ function formatHeadline(locale: Locale, h: Headline): string {
     case 'index':
       return t(locale, 'bench.r.index', {
         importMs: n(h.importMs, 0),
+        memoryMib: n(h.memoryMib, 0),
         editMean: n(h.editMean, 3),
-        editMax: n(h.editMax),
       });
     case 'text':
       return t(locale, 'bench.r.text', {
         insertMs: n(h.insertMs, 0),
         keyMean: n(h.keyMean, 3),
-        keyMax: n(h.keyMax),
       });
     case 'error':
       return t(locale, 'bench.r.error', { message: h.message });

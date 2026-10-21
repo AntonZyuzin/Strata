@@ -37,6 +37,8 @@ pnpm desktop:dev / pnpm desktop:build                                        # �
 - Горячий путь холста и 3D — вне React (`docs/15-architecture.md` §4).
 - CSP десктопа (`tauri.conf.json`) отдаёт и `vite preview`, поэтому e2e ловят то, что заблокирует WebView: без `'unsafe-eval'`, WASM — через `'wasm-unsafe-eval'`. Для Pixi подключать `pixi.js/unsafe-eval`.
 - WebKit округляет `performance.now()` до 1 мс: субмиллисекундные операции мерить сериями и делить на число операций.
+- Сцена Pixi: мир и слои — render group, камера — их трансформация; `Culler` из Pixi не использовать (`docs/15-architecture.md` §4.1, п. 6–6а).
+- Шейдеры (GLSL ES 3.0 через ANGLE): не называть uniform-переменные как служебные у Pixi (`uColor`, `uRound`, `uResolution`, `uWorldColorAlpha` и матрицы), не использовать зарезервированные слова (`half` и т. п.) и имена встроенных функций, не объявлять одну uniform-переменную в обоих шейдерах (разная точность — ошибка компоновки), комментарии только ASCII.
 - Лицензия — AGPL-3.0-or-later (ADR-0009); зависимости — только совместимые (MIT, Apache-2.0, BSD, ISC, MPL-2.0; для ассетов — OFL, CC BY, CC0). GPL-2.0-only не берём.
 - CI (`.github/workflows/ci.yml`) должен быть зелёным: fmt, clippy `-D warnings`, тесты, Biome, typecheck; десктоп собирается под macOS, Windows и Linux без подписи.
 - Процессы в shell не убивать через `pkill -f <шаблон>`: шаблон совпадает с командной строкой самой оболочки.

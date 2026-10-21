@@ -20,16 +20,17 @@ const vertex = /* glsl */ `
 in vec2 aPosition;   // x: t in [0, 1], y: side -1 / +1
 in vec4 aEnds;       // per wire: centres of the two bubbles, ax, ay, bx, by (world units)
 in vec2 aRadii;      // per wire: radii of the two bubbles
-in float aBend;      // per wire: control point distance, 0.3–0.5 of the length
+in float aBend;      // per wire: control point distance, 0.3-0.5 of the length
 
 uniform mat3 uProjectionMatrix;
 uniform mat3 uWorldTransformMatrix;
 uniform mat3 uTransformMatrix;
 uniform float uWidth;   // stroke width in CSS pixels
-uniform float uZoom;    // world → screen scale of the parent container
+uniform float uZoom;    // world -> screen scale of the parent container
 uniform float uTime;    // seconds; read here, in highp, not in the mediump fragment
 
-out float vSide;
+out float vPx;     // distance from the centre line, CSS px
+out float vHalfWidth;
 out float vT;
 out float vHead;
 
@@ -64,22 +65,28 @@ void main() {
   p += normal * aPosition.y * ((uWidth + 1.0) * 0.5 / uZoom);
   mat3 mvp = uProjectionMatrix * uWorldTransformMatrix * uTransformMatrix;
   gl_Position = vec4((mvp * vec3(p, 1.0)).xy, 0.0, 1.0);
-  vSide = aPosition.y * (uWidth + 1.0) / max(uWidth, 1.0);
+  vPx = aPosition.y * (uWidth + 1.0) * 0.5;
+  vHalfWidth = uWidth * 0.5;
   vT = t;
   vHead = fract(uTime / 3.0 + fract(aBend * 37.0));
 }
 `;
 
 const fragment = /* glsl */ `
-in float vSide;
+in float vPx;
+in float vHalfWidth;
 in float vT;
 in float vHead;
-uniform vec4 uColor;
+// Not uColor: Pixi's mesh pipe binds its own uColor (the tint) after ours and wins.
+uniform vec4 uWireColor;
+// Uniforms used here and in the vertex shader would need the same precision
+// in both (a link error on ANGLE); the width comes as a varying instead.
 void main() {
-  float edge = 1.0 - smoothstep(0.75, 1.0, abs(vSide));
-  float dot = 1.0 - smoothstep(0.0, 0.025, abs(vT - vHead));
-  float alpha = mix(uColor.a, 1.0, dot) * edge;
-  gl_FragColor = vec4(mix(uColor.rgb, vec3(1.0), dot) * alpha, alpha);
+  // One pixel of ramp centred on the nominal edge: the quad is half a pixel wider on each side.
+  float edge = 1.0 - smoothstep(vHalfWidth - 0.5, vHalfWidth + 0.5, abs(vPx));
+  float runDot = 1.0 - smoothstep(0.0, 0.025, abs(vT - vHead));
+  float alpha = mix(uWireColor.a, 1.0, runDot) * edge;
+  gl_FragColor = vec4(mix(uWireColor.rgb, vec3(1.0), runDot) * alpha, alpha);
 }
 `;
 
@@ -126,7 +133,7 @@ export function createWireLayer(
     uWidth: { value: opts.width, type: 'f32' },
     uZoom: { value: 1, type: 'f32' },
     uTime: { value: 0, type: 'f32' },
-    uColor: { value: new Float32Array(opts.color), type: 'vec4<f32>' },
+    uWireColor: { value: new Float32Array(opts.color), type: 'vec4<f32>' },
   });
   const shader = Shader.from({ gl: { vertex, fragment }, resources: { wireUniforms: uniforms } });
   const mesh = new Mesh({ geometry, shader });

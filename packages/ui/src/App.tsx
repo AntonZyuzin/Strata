@@ -1,14 +1,21 @@
-import type { Profile } from '@strata/bench/report';
+import { type Profile, SCENARIO_IDS, type ScenarioId } from '@strata/bench/report';
 import { detectLocale, type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
 import { BenchWindow } from './BenchWindow';
 import { type BuildInfo, closeAppWindow, loadBuildInfo } from './backend';
 
-/** `?bench` opens the benchmark at start; `?bench=quick` is the e2e profile. */
+/** `?bench` opens the benchmark at start; `?bench=quick` is the e2e profile; `?only=` picks scenarios. */
 function benchFromUrl(): Profile | null {
   const v = new URLSearchParams(window.location.search).get('bench');
   if (v === null) return null;
   return v === 'quick' ? 'quick' : 'full';
+}
+
+function onlyFromUrl(): ScenarioId[] | undefined {
+  const v = new URLSearchParams(window.location.search).get('only');
+  if (!v) return undefined;
+  const ids = v.split(',').filter((id): id is ScenarioId => SCENARIO_IDS.some((s) => s === id));
+  return ids.length > 0 ? ids : undefined;
 }
 
 export function App() {
@@ -48,6 +55,7 @@ export function App() {
           locale={locale}
           app={info ?? { core: null, shell: 'web' }}
           profile={bench}
+          only={onlyFromUrl()}
           autorun={info !== undefined && new URLSearchParams(window.location.search).has('autorun')}
           onBack={() => setBench(null)}
         />

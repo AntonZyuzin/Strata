@@ -105,7 +105,7 @@ function installFont() {
   if (fontInstalled) return;
   BitmapFont.install({
     name: FONT,
-    style: { fontFamily: fog.font.ui, fontSize: 24, fill: fog.color.paper },
+    style: { fontFamily: fog.font.ui, fontSize: 24, fill: fog.scene.paper },
     chars: [['a', 'z'], ['A', 'Z'], ['0', '9'], ['а', 'я'], ['А', 'Я'], ' ёЁ.,:-—«»№'],
     resolution: 2,
   });
@@ -129,9 +129,9 @@ const bubbleTexture = (app: Application) =>
     app,
     new Graphics()
       .circle(0, 0, SIZE.l / 2)
-      .fill(fog.color.paper)
+      .fill(fog.scene.paper)
       .circle(0, 0, SIZE.l / 2 - 1.5)
-      .stroke({ color: fog.color.ink, width: 1.5, alpha: 0.25 }),
+      .stroke({ color: fog.scene.ink, width: 1.5, alpha: 0.25 }),
   );
 
 const ringTexture = (app: Application) =>
@@ -159,7 +159,7 @@ function iconAtlas(app: Application): Texture[] {
       }
     }
   }
-  g.fill(fog.color.ink);
+  g.fill(fog.scene.ink);
   const atlas = texture(app, g, new Rectangle(0, 0, perRow * ICON_CELL, rows * ICON_CELL));
   return Array.from(
     { length: ICONS },
@@ -195,7 +195,7 @@ export async function runCanvasScenario(
   const app = new Application();
   await app.init({
     resizeTo: stage,
-    background: fog.color.sceneBg,
+    background: fog.scene.bg,
     antialias: true,
     autoDensity: true,
     resolution: window.devicePixelRatio,
@@ -288,7 +288,7 @@ export async function runCanvasScenario(
       const px = x[i] ?? 0;
       const py = y[i] ?? 0;
       if (r() < DEADLINE_SHARE) {
-        const ring = new Sprite({ texture: ringTex, anchor: 0.5, tint: fog.color.attention });
+        const ring = new Sprite({ texture: ringTex, anchor: 0.5, tint: fog.scene.attention });
         ring.scale.set(d / SIZE.l);
         ring.position.set(px, py);
         rings.addChild(ring);

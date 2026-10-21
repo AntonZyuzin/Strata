@@ -1,8 +1,26 @@
-/* Stage 0 Chrome: a single retro window over the fog scene (07 §8). Fonts fall
-   back to system monospace until spike 9 bundles the OFL fonts locally. */
+/* The Chrome on tokens (07 §2, §8). Every border, bevel, gap and pixel font
+   size is a whole number of the pixel unit `--u` (07 §2.3); `applyPixelUnit`
+   writes `--u` and the pixel type scale for the current DPR. Windows are sized
+   in `ch` of the UI font, so they grow with the pixel font at DPR 1.25 and 1.5
+   and never with the text of one language (07 §8). */
 
 :root {
   color-scheme: dark;
+  /* One row of the Chrome: at least a 24 px control, at least a UI line. */
+  --st-size-row: max(var(--st-size-control), calc(var(--st-font-ui-line) + 4 * var(--u)));
+  --st-size-bar: calc(var(--st-size-row) + var(--u));
+  --st-shadow-window: calc(4 * var(--u)) calc(4 * var(--u)) 0 var(--st-color-shadow);
+  --st-shadow-menu: calc(2 * var(--u)) calc(2 * var(--u)) 0 var(--st-color-shadow);
+  --st-bevel-raised:
+    inset calc(-1 * var(--u)) calc(-1 * var(--u)) 0 var(--st-color-bevel-lo),
+    inset var(--u) var(--u) 0 var(--st-color-bevel-hi),
+    inset calc(-2 * var(--u)) calc(-2 * var(--u)) 0 var(--st-color-bevel-lo-2),
+    inset calc(2 * var(--u)) calc(2 * var(--u)) 0 var(--st-color-bevel-hi-2);
+  --st-bevel-sunken:
+    inset calc(-1 * var(--u)) calc(-1 * var(--u)) 0 var(--st-color-bevel-hi),
+    inset var(--u) var(--u) 0 var(--st-color-bevel-lo),
+    inset calc(-2 * var(--u)) calc(-2 * var(--u)) 0 var(--st-color-bevel-hi-2),
+    inset calc(2 * var(--u)) calc(2 * var(--u)) 0 var(--st-color-bevel-lo-2);
 }
 
 * {
@@ -17,58 +35,104 @@ body,
 }
 
 body {
-  background: var(--st-color-scene-bg);
-  color: var(--st-color-chrome-fg);
-  font: calc(var(--st-size-ui-text) * 1px * 1.5) / 1.4 var(--st-font-ui);
+  background: var(--st-color-bg);
+  color: var(--st-color-text);
+  font: var(--st-font-ui-size) / var(--st-font-ui-line) var(--st-font-ui);
+  /* Pixel fonts stay crisp on macOS; Windows and Linux cannot switch smoothing off (07 §3.3). */
+  -webkit-font-smoothing: none;
+  text-rendering: optimizeSpeed;
+}
+
+/* 1-bit patterns 2×2 (07 §2.6) without PNGs: a checker of u-sized squares. */
+.st-pattern-50 {
+  background-image: repeating-conic-gradient(var(--st-pattern-ink) 0 25%, transparent 0 50%);
+  background-size: calc(2 * var(--u)) calc(2 * var(--u));
 }
 
 .scene {
   display: grid;
   place-items: center;
   height: 100%;
-  background: radial-gradient(ellipse at 50% 40%, #23262c 0%, var(--st-color-scene-bg) 70%);
+  padding: calc(8 * var(--u));
+  background: radial-gradient(ellipse at 50% 40%, #232326 0%, var(--st-color-bg) 70%);
 }
 
-/* Chrome never resizes with the locale (07 §8): fixed window width, a label
-   column sized for the longest locale, single-line values with ellipsis. */
+/* Window (07 §8.1): 1u frame, inverse title plate, hard 4u shadow. Chrome never
+   resizes with the locale: fixed width in ch, label column for the longest
+   locale, single-line values with ellipsis and a tooltip. */
 .window {
-  width: min(520px, calc(100vw - 32px));
-  background: var(--st-color-chrome-bg);
-  box-shadow:
-    inset 1px 1px 0 var(--st-color-chrome-bevel-light),
-    inset -1px -1px 0 var(--st-color-chrome-bevel-dark),
-    4px 4px 0 #000;
-  border: 1px solid var(--st-color-paper);
+  width: min(74ch, calc(100vw - 32px));
+  background: var(--st-color-surface);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-window);
 }
 
 .window-title {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 4px 8px;
+  gap: calc(4 * var(--u));
+  min-height: calc(var(--st-font-display-s-line) + 8 * var(--u));
+  padding: 0 calc(2 * var(--u)) 0 calc(6 * var(--u));
   background: var(--st-color-title-bg);
   color: var(--st-color-title-fg);
 }
 
 .window-title h1 {
+  min-width: 0;
   margin: 0;
-  font: calc(var(--st-size-title-text) * 1px) / 1 var(--st-font-display);
-  letter-spacing: 0.04em;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  text-transform: uppercase;
 }
 
 .window-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: var(--st-size-control);
+  height: var(--st-size-control);
+  padding: 0;
   border: 0;
+  box-shadow: none;
   background: transparent;
   color: inherit;
-  font: inherit;
-  font-size: 18px;
+  /* The pixel × below is the glyph; the text × stays for the accessible name only. */
+  font-size: 0;
   cursor: pointer;
-  min-width: 24px;
-  min-height: 24px;
+}
+
+.window-close:hover {
+  background: var(--st-color-title-fg);
+  color: var(--st-color-title-bg);
+}
+
+.window-close::before {
+  content: "";
+  width: calc(10 * var(--u));
+  height: calc(10 * var(--u));
+  background: currentColor;
+  /* A pixel ×: two diagonals of u-squares. */
+  clip-path: polygon(
+    0 10%,
+    10% 0,
+    50% 40%,
+    90% 0,
+    100% 10%,
+    60% 50%,
+    100% 90%,
+    90% 100%,
+    50% 60%,
+    10% 100%,
+    0 90%,
+    40% 50%
+  );
 }
 
 .window-body {
-  padding: 16px;
+  padding: calc(8 * var(--u));
 }
 
 .tagline,
@@ -81,45 +145,81 @@ dd {
 }
 
 .tagline {
-  margin: 0 0 4px;
-  font-family: var(--st-font-prose);
+  margin: 0 0 calc(2 * var(--u));
+  font-family: var(--st-font-text);
   font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: auto;
 }
 
 .stage {
-  margin: 0 0 16px;
-  opacity: 0.7;
+  margin: 0 0 calc(8 * var(--u));
+  color: var(--st-color-text-muted);
 }
 
 dl {
   display: grid;
   grid-template-columns: 10ch minmax(0, 1fr);
   align-items: center;
-  gap: 6px 16px;
+  gap: calc(4 * var(--u)) calc(8 * var(--u));
   margin: 0;
 }
 
 dt {
-  opacity: 0.7;
+  color: var(--st-color-text-muted);
 }
 
 dd {
   margin: 0;
 }
 
+/* Button (07 §8.2): 1u frame, raised bevel, sunken when pressed. */
 button {
+  min-height: var(--st-size-control);
+  padding: 0 calc(8 * var(--u));
   font: inherit;
-  color: var(--st-color-chrome-fg);
-  background: var(--st-color-chrome-bg);
-  border: 1px solid var(--st-color-paper);
-  padding: 2px 10px;
+  color: var(--st-color-text);
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
   cursor: pointer;
-  min-height: 24px;
 }
 
+button:hover:not(:disabled) {
+  background: #303035;
+}
+
+button:active:not(:disabled) {
+  box-shadow: var(--st-bevel-sunken);
+  padding-top: var(--u);
+}
+
+button.is-default {
+  /* The default button of retro systems: one more outer frame. */
+  outline: var(--u) solid var(--st-color-frame);
+  outline-offset: var(--u);
+}
+
+button:disabled {
+  --st-pattern-ink: var(--st-color-surface-raised);
+  color: var(--st-color-text-disabled);
+  background-color: var(--st-color-surface);
+  box-shadow: none;
+  border-color: var(--st-color-text-disabled);
+  cursor: default;
+}
+
+/* Focus (07 §11.3): 2u solid frame outside plus a 1u shadow underlay. */
 :focus-visible {
-  outline: 2px dotted var(--st-color-focus);
-  outline-offset: 2px;
+  outline: calc(2 * var(--u)) solid var(--st-color-focus);
+  outline-offset: var(--u);
+  box-shadow: 0 0 0 var(--u) var(--st-color-shadow);
+}
+
+button:focus-visible {
+  box-shadow:
+    var(--st-bevel-raised),
+    0 0 0 var(--u) var(--st-color-shadow);
 }
 
 .segmented {
@@ -131,11 +231,12 @@ button {
 }
 
 .segmented label {
+  display: grid;
+  place-items: center;
   min-width: 4ch;
-  min-height: 24px;
-  padding: 2px 10px;
-  text-align: center;
-  border: 1px solid var(--st-color-paper);
+  min-height: var(--st-size-control);
+  padding: 0 calc(6 * var(--u));
+  border: var(--u) solid var(--st-color-frame);
   cursor: pointer;
 }
 
@@ -144,13 +245,13 @@ button {
 }
 
 .segmented label.is-active {
-  background: var(--st-color-paper);
-  color: var(--st-color-ink);
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
 }
 
 .segmented label:has(input:focus-visible) {
-  outline: 2px dotted var(--st-color-focus);
-  outline-offset: 2px;
+  outline: calc(2 * var(--u)) solid var(--st-color-focus);
+  outline-offset: var(--u);
 }
 
 .segmented input,
@@ -168,9 +269,10 @@ button {
 
 .window-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin-top: 16px;
+  gap: calc(4 * var(--u));
+  margin-top: calc(8 * var(--u));
 }
 
 .window-actions .status {
@@ -178,17 +280,43 @@ button {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  opacity: 0.7;
+  color: var(--st-color-text-muted);
 }
 
-button:disabled {
-  opacity: 0.4;
-  cursor: default;
+/* Dashed divider 1u, dashes 2u/2u (07 §2.5). */
+.divider {
+  height: var(--u);
+  margin: calc(6 * var(--u)) 0;
+  border: 0;
+  background: repeating-linear-gradient(
+    90deg,
+    var(--st-color-divider) 0 calc(2 * var(--u)),
+    transparent 0 calc(4 * var(--u))
+  );
+}
+
+/* Scrollbars (07 §8.2): pattern track, bevelled thumb ≥ 24 px. */
+::-webkit-scrollbar {
+  width: var(--st-size-scrollbar);
+  height: var(--st-size-scrollbar);
+}
+
+::-webkit-scrollbar-track {
+  background:
+    repeating-conic-gradient(var(--st-color-surface-raised) 0 25%, var(--st-color-surface) 0 50%) 0
+    0 / calc(2 * var(--u)) calc(2 * var(--u));
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: var(--st-size-control);
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
 }
 
 /* Benchmark (16 §3.2 step 0.3): wide enough for the longest result line in either locale. */
 .window-wide {
-  width: min(760px, calc(100vw - 32px));
+  width: min(108ch, calc(100vw - 32px));
 }
 
 .bench-table {
@@ -214,19 +342,22 @@ button:disabled {
   display: block;
   width: 100%;
   height: 160px;
-  margin-top: 12px;
-  font: 12px / 1.3 var(--st-font-code);
-  color: var(--st-color-chrome-fg);
-  background: var(--st-color-scene-bg);
-  border: 1px solid var(--st-color-paper);
+  margin-top: calc(6 * var(--u));
+  padding: calc(3 * var(--u));
+  font: 12px / 1.3 var(--st-font-mono);
+  color: var(--st-color-text);
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
   resize: none;
+  -webkit-font-smoothing: auto;
 }
 
 /* Full-window drawing surface; Pixi owns its canvas (15 §4). */
 .bench-stage {
   position: fixed;
   inset: 0;
-  background: var(--st-color-scene-bg);
+  background: var(--st-scene-bg);
 }
 
 .bench-stage[hidden] {
@@ -244,12 +375,12 @@ button:disabled {
 
 .bench-hud {
   position: absolute;
-  top: 8px;
-  left: 8px;
+  top: calc(4 * var(--u));
+  left: calc(4 * var(--u));
   margin: 0;
-  padding: 2px 8px;
-  background: var(--st-color-chrome-bg);
-  border: 1px solid var(--st-color-paper);
+  padding: var(--u) calc(4 * var(--u));
+  background: var(--st-color-surface);
+  border: var(--u) solid var(--st-color-frame);
   pointer-events: none;
 }
 
@@ -262,7 +393,7 @@ button:disabled {
 
 .proto-canvas {
   position: absolute;
-  inset: 0 0 32px;
+  inset: 0 0 var(--st-size-bar);
   /* Ends above the status bar: an opaque full-width layer over the WebGL canvas
      made headless Chromium leave a black band of the same height at the top. */
 }
@@ -273,16 +404,16 @@ button:disabled {
 
 .proto-top {
   position: absolute;
-  top: 12px;
-  left: 12px;
-  width: 300px;
+  top: calc(6 * var(--u));
+  left: calc(6 * var(--u));
+  width: 44ch;
 }
 
 .proto-controls {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px 12px;
-  padding: 10px 12px;
+  gap: calc(4 * var(--u)) calc(6 * var(--u));
+  padding: calc(5 * var(--u)) calc(6 * var(--u));
 }
 
 .proto-controls .counts {
@@ -290,23 +421,24 @@ button:disabled {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  opacity: 0.7;
+  color: var(--st-color-text-muted);
 }
 
+/* Status bar (07 §8.2): one row, top frame 1u, fixed columns — nothing moves
+   when the language or the hint changes. */
 .proto-status {
   position: absolute;
   left: 0;
   right: 0;
   bottom: 0;
-  /* Fixed columns: nothing in the bar moves when the language or the hint changes. */
   display: grid;
   grid-template-columns: minmax(0, 1fr) 12ch 12ch;
   align-items: center;
-  column-gap: 12px;
-  height: 32px;
-  padding: 0 12px;
-  background: var(--st-color-chrome-bg);
-  border-top: 1px solid var(--st-color-paper);
+  column-gap: calc(6 * var(--u));
+  height: var(--st-size-bar);
+  padding: 0 calc(6 * var(--u));
+  background: var(--st-color-surface);
+  border-top: var(--u) solid var(--st-color-frame);
 }
 
 .proto-status .hint,
@@ -320,12 +452,12 @@ button:disabled {
 /* The last step is a value with a tooltip; below 1100 px it lives in the Undo tooltip only. */
 .proto-status .last-step {
   display: none;
-  opacity: 0.7;
+  color: var(--st-color-text-muted);
 }
 
 @media (min-width: 1100px) {
   .proto-status {
-    grid-template-columns: minmax(0, 1fr) 280px 12ch 12ch;
+    grid-template-columns: minmax(0, 1fr) 32ch 12ch 12ch;
   }
 
   .proto-status .last-step {
@@ -335,16 +467,18 @@ button:disabled {
 
 .proto-status button {
   width: 100%;
+  min-height: calc(var(--st-size-row) - 4 * var(--u));
 }
 
+/* Toasts (07 §8.2): above the status bar, 1u frame, hard 2u shadow, ≤ 3 in a stack. */
 .toasts {
   position: absolute;
-  bottom: 44px;
+  bottom: calc(var(--st-size-bar) + 6 * var(--u));
   left: 50%;
   transform: translateX(-50%);
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: calc(3 * var(--u));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -353,12 +487,12 @@ button:disabled {
 .toast {
   display: flex;
   align-items: center;
-  gap: 12px;
-  width: 420px;
-  padding: 6px 10px;
-  background: var(--st-color-chrome-bg);
-  border: 1px solid var(--st-color-paper);
-  box-shadow: 4px 4px 0 #000;
+  gap: calc(6 * var(--u));
+  width: min(60ch, calc(100vw - 32px));
+  padding: calc(3 * var(--u)) calc(3 * var(--u)) calc(3 * var(--u)) calc(6 * var(--u));
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
 }
 
 .toast span {
@@ -374,19 +508,23 @@ button:disabled {
   inset: 0;
 }
 
+/* Tab menu (07 §8.2): a window without a title, prompt `>`, inverse current row. */
 .tab-menu {
+  width: 52ch;
   position: fixed;
-  background: var(--st-color-chrome-bg);
-  border: 1px solid var(--st-color-paper);
-  box-shadow: 4px 4px 0 #000;
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
 }
 
 .tab-menu-prompt {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--st-color-paper);
+  gap: calc(4 * var(--u));
+  min-height: var(--st-size-row);
+  padding: 0 calc(4 * var(--u));
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
 }
 
 .tab-menu-prompt input,
@@ -394,38 +532,42 @@ button:disabled {
   flex: 1 1 auto;
   min-width: 0;
   font: inherit;
-  color: var(--st-color-chrome-fg);
+  color: var(--st-color-text);
   background: transparent;
   border: 0;
   outline: none;
 }
 
+.tab-menu-prompt input::selection,
+.name-input::selection {
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
+}
+
 .tab-menu-list {
   margin: 0;
-  padding: 2px 0;
+  padding: var(--u) 0;
   list-style: none;
 }
 
 .tab-menu-header {
-  padding: 4px 8px 0;
-  font-size: 0.75em;
+  padding: calc(2 * var(--u)) calc(4 * var(--u)) 0;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
-  opacity: 0.6;
+  color: var(--st-color-text-muted);
 }
 
 .tab-menu-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  min-height: 24px;
-  padding: 0 8px;
+  gap: calc(4 * var(--u));
+  min-height: var(--st-size-row);
+  padding: 0 calc(4 * var(--u));
   cursor: pointer;
 }
 
 .tab-menu-row.is-current {
-  background: var(--st-color-paper);
-  color: var(--st-color-ink);
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
 }
 
 .tab-menu-label {
@@ -442,58 +584,234 @@ button:disabled {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  opacity: 0.6;
+  color: var(--st-color-text-muted);
+}
+
+.tab-menu-row.is-current .tab-menu-detail {
+  color: inherit;
 }
 
 .tab-menu-empty,
 .tab-menu-footer {
-  padding: 4px 8px;
-  opacity: 0.7;
+  padding: calc(2 * var(--u)) calc(4 * var(--u));
+  color: var(--st-color-text-muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
 .tab-menu-footer {
-  border-top: 1px solid var(--st-color-paper);
-  font-size: 0.85em;
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--st-color-divider) 0 calc(2 * var(--u)),
+      transparent 0 calc(4 * var(--u))
+    )
+    top / 100% var(--u) no-repeat;
 }
 
-/* Kind icons: 1-bit pixel marks until the icon set of spike 9. */
+/* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
 .kind-icon {
   flex: none;
-  width: 12px;
-  height: 12px;
-  border: 2px solid currentColor;
-}
-
-.kind-network {
-  border-radius: 50%;
-}
-
-.kind-note {
-  border-width: 2px 2px 6px;
-}
-
-.kind-board {
-  border-style: double;
-  border-width: 3px;
-}
-
-.kind-checklist {
-  border-width: 2px 2px 2px 6px;
-}
-
-.kind-media {
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
   background: currentColor;
+  -webkit-mask: var(--glyph) center / 100% 100% no-repeat;
+  mask: var(--glyph) center / 100% 100% no-repeat;
+  image-rendering: pixelated;
 }
 
 .name-input {
   position: absolute;
-  width: 160px;
+  width: 24ch;
   transform: translateX(-50%);
-  padding: 1px 4px;
+  min-height: var(--st-size-control);
+  padding: 0 calc(3 * var(--u));
   text-align: center;
-  background: var(--st-color-chrome-bg);
-  border: 1px solid var(--st-color-paper);
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+/* Font and window check of spike 9 (07 §13): wide window, samples one line each. */
+.window-fonts {
+  width: min(112ch, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  display: flex;
+  flex-direction: column;
+}
+
+.window-fonts .window-body {
+  overflow-y: auto;
+}
+
+.fonts-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(4 * var(--u)) calc(6 * var(--u));
+}
+
+.fonts-metrics {
+  flex: 1 0 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+.fonts-specimens {
+  grid-template-columns: 26ch minmax(0, 1fr);
+  align-items: start;
+}
+
+.fonts-row {
+  display: contents;
+}
+
+.fonts-row dt {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fonts-sample {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.fonts-sample.is-smooth {
+  -webkit-font-smoothing: auto;
+}
+
+.fonts-heading {
+  margin: 0 0 calc(4 * var(--u));
+  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  text-transform: uppercase;
+}
+
+.demo {
+  display: grid;
+  gap: calc(6 * var(--u));
+}
+
+.demo-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(6 * var(--u));
+}
+
+/* Field (07 §8.2): sunken bevel and a frame on a dark surface. */
+.field {
+  width: 24ch;
+  min-height: var(--st-size-control);
+  padding: 0 calc(3 * var(--u));
+  font: inherit;
+  color: var(--st-color-text);
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.field::placeholder {
+  color: var(--st-color-text-muted);
+}
+
+/* Checkbox and radio: a 16u square or a pixel circle; 24 px target with the label. */
+.check {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  min-height: var(--st-size-control);
+  cursor: pointer;
+}
+
+.check input {
+  appearance: none;
+  display: grid;
+  place-items: center;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  margin: 0;
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.check input[type="radio"] {
+  clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
+}
+
+.check input:checked::before {
+  content: "";
+  width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
+  background: var(--st-color-text);
+}
+
+.check input[type="checkbox"]:checked::before {
+  -webkit-mask: var(--st-check) center / 100% 100% no-repeat;
+  mask: var(--st-check) center / 100% 100% no-repeat;
+}
+
+/* Segmented progress (07 §8.2): sunken track, 6u segments with 2u gaps. */
+.progress {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+}
+
+.progress-track {
+  display: flex;
+  gap: calc(2 * var(--u));
+  padding: calc(3 * var(--u));
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.progress-track i {
+  width: calc(6 * var(--u));
+  height: calc(10 * var(--u));
+}
+
+.progress-track i.is-on {
+  background: var(--st-color-text);
+}
+
+/* Attention and overdue are plates with a glyph, never coloured text (07 §2.2). */
+.plate {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  min-height: var(--st-size-control);
+  padding: 0 calc(4 * var(--u));
+  border: var(--u) solid var(--st-color-shadow);
+}
+
+.plate-attention {
+  background: var(--st-color-attention);
+  color: var(--st-color-attention-on);
+}
+
+.plate-overdue {
+  background: var(--st-color-overdue-strong);
+  color: var(--st-color-overdue-on);
+}
+
+/* About: a fixed grid of actions, so neither language reflows the window. */
+.about-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(4 * var(--u));
+  margin-top: calc(8 * var(--u));
+}
+
+.about-actions button {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }

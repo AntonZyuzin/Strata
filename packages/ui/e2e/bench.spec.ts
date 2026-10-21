@@ -1,5 +1,5 @@
 import { type Browser, expect, test } from '@playwright/test';
-import { box, overflowing, SCALES, VIEWPORTS } from './helpers';
+import { box, LAYOUTS, overflowing } from './helpers';
 
 // Benchmark window (16 §3.2 step 0.3). Layout: the same box in RU and EN, idle
 // and with results. Run: the `quick` profile end to end under the desktop CSP,
@@ -19,28 +19,26 @@ async function open(
   return { context, page };
 }
 
-for (const viewport of VIEWPORTS) {
-  for (const deviceScaleFactor of SCALES) {
-    test(`bench window is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
-      browser,
-    }, info) => {
-      const ru = await open(browser, 'ru-RU', viewport, deviceScaleFactor);
-      const en = await open(browser, 'en-US', viewport, deviceScaleFactor);
-      await ru.page.screenshot({ path: info.outputPath('ru.png') });
-      await en.page.screenshot({ path: info.outputPath('en.png') });
-      expect(await overflowing(ru.page), 'RU text must fit').toEqual([]);
-      expect(await overflowing(en.page), 'EN text must fit').toEqual([]);
-      const a = await box(ru.page, '.window');
-      const b = await box(en.page, '.window');
-      for (const k of ['x', 'y', 'width', 'height'] as const) {
-        expect(Math.abs(a[k] - b[k]), `window ${k}: RU ${a[k]} vs EN ${b[k]}`).toBeLessThanOrEqual(
-          0.5,
-        );
-      }
-      await ru.context.close();
-      await en.context.close();
-    });
-  }
+for (const { viewport, deviceScaleFactor } of LAYOUTS) {
+  test(`bench window is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }, info) => {
+    const ru = await open(browser, 'ru-RU', viewport, deviceScaleFactor);
+    const en = await open(browser, 'en-US', viewport, deviceScaleFactor);
+    await ru.page.screenshot({ path: info.outputPath('ru.png') });
+    await en.page.screenshot({ path: info.outputPath('en.png') });
+    expect(await overflowing(ru.page), 'RU text must fit').toEqual([]);
+    expect(await overflowing(en.page), 'EN text must fit').toEqual([]);
+    const a = await box(ru.page, '.window');
+    const b = await box(en.page, '.window');
+    for (const k of ['x', 'y', 'width', 'height'] as const) {
+      expect(Math.abs(a[k] - b[k]), `window ${k}: RU ${a[k]} vs EN ${b[k]}`).toBeLessThanOrEqual(
+        0.5,
+      );
+    }
+    await ru.context.close();
+    await en.context.close();
+  });
 }
 
 test('quick benchmark runs end to end and reports every scenario', async ({ browser }, info) => {

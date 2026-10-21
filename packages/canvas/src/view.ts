@@ -93,7 +93,7 @@ export class CanvasView {
     const app = new Application();
     await app.init({
       resizeTo: host,
-      background: fog.color.sceneBg,
+      background: fog.scene.bg,
       antialias: true,
       autoDensity: true,
       resolution: window.devicePixelRatio,
@@ -267,7 +267,7 @@ export class CanvasView {
     });
     icon.scale.set(2 * r * ICON_SCALE);
     const ring = node.deadline
-      ? new Sprite({ texture: t.ring, anchor: 0.5, tint: fog.color.attention })
+      ? new Sprite({ texture: t.ring, anchor: 0.5, tint: fog.scene.attention })
       : null;
     ring?.scale.set((2 * r) / SIZE.l);
     const label = new BitmapText({

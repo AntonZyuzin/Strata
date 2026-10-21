@@ -1,14 +1,14 @@
+import { glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { type Group, type MenuItem, type MenuNode, menuItems } from './menu';
 
 /**
- * Tab menu (06 §5, 07 §8.2): a window without a title bar, 360 px wide whatever
- * the language, prompt «>», up to 12 rows, group headers, key hints below.
+ * Tab menu (06 §5, 07 §8.2): a window without a title bar, 52 ch of the UI font
+ * wide (360 px at DPR 1) whatever the language, prompt «>», up to 12 rows, group headers, key hints below.
  * It opens at the anchor and stays inside the canvas, clear of the status bar.
  */
 
-const WIDTH = 360;
 const MARGIN = 8;
 
 export function TabMenu(props: {
@@ -42,10 +42,11 @@ export function TabMenu(props: {
   // biome-ignore lint/correctness/useExhaustiveDependencies: the height changes with the number of rows
   useLayoutEffect(() => {
     const h = box.current?.offsetHeight ?? 0;
+    const w = box.current?.offsetWidth ?? 0;
     const right = props.bounds?.right ?? window.innerWidth;
     const bottom = props.bounds?.bottom ?? window.innerHeight;
     setPos({
-      left: Math.max(MARGIN, Math.min(props.x, right - WIDTH - MARGIN)),
+      left: Math.max(MARGIN, Math.min(props.x, right - w - MARGIN)),
       top: Math.max(MARGIN, Math.min(props.y, bottom - h - MARGIN)),
     });
   }, [props.x, props.y, items.length]);
@@ -94,7 +95,7 @@ export function TabMenu(props: {
         className="tab-menu"
         role="dialog"
         aria-label={t(locale, 'menu.query')}
-        style={{ left: pos.left, top: pos.top, width: WIDTH }}
+        style={{ left: pos.left, top: pos.top }}
       >
         <div className="tab-menu-prompt">
           <span aria-hidden="true">&gt;</span>
@@ -136,7 +137,11 @@ export function TabMenu(props: {
                   props.onChoose(item);
                 }}
               >
-                <span className={`kind-icon kind-${item.kind}`} aria-hidden="true" />
+                <span
+                  className="kind-icon"
+                  style={{ '--glyph': glyphUrl(item.kind) } as React.CSSProperties}
+                  aria-hidden="true"
+                />
                 <span className="tab-menu-label" title={item.label}>
                   {item.label}
                 </span>

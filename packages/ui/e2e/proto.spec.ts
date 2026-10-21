@@ -1,6 +1,6 @@
 import { type Browser, expect, type Page, test } from '@playwright/test';
 import { type MessageKey, t } from '@strata/i18n';
-import { box, overflowing, SCALES, VIEWPORTS } from './helpers';
+import { box, chWidth, LAYOUTS, overflowing } from './helpers';
 
 // Canvas prototype (16 §3.2 step 0.3). Layout: the top window, the status bar
 // and the Tab menu keep their boxes in RU and EN and nothing is cut. Gestures:
@@ -171,59 +171,57 @@ async function glide(page: Page, from: { x: number; y: number }, to: { x: number
   }
 }
 
-for (const viewport of VIEWPORTS) {
-  for (const deviceScaleFactor of SCALES) {
-    test(`prototype Chrome is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
-      browser,
-    }, info) => {
-      const ru = await openIn(browser, 'ru-RU', viewport, deviceScaleFactor);
-      const en = await openIn(browser, 'en-US', viewport, deviceScaleFactor);
-      const parts = ['.proto-top', '.proto-status', '.proto-status button:first-of-type'];
-      for (const side of [ru, en]) {
-        expect(await overflowing(side.page, '.proto-top, .proto-status')).toEqual([]);
-        // The Tab menu at the centre of the canvas, empty query: kinds and classes.
-        await side.page.mouse.move(viewport.width / 2, viewport.height / 2);
-        await side.page.keyboard.press('Tab');
-        await expect(side.page.locator('.tab-menu')).toBeVisible();
-        expect(await overflowing(side.page, '.tab-menu')).toEqual([]);
-        const menu = await box(side.page, '.tab-menu');
-        expect(menu.width).toBeCloseTo(360, 0);
-        // Clamped into the canvas: the status bar stays visible.
-        expect(menu.y + menu.height).toBeLessThanOrEqual((await box(side.page, '.proto-status')).y);
+for (const { viewport, deviceScaleFactor } of LAYOUTS) {
+  test(`prototype Chrome is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }, info) => {
+    const ru = await openIn(browser, 'ru-RU', viewport, deviceScaleFactor);
+    const en = await openIn(browser, 'en-US', viewport, deviceScaleFactor);
+    const parts = ['.proto-top', '.proto-status', '.proto-status button:first-of-type'];
+    for (const side of [ru, en]) {
+      expect(await overflowing(side.page, '.proto-top, .proto-status')).toEqual([]);
+      // The Tab menu at the centre of the canvas, empty query: kinds and classes.
+      await side.page.mouse.move(viewport.width / 2, viewport.height / 2);
+      await side.page.keyboard.press('Tab');
+      await expect(side.page.locator('.tab-menu')).toBeVisible();
+      expect(await overflowing(side.page, '.tab-menu')).toEqual([]);
+      const menu = await box(side.page, '.tab-menu');
+      // 52 ch of the UI font: 364 px at DPR 1 and 2, wider with the pixel font at 1.25 and 1.5.
+      expect(Math.abs(menu.width - (await chWidth(side.page, 52)))).toBeLessThanOrEqual(0.5);
+      // Clamped into the canvas: the status bar stays visible.
+      expect(menu.y + menu.height).toBeLessThanOrEqual((await box(side.page, '.proto-status')).y);
+    }
+    await ru.page.screenshot({ path: info.outputPath('ru.png') });
+    await en.page.screenshot({ path: info.outputPath('en.png') });
+    for (const sel of [...parts, '.tab-menu']) {
+      const a = await box(ru.page, sel);
+      const b = await box(en.page, sel);
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(a[k] - b[k]), `${sel} ${k}: RU ${a[k]} vs EN ${b[k]}`).toBeLessThanOrEqual(
+          0.5,
+        );
       }
-      await ru.page.screenshot({ path: info.outputPath('ru.png') });
-      await en.page.screenshot({ path: info.outputPath('en.png') });
-      for (const sel of [...parts, '.tab-menu']) {
-        const a = await box(ru.page, sel);
-        const b = await box(en.page, sel);
-        for (const k of ['x', 'y', 'width', 'height'] as const) {
-          expect(
-            Math.abs(a[k] - b[k]),
-            `${sel} ${k}: RU ${a[k]} vs EN ${b[k]}`,
-          ).toBeLessThanOrEqual(0.5);
-        }
-      }
-      // Every hint of the status bar fits in both languages at this width.
-      for (const [side, lang] of [
-        [ru, 'ru'],
-        [en, 'en'],
-      ] as const) {
-        const texts = HINTS.map((k) => t(lang, k));
-        const cut = await side.page.locator('.proto-status .hint').evaluate((el, texts) => {
-          const keep = el.textContent;
-          const out = texts.filter((text) => {
-            el.textContent = text;
-            return el.scrollWidth > el.clientWidth + 1;
-          });
-          el.textContent = keep;
-          return out;
-        }, texts);
-        expect(cut, `${lang} hints cut at ${viewport.width} px`).toEqual([]);
-      }
-      await ru.context.close();
-      await en.context.close();
-    });
-  }
+    }
+    // Every hint of the status bar fits in both languages at this width.
+    for (const [side, lang] of [
+      [ru, 'ru'],
+      [en, 'en'],
+    ] as const) {
+      const texts = HINTS.map((k) => t(lang, k));
+      const cut = await side.page.locator('.proto-status .hint').evaluate((el, texts) => {
+        const keep = el.textContent;
+        const out = texts.filter((text) => {
+          el.textContent = text;
+          return el.scrollWidth > el.clientWidth + 1;
+        });
+        el.textContent = keep;
+        return out;
+      }, texts);
+      expect(cut, `${lang} hints cut at ${viewport.width} px`).toEqual([]);
+    }
+    await ru.context.close();
+    await en.context.close();
+  });
 }
 
 test.describe('gestures', () => {

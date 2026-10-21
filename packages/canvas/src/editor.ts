@@ -40,7 +40,7 @@ const PLACE_GAP = 16;
 
 const PAPER = 0xf2efe6;
 const INK = 0x0b0c0e;
-const ATTENTION = Number.parseInt(fog.color.attention.slice(1), 16);
+const ATTENTION = Number.parseInt(fog.scene.attention.slice(1), 16);
 const ACTIVE_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false };
 const RUNNING_WIRE: WireStyle = { ...ACTIVE_WIRE, dot: true };
 const CANDIDATE_WIRE: WireStyle = { color: ATTENTION, alpha: 1, width: 2.5, dot: false };

@@ -1,0 +1,19 @@
+/* Fonts of 07 §3.1, all bundled: no font CDN, the desktop works offline (07 §3.5).
+   Fontsource `400.css` declares every subset with its unicode-range, so the
+   browser loads Latin and Cyrillic on demand. Licences: OFL 1.1; texts are
+   shown on the «Благодарности» screen. fonts.test.ts checks the cmap. */
+@import "@fontsource/press-start-2p/400.css";
+@import "@fontsource/tiny5/400.css";
+@import "@fontsource/golos-text/400.css";
+@import "@fontsource/golos-text/600.css";
+@import "@fontsource/jetbrains-mono/400.css";
+
+/* Departure Mono 1.500 by Helena Zhang, OFL 1.1 (DepartureMono-OFL.txt);
+   not on Fontsource, taken from github.com/rektdeckard/departure-mono. */
+@font-face {
+  font-family: "Departure Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("./DepartureMono-1.500.woff2") format("woff2");
+}

@@ -17,7 +17,7 @@ export function installLabelFont(): void {
   if (fontInstalled) return;
   BitmapFont.install({
     name: LABEL_FONT,
-    style: { fontFamily: fog.font.ui, fontSize: 24, fill: fog.color.paper },
+    style: { fontFamily: fog.font.ui, fontSize: 24, fill: fog.scene.paper },
     chars: [['a', 'z'], ['A', 'Z'], ['0', '9'], ['а', 'я'], ['А', 'Я'], ' ёЁ.,:;-—«»№!?()/+#&'],
     resolution: 2,
   });
@@ -48,9 +48,9 @@ export function createTextures(app: Application): SceneTextures {
     app,
     new Graphics()
       .circle(0, 0, SIZE.l / 2)
-      .fill(fog.color.paper)
+      .fill(fog.scene.paper)
       .circle(0, 0, SIZE.l / 2 - 1.5)
-      .stroke({ color: fog.color.ink, width: 1.5, alpha: 0.25 }),
+      .stroke({ color: fog.scene.ink, width: 1.5, alpha: 0.25 }),
   );
   const ring = texture(
     app,
@@ -100,7 +100,7 @@ function iconAtlas(app: Application): Texture[] {
       }
     }
   }
-  g.fill(fog.color.ink);
+  g.fill(fog.scene.ink);
   const atlas = texture(app, g, new Rectangle(0, 0, perRow * ICON_CELL, rows * ICON_CELL));
   return Array.from(
     { length: ICONS },

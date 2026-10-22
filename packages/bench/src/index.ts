@@ -10,6 +10,7 @@ import {
   type ScenarioOutcome,
   verdict,
 } from './report';
+import { runMapScenario } from './starmap';
 
 export * from './report';
 
@@ -53,6 +54,22 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
     { id: 'canvas-pan-zoom-n5k', spike: 1, draws: true, run: canvas('pan-zoom', 5_000, 7_500) },
     { id: 'canvas-drag-n5k', spike: 1, draws: true, run: canvas('drag', 5_000, 7_500) },
     { id: 'canvas-pan-zoom-n10k', spike: 1, draws: true, run: canvas('pan-zoom', 10_000, 15_000) },
+    // NFR-12: 20 000 stars, 30 000 wires, fog, bloom at ½ (08 §8.1).
+    {
+      id: 'map-orbit-20k',
+      spike: 2,
+      draws: true,
+      run: (s, env) =>
+        runMapScenario(s, {
+          stars: q ? 2_000 : 20_000,
+          wires: q ? 3_000 : 30_000,
+          bloom: true,
+          warmupMs: q ? 300 : 2_000,
+          runMs: q ? 1_500 : 10_000,
+          runs: q ? 1 : 5,
+          vsyncMs: env.vsyncMs,
+        }),
+    },
     // One shard up to ≈ 20k nodes, 16 above (10 §2.7); one commit per node, as in S4.
     // 100k on one shard (S4's worst case) is not a configuration the app uses; the
     // first Mac run measured it: 60 ms first edit.

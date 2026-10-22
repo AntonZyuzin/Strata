@@ -38,6 +38,12 @@ importers:
       '@strata/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens
+      '@strata/layout':
+        specifier: workspace:*
+        version: link:../layout
+      '@strata/view3d':
+        specifier: workspace:*
+        version: link:../view3d
       loro-crdt:
         specifier: 1.16.4
         version: 1.16.4

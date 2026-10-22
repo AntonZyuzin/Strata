@@ -13,7 +13,10 @@ import createLayout from 'ngraph.forcelayout';
 import createGraph from 'ngraph.graph';
 import { BarnesHut3D } from './bh';
 import type { StarMapExtract } from './extract';
-import { clusterRadius, degrees, mass } from './layout';
+import { degrees, mass } from './layout';
+import { MODEL, type Spring, springsOf } from './relax';
+
+export { MODEL };
 
 /**
  * The force model of 08 §3.2 on the two candidates of spike 2 (08 §3.1, 16
@@ -35,21 +38,6 @@ import { clusterRadius, degrees, mass } from './layout';
 export type PhysicsLib = 'd3-force-3d' | 'ngraph' | 'typed-bh' | 'wasm';
 export const PHYSICS_LIBS: PhysicsLib[] = ['d3-force-3d', 'ngraph', 'typed-bh', 'wasm'];
 
-/** 08 §3.2: repulsion, nesting spring, wire springs, collision, centring, damping. */
-export const MODEL = {
-  repulsion: 30,
-  theta: 0.8,
-  nestStrength: 0.08,
-  nestLength: 0.6,
-  wireLength: 60,
-  wireInside: 0.02,
-  wireBetween: 0.005,
-  collide: 18,
-  centre: 0.001,
-  /** Velocity × 0.6 per tick. */
-  velocityDecay: 0.4,
-} as const;
-
 export interface PhysicsRun {
   lib: PhysicsLib;
   bodies: number;
@@ -60,50 +48,6 @@ export interface PhysicsRun {
   tickMeanMs: number;
   tickP95Ms: number;
   totalMs: number;
-}
-
-interface Spring {
-  a: number;
-  b: number;
-  length: number;
-  k: number;
-}
-
-/** Bodies (a subset or all) and the springs between them, in subset indices. */
-function springsOf(x: StarMapExtract, bodies: Int32Array): Spring[] {
-  const local = new Int32Array(x.count).fill(-1);
-  bodies.forEach((b, i) => {
-    local[b] = i;
-  });
-  const out: Spring[] = [];
-  for (let k = 0; k < bodies.length; k++) {
-    const b = bodies[k] ?? 0;
-    const p = x.primaryNet[b] ?? -1;
-    const lp = p >= 0 ? (local[p] ?? -1) : -1;
-    if (lp >= 0) {
-      out.push({
-        a: k,
-        b: lp,
-        length: MODEL.nestLength * clusterRadius(x.subtreeSize[p] ?? 1),
-        k: MODEL.nestStrength,
-      });
-    }
-  }
-  for (let e = 0; e < x.edges.length; e += 2) {
-    const ga = x.edges[e] ?? 0;
-    const gb = x.edges[e + 1] ?? 0;
-    const a = local[ga] ?? -1;
-    const b = local[gb] ?? -1;
-    if (a < 0 || b < 0) continue;
-    const inside = x.primaryNet[ga] === x.primaryNet[gb];
-    out.push({
-      a,
-      b,
-      length: MODEL.wireLength,
-      k: inside ? MODEL.wireInside : MODEL.wireBetween,
-    });
-  }
-  return out;
 }
 
 function percentile(values: number[], p: number): number {

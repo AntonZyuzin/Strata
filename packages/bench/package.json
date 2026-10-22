@@ -13,6 +13,8 @@
   },
   "dependencies": {
     "@strata/design-tokens": "workspace:*",
+    "@strata/layout": "workspace:*",
+    "@strata/view3d": "workspace:*",
     "loro-crdt": "1.16.4",
     "pixi.js": "8.22.0"
   },

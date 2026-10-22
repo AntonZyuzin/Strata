@@ -1,13 +1,14 @@
 import type { CanvasResult } from './canvas';
 import type { Environment } from './env';
 import type { LoroIndexResult, LoroTextResult } from './loro';
+import type { MapResult } from './starmap';
 
 /**
  * The report format and its summary, without Pixi or Loro: the UI imports this
  * at startup and loads the runner (`@strata/bench`) only when a run starts.
  */
 
-export type { CanvasResult, Environment, LoroIndexResult, LoroTextResult };
+export type { CanvasResult, Environment, LoroIndexResult, LoroTextResult, MapResult };
 
 /**
  * `full` is the run the owner makes on MO-mac and MO-win (15 §8.3); `quick`
@@ -20,6 +21,7 @@ export const SCENARIO_IDS = [
   'canvas-pan-zoom-n5k',
   'canvas-drag-n5k',
   'canvas-pan-zoom-n10k',
+  'map-orbit-20k',
   'loro-index-20k',
   'loro-index-100k-k16',
   'loro-text-1mb',
@@ -110,6 +112,7 @@ export const THRESHOLDS = {
     'canvas-pan-zoom-n5k': 1000 / 60,
     'canvas-drag-n5k': 1000 / 60,
     'canvas-pan-zoom-n10k': 1000 / 30,
+    'map-orbit-20k': 1000 / 60,
   },
   indexImportMs: 500,
   indexMemoryMib: 200,

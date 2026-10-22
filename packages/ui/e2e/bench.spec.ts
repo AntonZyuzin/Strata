@@ -1,4 +1,5 @@
 import { type Browser, expect, test } from '@playwright/test';
+import { SCENARIO_IDS } from '@strata/bench/report';
 import { box, LAYOUTS, overflowing } from './helpers';
 
 // Benchmark window (16 §3.2 step 0.3). Layout: the same box in RU and EN, idle
@@ -64,7 +65,7 @@ test('quick benchmark runs end to end and reports every scenario', async ({ brow
   });
   await page.screenshot({ path: info.outputPath('done.png') });
   const cells = await page.locator('.bench-row dd').allTextContents();
-  expect(cells).toHaveLength(6);
+  expect(cells).toHaveLength(SCENARIO_IDS.length);
   for (const c of cells) expect(c, 'a verdict and numbers').toMatch(/^[✓✗] .*\d/);
   for (const c of cells) expect(c).not.toContain('ошибка');
   expect(await overflowing(page), 'results must fit').toEqual([]);
@@ -72,12 +73,14 @@ test('quick benchmark runs end to end and reports every scenario', async ({ brow
   const report = JSON.parse(await page.locator('textarea.report').inputValue());
   expect(report.report).toBe('strata-bench');
   expect(report.profile).toBe('quick');
-  expect(report.outcomes.map((o: { ok: boolean }) => o.ok)).toEqual(Array(6).fill(true));
+  expect(report.outcomes.map((o: { ok: boolean }) => o.ok)).toEqual(
+    Array(SCENARIO_IDS.length).fill(true),
+  );
   expect(report.env.webgl).not.toBeNull();
   const index = report.outcomes.filter((o: { id: string }) => o.id.startsWith('loro-index'));
   for (const o of index) expect(o.result.isolated, `${o.id} ran in workers`).toBe(true);
   expect(report.summary.workers).toBe(true);
-  expect(Object.keys(report.summary.verdicts)).toHaveLength(6);
+  expect(Object.keys(report.summary.verdicts)).toHaveLength(SCENARIO_IDS.length);
   expect(errors).toEqual([]);
   await context.close();
 });

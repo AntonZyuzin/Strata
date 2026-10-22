@@ -269,7 +269,7 @@ test('backgrounds keep the Scene readable: every preset and a white photo (07 §
   await expect(page.locator('.contrast-cell.is-low')).toHaveCount(0);
 });
 
-test('a wire enters its target through an input socket; the source has none (07 §5)', async ({
+test('wire ends: a socket at the source, an arrow or a socket at the target (07 §5)', async ({
   browser,
 }) => {
   const context = await browser.newContext({
@@ -278,8 +278,8 @@ test('a wire enters its target through an input socket; the source has none (07 
   });
   const page = await context.newPage();
   await open(page);
-  // A wire between two plain bubbles, close enough to share the screen, whose
-  // ends miss the kind glyph at 6 o'clock (06 §4.1).
+  // A wire between two plain bubbles, the source above, close enough to share
+  // the screen, whose ends miss 6 o'clock (06 §4.1) and the labels below.
   const pick = await page.evaluate(() => {
     const { view, graph } = window.__strataProto as Hook;
     const plain = (id: string) => {
@@ -303,7 +303,7 @@ test('a wire enters its target through an input socket; the source has none (07 
     for (const [from, to] of graph.edges()) {
       const a = view.nodeAt(from);
       const b = view.nodeAt(to);
-      if (!a || !b || !plain(from) || !plain(to)) continue;
+      if (!a || !b || !plain(from) || !plain(to) || a.y >= b.y) continue;
       const dx = a.x - b.x;
       const dy = a.y - b.y;
       const d = Math.hypot(dx, dy);
@@ -320,6 +320,7 @@ test('a wire enters its target through an input socket; the source has none (07 
     throw new Error('no plain wire');
   });
   // Bubbles at the icon level (07 §4.9), the target in the middle of the canvas.
+  await page.mouse.move(2, 790);
   await page.evaluate(({ to }) => {
     const { view } = window.__strataProto as Hook;
     const b = view.nodeAt(to) as Pt;
@@ -329,47 +330,77 @@ test('a wire enters its target through an input socket; the source has none (07 
     cam.y = b.y - view.canvas.clientHeight / 2 / cam.zoom;
     view.invalidate();
   }, pick);
-  await page.evaluate(
-    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
-  );
-  const png = (await page.screenshot()).toString('base64');
-  // Brightness just inside the rim, 1.5 px in, where the wire meets each bubble.
-  const lum = await page.evaluate(
-    async ({ png, pick }) => {
-      const img = new Image();
-      img.src = `data:image/png;base64,${png}`;
-      await img.decode();
-      const c = document.createElement('canvas');
-      c.width = img.width;
-      c.height = img.height;
-      const g = c.getContext('2d') as CanvasRenderingContext2D;
-      g.drawImage(img, 0, 0);
-      const k = img.width / window.innerWidth;
-      const e = window.__e2e as Probe;
-      const a = e.node(pick.from);
-      const b = e.node(pick.to);
-      if (!e.free(a.x, a.y) || !e.free(b.x, b.y)) throw new Error('ends under the Chrome');
-      const at = (p: Pt, q: Pt) => {
-        const dx = q.x - p.x;
-        const dy = q.y - p.y;
-        const d = Math.hypot(dx, dy);
-        const x = p.x + (dx / d) * (p.r - 1.5);
-        const y = p.y + (dy / d) * (p.r - 1.5);
-        const [r = 0, gr = 0, bl = 0] = g.getImageData(
-          Math.floor(x * k),
-          Math.floor(y * k),
-          1,
-          1,
-        ).data;
-        return (r + gr + bl) / 765;
-      };
-      return { input: at(b, a), output: at(a, b) };
-    },
-    { png, pick },
-  );
-  // Ink socket at the input, bare paper at the output.
-  expect(lum.input).toBeLessThan(0.3);
-  expect(lum.output).toBeGreaterThan(0.6);
+
+  /** Brightness at both ends of the wire in the frame on screen, u = 1 CSS px at DPR 2. */
+  const measure = async () => {
+    await page.evaluate(
+      () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+    );
+    const png = (await page.screenshot()).toString('base64');
+    return page.evaluate(
+      async ({ png, pick }) => {
+        const img = new Image();
+        img.src = `data:image/png;base64,${png}`;
+        await img.decode();
+        const c = document.createElement('canvas');
+        c.width = img.width;
+        c.height = img.height;
+        const g = c.getContext('2d') as CanvasRenderingContext2D;
+        g.drawImage(img, 0, 0);
+        const k = img.width / window.innerWidth;
+        const lum = (x: number, y: number) => {
+          const [r = 0, gr = 0, bl = 0] = g.getImageData(
+            Math.floor(x * k),
+            Math.floor(y * k),
+            1,
+            1,
+          ).data;
+          return (r + gr + bl) / 765;
+        };
+        const e = window.__e2e as Probe;
+        const a = e.node(pick.from);
+        const b = e.node(pick.to);
+        if (!e.free(a.x, a.y) || !e.free(b.x, b.y)) throw new Error('ends under the Chrome');
+        const unit = (p: Pt, q: Pt) => {
+          const d = Math.hypot(q.x - p.x, q.y - p.y);
+          return { x: (q.x - p.x) / d, y: (q.y - p.y) / d };
+        };
+        const ua = unit(a, b);
+        const ub = unit(b, a);
+        // Bright pixels outside the target's rim within 12 px of where the wire enters.
+        const jx = b.x + ub.x * b.r;
+        const jy = b.y + ub.y * b.r;
+        let bright = 0;
+        for (let y = jy - 12; y <= jy + 12; y += 0.5) {
+          for (let x = jx - 12; x <= jx + 12; x += 0.5) {
+            if (Math.hypot(x - jx, y - jy) > 12 || Math.hypot(x - b.x, y - b.y) < b.r + 1) continue;
+            if (lum(x, y) > 0.8) bright++;
+          }
+        }
+        return {
+          // 2 px out of the source's rim, inside its socket.
+          source: lum(a.x + ua.x * (a.r + 2), a.y + ua.y * (a.r + 2)),
+          // 1.5 px inside the target's rim, inside a hollow socket if there is one.
+          target: lum(b.x + ub.x * (b.r - 1.5), b.y + ub.y * (b.r - 1.5)),
+          bright,
+        };
+      },
+      { png, pick },
+    );
+  };
+
+  // Default: a solid socket at the source, an arrowhead at the target.
+  const arrow = await measure();
+  expect(arrow.source).toBeGreaterThan(0.8);
+  expect(arrow.target).toBeGreaterThan(0.6);
+  expect(arrow.bright).toBeGreaterThan(120);
+  // Circles: a hollow ink socket at the target and no arrowhead.
+  await page.locator('.proto-ends label', { has: page.locator('input[value="sockets"]') }).click();
+  await page.mouse.move(2, 790);
+  const sockets = await measure();
+  expect(sockets.source).toBeGreaterThan(0.8);
+  expect(sockets.target).toBeLessThan(0.3);
+  expect(sockets.bright).toBeLessThan(100);
   await context.close();
 });
 

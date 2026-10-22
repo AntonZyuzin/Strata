@@ -13,6 +13,8 @@ import {
   processBackdrop,
   sceneContrast,
   type WheelMode,
+  WIRE_END_STYLES,
+  type WireEndStyle,
 } from '@strata/canvas';
 import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -35,6 +37,8 @@ interface Toast {
 }
 
 const RECENT_KEY = 'strata.tabmenu.recent';
+/** The wire end style under comparison (Q-07-20), kept between reloads. */
+const ENDS_KEY = 'strata.proto.ends';
 /** Procedural presets are blurred anyway: half the photo size looks the same (07 §7.1). */
 const PRESET_W = BACKDROP_SIDE / 2;
 const PRESET_H = Math.round((BACKDROP_SIDE / 2) * 0.625);
@@ -86,6 +90,15 @@ async function photo(file: File): Promise<{ px: Pixels; p95: number }> {
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
+function loadEnds(): WireEndStyle {
+  try {
+    const v = localStorage.getItem(ENDS_KEY);
+    return WIRE_END_STYLES.find((s) => s === v) ?? 'arrow';
+  } catch {
+    return 'arrow';
+  }
+}
+
 function loadRecent(): string[] {
   try {
     const v = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]');
@@ -115,6 +128,8 @@ export function Prototype(props: {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [hint, setHint] = useState<HintKey>('proto.hint.empty');
   const [wheel, setWheel] = useState<WheelMode>('mouse');
+  const [ends, setEnds] = useState<WireEndStyle>(loadEnds);
+  const endsRef = useRef(ends);
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [, setVersion] = useState(0);
   const toastId = useRef(0);
@@ -152,6 +167,7 @@ export function Prototype(props: {
       }
       view = v;
       viewRef.current = v;
+      v.wireEnds = endsRef.current;
       v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       // `?proto&plain`: no background, for gesture e2e on software WebGL in CI,
       // where two full-screen layers make every frame several times slower.
@@ -296,6 +312,39 @@ export function Prototype(props: {
           >
             {t(locale, 'proto.bg.photo')}
           </button>
+          <div className="proto-ends-row">
+            <span className="proto-ends-caption" aria-hidden="true" title={t(locale, 'proto.ends')}>
+              {t(locale, 'proto.ends')}
+            </span>
+            <fieldset className="segmented proto-ends">
+              <legend className="sr-only">{t(locale, 'proto.ends')}</legend>
+              {WIRE_END_STYLES.map((s) => (
+                <label
+                  key={s}
+                  className={ends === s ? 'is-active' : undefined}
+                  title={t(locale, `proto.ends.${s}Hint` as const)}
+                >
+                  <input
+                    type="radio"
+                    name="ends"
+                    value={s}
+                    checked={ends === s}
+                    onChange={() => {
+                      setEnds(s);
+                      endsRef.current = s;
+                      if (viewRef.current) viewRef.current.wireEnds = s;
+                      try {
+                        localStorage.setItem(ENDS_KEY, s);
+                      } catch {
+                        // A preference for the comparison; private windows may refuse storage.
+                      }
+                    }}
+                  />
+                  <span>{t(locale, `proto.ends.${s}` as const)}</span>
+                </label>
+              ))}
+            </fieldset>
+          </div>
           <input
             ref={fileInput}
             className="sr-only"

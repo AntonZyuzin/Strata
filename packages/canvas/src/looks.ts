@@ -1,5 +1,6 @@
 import type { GraphNode } from '@strata/backend';
 import { fog, type GlyphName, hex, palette } from '@strata/design-tokens';
+import { pointAt } from './curve';
 import type { Plate } from './textures';
 
 /**
@@ -56,6 +57,15 @@ interface Circle {
 }
 
 /**
+ * How the ends of wires look (07 §5, ✅ S9 2026-10-23, Q-07-20): a solid
+ * socket where a wire leaves its source, and where it enters its target a
+ * hollow socket (`sockets`), an arrowhead (`arrow`), or a hollow socket with an
+ * arrowhead midway along the wire (`both`).
+ */
+export type WireEndStyle = 'sockets' | 'arrow' | 'both';
+export const WIRE_END_STYLES: WireEndStyle[] = ['sockets', 'arrow', 'both'];
+
+/**
  * Direction from the centre of `node` to the socket of the wire from `src`:
  * the wire leaves and enters on the line of centres (06 §6.2). Null when the
  * bubbles overlap and the wire has no length to show.
@@ -66,4 +76,78 @@ export function socketAt(node: Circle, src: Circle): { dx: number; dy: number } 
   const d = Math.hypot(dx, dy);
   if (d <= node.r + src.r) return null;
   return { dx: dx / d, dy: dy / d };
+}
+
+/**
+ * An arrowhead with its tip at the point `t` of the curve with control points
+ * `c` (screen px), pointing from the point `length` back along the curve to
+ * the tip: the wire runs into the arrow's base even where it bends. Null when
+ * the curve before `t` is shorter than the arrow.
+ */
+export function arrowOn(
+  c: readonly number[],
+  t: number,
+  length: number,
+): { x: number; y: number; dx: number; dy: number } | null {
+  const tip = pointAt(c, t, { x: 0, y: 0 });
+  const p = { x: 0, y: 0 };
+  for (let k = 1; k <= 64; k++) {
+    const back = t - k / 64;
+    if (back < 0) break;
+    pointAt(c, back, p);
+    const d = Math.hypot(tip.x - p.x, tip.y - p.y);
+    if (d >= length) return { x: tip.x, y: tip.y, dx: (tip.x - p.x) / d, dy: (tip.y - p.y) / d };
+  }
+  return null;
+}
+
+/** Something on the rim: its angle from 3 o'clock clockwise and its half-size, px. */
+export interface RimMark {
+  angle: number;
+  reach: number;
+}
+
+const TURN = Math.PI * 2;
+
+function arc(a: number, b: number): number {
+  const d = Math.abs(a - b) % TURN;
+  return Math.min(d, TURN - d);
+}
+
+/**
+ * The place on a rim of radius `r` for a glyph of half-size `reach` wanted at
+ * clock `hour` (07 §4.7 rule 5: one place, one mark): the hour itself or the
+ * nearest half-hour step either way, up to two hours, at least `gap` px clear
+ * of every mark in `taken`. Wire ends take their places first: a glyph gives
+ * way to a socket. The place found joins `taken`; when none is free the glyph
+ * keeps its hour. Returns the angle.
+ */
+export function rimSlot(
+  hour: number,
+  reach: number,
+  taken: RimMark[],
+  r: number,
+  gap: number,
+): number {
+  const base = (hour / 12) * TURN - Math.PI / 2;
+  for (const step of [0, 0.5, -0.5, 1, -1, 1.5, -1.5, 2, -2]) {
+    const angle = base + (step / 12) * TURN;
+    if (taken.every((m) => arc(m.angle, angle) * r >= m.reach + reach + gap)) {
+      taken.push({ angle, reach });
+      return angle;
+    }
+  }
+  taken.push({ angle: base, reach });
+  return base;
+}
+
+/** `top` over `bottom` at `alpha` as one opaque colour, 0xRRGGBB. */
+export function over(bottom: number, top: number, alpha: number): number {
+  let out = 0;
+  for (const shift of [16, 8, 0]) {
+    const b = (bottom >> shift) & 255;
+    const t = (top >> shift) & 255;
+    out |= Math.round(b + (t - b) * alpha) << shift;
+  }
+  return out;
 }

@@ -872,6 +872,28 @@ button:focus-visible {
   min-width: 0;
 }
 
+/* Wire end styles (07 §5, Q-07-20): a row of its own with fixed cells, the
+   same in RU and EN. */
+.proto-ends-row {
+  flex: 1 0 100%;
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+}
+
+.proto-ends-caption {
+  width: 12ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+.proto-top .proto-ends label {
+  width: 9ch;
+  padding: 0;
+}
+
 .contrast {
   flex: 1 0 100%;
   display: grid;

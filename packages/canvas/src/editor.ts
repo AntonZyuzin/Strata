@@ -1140,8 +1140,8 @@ export class Editor {
       ay: a?.y ?? 0,
       bx: b?.x ?? 0,
       by: b?.y ?? 0,
-      ra: (a?.r ?? 0) + 1,
-      // The target end runs into its input socket on the rim (07 §5).
+      // Both ends run into their sockets on the rim (07 §5).
+      ra: a?.r ?? 0,
       rb: b?.r ?? 0,
     };
   }

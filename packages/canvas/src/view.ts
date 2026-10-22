@@ -8,7 +8,7 @@ import { BackgroundLayer } from './background';
 import { Camera } from './camera';
 import { Decor, type DecorNode, type Interaction } from './decor';
 import { createIconAtlas, type IconAtlas, iconScale } from './icons';
-import { dotColor, isClosed, levelOf, nodeAlpha } from './looks';
+import { dotColor, isClosed, levelOf, nodeAlpha, type WireEndStyle } from './looks';
 import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
 
@@ -20,6 +20,7 @@ interface NodeView extends DecorNode {
   icon: Sprite;
   halo: Sprite | null;
   inputs: NodeView[];
+  outputs: NodeView[];
 }
 
 interface Tween {
@@ -139,6 +140,16 @@ export class CanvasView {
     return this.app.screen.height;
   }
 
+  /** How the ends of wires look (07 §5, Q-07-20). */
+  get wireEnds(): WireEndStyle {
+    return this.decor.ends;
+  }
+
+  set wireEnds(style: WireEndStyle) {
+    this.decor.ends = style;
+    this.invalidate();
+  }
+
   get reducedMotion(): boolean {
     return this.motionReduced;
   }
@@ -245,7 +256,6 @@ export class CanvasView {
       this.height,
       this.interaction(),
       now,
-      (from, to) => this.wireStyle(from, to).alpha,
     );
     this.app.render();
     if (moving || animating) this.invalidate();
@@ -261,8 +271,8 @@ export class CanvasView {
       const a = this.views.get(from);
       const b = this.views.get(to);
       if (!a || !b) continue;
-      // The target end runs into its input socket on the rim (07 §5); same as editor.wireEnds.
-      this.wires.set(i, { ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r + 1, rb: b.r });
+      // Both ends run into their sockets on the rim (07 §5); same as editor.wireEnds.
+      this.wires.set(i, { ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r });
       const style = this.wireStyle(from, to);
       this.wires.setStyle(i, far && style === NORMAL_WIRE ? FAR_WIRE : style);
     }
@@ -321,10 +331,16 @@ export class CanvasView {
       if (v.x !== node.x || v.y !== node.y) moved.push(node.id);
     }
     this.wireList = graph.edges();
-    for (const v of this.views.values()) v.inputs.length = 0;
+    for (const v of this.views.values()) {
+      v.inputs.length = 0;
+      v.outputs.length = 0;
+    }
     for (const [from, to] of this.wireList) {
       const a = this.views.get(from);
-      if (a) this.views.get(to)?.inputs.push(a);
+      const b = this.views.get(to);
+      if (!a || !b) continue;
+      a.outputs.push(b);
+      b.inputs.push(a);
     }
     this.settle(moved);
     this.invalidate();
@@ -354,7 +370,18 @@ export class CanvasView {
     this.layer.bodies.addChild(body);
     this.layer.icons.addChild(icon);
     if (halo) this.layer.halos.addChild(halo);
-    const v: NodeView = { id: node.id, node, body, icon, halo, inputs: [], x: 0, y: 0, r };
+    const v: NodeView = {
+      id: node.id,
+      node,
+      body,
+      icon,
+      halo,
+      inputs: [],
+      outputs: [],
+      x: 0,
+      y: 0,
+      r,
+    };
     this.setPosition(v, node.x, node.y);
     this.applyLevel(v);
     return v;

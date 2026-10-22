@@ -1,8 +1,21 @@
 import type { GraphNode } from '@strata/backend';
 import { fog, type GlyphName, hex, palette, people } from '@strata/design-tokens';
 import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
+import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
-import { isClosed, levelOf, nodeAlpha, socketAt, statusGlyph } from './looks';
+import { controls } from './curve';
+import {
+  arrowOn,
+  isClosed,
+  levelOf,
+  nodeAlpha,
+  over,
+  type RimMark,
+  rimSlot,
+  socketAt,
+  statusGlyph,
+  type WireEndStyle,
+} from './looks';
 import { RingLayer } from './rings';
 import { GlyphTextures, labelFont, type Plate } from './textures';
 
@@ -31,6 +44,8 @@ export interface DecorNode {
   r: number;
   /** Sources of the wires drawn into this node. */
   inputs: readonly DecorNode[];
+  /** Targets of the wires drawn out of this node. */
+  outputs: readonly DecorNode[];
 }
 
 /** Clock hours of the rim (06 §4.1, 07 §4.1) as angles from 3 o'clock, clockwise. */
@@ -49,8 +64,13 @@ const PULSES = 3;
 /** Marching ants of the current node run 3 s, then stand (07 §2.8). */
 const ANTS_MS = 3000;
 const LABEL_MAX = 160;
-/** Input socket: ink disc of radius 3u with a paper ring 1u (07 §5). */
-const SOCKET = 3;
+/** Wire ends (07 §5): sockets of radius 4u with a ring 1u, arrowheads in u. */
+const SOCKET = 4;
+const ARROW = { length: 10, half: 5 };
+/** The midway arrow of `both`: at 60 % of the wire, as the chevron of 06 §6.3. */
+const MID = { t: 0.6, length: 8, half: 4 };
+/** Half-size of a rim glyph: 8u picture on a 2u plate (textures.ts). */
+const GLYPH_REACH = 6;
 const CORNERS = [
   [-1, -1],
   [1, -1],
@@ -61,6 +81,7 @@ const CORNERS = [
 export class Decor {
   readonly container = new Container();
   private readonly rings: RingLayer;
+  private readonly arrows = new ArrowLayer();
   private readonly plates = new Container();
   /** Selection corners. */
   private readonly g = new Graphics();
@@ -80,6 +101,7 @@ export class Decor {
   private antsFor: string | null = null;
   private antsStart = 0;
   reducedMotion = false;
+  ends: WireEndStyle = 'arrow';
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -95,6 +117,7 @@ export class Decor {
     this.container.addChild(
       this.hatching,
       this.rings.mesh,
+      this.arrows.mesh,
       this.g,
       this.badges,
       this.plates,
@@ -105,6 +128,7 @@ export class Decor {
   destroy(): void {
     this.glyphs.destroy();
     this.rings.destroy();
+    this.arrows.destroy();
     this.container.destroy({ children: true });
   }
 
@@ -116,13 +140,13 @@ export class Decor {
     h: number,
     ia: Interaction,
     now: number,
-    wireAlpha: (from: string, to: string) => number = () => fog.scene.edgeAlpha,
   ): boolean {
     const g = this.g;
     const rings = this.rings;
     g.clear();
     this.hatching.clear();
     rings.clear();
+    this.arrows.clear();
     this.plateUsed = 0;
     this.badgeUsed = 0;
     this.textUsed = 0;
@@ -176,19 +200,45 @@ export class Decor {
       // Key: a paper contour outside the rim makes the double rim (07 §4.5).
       if (n.key) rings.add(s.x, s.y, R + 2.5 * U, U, { color: PAPER, alpha: a });
 
-      // Input sockets where wires enter the rim (07 §5, ✅ S9 2026-10-23), from the
-      // icon level up; over the rim, under the assignees and glyphs.
+      // Wire ends (07 §5, ✅ S9 2026-10-23) from the icon level up, over the rim
+      // and under the assignees and glyphs: a solid socket where a wire leaves,
+      // a hollow socket or an arrowhead where it enters.
+      const taken: RimMark[] = [];
+      // Opaque even on a dimmed node: paper already blended over the Scene,
+      // so the wire under a mark never shows through (✅ S9 2026-10-23).
+      const paper = over(INK, PAPER, a);
       if (lv !== 'glyph') {
+        for (const dst of v.outputs) {
+          const p = socketAt(v, dst);
+          if (!p) continue;
+          taken.push({ angle: Math.atan2(p.dy, p.dx), reach: SOCKET * U });
+          const x = s.x + p.dx * R;
+          const y = s.y + p.dy * R;
+          rings.dot(x, y, SOCKET * U, paper);
+          rings.add(x, y, (SOCKET - 0.5) * U, U, { color: INK });
+        }
         for (const src of v.inputs) {
           const p = socketAt(v, src);
           if (!p) continue;
-          const x = s.x + p.dx * R;
-          const y = s.y + p.dy * R;
-          rings.dot(x, y, SOCKET * U, INK, a);
-          rings.add(x, y, (SOCKET - 0.5) * U, U, {
-            color: PAPER,
-            alpha: a * wireAlpha(src.id, v.id),
-          });
+          // An arrowhead touches the rim with its tip only.
+          const reach = this.ends === 'arrow' ? (ARROW.half / 2) * U : SOCKET * U;
+          taken.push({ angle: Math.atan2(p.dy, p.dx), reach });
+          if (this.ends !== 'arrow') {
+            const x = s.x + p.dx * R;
+            const y = s.y + p.dy * R;
+            rings.dot(x, y, SOCKET * U, INK);
+            rings.add(x, y, (SOCKET - 0.5) * U, U, { color: paper });
+          }
+          if (this.ends === 'sockets') continue;
+          const c = screenCurve(cam, src, v);
+          const head = this.ends === 'arrow' ? ARROW : MID;
+          // The midway arrow only on wires long enough to carry it.
+          const span = Math.hypot((c[6] ?? 0) - (c[0] ?? 0), (c[7] ?? 0) - (c[1] ?? 0));
+          if (head === MID && span < 6 * MID.length * U) continue;
+          const tip = arrowOn(c, head === MID ? MID.t : 1, head.length * U);
+          if (tip) {
+            this.arrows.add(tip.x, tip.y, tip.dx, tip.dy, head.length * U, head.half * U, paper);
+          }
         }
       }
 
@@ -294,21 +344,23 @@ export class Decor {
           const k = Math.max(1, Math.floor((0.55 * 2 * R) / (8 * U)));
           this.badge('question', 'none', s.x, s.y, k, a, true);
         }
-        if (status) this.badge(status[0], status[1], ...at(s, R, 4.5));
+        // Each glyph takes its hour unless a wire end or an earlier glyph is there (07 §4.7 rule 5).
+        const slot = (h: number) => onRim(s, R, rimSlot(h, GLYPH_REACH * U, taken, R, U));
+        if (status) this.badge(status[0], status[1], ...slot(4.5));
         // One hour, one glyph: the second flag moves an hour clockwise (07 §4.7 rule 5).
         let flagHour = 10.5;
         if (n.pause) {
-          this.badge('pause', 'ink', ...at(s, R, flagHour));
+          this.badge('pause', 'ink', ...slot(flagHour));
           flagHour += 1;
         }
-        if (n.template) this.badge('template', 'ink', ...at(s, R, flagHour));
-        if (n.appearance) this.badge('shortcut', 'ink', ...at(s, R, 7.5));
+        if (n.template) this.badge('template', 'ink', ...slot(flagHour));
+        if (n.appearance) this.badge('shortcut', 'ink', ...slot(7.5));
         if (n.external > 0) {
-          const [ex, ey] = at(s, R, 1.5);
+          const [ex, ey] = slot(1.5);
           this.badge('external', 'ink', ex, ey);
           this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
         }
-        if (!n.ghost) this.badge(kindGlyph(n, false), 'ink', ...at(s, R, 6));
+        if (!n.ghost) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
       }
 
       // Label under the rings on a plate (07 §4.1, §2.2 scene-label-plate).
@@ -321,6 +373,7 @@ export class Decor {
     if (corners) g.stroke({ width: U, color: PAPER });
     if (hatched) this.hatching.stroke({ width: U, color: INK, alpha: 0.5 * fog.scene.pauseAlpha });
     rings.upload();
+    this.arrows.upload();
     for (const [id, l] of this.labels) l.visible = shown.has(id);
     hideFrom(this.platePool, this.plateUsed);
     hideFrom(this.badgePool, this.badgeUsed);
@@ -428,8 +481,18 @@ function hideFrom(pool: { visible: boolean }[], used: number): void {
   }
 }
 
+/** Control points of the wire `a → b` on screen, as wires.ts draws it (06 §6.2). */
+function screenCurve(cam: Camera, a: DecorNode, b: DecorNode): number[] {
+  const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r });
+  return c.map((v, i) => (v - (i % 2 === 0 ? cam.x : cam.y)) * cam.zoom);
+}
+
 function at(s: { x: number; y: number }, R: number, h: number): [number, number] {
-  return [s.x + Math.cos(hour(h)) * R, s.y + Math.sin(hour(h)) * R];
+  return onRim(s, R, hour(h));
+}
+
+function onRim(s: { x: number; y: number }, R: number, angle: number): [number, number] {
+  return [s.x + Math.cos(angle) * R, s.y + Math.sin(angle) * R];
 }
 
 function kindGlyph(n: GraphNode, big: boolean): GlyphName {

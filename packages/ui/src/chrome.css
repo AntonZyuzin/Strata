@@ -402,6 +402,20 @@ button:focus-visible {
   outline: none;
 }
 
+/* The star map over the canvas (08 §7): hidden in 2D, so the canvas gets input. */
+.proto-canvas .proto-map {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  touch-action: none;
+}
+
+.proto-canvas .proto-map[hidden] {
+  display: none;
+}
+
 .proto-top {
   position: absolute;
   top: calc(6 * var(--u));
@@ -891,6 +905,11 @@ button:focus-visible {
 
 .proto-top .proto-ends label {
   width: 9ch;
+  padding: 0;
+}
+
+.proto-top .proto-view label {
+  width: 4ch;
   padding: 0;
 }
 

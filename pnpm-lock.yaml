@@ -35,6 +35,12 @@ importers:
 
   packages/bench:
     dependencies:
+      '@strata/backend':
+        specifier: workspace:*
+        version: link:../backend
+      '@strata/canvas':
+        specifier: workspace:*
+        version: link:../canvas
       '@strata/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens
@@ -142,6 +148,12 @@ importers:
       '@strata/i18n':
         specifier: workspace:*
         version: link:../i18n
+      '@strata/layout':
+        specifier: workspace:*
+        version: link:../layout
+      '@strata/view3d':
+        specifier: workspace:*
+        version: link:../view3d
       '@tauri-apps/api':
         specifier: 2.12.4
         version: 2.12.4
@@ -182,6 +194,9 @@ importers:
 
   packages/view3d:
     dependencies:
+      '@strata/backend':
+        specifier: workspace:*
+        version: link:../backend
       '@strata/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens

@@ -12,6 +12,8 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@strata/backend": "workspace:*",
+    "@strata/canvas": "workspace:*",
     "@strata/design-tokens": "workspace:*",
     "@strata/layout": "workspace:*",
     "@strata/view3d": "workspace:*",

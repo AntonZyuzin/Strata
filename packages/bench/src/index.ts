@@ -1,3 +1,4 @@
+import { runBridgeScenario } from './bridge';
 import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
 import { describeError } from './errors';
@@ -66,6 +67,21 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
           bloom: true,
           warmupMs: q ? 300 : 2_000,
           runMs: q ? 1_500 : 10_000,
+          runs: q ? 1 : 5,
+          vsyncMs: env.vsyncMs,
+        }),
+    },
+    // Spike 3: frame 0 ≤ 1 % of pixels, NFR-15, the 600 ms flight (08 §7).
+    {
+      id: 'bridge-2d-3d',
+      spike: 3,
+      draws: true,
+      run: (s, env) =>
+        runBridgeScenario(s, {
+          rest: q ? 2_000 : 20_000,
+          restWires: q ? 3_000 : 30_000,
+          warmupMs: q ? 300 : 2_000,
+          runMs: q ? 1_200 : 9_600,
           runs: q ? 1 : 5,
           vsyncMs: env.vsyncMs,
         }),

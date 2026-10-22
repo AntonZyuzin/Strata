@@ -80,6 +80,9 @@ test('quick benchmark runs end to end and reports every scenario', async ({ brow
   const index = report.outcomes.filter((o: { id: string }) => o.id.startsWith('loro-index'));
   for (const o of index) expect(o.result.isolated, `${o.id} ran in workers`).toBe(true);
   expect(report.summary.workers).toBe(true);
+  // Spike 3: frame 0 of the map is the canvas's frame (08 §7.1).
+  const bridge = report.outcomes.find((o: { id: string }) => o.id === 'bridge-2d-3d');
+  expect(bridge?.result.frame0Diff).toBeLessThanOrEqual(0.01);
   expect(Object.keys(report.summary.verdicts)).toHaveLength(SCENARIO_IDS.length);
   expect(errors).toEqual([]);
   await context.close();

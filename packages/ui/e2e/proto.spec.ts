@@ -16,6 +16,7 @@ const HINTS: MessageKey[] = [
   'proto.hint.dragInsert',
   'proto.hint.wireDrag',
   'proto.hint.marquee',
+  'proto.hint.map',
 ];
 
 interface Pt {
@@ -402,6 +403,33 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
   expect(sockets.target).toBeLessThan(0.3);
   expect(sockets.bright).toBeLessThan(100);
   await context.close();
+});
+
+test('M flies to the star map and back over the camera bridge (08 §7)', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await open(page);
+  const proto = page.locator('.proto');
+  await expect(proto).toHaveAttribute('data-view', '2d');
+  await page.mouse.move(600, 400);
+  await page.keyboard.press('KeyM');
+  await expect(proto).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+  await expect(page.locator('.proto-map')).toBeVisible();
+  // The map listens to its own keys: the canvas's are off while it is shown.
+  const hint = await page.locator('.proto-status .hint').textContent();
+  expect([t('ru', 'proto.hint.map'), t('en', 'proto.hint.map')]).toContain(hint);
+  const first = Number(await page.locator('.proto-canvas').getAttribute('data-first-frame'));
+  expect(first).toBeGreaterThan(0);
+  await page.keyboard.press('KeyM');
+  await expect(proto).toHaveAttribute('data-view', '2d', { timeout: 10_000 });
+  await expect(page.locator('.proto-map')).toBeHidden();
+  // Back on the canvas: its keys work again.
+  const before = await counts(page);
+  await page.keyboard.press('Tab');
+  await expect(page.locator('.tab-menu')).toBeVisible();
+  await page.keyboard.press('Escape');
+  expect(await counts(page)).toEqual(before);
+  expect(errors).toEqual([]);
 });
 
 test.describe('gestures', () => {

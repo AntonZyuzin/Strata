@@ -1,3 +1,4 @@
+import type { BridgeResult } from './bridge';
 import type { CanvasResult } from './canvas';
 import type { Environment } from './env';
 import type { LoroIndexResult, LoroTextResult } from './loro';
@@ -8,7 +9,7 @@ import type { MapResult } from './starmap';
  * at startup and loads the runner (`@strata/bench`) only when a run starts.
  */
 
-export type { CanvasResult, Environment, LoroIndexResult, LoroTextResult, MapResult };
+export type { BridgeResult, CanvasResult, Environment, LoroIndexResult, LoroTextResult, MapResult };
 
 /**
  * `full` is the run the owner makes on MO-mac and MO-win (15 §8.3); `quick`
@@ -22,6 +23,7 @@ export const SCENARIO_IDS = [
   'canvas-drag-n5k',
   'canvas-pan-zoom-n10k',
   'map-orbit-20k',
+  'bridge-2d-3d',
   'loro-index-20k',
   'loro-index-100k-k16',
   'loro-text-1mb',
@@ -65,6 +67,7 @@ export interface BenchReport {
 /** The numbers the results table shows; the UI formats them through i18n. */
 export type Headline =
   | { kind: 'canvas'; fps: number; p95: number }
+  | { kind: 'bridge'; p95: number; firstFrame: number; diff: number }
   | {
       kind: 'index';
       importMs: number;
@@ -78,7 +81,14 @@ export type Headline =
 
 export function headline(o: ScenarioOutcome): Headline {
   if (!o.ok) return { kind: 'error', message: firstLine(o.error) };
-  const r = o.result as Partial<CanvasResult & LoroIndexResult & LoroTextResult>;
+  const r = o.result as Partial<CanvasResult & BridgeResult & LoroIndexResult & LoroTextResult>;
+  if (r.frame0Diff !== undefined && r.firstFrameMs && r.p95Ms !== undefined)
+    return {
+      kind: 'bridge',
+      p95: r.p95Ms,
+      firstFrame: r.firstFrameMs.p50,
+      diff: r.frame0Diff,
+    };
   // The gate reads the median of the runs' p95 (14 §1.4).
   if (r.fps !== undefined && r.p95Ms !== undefined)
     return { kind: 'canvas', fps: r.fps, p95: r.p95Ms };
@@ -113,7 +123,12 @@ export const THRESHOLDS = {
     'canvas-drag-n5k': 1000 / 60,
     'canvas-pan-zoom-n10k': 1000 / 30,
     'map-orbit-20k': 1000 / 60,
+    'bridge-2d-3d': 1000 / 60,
   },
+  /** NFR-15: `M` → first 3D frame with the layout cached. */
+  firstFrameMs: 100,
+  /** Spike 3: frame 0 of the map against the canvas (08 §7.1). */
+  frame0Diff: 0.01,
   indexImportMs: 500,
   indexMemoryMib: 200,
   editMs: 5,
@@ -139,6 +154,12 @@ export function verdict(o: ScenarioOutcome, timerResolutionMs = 0): Verdict {
       const limit = THRESHOLDS.frameP95Ms[o.id as keyof typeof THRESHOLDS.frameP95Ms];
       return limit !== undefined && h.p95 <= limit + slack ? 'pass' : 'fail';
     }
+    case 'bridge':
+      return h.p95 <= THRESHOLDS.frameP95Ms['bridge-2d-3d'] + slack &&
+        h.firstFrame <= THRESHOLDS.firstFrameMs &&
+        h.diff <= THRESHOLDS.frame0Diff
+        ? 'pass'
+        : 'fail';
     case 'index':
       return h.importMs < THRESHOLDS.indexImportMs &&
         (h.memoryMib === null || h.memoryMib < THRESHOLDS.indexMemoryMib) &&

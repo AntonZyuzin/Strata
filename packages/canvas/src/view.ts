@@ -86,6 +86,9 @@ export class CanvasView {
   /** Hover and selection, asked every frame; set by the editor. */
   interaction: () => Interaction = () => ({ hover: null, selection: new Set(), current: null });
   private motionReduced = false;
+  private resizer: ResizeObserver | null = null;
+  private destroyed = false;
+  private pending = 0;
 
   private constructor(
     private readonly app: Application,
@@ -117,10 +120,11 @@ export class CanvasView {
     // Labels are Departure Mono rasterised at their device size (07 §3.4).
     await document.fonts.load(`11px ${fog.font.ui}`, 'AaЖж');
     const view = new CanvasView(app, createBodyTextures(), await createIconAtlas());
-    new ResizeObserver(() => {
+    view.resizer = new ResizeObserver(() => {
       app.resize();
       view.invalidate();
-    }).observe(host);
+    });
+    view.resizer.observe(host);
     return view;
   }
 
@@ -212,13 +216,25 @@ export class CanvasView {
     this.invalidate();
   }
 
+  /**
+   * Draws a frame now, in this task: the camera bridge reads the canvas right
+   * after it (08 §7.1), before the browser presents and clears the buffer.
+   */
+  renderNow(): void {
+    if (!this.destroyed) this.frame(performance.now());
+  }
+
   invalidate(): void {
-    if (this.scheduled) return;
+    if (this.scheduled || this.destroyed) return;
     this.scheduled = true;
-    requestAnimationFrame((now) => this.frame(now));
+    this.pending = requestAnimationFrame((now) => this.frame(now));
   }
 
   destroy(): void {
+    // A frame asked for before destroy must not run on a destroyed scene.
+    this.destroyed = true;
+    cancelAnimationFrame(this.pending);
+    this.resizer?.disconnect();
     this.wires.destroy();
     this.decor.destroy();
     this.background.destroy();
@@ -229,6 +245,8 @@ export class CanvasView {
 
   private frame(now: number) {
     this.scheduled = false;
+    // WebKit runs a frame cancelled from inside the same animation-frame round.
+    if (this.destroyed) return;
     let moving = false;
     if (this.tweens.length > 0) {
       this.tweens = this.tweens.filter((t) => {

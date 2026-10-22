@@ -9,16 +9,19 @@ import {
   InstancedBufferGeometry,
   LineSegments,
   Mesh,
+  NearestFilter,
   OneFactor,
   OneMinusSrcAlphaFactor,
   OrthographicCamera,
   PerspectiveCamera,
   RawShaderMaterial,
   Scene,
+  Texture,
   Vector2,
   Vector3,
   WebGLRenderer,
   WebGLRenderTarget,
+  ZeroFactor,
 } from 'three';
 import { FLAG, KIND, STATE, type StarMapExtract } from './extract';
 
@@ -55,6 +58,8 @@ const SIZE = { s: 32, m: 48, l: 72 } as const;
 const MIN_PX = 2;
 /** Wire alpha inside a cluster and between clusters (08 §4.4). */
 const WIRE_ALPHA = { inside: 0.3, between: 0.12 } as const;
+/** Strength of the bloom added onto the frame. */
+const BLOOM = 0.8;
 /** Share of the far edge hidden by fog (08 §4.1). */
 const FOG_AT_EDGE = 0.85;
 
@@ -65,8 +70,10 @@ in vec3 center;
 in float size;
 in vec4 tint;
 in float halo;
+in float focus;            // 1: a star of the current network (the bridge, 08 7)
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
+uniform float uOthers;     // alpha of the stars outside the current network
 uniform float uPxPerUnit;  // device px per world unit at distance 1
 uniform float uMinPx;      // smallest diameter, device px
 uniform float uGrow;       // 1 for stars, larger for the bloom copy
@@ -86,7 +93,7 @@ void main() {
   mv.xy += position.xy * half_;
   gl_Position = projectionMatrix * mv;
   vUv = position.xy * extent;
-  vTint = tint;
+  vTint = vec4(tint.rgb, tint.a * mix(uOthers, 1.0, focus));
   vHalo = halo;
   float f = uStarFog * depth;
   vFog = 1.0 - exp(-f * f);
@@ -140,15 +147,18 @@ const wireVertex = /* glsl */ `
 precision highp float;
 in vec3 position;
 in float alpha;
+in float focus;  // 1: a wire inside the current network
 uniform mat4 modelViewMatrix;
 uniform mat4 projectionMatrix;
 uniform float uWireFog;
+uniform float uWireOthers;  // alpha of the other wires
+uniform float uWireFocus;   // alpha of the network's wires: they replace the 2D curves
 out float vAlpha;
 void main() {
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   gl_Position = projectionMatrix * mv;
   float f = uWireFog * max(-mv.z, 0.0);
-  vAlpha = alpha * exp(-f * f);
+  vAlpha = alpha * exp(-f * f) * mix(uWireOthers, uWireFocus, focus);
 }
 `;
 
@@ -159,6 +169,32 @@ uniform vec3 uWire;
 out vec4 fragColor;
 void main() {
   fragColor = vec4(uWire * vAlpha, vAlpha);
+}
+`;
+
+const snapVertex = /* glsl */ `
+precision highp float;
+in vec3 position;
+in vec2 uv;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+out vec2 vSnapUv;
+void main() {
+  vSnapUv = uv;
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+// The 2D frame as it was: texels copied one to one (nearest), no colour conversion.
+const snapFragment = /* glsl */ `
+precision highp float;
+in vec2 vSnapUv;
+uniform sampler2D uSnap;
+uniform float uSnapAlpha;
+out vec4 fragColor;
+void main() {
+  vec4 c = texture(uSnap, vSnapUv);
+  fragColor = vec4(c.rgb * uSnapAlpha, uSnapAlpha);
 }
 `;
 
@@ -197,7 +233,9 @@ uniform float uStrength;
 out vec4 fragColor;
 void main() {
   vec4 b = texture(uBloom, vUv) * uStrength;
-  fragColor = vec4(b.rgb, 0.0);
+  // rgb is added; alpha is set to 1: three's context always has alpha, and the
+  // stars' coverage alpha would let the page show through the canvas.
+  fragColor = vec4(b.rgb, 1.0);
 }
 `;
 
@@ -252,6 +290,8 @@ export class StarMap {
   private readonly composite: RawShaderMaterial;
   private readonly quad: Mesh;
   private targets: [WebGLRenderTarget, WebGLRenderTarget] | null = null;
+  private readonly snapMaterial: RawShaderMaterial;
+  private snap: Mesh | null = null;
   private stars: Mesh | null = null;
   private bloomStars: Mesh | null = null;
   private wires: LineSegments | null = null;
@@ -293,6 +333,7 @@ export class StarMap {
       uAttention: { value: new Color(hex(fog.scene.attention)) },
       uSoft: { value: soft },
       uPremul: { value: soft },
+      uOthers: { value: 1 },
     });
     // Stars write depth and turn alpha into MSAA coverage: near stars hide far
     // ones whatever the draw order, without sorting 20 000 quads per frame.
@@ -324,7 +365,12 @@ export class StarMap {
       glslVersion: GLSL3,
       vertexShader: wireVertex,
       fragmentShader: wireFragment,
-      uniforms: { uWireFog: { value: 0 }, uWire: { value: new Color(hex(palette.paper)) } },
+      uniforms: {
+        uWireFog: { value: 0 },
+        uWire: { value: new Color(hex(palette.paper)) },
+        uWireOthers: { value: 1 },
+        uWireFocus: { value: 1 },
+      },
       transparent: true,
       depthWrite: false,
       blending: CustomBlending,
@@ -343,13 +389,23 @@ export class StarMap {
       glslVersion: GLSL3,
       vertexShader: quadVertex,
       fragmentShader: compositeFragment,
-      uniforms: { uBloom: { value: null }, uStrength: { value: 0.8 } },
+      uniforms: { uBloom: { value: null }, uStrength: { value: BLOOM } },
       transparent: true,
       depthTest: false,
       depthWrite: false,
       blending: CustomBlending,
       blendSrc: OneFactor,
       blendDst: OneFactor,
+      blendSrcAlpha: OneFactor,
+      blendDstAlpha: ZeroFactor,
+    });
+    this.snapMaterial = new RawShaderMaterial({
+      glslVersion: GLSL3,
+      vertexShader: snapVertex,
+      fragmentShader: snapFragment,
+      uniforms: { uSnap: { value: null }, uSnapAlpha: { value: 1 } },
+      ...premultiplied,
+      depthTest: false,
     });
     // One triangle over the whole screen.
     const tri = new BufferGeometry();
@@ -392,6 +448,7 @@ export class StarMap {
     stars.setAttribute('size', new InstancedBufferAttribute(size, 1));
     stars.setAttribute('tint', new InstancedBufferAttribute(tint, 4));
     stars.setAttribute('halo', new InstancedBufferAttribute(halo, 1));
+    stars.setAttribute('focus', new InstancedBufferAttribute(new Float32Array(n).fill(1), 1));
     this.stars = new Mesh(stars, this.starMaterial);
     this.stars.frustumCulled = false;
 
@@ -416,6 +473,7 @@ export class StarMap {
       ),
     );
     bloom.setAttribute('halo', new InstancedBufferAttribute(new Float32Array(k), 1));
+    bloom.setAttribute('focus', new InstancedBufferAttribute(new Float32Array(k).fill(1), 1));
     this.bloomStars = new Mesh(bloom, this.bloomMaterial);
     this.bloomStars.frustumCulled = false;
 
@@ -430,6 +488,7 @@ export class StarMap {
       alpha[w * 2] = alpha[w * 2 + 1] = inside ? WIRE_ALPHA.inside : WIRE_ALPHA.between;
     }
     lines.setAttribute('alpha', new BufferAttribute(alpha, 1));
+    lines.setAttribute('focus', new BufferAttribute(new Float32Array(e * 2).fill(1), 1));
     this.wires = new LineSegments(lines, this.wireMaterial);
     this.wires.frustumCulled = false;
 
@@ -495,6 +554,96 @@ export class StarMap {
     this.radius = Math.sqrt(r2);
   }
 
+  /**
+   * Bodies of the current network (08 §7): its stars stay while the others
+   * fade by `setFade`; `null` makes every body a focus.
+   */
+  setFocus(members: Uint8Array | null): void {
+    const x = this.x;
+    if (!x || !this.stars || !this.bloomStars || !this.wires) return;
+    const on = (i: number) => (members ? (members[i] ?? 0) : 1);
+    const sf = this.stars.geometry.getAttribute('focus') as InstancedBufferAttribute;
+    const sa = sf.array as Float32Array;
+    for (let i = 0; i < x.count; i++) sa[i] = on(i);
+    sf.needsUpdate = true;
+    const bf = this.bloomStars.geometry.getAttribute('focus') as InstancedBufferAttribute;
+    const ba = bf.array as Float32Array;
+    this.keyIndex.forEach((i, j) => {
+      ba[j] = on(i);
+    });
+    bf.needsUpdate = true;
+    const wf = this.wires.geometry.getAttribute('focus') as BufferAttribute;
+    const wa = wf.array as Float32Array;
+    for (let w = 0; w < x.edges.length / 2; w++) {
+      const both = on(x.edges[w * 2] ?? 0) * on(x.edges[w * 2 + 1] ?? 0);
+      wa[w * 2] = wa[w * 2 + 1] = both;
+    }
+    wf.needsUpdate = true;
+  }
+
+  /** Alphas of the bridge: other stars, other wires, the network's wires (08 §7.2). */
+  setFade(others: number, wiresOthers: number, wiresFocus: number): void {
+    for (const m of [this.starMaterial, this.bloomMaterial, this.occluderMaterial]) {
+      (m.uniforms.uOthers as { value: number }).value = others;
+    }
+    const u = this.wireMaterial.uniforms as Record<string, { value: number }>;
+    (u.uWireOthers as { value: number }).value = wiresOthers;
+    (u.uWireFocus as { value: number }).value = wiresFocus;
+  }
+
+  /**
+   * The 2D frame on the plane z = 0 (08 §7.1): `source` is the Pixi canvas or
+   * its copy, laid over the world rectangle it shows, `x0, y0` top-left and
+   * `x1, y1` bottom-right in 2D world units (y down). Read at once, so call it
+   * in the same task as the 2D render. `null` removes it.
+   */
+  setSnapshot(
+    source: TexImageSource | null,
+    rect?: { x0: number; y0: number; x1: number; y1: number },
+  ): void {
+    if (this.snap) {
+      this.snap.removeFromParent();
+      this.snap.geometry.dispose();
+      (this.snapMaterial.uniforms.uSnap as { value: Texture | null }).value?.dispose();
+      this.snap = null;
+    }
+    if (!source || !rect) return;
+    const tex = new Texture(source as never);
+    tex.minFilter = NearestFilter;
+    tex.magFilter = NearestFilter;
+    tex.generateMipmaps = false;
+    tex.needsUpdate = true;
+    // Upload now: a WebGL canvas keeps its frame only until the task ends.
+    this.renderer.initTexture(tex);
+    (this.snapMaterial.uniforms.uSnap as { value: Texture | null }).value = tex;
+    const g = new BufferGeometry();
+    const { x0, y0, x1, y1 } = rect;
+    // Plane coordinates are (x, -y, 0): the 2D world's y points down.
+    g.setAttribute(
+      'position',
+      new BufferAttribute(
+        new Float32Array([x0, -y0, 0, x0, -y1, 0, x1, -y1, 0, x0, -y0, 0, x1, -y1, 0, x1, -y0, 0]),
+        3,
+      ),
+    );
+    g.setAttribute(
+      'uv',
+      new BufferAttribute(new Float32Array([0, 1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 1]), 2),
+    );
+    this.snap = new Mesh(g, this.snapMaterial);
+    this.snap.frustumCulled = false;
+    this.snap.renderOrder = 10;
+    this.scene.add(this.snap);
+  }
+
+  /** Alpha of the 2D frame on the plane. */
+  setSnapshotAlpha(alpha: number): void {
+    (this.snapMaterial.uniforms.uSnapAlpha as { value: number }).value = alpha;
+    if (this.snap) this.snap.visible = alpha > 0;
+    // Bloom is added after the scene: under the 2D frame it would show through.
+    (this.composite.uniforms.uStrength as { value: number }).value = BLOOM * (1 - alpha);
+  }
+
   /** Canvas size in CSS px. */
   setSize(width: number, height: number): void {
     this.renderer.setSize(width, height, false);
@@ -531,7 +680,8 @@ export class StarMap {
     r.setRenderTarget(null);
     r.render(this.scene, cam);
     const t = this.targets;
-    if (this.bloom && t && this.keyIndex.length > 0) {
+    const glow = this.bloom && t !== null && this.keyIndex.length > 0;
+    if (glow && t) {
       const [a, b] = t;
       r.setRenderTarget(a);
       r.setClearColor(0x000000, 0);
@@ -550,14 +700,24 @@ export class StarMap {
       u.uStep.value.set(0, 1 / a.height);
       r.setRenderTarget(a);
       r.render(this.quadScene, this.quadCamera);
+      r.setClearColor(hex(fog.scene.bg), 1);
+    }
+    // The final pass, always: adds the bloom if there is one, makes the frame opaque.
+    if (t) {
       this.quad.material = this.composite;
-      (this.composite.uniforms.uBloom as { value: unknown }).value = a.texture;
+      const u = this.composite.uniforms as {
+        uBloom: { value: unknown };
+        uStrength: { value: number };
+      };
+      u.uBloom.value = t[0].texture;
+      const strength = u.uStrength.value;
+      if (!glow) u.uStrength.value = 0;
       r.setRenderTarget(null);
       const auto = r.autoClear;
       r.autoClear = false;
       r.render(this.quadScene, this.quadCamera);
       r.autoClear = auto;
-      r.setClearColor(hex(fog.scene.bg), 1);
+      u.uStrength.value = strength;
     }
     return r.info.render.calls;
   }
@@ -576,12 +736,14 @@ export class StarMap {
   }
 
   dispose(): void {
+    this.setSnapshot(null);
     this.clear();
     for (const m of [
       this.starMaterial,
       this.bloomMaterial,
       this.occluderMaterial,
       this.wireMaterial,
+      this.snapMaterial,
       this.blur,
       this.composite,
     ]) {

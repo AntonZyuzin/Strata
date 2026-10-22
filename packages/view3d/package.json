@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@strata/backend": "workspace:*",
     "@strata/design-tokens": "workspace:*",
     "@strata/layout": "workspace:*",
     "d3-force-3d": "3.0.6",

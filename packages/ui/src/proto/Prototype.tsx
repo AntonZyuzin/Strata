@@ -19,6 +19,7 @@ import {
 import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
+import { Map3D, type MapState } from './map3d';
 import { type MenuItem, type MenuNode, remember } from './menu';
 import { NameInput } from './NameInput';
 import { TabMenu } from './TabMenu';
@@ -116,6 +117,8 @@ export function Prototype(props: {
   const { locale } = props;
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
+  const map3d = useRef<Map3D | null>(null);
+  const [view3d, setView3d] = useState<MapState>('2d');
   const viewRef = useRef<CanvasView | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const [backdrop, setBackdrop] = useState<Backdrop>('fog');
@@ -159,6 +162,7 @@ export function Prototype(props: {
       },
       hint: (k) => setHint(k),
       change: () => setVersion((v) => v + 1),
+      map: () => map3d.current?.toggle(),
     };
     CanvasView.create(el).then((v) => {
       if (cancelled) {
@@ -180,6 +184,12 @@ export function Prototype(props: {
       graph.current = g;
       const ed = new Editor(v, g, events);
       editor.current = ed;
+      const m3 = new Map3D(el, v, g, setView3d);
+      map3d.current = m3;
+      // The space and its layout ahead of `M`, off the first interactions (08 §7.2).
+      setTimeout(() => {
+        if (!cancelled) void m3.prepare();
+      }, 1_000);
       // Test hook for e2e: where the bubbles are drawn.
       (window as unknown as { __strataProto: unknown }).__strataProto = { view: v, graph: g };
       setWheel(ed.wheelMode);
@@ -195,6 +205,8 @@ export function Prototype(props: {
     });
     return () => {
       cancelled = true;
+      map3d.current?.destroy();
+      map3d.current = null;
       editor.current?.destroy();
       editor.current = null;
       viewRef.current = null;
@@ -203,8 +215,18 @@ export function Prototype(props: {
   }, []);
 
   useEffect(() => {
-    editor.current?.setOverlayOpen(menu !== null || name !== null);
-  }, [menu, name]);
+    // In 3D the canvas's keys are off; `M` comes back here (08 §5.2).
+    editor.current?.setOverlayOpen(menu !== null || name !== null || view3d !== '2d');
+  }, [menu, name, view3d]);
+
+  useEffect(() => {
+    if (view3d !== '3d') return;
+    const key = (e: KeyboardEvent) => {
+      if (e.code === 'KeyM' && !e.metaKey && !e.ctrlKey && !e.altKey) map3d.current?.toggle();
+    };
+    window.addEventListener('keydown', key);
+    return () => window.removeEventListener('keydown', key);
+  }, [view3d]);
 
   const choose = useCallback(
     (item: MenuItem) => {
@@ -247,7 +269,12 @@ export function Prototype(props: {
   });
 
   return (
-    <div className="proto" data-nodes={g?.nodes.size ?? 0} data-wires={g?.edges().length ?? 0}>
+    <div
+      className="proto"
+      data-nodes={g?.nodes.size ?? 0}
+      data-wires={g?.edges().length ?? 0}
+      data-view={view3d}
+    >
       <div ref={host} className="proto-canvas" />
       <section className="window proto-top" aria-labelledby="proto-title">
         <header className="window-title">
@@ -344,6 +371,24 @@ export function Prototype(props: {
                 </label>
               ))}
             </fieldset>
+            <fieldset className="segmented proto-view" title={t(locale, 'proto.view.hint')}>
+              <legend className="sr-only">{t(locale, 'proto.view')}</legend>
+              {(['2d', '3d'] as const).map((m) => {
+                const on = (m === '3d') === (view3d === '3d' || view3d === 'to3d');
+                return (
+                  <label key={m} className={on ? 'is-active' : undefined}>
+                    <input
+                      type="radio"
+                      name="view"
+                      value={m}
+                      checked={on}
+                      onChange={() => map3d.current?.toggle()}
+                    />
+                    <span>{t(locale, `proto.view.${m}` as const)}</span>
+                  </label>
+                );
+              })}
+            </fieldset>
           </div>
           <input
             ref={fileInput}
@@ -386,7 +431,7 @@ export function Prototype(props: {
       </section>
       <footer className="proto-status">
         {/* Hints are short enough to fit at the minimum window width (800 px). */}
-        <span className="hint">{t(locale, hint)}</span>
+        <span className="hint">{t(locale, view3d === '2d' ? hint : 'proto.hint.map')}</span>
         <span className="last-step" title={lastStep}>
           {lastStep}
         </span>

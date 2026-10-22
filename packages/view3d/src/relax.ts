@@ -1,4 +1,4 @@
-import { createForce3d } from '@strata/layout';
+import { createForce3d, type ForceParams, type ForceSprings } from '@strata/layout';
 import type { StarMapExtract } from './extract';
 import { clusterRadius, degrees, mass } from './layout';
 
@@ -69,33 +69,50 @@ export function springsOf(x: StarMapExtract, bodies: Int32Array): Spring[] {
   return out;
 }
 
-/**
- * Runs `ticks` ticks of the model over all bodies, cooling 1 → 0.001, and
- * writes the result into `pos`. Returns the time it took, ms.
- */
-export function relax(x: StarMapExtract, pos: Float32Array, ticks = 300): number {
-  const t0 = performance.now();
+/** What the force layout needs besides positions: masses, springs, settings (08 §3.2). */
+export function relaxInputs(x: StarMapExtract): {
+  mass: Float32Array;
+  springs: ForceSprings;
+  params: ForceParams;
+} {
   const all = Int32Array.from({ length: x.count }, (_, i) => i);
   const springs = springsOf(x, all);
   const deg = degrees(x);
-  const sim = createForce3d(
-    pos,
-    Float32Array.from(all, (b) => mass(x.flags[b] ?? 0, deg[b] ?? 0)),
-    {
+  return {
+    mass: Float32Array.from(all, (b) => mass(x.flags[b] ?? 0, deg[b] ?? 0)),
+    springs: {
       a: Uint32Array.from(springs, (s) => s.a),
       b: Uint32Array.from(springs, (s) => s.b),
       length: Float32Array.from(springs, (s) => s.length),
       k: Float32Array.from(springs, (s) => s.k),
     },
-    {
+    params: {
       repulsion: MODEL.repulsion,
       theta: MODEL.theta,
       centre: MODEL.centre,
       decay: MODEL.velocityDecay,
       maxStep: 50,
     },
-  );
-  sim.run(ticks, 0.001);
+  };
+}
+
+/** Ticks of a full layout and where alpha cools to (08 §3.3). */
+export const FULL_LAYOUT = { ticks: 300, alphaMin: 0.001 } as const;
+
+/**
+ * Runs `ticks` ticks of the model over all bodies, cooling 1 → 0.001, and
+ * writes the result into `pos`, on this thread. Returns the time it took, ms.
+ * The app runs the same in its worker (`@strata/layout/worker`).
+ */
+export function relax(
+  x: StarMapExtract,
+  pos: Float32Array,
+  ticks: number = FULL_LAYOUT.ticks,
+): number {
+  const t0 = performance.now();
+  const input = relaxInputs(x);
+  const sim = createForce3d(pos, input.mass, input.springs, input.params);
+  sim.run(ticks, FULL_LAYOUT.alphaMin);
   pos.set(sim.positions());
   sim.free();
   return performance.now() - t0;

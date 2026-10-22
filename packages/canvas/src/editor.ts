@@ -68,6 +68,8 @@ export interface EditorEvents {
   hint(key: HintKey): void;
   /** The graph, the selection or the undo stack changed. */
   change(): void;
+  /** `M`: to the star map and back (08 §7, 06 §17). */
+  map?(): void;
 }
 
 export type MenuChoice =
@@ -828,6 +830,10 @@ export class Editor {
       case 'KeyH':
         if (mod) return;
         this.fitAll();
+        return;
+      case 'KeyM':
+        if (mod) return;
+        this.events.map?.();
         return;
       case 'KeyG':
       case 'KeyF':

@@ -168,6 +168,12 @@ function formatHeadline(locale: Locale, h: Headline): string {
   switch (h.kind) {
     case 'canvas':
       return t(locale, 'bench.r.canvas', { fps: n(h.fps), p95: n(h.p95) });
+    case 'bridge':
+      return t(locale, 'bench.r.bridge', {
+        diff: n(h.diff * 100, 2),
+        first: n(h.firstFrame, 0),
+        p95: n(h.p95),
+      });
     case 'index':
       return t(locale, 'bench.r.index', {
         importMs: n(h.importMs, 0),

@@ -1,6 +1,6 @@
 import { type GraphNode, newNode } from '@strata/backend';
 import { describe, expect, it } from 'vitest';
-import { dotColor, levelOf, nodeAlpha, statusGlyph } from './looks';
+import { dotColor, levelOf, nodeAlpha, socketAt, statusGlyph } from './looks';
 
 const node = (over: Partial<GraphNode> = {}) =>
   newNode({ id: 'a', name: 'a', kind: 'note', cls: null, icon: 0, x: 0, y: 0, ...over });
@@ -40,5 +40,15 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
     expect(statusGlyph(node({ due: 'far' }))).toBeNull();
     const fold = { done: 1, total: 3, burning: 'soon' as const };
     expect(statusGlyph(node({ kind: 'network', fold }))).toEqual(['clock', 'attention']);
+  });
+
+  it('puts the input socket on the line of centres, facing the source (07 §5)', () => {
+    const target = { x: 0, y: 0, r: 16 };
+    expect(socketAt(target, { x: 0, y: -100, r: 16 })).toEqual({ dx: 0, dy: -1 });
+    const p = socketAt(target, { x: 30, y: 40, r: 8 });
+    expect(p?.dx).toBeCloseTo(0.6);
+    expect(p?.dy).toBeCloseTo(0.8);
+    // Overlapping bubbles: no wire to show, no socket.
+    expect(socketAt(target, { x: 20, y: 0, r: 8 })).toBeNull();
   });
 });

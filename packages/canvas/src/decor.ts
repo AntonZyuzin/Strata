@@ -2,7 +2,7 @@ import type { GraphNode } from '@strata/backend';
 import { fog, type GlyphName, hex, palette, people } from '@strata/design-tokens';
 import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import type { Camera } from './camera';
-import { isClosed, levelOf, nodeAlpha, statusGlyph } from './looks';
+import { isClosed, levelOf, nodeAlpha, socketAt, statusGlyph } from './looks';
 import { RingLayer } from './rings';
 import { GlyphTextures, labelFont, type Plate } from './textures';
 
@@ -29,6 +29,8 @@ export interface DecorNode {
   x: number;
   y: number;
   r: number;
+  /** Sources of the wires drawn into this node. */
+  inputs: readonly DecorNode[];
 }
 
 /** Clock hours of the rim (06 §4.1, 07 §4.1) as angles from 3 o'clock, clockwise. */
@@ -47,6 +49,8 @@ const PULSES = 3;
 /** Marching ants of the current node run 3 s, then stand (07 §2.8). */
 const ANTS_MS = 3000;
 const LABEL_MAX = 160;
+/** Input socket: ink disc of radius 3u with a paper ring 1u (07 §5). */
+const SOCKET = 3;
 const CORNERS = [
   [-1, -1],
   [1, -1],
@@ -112,6 +116,7 @@ export class Decor {
     h: number,
     ia: Interaction,
     now: number,
+    wireAlpha: (from: string, to: string) => number = () => fog.scene.edgeAlpha,
   ): boolean {
     const g = this.g;
     const rings = this.rings;
@@ -170,6 +175,22 @@ export class Decor {
       }
       // Key: a paper contour outside the rim makes the double rim (07 §4.5).
       if (n.key) rings.add(s.x, s.y, R + 2.5 * U, U, { color: PAPER, alpha: a });
+
+      // Input sockets where wires enter the rim (07 §5, ✅ S9 2026-10-23), from the
+      // icon level up; over the rim, under the assignees and glyphs.
+      if (lv !== 'glyph') {
+        for (const src of v.inputs) {
+          const p = socketAt(v, src);
+          if (!p) continue;
+          const x = s.x + p.dx * R;
+          const y = s.y + p.dy * R;
+          rings.dot(x, y, SOCKET * U, INK, a);
+          rings.add(x, y, (SOCKET - 0.5) * U, U, {
+            color: PAPER,
+            alpha: a * wireAlpha(src.id, v.id),
+          });
+        }
+      }
 
       // Deadline or roll-up ring at r + 4u … r + 6u (07 §4.3); pause and final statuses drop it (07 §4.7).
       const due = closed || n.pause ? 'none' : n.due;

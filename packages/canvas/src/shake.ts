@@ -1,13 +1,18 @@
 /**
- * Shake detection (06 §1.3, §6.7): at least 4 reversals within 600 ms, each
- * swing at least D screen px; D = 0 turns the gesture off (05 §8.4). An
- * extremum is recorded on an axis when the motion turns back after travelling
- * at least D since the previous extremum; reversals of either axis count.
+ * Shake detection (06 §1.3, §6.7): at least 4 reversals on one axis within
+ * 600 ms, each swing at least D screen px; D = 0 turns the gesture off (05 §8.4).
+ * An extremum is recorded on an axis when the motion turns back after
+ * travelling at least D since the previous extremum.
+ *
+ * ✅ S9 (2026-10-23): the owner detached nodes by accident while moving them.
+ * Reversals are counted per axis, not summed over both: a diagonal correction
+ * turned both axes at once and counted twice, a loop around a target counted
+ * four per turn. D went from 32 to 40 px.
  */
 export const SHAKE_REVERSALS = 4;
 export const SHAKE_WINDOW_MS = 600;
-/** Mouse; a trackpad gets a larger swing (06 §18, 48 px). */
-export const SHAKE_SWING_PX = 32;
+/** Mouse; a trackpad gets a larger swing (06 §18). */
+export const SHAKE_SWING_PX = 40;
 
 interface Axis {
   /** Last extremum. */
@@ -16,11 +21,12 @@ interface Axis {
   dir: number;
   /** Furthest point in the current direction. */
   peak: number;
+  /** Times of the reversals still inside the window. */
+  reversals: number[];
 }
 
 export class ShakeDetector {
   private readonly axes: [Axis, Axis];
-  private reversals: number[] = [];
   private fired = false;
 
   constructor(
@@ -29,20 +35,23 @@ export class ShakeDetector {
     private readonly swing = SHAKE_SWING_PX,
   ) {
     this.axes = [
-      { ext: x, dir: 0, peak: x },
-      { ext: y, dir: 0, peak: y },
+      { ext: x, dir: 0, peak: x, reversals: [] },
+      { ext: y, dir: 0, peak: y, reversals: [] },
     ];
   }
 
   /** Feeds a pointer position; returns true once, when the shake is recognized. */
   feed(x: number, y: number, timeMs: number): boolean {
     if (this.fired || this.swing <= 0) return false;
-    this.track(this.axes[0], x, timeMs);
-    this.track(this.axes[1], y, timeMs);
-    this.reversals = this.reversals.filter((t) => timeMs - t <= SHAKE_WINDOW_MS);
-    if (this.reversals.length >= SHAKE_REVERSALS) {
-      this.fired = true;
-      return true;
+    const [ax, ay] = this.axes;
+    this.track(ax, x, timeMs);
+    this.track(ay, y, timeMs);
+    for (const a of this.axes) {
+      a.reversals = a.reversals.filter((t) => timeMs - t <= SHAKE_WINDOW_MS);
+      if (a.reversals.length >= SHAKE_REVERSALS) {
+        this.fired = true;
+        return true;
+      }
     }
     return false;
   }
@@ -62,7 +71,7 @@ export class ShakeDetector {
     // Turned back: a reversal if the swing since the last extremum was long enough
     // and the motion has come back far enough to be deliberate.
     if (Math.abs(a.peak - a.ext) >= this.swing && Math.abs(v - a.peak) >= this.swing / 2) {
-      this.reversals.push(t);
+      a.reversals.push(t);
       a.ext = a.peak;
       a.dir = -a.dir;
       a.peak = v;

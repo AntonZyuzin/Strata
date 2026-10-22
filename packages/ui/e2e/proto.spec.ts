@@ -27,12 +27,18 @@ interface Pt {
 interface Hook {
   view: {
     canvas: HTMLCanvasElement;
-    camera: { zoom: number; toScreen(x: number, y: number): { x: number; y: number } };
+    camera: {
+      x: number;
+      y: number;
+      zoom: number;
+      toScreen(x: number, y: number): { x: number; y: number };
+    };
     nodeAt(id: string): Pt | null;
     eachNode(): Iterable<[string, Pt]>;
+    invalidate(): void;
   };
   graph: {
-    nodes: Map<string, { id: string; name: string }>;
+    nodes: Map<string, { id: string; name: string } & Record<string, unknown>>;
     edges(): [string, string][];
     inputs(id: string): Iterable<string>;
     outputs(id: string): Iterable<string>;
@@ -263,6 +269,110 @@ test('backgrounds keep the Scene readable: every preset and a white photo (07 §
   await expect(page.locator('.contrast-cell.is-low')).toHaveCount(0);
 });
 
+test('a wire enters its target through an input socket; the source has none (07 §5)', async ({
+  browser,
+}) => {
+  const context = await browser.newContext({
+    viewport: { width: 1280, height: 800 },
+    deviceScaleFactor: 2,
+  });
+  const page = await context.newPage();
+  await open(page);
+  // A wire between two plain bubbles, close enough to share the screen, whose
+  // ends miss the kind glyph at 6 o'clock (06 §4.1).
+  const pick = await page.evaluate(() => {
+    const { view, graph } = window.__strataProto as Hook;
+    const plain = (id: string) => {
+      const n = graph.nodes.get(id);
+      return (
+        n !== undefined &&
+        n.color === null &&
+        n.status === 'open' &&
+        n.due === 'none' &&
+        !n.pause &&
+        !n.ghost &&
+        !n.key &&
+        !n.template &&
+        !n.appearance &&
+        n.external === 0 &&
+        (n.assignees as unknown[]).length === 0
+      );
+    };
+    const offSix = (dx: number, dy: number) => Math.abs(Math.atan2(dx, dy)) > Math.PI / 6;
+    const all = [...view.eachNode()];
+    for (const [from, to] of graph.edges()) {
+      const a = view.nodeAt(from);
+      const b = view.nodeAt(to);
+      if (!a || !b || !plain(from) || !plain(to)) continue;
+      const dx = a.x - b.x;
+      const dy = a.y - b.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 3 * (a.r + b.r) || d > 200 || !offSix(dx, dy) || !offSix(-dx, -dy)) continue;
+      // No third bubble or its label near either end.
+      const crowded = all.some(
+        ([id, n]) =>
+          id !== from &&
+          id !== to &&
+          (Math.hypot(n.x - a.x, n.y - a.y) < 80 || Math.hypot(n.x - b.x, n.y - b.y) < 80),
+      );
+      if (!crowded) return { from, to };
+    }
+    throw new Error('no plain wire');
+  });
+  // Bubbles at the icon level (07 §4.9), the target in the middle of the canvas.
+  await page.evaluate(({ to }) => {
+    const { view } = window.__strataProto as Hook;
+    const b = view.nodeAt(to) as Pt;
+    const cam = view.camera;
+    cam.zoom = 24 / b.r;
+    cam.x = b.x - view.canvas.clientWidth / 2 / cam.zoom;
+    cam.y = b.y - view.canvas.clientHeight / 2 / cam.zoom;
+    view.invalidate();
+  }, pick);
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
+  const png = (await page.screenshot()).toString('base64');
+  // Brightness just inside the rim, 1.5 px in, where the wire meets each bubble.
+  const lum = await page.evaluate(
+    async ({ png, pick }) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${png}`;
+      await img.decode();
+      const c = document.createElement('canvas');
+      c.width = img.width;
+      c.height = img.height;
+      const g = c.getContext('2d') as CanvasRenderingContext2D;
+      g.drawImage(img, 0, 0);
+      const k = img.width / window.innerWidth;
+      const e = window.__e2e as Probe;
+      const a = e.node(pick.from);
+      const b = e.node(pick.to);
+      if (!e.free(a.x, a.y) || !e.free(b.x, b.y)) throw new Error('ends under the Chrome');
+      const at = (p: Pt, q: Pt) => {
+        const dx = q.x - p.x;
+        const dy = q.y - p.y;
+        const d = Math.hypot(dx, dy);
+        const x = p.x + (dx / d) * (p.r - 1.5);
+        const y = p.y + (dy / d) * (p.r - 1.5);
+        const [r = 0, gr = 0, bl = 0] = g.getImageData(
+          Math.floor(x * k),
+          Math.floor(y * k),
+          1,
+          1,
+        ).data;
+        return (r + gr + bl) / 765;
+      };
+      return { input: at(b, a), output: at(a, b) };
+    },
+    { png, pick },
+  );
+  // Ink socket at the input, bare paper at the output.
+  expect(lum.input).toBeLessThan(0.3);
+  expect(lum.output).toBeGreaterThan(0.6);
+  await context.close();
+});
+
 test.describe('gestures', () => {
   test.use({ viewport: { width: 1280, height: 800 }, locale: 'ru-RU' });
 
@@ -399,7 +509,7 @@ test.describe('gestures', () => {
     const p = await screenOf(page, pick.id);
     await page.mouse.move(p.x, p.y);
     await page.mouse.down();
-    // Four reversals of 40 px and more within 600 ms (06 §6.5). The swings are
+    // Four reversals on one axis, 40 px and more, within 600 ms (06 §1.3). The swings are
     // synthetic pointer events dispatched at once: the detector reads their
     // timestamps, so the gesture no longer depends on how fast software WebGL
     // in CI renders a frame per event. Press, drag start and release are real.
@@ -411,7 +521,7 @@ test.describe('gestures', () => {
       for (let i = 0; i < 6; i++) {
         canvas.dispatchEvent(
           new PointerEvent('pointermove', {
-            clientX: x + (i % 2 === 0 ? 45 : -45),
+            clientX: x + (i % 2 === 0 ? 60 : -60),
             clientY: y,
             pointerId: 1,
             pointerType: 'mouse',

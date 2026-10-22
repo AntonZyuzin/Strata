@@ -48,3 +48,22 @@ export function statusGlyph(n: GraphNode): [GlyphName, Plate] | null {
   if (n.fold?.burning === 'soon') return ['clock', 'attention'];
   return null;
 }
+
+interface Circle {
+  x: number;
+  y: number;
+  r: number;
+}
+
+/**
+ * Direction from the centre of `node` to the socket of the wire from `src`:
+ * the wire leaves and enters on the line of centres (06 §6.2). Null when the
+ * bubbles overlap and the wire has no length to show.
+ */
+export function socketAt(node: Circle, src: Circle): { dx: number; dy: number } | null {
+  const dx = src.x - node.x;
+  const dy = src.y - node.y;
+  const d = Math.hypot(dx, dy);
+  if (d <= node.r + src.r) return null;
+  return { dx: dx / d, dy: dy / d };
+}

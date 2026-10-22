@@ -14,7 +14,7 @@ import {
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
 import { closest, controls, pointAt, type WireEnds, bounds as wireBounds } from './curve';
-import { ShakeDetector } from './shake';
+import { SHAKE_SWING_PX, ShakeDetector } from './shake';
 import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
 import type { WireStyle } from './wires';
 
@@ -154,7 +154,7 @@ export class Editor {
   current: string | null = null;
   wheelMode: WheelMode = /Mac/.test(navigator.platform) ? 'trackpad' : 'mouse';
   /** Swing of the shake in screen px; 0 turns the gesture off (05 §8.4). */
-  shakePx = 32;
+  shakePx = SHAKE_SWING_PX;
   private mode: Mode = { t: 'idle' };
   private hover: Hit = { t: 'empty' };
   private selectedWire: [string, string] | null = null;
@@ -1141,7 +1141,8 @@ export class Editor {
       bx: b?.x ?? 0,
       by: b?.y ?? 0,
       ra: (a?.r ?? 0) + 1,
-      rb: (b?.r ?? 0) + 1,
+      // The target end runs into its input socket on the rim (07 §5).
+      rb: b?.r ?? 0,
     };
   }
 

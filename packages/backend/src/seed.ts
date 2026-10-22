@@ -47,7 +47,8 @@ const WORDS_EN = [
   'Task',
 ];
 const KINDS: NodeKind[] = ['note', 'note', 'note', 'network', 'board', 'checklist', 'media'];
-const CLASSES: (NodeClass | null)[] = [null, null, null, null, 'task', 'project', 'references'];
+/** Classes of networks (05 §4.3); references are boards, checklists may be «Чек-лист». */
+const CLASSES: (NodeClass | null)[] = [null, null, null, null, 'task', 'project', 'task'];
 
 export const SEED_SPACING = { x: 120, y: 110 };
 /** Icon presets in the atlas (07 §6.3). */
@@ -155,7 +156,15 @@ export function seedGraph(
       // The order of draws from `r` is the layout of earlier versions; looks draw from `rs`.
       const kind = KINDS[Math.floor(r() * KINDS.length)] ?? 'note';
       const name = `${words[Math.floor(r() * words.length)]} ${i + 1}`;
-      const cls = kind === 'network' ? (CLASSES[Math.floor(r() * CLASSES.length)] ?? null) : null;
+      // Boards and checklists take their class from the index: no extra draws, the layout stays.
+      const cls =
+        kind === 'network'
+          ? (CLASSES[Math.floor(r() * CLASSES.length)] ?? null)
+          : kind === 'board' && i % 2 === 0
+            ? 'references'
+            : kind === 'checklist' && i % 2 === 0
+              ? 'checklist'
+              : null;
       const icon = Math.floor(r() * ICON_COUNT);
       const key = r() < 0.1;
       const hasDeadline = r() < 0.05;

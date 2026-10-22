@@ -8,7 +8,7 @@ import { BackgroundLayer } from './background';
 import { Camera } from './camera';
 import { Decor, type DecorNode, type Interaction } from './decor';
 import { createIconAtlas, type IconAtlas, iconScale } from './icons';
-import { dotColor, isClosed, levelOf, nodeAlpha, type WireEndStyle } from './looks';
+import { defaultIcon, dotColor, isClosed, levelOf, nodeAlpha, type WireEndStyle } from './looks';
 import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
 
@@ -172,6 +172,11 @@ export class CanvasView {
     this.graph = graph;
     this.sync();
     return graph.subscribe(() => this.sync());
+  }
+
+  /** Atlas index of the default icon of a new node (07 §6.3, Q-07-21). */
+  iconFor(kind: GraphNode['kind'], cls: GraphNode['cls']): number {
+    return Math.max(0, this.icons.ids.indexOf(defaultIcon(kind, cls)));
   }
 
   /** Rendered position and radius of a node. */

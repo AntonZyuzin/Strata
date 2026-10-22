@@ -1,8 +1,11 @@
 import { type GraphNode, newNode } from '@strata/backend';
 import { describe, expect, it } from 'vitest';
+import icons from './assets/game-icons.json';
 import { controls } from './curve';
 import {
   arrowOn,
+  DEFAULT_ICONS,
+  defaultIcon,
   dotColor,
   levelOf,
   nodeAlpha,
@@ -103,5 +106,14 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
     expect(over(0x000000, 0xffffff, 0.4)).toBe(0x666666);
     expect(over(0x102030, 0x102030, 0.5)).toBe(0x102030);
     expect(over(0x000000, 0xff8000, 1)).toBe(0xff8000);
+  });
+
+  it('gives a new node the icon of its class, else of its kind, from the presets (Q-07-21)', () => {
+    const ids = new Set(icons.icons.map((i) => i.id));
+    for (const id of [...Object.values(DEFAULT_ICONS.kind), ...Object.values(DEFAULT_ICONS.cls)]) {
+      expect(ids.has(id), id).toBe(true);
+    }
+    expect(defaultIcon('note', null)).toBe(DEFAULT_ICONS.kind.note);
+    expect(defaultIcon('network', 'task')).toBe(DEFAULT_ICONS.cls.task);
   });
 });

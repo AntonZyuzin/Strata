@@ -23,11 +23,11 @@ export const KINDS: Template[] = [
   { kind: 'media', cls: null, key: 'kind.media' },
 ];
 
-/** Classes on top of kinds (05 §4.3): a task, a project and references are networks. */
+/** Classes on top of kinds (05 §4.3): a task and a project are networks, references a board. */
 export const CLASSES: Template[] = [
   { kind: 'network', cls: 'task', key: 'class.task' },
   { kind: 'network', cls: 'project', key: 'class.project' },
-  { kind: 'network', cls: 'references', key: 'class.references' },
+  { kind: 'board', cls: 'references', key: 'class.references' },
   { kind: 'checklist', cls: 'checklist', key: 'class.checklist' },
 ];
 

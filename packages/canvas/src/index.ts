@@ -14,7 +14,13 @@ export * from './curve';
 export type { Interaction } from './decor';
 export { Editor, type EditorEvents, type HintKey, type MenuChoice, type WheelMode } from './editor';
 export { createIconAtlas, type IconAuthor, type IconCredits, iconCredits } from './icons';
-export { levelOf, WIRE_END_STYLES, type WireEndStyle } from './looks';
+export {
+  DEFAULT_ICONS,
+  defaultIcon,
+  levelOf,
+  WIRE_END_STYLES,
+  type WireEndStyle,
+} from './looks';
 export { ShakeDetector } from './shake';
 export {
   DEFAULT_STYLE,

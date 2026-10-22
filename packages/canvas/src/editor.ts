@@ -248,7 +248,7 @@ export class Editor {
       name: choice.name,
       kind: choice.kind,
       cls: choice.cls,
-      icon: Math.floor(Math.random() * 200),
+      icon: this.view.iconFor(choice.kind, choice.cls),
       x: place.x,
       y: place.y,
     });
@@ -733,7 +733,7 @@ export class Editor {
       name: '',
       kind: 'note',
       cls: null,
-      icon: Math.floor(Math.random() * 200),
+      icon: this.view.iconFor('note', null),
       x: w.x,
       y: w.y,
     });

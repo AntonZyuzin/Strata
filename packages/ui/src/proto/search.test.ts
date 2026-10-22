@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { menuItems } from './menu';
+import { CLASSES, menuItems } from './menu';
 import { norm, rank, score, stage, switchLayout } from './search';
 
 describe('Tab menu search (09 §2, temporary TS engine)', () => {
@@ -80,5 +80,17 @@ describe('Tab menu items (06 §5.2)', () => {
   it('does not offer «Заметка «доска»» when the query names a kind', () => {
     const items = menuItems('ru', 'доска', nodes, []);
     expect(items[0]?.choice).toMatchObject({ t: 'create', kind: 'board', rename: true });
+  });
+});
+
+describe('classes of the Tab menu (05 §4.3)', () => {
+  it('builds a task and a project on networks, references on a board, a checklist on a list', () => {
+    const kindOf = Object.fromEntries(CLASSES.map((c) => [c.cls, c.kind]));
+    expect(kindOf).toEqual({
+      task: 'network',
+      project: 'network',
+      references: 'board',
+      checklist: 'checklist',
+    });
   });
 });

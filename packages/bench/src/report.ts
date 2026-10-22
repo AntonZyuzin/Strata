@@ -3,6 +3,7 @@ import type { CanvasResult } from './canvas';
 import type { Environment } from './env';
 import type { LookResult } from './look';
 import type { LoroIndexResult, LoroTextResult } from './loro';
+import type { NoteResult } from './note';
 import type { MapResult } from './starmap';
 
 /**
@@ -18,6 +19,7 @@ export type {
   LoroIndexResult,
   LoroTextResult,
   MapResult,
+  NoteResult,
 };
 
 /**
@@ -37,6 +39,7 @@ export const SCENARIO_IDS = [
   'loro-index-20k',
   'loro-index-100k-k16',
   'loro-text-1mb',
+  'note-1mb',
 ] as const;
 
 export type ScenarioId = (typeof SCENARIO_IDS)[number];
@@ -78,6 +81,7 @@ export interface BenchReport {
 export type Headline =
   | { kind: 'canvas'; fps: number; p95: number }
   | { kind: 'bridge'; p95: number; firstFrame: number; diff: number }
+  | { kind: 'note'; openMs: number; keyP95: number }
   | {
       kind: 'index';
       importMs: number;
@@ -91,7 +95,11 @@ export type Headline =
 
 export function headline(o: ScenarioOutcome): Headline {
   if (!o.ok) return { kind: 'error', message: firstLine(o.error) };
-  const r = o.result as Partial<CanvasResult & BridgeResult & LoroIndexResult & LoroTextResult>;
+  const r = o.result as Partial<
+    CanvasResult & BridgeResult & LoroIndexResult & LoroTextResult & NoteResult
+  >;
+  if (r.openMs !== undefined && r.keyWorkMs)
+    return { kind: 'note', openMs: r.openMs, keyP95: r.keyWorkMs.p95 };
   if (r.frame0Diff !== undefined && r.firstFrameMs && r.p95Ms !== undefined)
     return {
       kind: 'bridge',
@@ -138,6 +146,9 @@ export const THRESHOLDS = {
   },
   /** NFR-15: `M` → first 3D frame with the layout cached. */
   firstFrameMs: 100,
+  /** NFR-29: a 1 MB note opens in ≤ 1 s; NFR-33: a character shows in ≤ 16 ms p95. */
+  noteOpenMs: 1000,
+  noteKeyMs: 16,
   /** Spike 3: frame 0 of the map against the canvas (08 §7.1). */
   frame0Diff: 0.01,
   indexImportMs: 500,
@@ -169,6 +180,10 @@ export function verdict(o: ScenarioOutcome, timerResolutionMs = 0): Verdict {
       return h.p95 <= THRESHOLDS.frameP95Ms['bridge-2d-3d'] + slack &&
         h.firstFrame <= THRESHOLDS.firstFrameMs &&
         h.diff <= THRESHOLDS.frame0Diff
+        ? 'pass'
+        : 'fail';
+    case 'note':
+      return h.openMs <= THRESHOLDS.noteOpenMs && h.keyP95 <= THRESHOLDS.noteKeyMs + slack
         ? 'pass'
         : 'fail';
     case 'index':

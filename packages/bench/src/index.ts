@@ -4,6 +4,7 @@ import { collectEnvironment, type Environment } from './env';
 import { describeError } from './errors';
 import { runLookScenario } from './look';
 import { runLoroIndex, runLoroText } from './loro';
+import { runNoteScenario } from './note';
 import {
   type AppInfo,
   type BenchReport,
@@ -117,6 +118,13 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
       run: () => runLoroIndex(q ? 10_000 : 100_000, 1, 16),
     },
     { id: 'loro-text-1mb', spike: 4, draws: false, run: () => runLoroText() },
+    // Spike 6: the note editor on T-1M (NFR-29, NFR-33).
+    {
+      id: 'note-1mb',
+      spike: 6,
+      draws: true,
+      run: (s) => runNoteScenario(s, q ? 200_000 : 1_000_000),
+    },
   ];
 }
 

@@ -78,7 +78,8 @@ body {
   color: var(--st-color-title-fg);
 }
 
-.window-title h1 {
+.window-title h1,
+.window-title h2 {
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -400,6 +401,23 @@ button:focus-visible {
 
 .proto-canvas canvas:focus {
   outline: none;
+}
+
+/* A note's window beside its bubble (06 §13.1): the editor fills it. */
+.note-window {
+  position: absolute;
+  z-index: 5;
+  width: 80ch;
+  max-width: calc(100% - 12 * var(--u));
+  height: clamp(240px, 70vh, 640px);
+  display: flex;
+  flex-direction: column;
+}
+
+.note-body {
+  flex: 1;
+  min-height: 0;
+  box-shadow: var(--st-bevel-sunken);
 }
 
 /* The star map over the canvas (08 §7): hidden in 2D, so the canvas gets input. */

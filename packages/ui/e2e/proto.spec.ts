@@ -232,6 +232,36 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
   });
 }
 
+for (const { viewport, deviceScaleFactor } of LAYOUTS) {
+  test(`the note window is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }) => {
+    const sides = [];
+    for (const locale of ['ru-RU', 'en-US']) {
+      const side = await openIn(browser, locale, viewport, deviceScaleFactor);
+      // The gallery's first look, «Обычная» / «Default», is a note.
+      const at = await side.page.evaluate(() => {
+        const { graph } = window.__strataProto as Hook;
+        const first = [...graph.nodes.values()].slice(-20)[0];
+        if (!first) throw new Error('no gallery');
+        return (window.__e2e as Probe).node(first.id);
+      });
+      await side.page.mouse.dblclick(at.x, at.y);
+      await expect(side.page.locator('.note-window')).toBeVisible();
+      expect(await overflowing(side.page, '.note-window')).toEqual([]);
+      sides.push(side);
+    }
+    const [ru, en] = sides as [(typeof sides)[number], (typeof sides)[number]];
+    const a = await box(ru.page, '.note-window');
+    const b = await box(en.page, '.note-window');
+    for (const k of ['x', 'y', 'width', 'height'] as const) {
+      expect(Math.abs(a[k] - b[k]), `note window ${k}`).toBeLessThanOrEqual(0.5);
+    }
+    await ru.context.close();
+    await en.context.close();
+  });
+}
+
 test('backgrounds keep the Scene readable: every preset and a white photo (07 §7, §2.2)', async ({
   page,
 }) => {
@@ -403,6 +433,64 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
   expect(sockets.target).toBeLessThan(0.3);
   expect(sockets.bright).toBeLessThan(100);
   await context.close();
+});
+
+/** A note of the demo network on the bare canvas, and another node to link it to by name. */
+async function notePair(page: Page) {
+  return page.evaluate(() => {
+    const { graph } = window.__strataProto as Hook;
+    const e = window.__e2e as Probe;
+    const nodes = [...graph.nodes.values()];
+    const names = new Map<string, number>();
+    for (const n of nodes)
+      names.set(n.name.toLowerCase(), (names.get(n.name.toLowerCase()) ?? 0) + 1);
+    for (const n of nodes) {
+      if (n.kind !== 'note' || n.ghost) continue;
+      const p = e.node(n.id);
+      if (!e.free(p.x, p.y, 40) || p.x > window.innerWidth * 0.6) continue;
+      const target = nodes.find(
+        (m) =>
+          m.id !== n.id &&
+          names.get(m.name.toLowerCase()) === 1 &&
+          !graph.hasEdge(n.id, m.id) &&
+          m.name.length > 2,
+      );
+      if (target) return { id: n.id, x: p.x, y: p.y, target: { id: target.id, name: target.name } };
+    }
+    throw new Error('no note on the bare canvas');
+  });
+}
+
+test('a note opens in its window; [[links]] in its text are wires (06 §13.1, 05 §8.2)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await open(page);
+  await page.evaluate(() => localStorage.clear());
+  const pick = await notePair(page);
+  await page.mouse.dblclick(pick.x, pick.y);
+  const win = page.locator('.note-window');
+  await expect(win).toBeVisible();
+  await expect(win.locator('.cm-content')).toBeFocused();
+  const edge = () =>
+    page.evaluate(({ a, b }) => (window.__strataProto as Hook).graph.hasEdge(a, b), {
+      a: pick.id,
+      b: pick.target.id,
+    });
+  await page.keyboard.type(`Связь с [[${pick.target.name}]] и дальше`);
+  await expect.poll(edge).toBe(true);
+  // A derived wire is not a step of the canvas's undo (05 §11, source system).
+  // Remove the link from the text: its wire goes.
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.keyboard.press('Backspace');
+  await expect.poll(edge).toBe(false);
+  // Esc: the canvas gets the keyboard, the window stays.
+  await page.keyboard.press('Escape');
+  await expect(win).toBeVisible();
+  await win.locator('.window-close').click();
+  await expect(win).toHaveCount(0);
+  expect(errors).toEqual([]);
 });
 
 test('M flies to the star map and back over the camera bridge (08 §7)', async ({ page }) => {

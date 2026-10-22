@@ -22,6 +22,8 @@ import { LocaleSwitch } from '../LocaleSwitch';
 import { Map3D, type MapState } from './map3d';
 import { type MenuItem, type MenuNode, remember } from './menu';
 import { NameInput } from './NameInput';
+import { NoteWindow } from './NoteWindow';
+import { NoteStore } from './notes';
 import { TabMenu } from './TabMenu';
 
 /**
@@ -118,6 +120,11 @@ export function Prototype(props: {
   const host = useRef<HTMLDivElement>(null);
   const editor = useRef<Editor | null>(null);
   const map3d = useRef<Map3D | null>(null);
+  const notes = useRef<NoteStore | null>(null);
+  const [note, setNote] = useState<{
+    id: string;
+    at: { x: number; y: number; side: 'left' | 'right' };
+  } | null>(null);
   const [view3d, setView3d] = useState<MapState>('2d');
   const viewRef = useRef<CanvasView | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -163,6 +170,28 @@ export function Prototype(props: {
       hint: (k) => setHint(k),
       change: () => setVersion((v) => v + 1),
       map: () => map3d.current?.toggle(),
+      open: (id) => {
+        const v = viewRef.current;
+        const n = graph.current?.nodes.get(id);
+        const p = v?.nodeAt(id);
+        if (!v || !n || !p) return;
+        if (n.kind !== 'note') {
+          events.toast({ key: 'proto.toast.notOpenable' });
+          return;
+        }
+        // Beside the bubble, on the side with more room (06 §13.1).
+        const s = v.camera.toScreen(p.x, p.y);
+        const r = p.r * v.camera.zoom;
+        const side = s.x < v.width / 2 ? 'right' : 'left';
+        setNote({
+          id,
+          at: {
+            side,
+            x: side === 'right' ? s.x + r + 24 : s.x - r - 24,
+            y: Math.max(8, Math.min(s.y - 120, v.height - 320)),
+          },
+        });
+      },
     };
     CanvasView.create(el).then((v) => {
       if (cancelled) {
@@ -184,6 +213,9 @@ export function Prototype(props: {
       graph.current = g;
       const ed = new Editor(v, g, events);
       editor.current = ed;
+      const store = new NoteStore(g);
+      notes.current = store;
+      store.restore();
       const m3 = new Map3D(el, v, g, setView3d);
       map3d.current = m3;
       // The space and its layout ahead of `M`, off the first interactions (08 §7.2).
@@ -203,8 +235,12 @@ export function Prototype(props: {
       v.canvas.focus();
       setVersion((x) => x + 1);
     });
+    const leave = () => notes.current?.flush();
+    window.addEventListener('pagehide', leave);
     return () => {
       cancelled = true;
+      window.removeEventListener('pagehide', leave);
+      notes.current?.flush();
       map3d.current?.destroy();
       map3d.current = null;
       editor.current?.destroy();
@@ -480,6 +516,22 @@ export function Prototype(props: {
           onCancel={() => {
             setMenu(null);
             ed?.menuCancel();
+            host.current?.querySelector('canvas')?.focus();
+          }}
+        />
+      ) : null}
+      {note && notes.current ? (
+        <NoteWindow
+          key={note.id}
+          locale={locale}
+          name={g?.nodes.get(note.id)?.name ?? ''}
+          doc={notes.current.doc(note.id)}
+          at={note.at}
+          onChange={(text) => notes.current?.changed(note.id, text)}
+          onEscape={() => host.current?.querySelector('canvas')?.focus()}
+          onClose={() => {
+            notes.current?.flush();
+            setNote(null);
             host.current?.querySelector('canvas')?.focus();
           }}
         />

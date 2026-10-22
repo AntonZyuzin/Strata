@@ -15,6 +15,7 @@
     "@strata/backend": "workspace:*",
     "@strata/canvas": "workspace:*",
     "@strata/design-tokens": "workspace:*",
+    "@strata/editor": "workspace:*",
     "@strata/layout": "workspace:*",
     "@strata/view3d": "workspace:*",
     "loro-crdt": "1.16.4",

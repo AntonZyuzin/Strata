@@ -31,7 +31,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/bench:
     dependencies:
@@ -44,6 +44,9 @@ importers:
       '@strata/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens
+      '@strata/editor':
+        specifier: workspace:*
+        version: link:../editor
       '@strata/layout':
         specifier: workspace:*
         version: link:../layout
@@ -62,7 +65,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/canvas:
     dependencies:
@@ -87,7 +90,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/design-tokens:
     devDependencies:
@@ -96,7 +99,47 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
+
+  packages/editor:
+    dependencies:
+      '@codemirror/commands':
+        specifier: 6.11.1
+        version: 6.11.1
+      '@codemirror/lang-markdown':
+        specifier: 6.5.2
+        version: 6.5.2
+      '@codemirror/language':
+        specifier: 6.13.1
+        version: 6.13.1
+      '@codemirror/state':
+        specifier: 6.7.6
+        version: 6.7.6
+      '@codemirror/view':
+        specifier: 6.43.15
+        version: 6.43.15
+      '@lezer/markdown':
+        specifier: 1.8.1
+        version: 1.8.1
+      '@strata/design-tokens':
+        specifier: workspace:*
+        version: link:../design-tokens
+      loro-codemirror:
+        specifier: 0.3.3
+        version: 0.3.3(@codemirror/state@6.7.6)(@codemirror/view@6.43.15)(loro-crdt@1.16.4)
+      loro-crdt:
+        specifier: 1.16.4
+        version: 1.16.4
+    devDependencies:
+      happy-dom:
+        specifier: 21.0.4
+        version: 21.0.4
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/i18n:
     devDependencies:
@@ -105,7 +148,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/layout:
     devDependencies:
@@ -117,7 +160,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/ui:
     dependencies:
@@ -145,6 +188,9 @@ importers:
       '@strata/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens
+      '@strata/editor':
+        specifier: workspace:*
+        version: link:../editor
       '@strata/i18n':
         specifier: workspace:*
         version: link:../i18n
@@ -157,6 +203,9 @@ importers:
       '@tauri-apps/api':
         specifier: 2.12.4
         version: 2.12.4
+      loro-crdt:
+        specifier: 1.16.4
+        version: 1.16.4
       react:
         specifier: 19.3.1
         version: 19.3.1
@@ -190,7 +239,7 @@ importers:
         version: 8.3.4(@types/node@22.20.5)
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   packages/view3d:
     dependencies:
@@ -227,7 +276,7 @@ importers:
         version: 7.0.2
       vitest:
         specifier: 5.0.5
-        version: 5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5))
+        version: 5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5))
 
   spikes/loro-wasm:
     dependencies:
@@ -290,6 +339,39 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  '@codemirror/autocomplete@6.20.4':
+    resolution: {integrity: sha512-yF8RhOf2SXlg00+qtupzLhrglcas61boqaONiNcbPIebHCpJocpqTBA6dyrtUrQO47hqyTdeob/3XnYilT7TaQ==}
+
+  '@codemirror/commands@6.11.1':
+    resolution: {integrity: sha512-O/4hG3SC1YwcmQ0d2UVNDs+AsaNWd1iHVxbTeEBuqH+6bExAiPK3iS/BvpY6rZGURALv4ZD3sIgcCmRvw3ehBg==}
+
+  '@codemirror/lang-css@6.3.1':
+    resolution: {integrity: sha512-kr5fwBGiGtmz6l0LSJIbno9QrifNMUusivHbnA1H6Dmqy4HZFte3UAICix1VuKo0lMPKQr2rqB+0BkKi/S3Ejg==}
+
+  '@codemirror/lang-html@6.4.12':
+    resolution: {integrity: sha512-pw2ReWKUqSkbvh76RAT4NYxiogRu+PWkR2ukAwO9uOgrm8uipkzjtKKtNpyeAQwHOqxEeSvAXZ6vr3AfyB9y/w==}
+
+  '@codemirror/lang-javascript@6.2.5':
+    resolution: {integrity: sha512-zD4e5mS+50htS7F+TYjBPsiIFGanfVqg4HyUz6WNFikgOPf2BgKlx+TQedI1w6n/IqRBVBbBWmGFdLB/7uxO4A==}
+
+  '@codemirror/lang-markdown@6.5.2':
+    resolution: {integrity: sha512-AwBOdkWYuA//WcM0xO5PfHPUcmz/O2i5o0Nsg1U69SII/loCJlFI1Romd9xp2HYb1kYJRGZotyqRghuHH5n8Kw==}
+
+  '@codemirror/language@6.13.1':
+    resolution: {integrity: sha512-zfvU2r3TyylQLMj/te+5CnQ0rSqZi8B1oTCBbQkagcLW4Xc6imab6qN+pEJhsuNOLaJqiRyBXp9UhWA1DhVvDw==}
+
+  '@codemirror/lint@6.9.7':
+    resolution: {integrity: sha512-28/+iWLYxKxsvGYhSYL7zaCZqLz5+FFFDq9tVsvGv9kv8RY4fFAchJ5WX9M3YrrRlTIsECjsXPqeNgnSmNP2dg==}
+
+  '@codemirror/state@6.7.6':
+    resolution: {integrity: sha512-kAz+AncRtKuIknedxT1bq4XwXv4UowhbkHU1myPrtVb/jZtImWuV5BXzv5vK6i3kYACsdiZiQKFQQ5Mq7elW8w==}
+
+  '@codemirror/streamparser@6.0.0':
+    resolution: {integrity: sha512-JTFPF6xrfjt0mnfGPgzcLiMwYmvIyNaoizp8BYzv8FE8KrT6GBGDZ190rtt+O7Wke3gG/MFHyiY9YGNeimof4w==}
+
+  '@codemirror/view@6.43.15':
+    resolution: {integrity: sha512-HHsfpqFeHyXLs983pSRe38Xajs0vFWZQ2BuX0m7Ki8w3jZ5iD8cuR3lBz2/5/X53Dhf32SBHKh6rtSTB6tKeGw==}
+
   '@dimforge/rapier3d-compat@0.12.0':
     resolution: {integrity: sha512-uekIGetywIgopfD97oDL5PfeezkFpNhwlzlaEYNOA0N6ghdsOvh/HYjSMek5Q2O1PYvRSDFcqFVJl4r4ZBwOow==}
 
@@ -314,6 +396,30 @@ packages:
 
   '@jridgewell/trace-mapping@0.3.31':
     resolution: {integrity: sha512-zzNR+SdQSDJzc8joaeP8QQoCQr8NuYx2dIIytl1QeBEZHJ9uW6hebsrYgbz8hJwUQao3TWCMtmfV8Nu1twOLAw==}
+
+  '@lezer/common@1.5.4':
+    resolution: {integrity: sha512-xt3Q4z64xM+xhg4M7NXqw1N//1O74bUFo5kz6fwMeC4qwxSuRdwkYSmjcqCEEKYkNw5e67f2hcNqBoNERAEU0w==}
+
+  '@lezer/css@1.3.9':
+    resolution: {integrity: sha512-ZmzgvTOBdJWGIsY/ItAfN7UW8DV802oZG+jeG6E508SwEzz5YhuAajptpWPICvIyqYAD2+VjMdOS40GgGkyEOQ==}
+
+  '@lezer/highlight@1.2.5':
+    resolution: {integrity: sha512-O1GMVKgtf5YspFaRzpmqkVgMtIk2HG9uMAbH6wdAIdNh3TVzCsch/+cRi+6l2//UGDKe6NB9BW3cvuR5ezMQ0w==}
+
+  '@lezer/html@1.3.13':
+    resolution: {integrity: sha512-oI7n6NJml729m7pjm9lvLvmXbdoMoi2f+1pwSDJkl9d68zGr7a9Btz8NdHTGQZtW2DA25ybeuv/SyDb9D5tseg==}
+
+  '@lezer/javascript@1.5.6':
+    resolution: {integrity: sha512-sEvOqpl4vJQca0NugSQK02vQPbc5KrvoojnYGoqqFgFO0MtcYhwGiHKVEB+LuXYJnfyXo4QPA8ztbrEa4Fw5NA==}
+
+  '@lezer/lr@1.4.11':
+    resolution: {integrity: sha512-UwgZcl1R66H2hDzBrA7kWyYmX6s8p5TQ+e/t7CuvgCtBEPxbEPaHYHu+pJBvTvDotEJpuQkJjbXuHiw5Cixxgw==}
+
+  '@lezer/markdown@1.8.1':
+    resolution: {integrity: sha512-M5YmEcKWO4mJ45Y1hECwqyu8cLv25EiXOK554PVOvDOWOP0olwelHHQUWr9sjF+d1bENVhy0nfJ8E57XZUTiXg==}
+
+  '@marijn/find-cluster-break@1.0.4':
+    resolution: {integrity: sha512-Wy0V7+SGUjnF9/TkiM1hKVDPj7jKXduPNboMVtHTA8dySMURWqfg/JZ9E2Sq8JgSJmkl7k7Qe9FLeMSrSraWmQ==}
 
   '@oxc-project/types@0.154.0':
     resolution: {integrity: sha512-KYOUGQFlLWR+s4QMV2Q9ko38TZm7EdO87Qm7rvZLqk/webse/cDjtyxKhg/47l0byCbs/k46LT8qc4PKjAikzA==}
@@ -535,6 +641,12 @@ packages:
   '@types/webxr@0.5.24':
     resolution: {integrity: sha512-h8fgEd/DpoS9CBrjEQXR+dIDraopAEfu4wYVNY2tEPwk60stPWhvZMf4Foo5FakuQ7HFZoa8WceaWFervK2Ovg==}
 
+  '@types/whatwg-mimetype@3.0.2':
+    resolution: {integrity: sha512-c2AKvDT8ToxLIOUlN51gTiHXflsfIFisS4pO7pDPoKouJCESkhZnEy623gwP9laCy5lnLDAw1vAzu2vM2YLOrA==}
+
+  '@types/ws@8.18.2':
+    resolution: {integrity: sha512-67MQl+fpWKVTT1NYdnmo3U4sc/xPo/zQBncVnI74qmQa0z/b+1g6iYqNmGCPbxO+zz2aklb08a0oHfegiVd0/w==}
+
   '@typescript/typescript-aix-ppc64@7.0.2':
     resolution: {integrity: sha512-MTKKkWB7p/0E9xi1d1tHtZ5PiLkGEMIq88pK2CubZjOsLtYTLqhgIgi6zepFa+9GHZ6h05NMCkQxGKiPXMxXtQ==}
     engines: {node: '>=16.20.0'}
@@ -702,6 +814,10 @@ packages:
   brotli@1.3.3:
     resolution: {integrity: sha512-oTKjJdShmDuGW94SyyaoQvAjf30dZaHnjJ8uAF+u2/vGJkJbJPJAT1gDiOJP5v1Zb6f9KEyW/1HpuaWIXtGHPg==}
 
+  buffer-image-size@0.6.4:
+    resolution: {integrity: sha512-nEh+kZOPY1w+gcCMobZ6ETUp9WfibndnosbpwB1iJk/8Gt5ZF2bhS6+B6bPYz424KtwsR6Rflc3tCz1/ghX2dQ==}
+    engines: {node: '>=4.0'}
+
   chai@6.3.0:
     resolution: {integrity: sha512-XWAtwJ6OHO+tj0EKCs0Y2UamnyOxseZWltU4x2U2wh8g4AigdjwvtUjvLP2tqkA/avxHEtzxNaqGq/YGNwckKg==}
     engines: {node: '>=18'}
@@ -709,6 +825,9 @@ packages:
   clone@2.1.2:
     resolution: {integrity: sha512-3Pe/CF1Nn94hyhIYpjtiLhdCoEoz0DqQ+988E9gmeEdQZlojxnOb74wctFyuwWQHzqyf9X7C7MG8juUpqBJT8w==}
     engines: {node: '>=0.8'}
+
+  crelt@1.0.7:
+    resolution: {integrity: sha512-aK6BbWfhf4U/wCcLHKPJl/xa6VkVstRaPywWtMKGwuOLc/wZTyQYuoxgvZnNsBvv7Kg3YTBQYYBCggcviQczuA==}
 
   csstype@3.2.3:
     resolution: {integrity: sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ==}
@@ -744,6 +863,10 @@ packages:
 
   earcut@3.2.4:
     resolution: {integrity: sha512-FHc6yNpnTORB0tM5kmZ03iD2mDuNakDE2lvf4Hw1XkfxtEHIGVi01B/GqUSwx+NcC1WGjidAfpTXzeALtPtfpg==}
+
+  entities@7.0.1:
+    resolution: {integrity: sha512-TWrgLOFUQTH994YUyl1yT4uyavY5nNB5muff+RtWaqNVCAK408b5ZnnbNAUEWLTCpum9w6arT70i1XdQ4UeOPA==}
+    engines: {node: '>=0.12'}
 
   es-module-lexer@2.3.2:
     resolution: {integrity: sha512-poHGpORABojJJucnV9KbOavETW8lBVnphkW77ER5/BQ5Fz7oXSoCNek7IH3vR5nRjdsEz926ibFYX8KtLQmdyw==}
@@ -788,6 +911,10 @@ packages:
 
   gifuct-js@2.1.2:
     resolution: {integrity: sha512-rI2asw77u0mGgwhV3qA+OEgYqaDn5UNqgs+Bx0FGwSpuqfYn+Ir6RQY5ENNQ8SbIiG/m5gVa7CD5RriO4f4Lsg==}
+
+  happy-dom@21.0.4:
+    resolution: {integrity: sha512-tFm+GaLBgo6o0awHnvHaNoraVo27qJ+2tZEtZ+cIa08hXbeitrxAJajLI05hsUy/2/YTKcUjQYzHe5mCcraLBw==}
+    engines: {node: '>=20.0.0'}
 
   ismobilejs@1.1.1:
     resolution: {integrity: sha512-VaFW53yt8QO61k2WJui0dHf4SlL8lxBofUuUmwBo0ljPk0Drz2TiuDW4jo3wDcv41qy/SxrJ+VAzJ/qYqsmzRw==}
@@ -864,6 +991,13 @@ packages:
   lightningcss@1.33.0:
     resolution: {integrity: sha512-WkUDrojuJs0xkgGf2udWxa3yGBRxPtxUkB79i6aCZLRgc7PM8fZe9TosfPDcvEpQZbuFASnHYmRLBLUbmLOIIA==}
     engines: {node: '>= 12.0.0'}
+
+  loro-codemirror@0.3.3:
+    resolution: {integrity: sha512-C6qAUmDjMTyoXVeDxKWixvr/TSTo/jXFrvgGW+wn6RAHeIzNFovBDLQNi/Sary4Ahx8DaYADTCm9eCaRAjvWtw==}
+    peerDependencies:
+      '@codemirror/state': ^6.0.0
+      '@codemirror/view': ^6.7.0
+      loro-crdt: ^1.8.2
 
   loro-crdt@1.16.4:
     resolution: {integrity: sha512-UPufMpHSEMLRVjWfCjhVbOD8nkCDwxdfVk4Uer6xTEFAcNn+X+oGYWGgIIYuAgofc8UiI0ERZUIMnP7ib/kh6w==}
@@ -960,6 +1094,9 @@ packages:
 
   std-env@4.3.0:
     resolution: {integrity: sha512-OtU/EgQ1kIm5KwqQpBC6ZEMXrZRui11w8zgfTWp8cdO9B8OaPsbA8bTHO2P+HNo1VlUTGMVBwPhydu6poeXiag==}
+
+  style-mod@4.1.4:
+    resolution: {integrity: sha512-XXWIQt633/EpAFx8aZDOTjBzrCaGmhvEQlQo6MVPfa2OzO2cWo+4hV9h+6UkHYlXGfy+ODXKUdP7Pthmcu5ATw==}
 
   three@0.186.1:
     resolution: {integrity: sha512-blFeqb49wRCSGUGj7gtpfnSGHy2lwDk94RhUmS1c/hTby70kvChbWpkJ4Pm1390LqzzvTmzgXKHPEafJwCb8jA==}
@@ -1084,10 +1221,29 @@ packages:
       jsdom:
         optional: true
 
+  w3c-keyname@2.2.8:
+    resolution: {integrity: sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ==}
+
+  whatwg-mimetype@3.0.0:
+    resolution: {integrity: sha512-nt+N2dzIutVRxARx1nghPKGv1xHikU7HKdfafKkLNLindmPU/ch3U31NOCGGA/dmPcmb1VlofO0vnKAcsm0o/Q==}
+    engines: {node: '>=12'}
+
   why-is-node-running@3.2.1:
     resolution: {integrity: sha512-Tb2FUhB4vUsGQlfSquQLYkApkuPAFQXGFzxWKHHumVz2dK+X1RUm/HnID4+TfIGYJ1kTcwOaCk/buYCEJr6YjQ==}
     engines: {node: '>=20.11'}
     hasBin: true
+
+  ws@8.22.0:
+    resolution: {integrity: sha512-Ydggc987+RO0AnWtZ/7Wq9FtNvcrL1b/RO0ud9mWjUPgDrsAAwQSF51sm2hm1XofbU/4jkpGEsLFsZZxU+1DOg==}
+    engines: {node: '>=10.0.0'}
+    peerDependencies:
+      bufferutil: ^4.0.1
+      utf-8-validate: '>=5.0.2'
+    peerDependenciesMeta:
+      bufferutil:
+        optional: true
+      utf-8-validate:
+        optional: true
 
 snapshots:
 
@@ -1126,6 +1282,89 @@ snapshots:
   '@biomejs/cli-win32-x64@2.5.15':
     optional: true
 
+  '@codemirror/autocomplete@6.20.4':
+    dependencies:
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+
+  '@codemirror/commands@6.11.1':
+    dependencies:
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+
+  '@codemirror/lang-css@6.3.1':
+    dependencies:
+      '@codemirror/autocomplete': 6.20.4
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@lezer/common': 1.5.4
+      '@lezer/css': 1.3.9
+
+  '@codemirror/lang-html@6.4.12':
+    dependencies:
+      '@codemirror/autocomplete': 6.20.4
+      '@codemirror/lang-css': 6.3.1
+      '@codemirror/lang-javascript': 6.2.5
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+      '@lezer/css': 1.3.9
+      '@lezer/html': 1.3.13
+
+  '@codemirror/lang-javascript@6.2.5':
+    dependencies:
+      '@codemirror/autocomplete': 6.20.4
+      '@codemirror/language': 6.13.1
+      '@codemirror/lint': 6.9.7
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+      '@lezer/javascript': 1.5.6
+
+  '@codemirror/lang-markdown@6.5.2':
+    dependencies:
+      '@codemirror/autocomplete': 6.20.4
+      '@codemirror/lang-html': 6.4.12
+      '@codemirror/language': 6.13.1
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+      '@lezer/markdown': 1.8.1
+
+  '@codemirror/language@6.13.1':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      '@codemirror/streamparser': 6.0.0
+      '@codemirror/view': 6.43.15
+      '@lezer/common': 1.5.4
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.11
+      style-mod: 4.1.4
+
+  '@codemirror/lint@6.9.7':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      crelt: 1.0.7
+
+  '@codemirror/state@6.7.6':
+    dependencies:
+      '@marijn/find-cluster-break': 1.0.4
+
+  '@codemirror/streamparser@6.0.0': {}
+
+  '@codemirror/view@6.43.15':
+    dependencies:
+      '@codemirror/state': 6.7.6
+      crelt: 1.0.7
+      style-mod: 4.1.4
+      w3c-keyname: 2.2.8
+
   '@dimforge/rapier3d-compat@0.12.0': {}
 
   '@fontsource/golos-text@5.3.0': {}
@@ -1144,6 +1383,41 @@ snapshots:
     dependencies:
       '@jridgewell/resolve-uri': 3.1.2
       '@jridgewell/sourcemap-codec': 1.6.0
+
+  '@lezer/common@1.5.4': {}
+
+  '@lezer/css@1.3.9':
+    dependencies:
+      '@lezer/common': 1.5.4
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.11
+
+  '@lezer/highlight@1.2.5':
+    dependencies:
+      '@lezer/common': 1.5.4
+
+  '@lezer/html@1.3.13':
+    dependencies:
+      '@lezer/common': 1.5.4
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.11
+
+  '@lezer/javascript@1.5.6':
+    dependencies:
+      '@lezer/common': 1.5.4
+      '@lezer/highlight': 1.2.5
+      '@lezer/lr': 1.4.11
+
+  '@lezer/lr@1.4.11':
+    dependencies:
+      '@lezer/common': 1.5.4
+
+  '@lezer/markdown@1.8.1':
+    dependencies:
+      '@lezer/common': 1.5.4
+      '@lezer/highlight': 1.2.5
+
+  '@marijn/find-cluster-break@1.0.4': {}
 
   '@oxc-project/types@0.154.0': {}
 
@@ -1295,6 +1569,12 @@ snapshots:
 
   '@types/webxr@0.5.24': {}
 
+  '@types/whatwg-mimetype@3.0.2': {}
+
+  '@types/ws@8.18.2':
+    dependencies:
+      '@types/node': 22.20.5
+
   '@typescript/typescript-aix-ppc64@7.0.2':
     optional: true
 
@@ -1383,9 +1663,15 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
 
+  buffer-image-size@0.6.4:
+    dependencies:
+      '@types/node': 22.20.5
+
   chai@6.3.0: {}
 
   clone@2.1.2: {}
+
+  crelt@1.0.7: {}
 
   csstype@3.2.3: {}
 
@@ -1412,6 +1698,8 @@ snapshots:
   dfa@1.2.0: {}
 
   earcut@3.2.4: {}
+
+  entities@7.0.1: {}
 
   es-module-lexer@2.3.2: {}
 
@@ -1452,6 +1740,19 @@ snapshots:
   gifuct-js@2.1.2:
     dependencies:
       js-binary-schema-parser: 2.0.3
+
+  happy-dom@21.0.4:
+    dependencies:
+      '@types/node': 22.20.5
+      '@types/whatwg-mimetype': 3.0.2
+      '@types/ws': 8.18.2
+      buffer-image-size: 0.6.4
+      entities: 7.0.1
+      whatwg-mimetype: 3.0.0
+      ws: 8.22.0
+    transitivePeerDependencies:
+      - bufferutil
+      - utf-8-validate
 
   ismobilejs@1.1.1: {}
 
@@ -1505,6 +1806,12 @@ snapshots:
       lightningcss-linux-x64-musl: 1.33.0
       lightningcss-win32-arm64-msvc: 1.33.0
       lightningcss-win32-x64-msvc: 1.33.0
+
+  loro-codemirror@0.3.3(@codemirror/state@6.7.6)(@codemirror/view@6.43.15)(loro-crdt@1.16.4):
+    dependencies:
+      '@codemirror/state': 6.7.6
+      '@codemirror/view': 6.43.15
+      loro-crdt: 1.16.4
 
   loro-crdt@1.16.4: {}
 
@@ -1611,6 +1918,8 @@ snapshots:
 
   std-env@4.3.0: {}
 
+  style-mod@4.1.4: {}
+
   three@0.186.1: {}
 
   tiny-inflate@1.0.3: {}
@@ -1674,7 +1983,7 @@ snapshots:
       '@types/node': 22.20.5
       fsevents: 2.3.3
 
-  vitest@5.0.5(@types/node@22.20.5)(vite@8.3.4(@types/node@22.20.5)):
+  vitest@5.0.5(@types/node@22.20.5)(happy-dom@21.0.4)(vite@8.3.4(@types/node@22.20.5)):
     dependencies:
       '@types/chai': 5.2.3
       '@vitest/mocker': 5.0.5(vite@8.3.4(@types/node@22.20.5))
@@ -1692,7 +2001,14 @@ snapshots:
       why-is-node-running: 3.2.1
     optionalDependencies:
       '@types/node': 22.20.5
+      happy-dom: 21.0.4
     transitivePeerDependencies:
       - msw
 
+  w3c-keyname@2.2.8: {}
+
+  whatwg-mimetype@3.0.0: {}
+
   why-is-node-running@3.2.1: {}
+
+  ws@8.22.0: {}

@@ -70,6 +70,8 @@ export interface EditorEvents {
   change(): void;
   /** `M`: to the star map and back (08 §7, 06 §17). */
   map?(): void;
+  /** Double click or `Enter` on a node: open its content (06 §13.1). */
+  open?(id: string): void;
 }
 
 export type MenuChoice =
@@ -491,6 +493,14 @@ export class Editor {
       return;
     }
     if (hit.t === 'node') {
+      if (double && !e.shiftKey && !mod) {
+        this.select([hit.id]);
+        this.current = hit.id;
+        this.events.change();
+        this.view.invalidate();
+        this.events.open?.(hit.id);
+        return;
+      }
       if (e.shiftKey) this.selection.add(hit.id);
       else if (mod) {
         if (this.selection.has(hit.id)) this.selection.delete(hit.id);
@@ -834,6 +844,12 @@ export class Editor {
       case 'KeyM':
         if (mod) return;
         this.events.map?.();
+        return;
+      case 'Enter':
+      case 'NumpadEnter':
+        if (mod || !this.current) return;
+        e.preventDefault();
+        this.events.open?.(this.current);
         return;
       case 'KeyG':
       case 'KeyF':

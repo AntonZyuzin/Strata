@@ -1,6 +1,6 @@
 # ADR-0007. Редактор текста заметок
 
-- Статус: Принято (2026-10-19, по делегированию владельца); подтверждается спайком 6 ([15 §7](../15-architecture.md), [16 §3.2](../16-roadmap.md)). ☑ Q-15-4
+- Статус: Принято (2026-10-19, по делегированию владельца); подтверждается спайком 6 ([15 §7](../15-architecture.md), [16 §3.2](../16-roadmap.md)). ☑ Q-15-4. Часть 1 спайка 6 (2026-10-23, [S6](../spikes/S6-editor.md)): round-trip, сходимость, NFR-29 и NFR-33 подтверждены; в `loro-codemirror` 0.3.3 найдена ошибка первой правки — обход в `createNoteEditor`
 - Дата: 2026-10-14
 - Связано: [05-domain-model.md](../05-domain-model.md) (§4.2, §13), [06-canvas-ux.md](../06-canvas-ux.md) (§2.2, §13.1), [07-design-system.md](../07-design-system.md) §3.2, [10-storage-sync-collab.md](../10-storage-sync-collab.md) (§2.4, §7.2, §9.2, §14, §15), [13-interop.md](../13-interop.md) §7, [14-nfr.md](../14-nfr.md) (§1.3, §4, §5, §16), [15-architecture.md](../15-architecture.md) (§2, §3.4, §7, §8.2), [ADR-0003](0003-sync-engine.md), [ADR-0004](0004-app-shell.md), [ADR-0006](0006-board-engine.md); исследования [R4](../research/R4-app-shell-rendering.md) §6 (главное), [R3](../research/R3-crdt-sync.md) §8, [R2](../research/R2-obsidian-format.md), [R5](../research/R5-board-engine.md) §3, [R7](../research/R7-retro-design-assets.md)
 

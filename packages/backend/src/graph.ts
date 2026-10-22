@@ -92,8 +92,11 @@ export interface ChangeLabel {
 export interface Changeset {
   id: number;
   label: ChangeLabel;
-  /** 05 §11: changesets carry their source; the prototype only has the user. */
-  source: 'user';
+  /**
+   * 05 §11: changesets carry their source. `system` is derived state — wires
+   * of `[[links]]` in a note's text (05 §8.2 rule 4) — and stays out of undo.
+   */
+  source: 'user' | 'system';
   ops: Op[];
   /** Applied in reverse order to undo. */
   inverse: Op[];
@@ -166,6 +169,22 @@ export class Graph {
    * null when the gesture changed nothing, so no empty steps reach the stack.
    */
   transaction(label: ChangeLabel, build: (tx: Tx) => void): Changeset | null {
+    return this.apply(label, build, 'user');
+  }
+
+  /**
+   * Applies derived changes with the source `system` (05 §11): wires that
+   * follow the text of a note. They are not steps of the user's undo.
+   */
+  derive(label: ChangeLabel, build: (tx: Tx) => void): Changeset | null {
+    return this.apply(label, build, 'system');
+  }
+
+  private apply(
+    label: ChangeLabel,
+    build: (tx: Tx) => void,
+    source: Changeset['source'],
+  ): Changeset | null {
     const ops: Op[] = [];
     const inverse: Op[] = [];
     const run = (op: Op): boolean => {
@@ -202,10 +221,12 @@ export class Graph {
       throw e;
     }
     if (ops.length === 0) return null;
-    const changeset: Changeset = { id: this.nextId++, label, source: 'user', ops, inverse };
-    this.undoStack.push(changeset);
-    if (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift();
-    this.redoStack = [];
+    const changeset: Changeset = { id: this.nextId++, label, source, ops, inverse };
+    if (source === 'user') {
+      this.undoStack.push(changeset);
+      if (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift();
+      this.redoStack = [];
+    }
     this.emit({ type: 'apply', changeset });
     return changeset;
   }
@@ -277,10 +298,22 @@ export class Graph {
       }
       case 'remove': {
         const node = this.nodes.get(op.id);
-        // Wires are removed by Tx.remove before; a node with wires is a caller error.
-        if (!node || this.outs.get(op.id)?.size || this.ins.get(op.id)?.size) return null;
+        if (!node) return null;
+        // Tx.remove takes the wires off first, each a step of its own. Wires
+        // left here are derived (source system, `[[links]]`) and go with the
+        // node when undo or redo removes it; its inverse brings them back.
+        const back: Op[] = [];
+        for (const to of [...(this.outs.get(op.id) ?? [])]) {
+          this.applyOp({ t: 'disconnect', from: op.id, to });
+          back.push({ t: 'connect', from: op.id, to });
+        }
+        for (const from of [...(this.ins.get(op.id) ?? [])]) {
+          this.applyOp({ t: 'disconnect', from, to: op.id });
+          back.push({ t: 'connect', from, to: op.id });
+        }
         this.nodes.delete(op.id);
-        return [{ t: 'add', node }];
+        // Undo applies inverses from the end: the node first, then its wires.
+        return [...back, { t: 'add', node }];
       }
       case 'move': {
         const node = this.nodes.get(op.id);

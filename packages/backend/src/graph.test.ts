@@ -181,3 +181,19 @@ describe('ids and seed', () => {
     expect([...g.nodes.keys()].some((id) => g.inputs(id).length >= 2)).toBe(true);
   });
 });
+
+describe('derived changes (05 §11, source system)', () => {
+  it('applies wires from text without a step of undo', () => {
+    const g = new Graph();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node('a', 0, 0));
+      tx.add(node('b', 0, 100));
+    });
+    const cs = g.derive({ key: 'link' }, (tx) => tx.connect('a', 'b'));
+    expect(cs?.source).toBe('system');
+    expect(g.hasEdge('a', 'b')).toBe(true);
+    expect(g.undoLabel).toEqual({ key: 't' });
+    g.undo();
+    expect(g.nodes.size).toBe(0);
+  });
+});

@@ -1,6 +1,7 @@
 import type { BridgeResult } from './bridge';
 import type { CanvasResult } from './canvas';
 import type { Environment } from './env';
+import type { LookResult } from './look';
 import type { LoroIndexResult, LoroTextResult } from './loro';
 import type { MapResult } from './starmap';
 
@@ -9,7 +10,15 @@ import type { MapResult } from './starmap';
  * at startup and loads the runner (`@strata/bench`) only when a run starts.
  */
 
-export type { BridgeResult, CanvasResult, Environment, LoroIndexResult, LoroTextResult, MapResult };
+export type {
+  BridgeResult,
+  CanvasResult,
+  Environment,
+  LookResult,
+  LoroIndexResult,
+  LoroTextResult,
+  MapResult,
+};
 
 /**
  * `full` is the run the owner makes on MO-mac and MO-win (15 §8.3); `quick`
@@ -22,6 +31,7 @@ export const SCENARIO_IDS = [
   'canvas-pan-zoom-n5k',
   'canvas-drag-n5k',
   'canvas-pan-zoom-n10k',
+  'canvas-look-n5k',
   'map-orbit-20k',
   'bridge-2d-3d',
   'loro-index-20k',
@@ -122,6 +132,7 @@ export const THRESHOLDS = {
     'canvas-pan-zoom-n5k': 1000 / 60,
     'canvas-drag-n5k': 1000 / 60,
     'canvas-pan-zoom-n10k': 1000 / 30,
+    'canvas-look-n5k': 1000 / 60,
     'map-orbit-20k': 1000 / 60,
     'bridge-2d-3d': 1000 / 60,
   },

@@ -2,6 +2,7 @@ import { runBridgeScenario } from './bridge';
 import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
 import { describeError } from './errors';
+import { runLookScenario } from './look';
 import { runLoroIndex, runLoroText } from './loro';
 import {
   type AppInfo,
@@ -55,6 +56,20 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
     { id: 'canvas-pan-zoom-n5k', spike: 1, draws: true, run: canvas('pan-zoom', 5_000, 7_500) },
     { id: 'canvas-drag-n5k', spike: 1, draws: true, run: canvas('drag', 5_000, 7_500) },
     { id: 'canvas-pan-zoom-n10k', spike: 1, draws: true, run: canvas('pan-zoom', 10_000, 15_000) },
+    // R7 §8 item 4: the prototype's canvas with the whole look of 07 at N-5k.
+    {
+      id: 'canvas-look-n5k',
+      spike: 9,
+      draws: true,
+      run: (s, env) =>
+        runLookScenario(s, {
+          nodes: q ? 1_000 : 5_000,
+          warmupMs: q ? 300 : 2_000,
+          runMs: q ? 1_500 : 10_000,
+          runs: q ? 1 : 5,
+          vsyncMs: env.vsyncMs,
+        }),
+    },
     // NFR-12: 20 000 stars, 30 000 wires, fog, bloom at ½ (08 §8.1).
     {
       id: 'map-orbit-20k',

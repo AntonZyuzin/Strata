@@ -1,3 +1,5 @@
 [toolchain]
 channel = "1.97.0"
 components = ["rustfmt", "clippy"]
+# strata-layout runs in the UI's workers as WASM (15 §2.6).
+targets = ["wasm32-unknown-unknown"]

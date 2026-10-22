@@ -1,9 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { loadLayout } from '@strata/layout';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { KIND, syntheticExtract } from './extract';
 import { clusterRadius, initialLayout } from './layout';
 import { activeZone, PHYSICS_LIBS, simulate } from './physics';
 
 const x = syntheticExtract({ nodes: 2_000, edges: 3_000, seed: 5 });
+
+// The `wasm` candidate needs the module; `pnpm wasm` builds it before the tests.
+beforeAll(async () => {
+  await loadLayout(
+    readFileSync(new URL('../../layout/pkg/strata_layout_bg.wasm', import.meta.url)),
+  );
+});
 
 const dist = (pos: Float32Array, a: number, b: number) =>
   Math.hypot(

@@ -4,6 +4,8 @@ members = [
     "crates/strata-model",
     "crates/strata-core",
     "crates/strata-cli",
+    "crates/strata-layout",
+    "crates/strata-layout-wasm",
     "crates/strata-desktop",
     "spikes/loro-index",
 ]
@@ -14,6 +16,7 @@ default-members = [
     "crates/strata-model",
     "crates/strata-core",
     "crates/strata-cli",
+    "crates/strata-layout",
 ]
 
 [workspace.package]
@@ -27,6 +30,7 @@ authors = ["Strata contributors"]
 [workspace.dependencies]
 strata-model = { path = "crates/strata-model" }
 strata-core = { path = "crates/strata-core" }
+strata-layout = { path = "crates/strata-layout" }
 
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

@@ -23,6 +23,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
+      - name: Clippy of the WASM bindings (strata-layout-wasm)
+        run: cargo clippy -p strata-layout-wasm --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test
 
   web:
@@ -36,6 +38,16 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Rust toolchain with the wasm32 target (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack,wasm-bindgen@0.2.129
+      - name: Layout as WASM (crates/strata-layout → packages/layout/pkg)
+        run: pnpm --filter @strata/layout build
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
@@ -100,6 +112,11 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack,wasm-bindgen@0.2.129
+      - name: Layout as WASM (crates/strata-layout → packages/layout/pkg)
+        run: pnpm --filter @strata/layout build
       - name: Clippy and tests of the shell (the UI is embedded at compile time)
         shell: bash
         run: |

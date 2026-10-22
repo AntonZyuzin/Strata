@@ -1,0 +1,16 @@
+[package]
+name = "strata-layout"
+description = "Strata layouts without IO: the star map's force layout (08 §3), later the 2D layouts of spike 10"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+bytemuck = "1.25.2"
+wide = "0.7.33"
+
+[lints]
+workspace = true

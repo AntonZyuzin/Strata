@@ -8,6 +8,7 @@
       "*.json",
       "!**/dist",
       "!**/node_modules",
+      "!**/pkg",
       "!**/src/assets/*.json"
     ]
   },

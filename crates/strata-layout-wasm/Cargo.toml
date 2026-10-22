@@ -1,0 +1,31 @@
+[package]
+name = "strata-layout-wasm"
+description = "WASM bindings of strata-layout for the UI's workers (15 §2.6)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+strata-layout.workspace = true
+wasm-bindgen = "=0.2.129"
+
+# Not the workspace lints: `forbid(unsafe_code)` rejects the exports that
+# #[wasm_bindgen] generates. This crate holds bindings only; the layout code
+# lives in strata-layout under the workspace lints.
+[lints.rust]
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+# wasm-opt is a separate download (binaryen); the module is small and its hot
+# loop is SIMD already. The build stays cargo + wasm-bindgen only.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

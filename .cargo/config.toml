@@ -1,0 +1,4 @@
+# WASM SIMD (simd128): the layout sums four pairs at a time. Safari 16.4+,
+# WKWebView on macOS 13.3+, Chromium 91+ and WebView2 support it.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "target-feature=+simd128"]

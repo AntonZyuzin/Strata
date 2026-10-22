@@ -1,4 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { loadLayout } from '@strata/layout';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { syntheticExtract } from './extract';
 import { initialLayout } from './layout';
 import { activeZone, PHYSICS_LIBS, simulate } from './physics';
@@ -12,6 +14,11 @@ const on = env?.STRATA_BENCH === '1';
 
 describe.runIf(on)('spike 2, physics on the CPU', () => {
   const x = syntheticExtract({ nodes: 20_000, edges: 30_000, seed: 7 });
+  beforeAll(async () => {
+    await loadLayout(
+      readFileSync(new URL('../../layout/pkg/strata_layout_bg.wasm', import.meta.url)),
+    );
+  });
 
   it.each(PHYSICS_LIBS)(
     '%s: full layout and active-zone tick',

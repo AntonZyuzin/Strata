@@ -1,3 +1,4 @@
+import { createForce3d } from '@strata/layout';
 import {
   forceCollide,
   forceLink,
@@ -22,15 +23,17 @@ import { clusterRadius, degrees, mass } from './layout';
  * 5 000 active ones (NFR-17).
  *
  * The third candidate, `typed-bh` (bh.ts), is our own Barnes–Hut on typed
- * arrays: the fallback of ADR-0005 when the libraries miss the budgets.
+ * arrays: the fallback of ADR-0005 when the libraries miss the budgets. The
+ * fourth, `wasm`, is the same model in Rust (`crates/strata-layout`) as WASM,
+ * with the walk by groups and SIMD sums; call `loadLayout` first.
  *
  * ngraph builds its integrator with `new Function`: under the desktop CSP
  * (no 'unsafe-eval', 11 §8.7) it cannot start. The bench reports that error
  * as the finding; Node measures its speed for the comparison.
  */
 
-export type PhysicsLib = 'd3-force-3d' | 'ngraph' | 'typed-bh';
-export const PHYSICS_LIBS: PhysicsLib[] = ['d3-force-3d', 'ngraph', 'typed-bh'];
+export type PhysicsLib = 'd3-force-3d' | 'ngraph' | 'typed-bh' | 'wasm';
+export const PHYSICS_LIBS: PhysicsLib[] = ['d3-force-3d', 'ngraph', 'typed-bh', 'wasm'];
 
 /** 08 §3.2: repulsion, nesting spring, wire springs, collision, centring, damping. */
 export const MODEL = {
@@ -171,6 +174,46 @@ export function simulate(
       pos[b * 3] = n.x ?? 0;
       pos[b * 3 + 1] = n.y ?? 0;
       pos[b * 3 + 2] = n.z ?? 0;
+    });
+  } else if (lib === 'wasm') {
+    const sub = new Float32Array(bodies.length * 3);
+    bodies.forEach((b, i) => {
+      sub[i * 3] = pos[b * 3] ?? 0;
+      sub[i * 3 + 1] = pos[b * 3 + 1] ?? 0;
+      sub[i * 3 + 2] = pos[b * 3 + 2] ?? 0;
+    });
+    const sim = createForce3d(
+      sub,
+      Float32Array.from(masses),
+      {
+        a: Uint32Array.from(springs, (s) => s.a),
+        b: Uint32Array.from(springs, (s) => s.b),
+        length: Float32Array.from(springs, (s) => s.length),
+        k: Float32Array.from(springs, (s) => s.k),
+      },
+      {
+        repulsion: MODEL.repulsion,
+        theta: MODEL.theta,
+        centre: MODEL.centre,
+        decay: MODEL.velocityDecay,
+        maxStep: 50,
+      },
+    );
+    setupMs = performance.now() - t0;
+    const decay = 0.001 ** (1 / Math.max(1, opts.ticks));
+    let alpha = 1;
+    for (let t = 0; t < opts.ticks; t++) {
+      const s = performance.now();
+      sim.tick(alpha);
+      times.push(performance.now() - s);
+      alpha *= decay;
+    }
+    const out = sim.positions();
+    sim.free();
+    bodies.forEach((b, i) => {
+      pos[b * 3] = out[i * 3] ?? 0;
+      pos[b * 3 + 1] = out[i * 3 + 1] ?? 0;
+      pos[b * 3 + 2] = out[i * 3 + 2] ?? 0;
     });
   } else if (lib === 'typed-bh') {
     const sub = new Float32Array(bodies.length * 3);

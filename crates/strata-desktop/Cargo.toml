@@ -21,6 +21,10 @@ serde_json.workspace = true
 strata-core.workspace = true
 sysinfo = { version = "0.36.1", default-features = false, features = ["system"] }
 tauri = { version = "2", features = [] }
+# «Открыть пространство…»: the system folder picker.
+tauri-plugin-dialog = "2"
+# A removed workspace's folder goes to the system trash, not away for good.
+trash = "5"
 
 
 [lints]

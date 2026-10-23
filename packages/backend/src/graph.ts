@@ -102,7 +102,15 @@ export interface Changeset {
   inverse: Op[];
 }
 
-export type GraphEvent = { type: 'apply' | 'undo' | 'redo'; changeset: Changeset };
+/**
+ * What happened to the graph. `amend` marks the rest of a gesture folded into
+ * the last step (its new operations only, and the step's label); `cancel` is
+ * a step reverted and forgotten (Esc). A core behind the graph repeats them
+ * (15 §3.3).
+ */
+export type GraphEvent =
+  | { type: 'apply'; changeset: Changeset; amend: boolean }
+  | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset };
 
 /** 06 §1.2, NFR-79: 200 steps per session. */
 export const UNDO_DEPTH = 200;
@@ -169,7 +177,7 @@ export class Graph {
    * null when the gesture changed nothing, so no empty steps reach the stack.
    */
   transaction(label: ChangeLabel, build: (tx: Tx) => void): Changeset | null {
-    return this.apply(label, build, 'user');
+    return this.apply(label, build, 'user', false);
   }
 
   /**
@@ -177,13 +185,14 @@ export class Graph {
    * follow the text of a note. They are not steps of the user's undo.
    */
   derive(label: ChangeLabel, build: (tx: Tx) => void): Changeset | null {
-    return this.apply(label, build, 'system');
+    return this.apply(label, build, 'system', false);
   }
 
   private apply(
     label: ChangeLabel,
     build: (tx: Tx) => void,
     source: Changeset['source'],
+    amend: boolean,
   ): Changeset | null {
     const ops: Op[] = [];
     const inverse: Op[] = [];
@@ -223,11 +232,11 @@ export class Graph {
     if (ops.length === 0) return null;
     const changeset: Changeset = { id: this.nextId++, label, source, ops, inverse };
     if (source === 'user') {
-      this.undoStack.push(changeset);
+      if (!amend) this.undoStack.push(changeset);
       if (this.undoStack.length > UNDO_DEPTH) this.undoStack.shift();
       this.redoStack = [];
     }
-    this.emit({ type: 'apply', changeset });
+    if (!amend) this.emit({ type: 'apply', changeset, amend: false });
     return changeset;
   }
 
@@ -239,16 +248,18 @@ export class Graph {
   amend(build: (tx: Tx) => void, label?: ChangeLabel): Changeset | null {
     const last = this.undoStack.at(-1);
     if (!last) return this.transaction(label ?? { key: 'change' }, build);
-    const cs = this.transaction(label ?? last.label, build);
-    if (!cs) {
-      if (label) last.label = label;
-      return last;
+    const cs = this.apply(label ?? last.label, build, 'user', true);
+    // Fold the new operations into the previous step.
+    if (cs) {
+      last.ops.push(...cs.ops);
+      last.inverse.push(...cs.inverse);
     }
-    // Fold the new step into the previous one.
-    this.undoStack.pop();
-    last.ops.push(...cs.ops);
-    last.inverse.push(...cs.inverse);
     if (label) last.label = label;
+    this.emit({
+      type: 'apply',
+      amend: true,
+      changeset: cs ?? { ...last, ops: [], inverse: [] },
+    });
     return last;
   }
 
@@ -257,7 +268,7 @@ export class Graph {
     const cs = this.undoStack.pop();
     if (!cs) return;
     for (let i = cs.inverse.length - 1; i >= 0; i--) this.applyOp(cs.inverse[i] as Op);
-    this.emit({ type: 'undo', changeset: cs });
+    this.emit({ type: 'cancel', changeset: cs });
   }
 
   undo(): Changeset | null {

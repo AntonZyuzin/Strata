@@ -1,0 +1,29 @@
+[package]
+name = "strata-core-wasm"
+description = "The Strata core as WASM: the browser build and e2e tests (15 §5.4)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# No SQLite in the browser: the store lives in memory and the page keeps its bytes.
+strata-core = { path = "../strata-core", default-features = false }
+wasm-bindgen = "=0.2.129"
+
+# Not the workspace lints: `forbid(unsafe_code)` rejects the exports that
+# #[wasm_bindgen] generates. The core itself lives in strata-core under them.
+[lints.rust]
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false

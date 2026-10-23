@@ -9,10 +9,13 @@
 //! - [`ops`]: the operations the UI sends; [`api`]: every call as JSON, the
 //!   same for the desktop shell and the browser build;
 //! - [`store`]: where documents and changesets live; [`sqlite`]: the
-//!   workspace folder and its `store.sqlite` (10 §3.1–3.3).
+//!   workspace folder and its `store.sqlite` (10 §3.1–3.3);
+//! - [`home`]: the workspaces of this device for the home screen (✅ Q-16-12).
 
 pub mod api;
 pub mod changeset;
+#[cfg(feature = "sqlite")]
+pub mod home;
 pub mod ops;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;

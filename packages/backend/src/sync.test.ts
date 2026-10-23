@@ -1,0 +1,179 @@
+import { readFileSync } from 'node:fs';
+import { LoroDoc } from 'loro-crdt';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
+import type { HomeBackend, NetworkView } from './core';
+import { type Graph, newNode } from './graph';
+import { CoreSync, followWires, graphOf } from './sync';
+
+beforeAll(async () => {
+  await loadCore(readFileSync(new URL('../pkg/strata_core_bg.wasm', import.meta.url)));
+});
+
+/** The graph and the core's network, compared by what the canvas shows. */
+function shape(
+  nodes: { id: string; name: string; x: number; y: number }[],
+  edges: [string, string][],
+) {
+  return {
+    nodes: nodes.map((n) => `${n.id} ${n.name} ${n.x} ${n.y}`).sort(),
+    edges: edges.map(([a, b]) => `${a}→${b}`).sort(),
+  };
+}
+
+const ofGraph = (g: Graph) => shape([...g.nodes.values()], g.edges());
+const ofView = (v: NetworkView) =>
+  shape(
+    v.nodes,
+    v.edges.map((e) => [e.from, e.to]),
+  );
+
+async function start(shelf: Shelf = memoryShelf()) {
+  const home = await browserHome(shelf);
+  const { root } = await home.create('Тест');
+  const g = graphOf(await home.core.view(root), () => 0);
+  const errors: unknown[] = [];
+  const sync = new CoreSync(home.core, g, root, (e) => errors.push(e));
+  return { home, root, g, sync, errors, shelf };
+}
+
+const node = (id: string, name: string, x = 0, y = 0) =>
+  newNode({ id, name, kind: 'note', cls: null, icon: 0, x, y });
+
+// Crockford base32 UUIDv7-shaped ids, as `newId` makes them.
+const A = '01K8A0000000000000000000AA';
+const B = '01K8A0000000000000000000BB';
+const C = '01K8A0000000000000000000CC';
+
+describe('the canvas and the core in step', () => {
+  it('repeats gestures, their rest, undo and redo in the core', async () => {
+    const { home, root, g, sync, errors } = await start();
+    g.transaction({ key: 't.create' }, (tx) => {
+      tx.add(node(A, 'Без имени', 10, 20));
+      tx.add(node(B, 'Вторая', 200, 20));
+      tx.connect(A, B);
+    });
+    // The name typed right after creating joins the same step (06 §5.5).
+    g.amend((tx) => tx.rename(A, 'Первая'), { key: 't.named' });
+    g.transaction({ key: 't.move' }, (tx) => tx.move(B, 300, 40));
+    await sync.settled();
+    expect(ofView(await home.core.view(root))).toEqual(ofGraph(g));
+
+    g.undo();
+    g.undo();
+    await sync.settled();
+    expect((await home.core.view(root)).nodes).toEqual([]);
+    expect(ofView(await home.core.view(root))).toEqual(ofGraph(g));
+
+    g.redo();
+    await sync.settled();
+    expect(ofView(await home.core.view(root))).toEqual(ofGraph(g));
+    expect(errors).toEqual([]);
+  });
+
+  it('forgets a cancelled gesture in the core too', async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't.create' }, (tx) => tx.add(node(A, 'A')));
+    g.transaction({ key: 't.create' }, (tx) => tx.add(node(B, 'B')));
+    g.revertLast();
+    await sync.settled();
+    expect(ofView(await home.core.view(root))).toEqual(ofGraph(g));
+    // Undo now reaches the step before the cancelled one, in both.
+    g.undo();
+    await sync.settled();
+    expect((await home.core.view(root)).nodes).toEqual([]);
+  });
+
+  it('deletes into the trash, and the wires come back with the node', async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'A'));
+      tx.add(node(B, 'B'));
+      tx.add(node(C, 'C'));
+      tx.connect(A, B);
+      tx.connect(B, C);
+    });
+    g.transaction({ key: 't.delete' }, (tx) => tx.remove(B));
+    await sync.settled();
+    expect(ofView(await home.core.view(root))).toEqual(ofGraph(g));
+    expect((await home.core.trash()).map((t) => t.name)).toEqual(['B']);
+    // Back from the trash by the core: B and both of its wires.
+    await home.core.apply([{ op: 'restore', ids: [B] }], { key: 't.restore' });
+    const v = await home.core.view(root);
+    expect(v.edges.map((e) => `${e.from}→${e.to}`).sort()).toEqual([`${A}→${B}`, `${B}→${C}`]);
+  });
+
+  it('keeps the workspace across a restart', async () => {
+    const shelf = memoryShelf();
+    const { home, root, g, sync } = await start(shelf);
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Остаётся', 5, 6));
+      tx.add(node(B, 'Тоже', 7, 8));
+      tx.connect(A, B);
+    });
+    await sync.settled();
+    const id = (await home.home()).current as string;
+
+    const later = await browserHome(shelf);
+    const list = await later.home();
+    expect(list.workspaces.map((w) => w.name)).toEqual(['Тест']);
+    expect(list.current).toBe(null);
+    const opened = await later.open(id);
+    expect(opened.root).toBe(root);
+    expect(ofView(await later.core.view(root))).toEqual(ofGraph(g));
+  });
+
+  it('reads the network again when the core refuses a step', async () => {
+    const { g, sync, home, errors } = await start();
+    // A network id the core does not know: every step here is refused.
+    const lost = new CoreSync(home.core, g, '01K8A00000000000000000000Z', (e) => errors.push(e));
+    sync.destroy();
+    g.transaction({ key: 't' }, (tx) => tx.add(node(A, 'A')));
+    g.transaction({ key: 't' }, (tx) => tx.add(node(B, 'B')));
+    await lost.settled();
+    expect(errors).toHaveLength(1);
+  });
+
+  it('follows the text wires the core makes from a note', async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Заметка'));
+      tx.add(node(B, 'Цель'));
+    });
+    await sync.settled();
+    const doc = new LoroDoc();
+    doc.import(await home.core.openDoc(`content/${A}`));
+    const from = doc.oplogVersion();
+    doc.getText('text').insert(0, 'См. [[цель]]');
+    doc.commit();
+    const wires = await home.core.pushDoc(`content/${A}`, doc.export({ mode: 'update', from }));
+    expect(wires).toBe(true);
+    const undoBefore = g.undoLabel;
+    followWires(g, await home.core.view(root));
+    expect(g.edges()).toEqual([[A, B]]);
+    expect(g.undoLabel).toEqual(undoBefore);
+  });
+});
+
+describe('the home screen in a browser', () => {
+  it('creates, renames, lists by last opened and removes workspaces', async () => {
+    let t = 1_000;
+    const home: HomeBackend = await browserHome(memoryShelf(), () => t++);
+    const a = await home.create('Работа');
+    const b = await home.create('Личное');
+    expect((await home.home()).workspaces.map((w) => w.name)).toEqual(['Личное', 'Работа']);
+    await home.rename(a.workspace.id, 'Работа 2');
+    await home.open(a.workspace.id);
+    const list = await home.home();
+    expect(list.workspaces.map((w) => w.name)).toEqual(['Работа 2', 'Личное']);
+    expect(list.current).toBe(a.workspace.id);
+    expect((await home.core.view(a.root)).name).toBe('Работа 2');
+    await home.setPreview(b.workspace.id, new Uint8Array([1, 2, 3]));
+    expect(await home.preview(b.workspace.id)).toEqual(new Uint8Array([1, 2, 3]));
+    const after = await home.remove(b.workspace.id);
+    expect(after.workspaces.map((w) => w.name)).toEqual(['Работа 2']);
+    expect(await home.preview(b.workspace.id)).toBe(null);
+    await expect(home.open(b.workspace.id)).rejects.toThrow();
+    expect((await home.setProfile({ name: ' Я ' })).profile.name).toBe('Я');
+  });
+});

@@ -134,6 +134,27 @@ impl Store for SqliteStore {
         tx.commit().map_err(io)
     }
 
+    fn append(
+        &mut self,
+        doc_id: &str,
+        update: &[u8],
+        ts: i64,
+    ) -> std::result::Result<(), StoreError> {
+        let tx = self.db.transaction().map_err(io)?;
+        tx.execute(
+            "INSERT INTO docs (doc_id, kind, snapshot, updated_at) VALUES (?1, ?2, NULL, ?3)
+             ON CONFLICT (doc_id) DO UPDATE SET updated_at = excluded.updated_at",
+            params![doc_id, doc_kind(doc_id), ts],
+        )
+        .map_err(io)?;
+        tx.execute(
+            "INSERT INTO updates (doc_id, bytes, changeset, ts) VALUES (?1, ?2, NULL, ?3)",
+            params![doc_id, update, ts],
+        )
+        .map_err(io)?;
+        tx.commit().map_err(io)
+    }
+
     fn changesets(&self) -> std::result::Result<Vec<Changeset>, StoreError> {
         let mut stmt = self
             .db
@@ -247,6 +268,7 @@ mod tests {
             let mk = |id: &str| Op::CreateNode {
                 id: Some(id.to_owned()),
                 kind: NodeKind::Note,
+                class: None,
                 name: format!("Нода {id}"),
                 net: root.clone(),
                 x: 1.0,

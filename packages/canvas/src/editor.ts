@@ -74,6 +74,8 @@ export interface EditorEvents {
   open?(id: string): void;
   /** `L`: lay out the selection, or the whole network when nothing is selected (06 §9.1). */
   layout?(ids: string[] | null): void;
+  /** `U`: out of this network into its parent (06 §1.4). */
+  up?(): void;
 }
 
 export type MenuChoice =
@@ -852,6 +854,10 @@ export class Editor {
       case 'KeyL':
         if (mod) return;
         this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);
+        return;
+      case 'KeyU':
+        if (mod) return;
+        this.events.up?.();
         return;
       case 'Enter':
       case 'NumpadEnter':

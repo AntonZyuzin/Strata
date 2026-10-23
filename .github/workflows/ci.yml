@@ -23,8 +23,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
-      - name: Clippy of the WASM bindings (strata-layout-wasm)
-        run: cargo clippy -p strata-layout-wasm --target wasm32-unknown-unknown -- -D warnings
+      - name: Clippy of the WASM bindings (strata-layout-wasm, strata-core-wasm)
+        run: cargo clippy -p strata-layout-wasm -p strata-core-wasm --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test
 
   web:
@@ -47,18 +47,24 @@ jobs:
       - uses: taiki-e/install-action@v2
         with:
           tool: wasm-pack,wasm-bindgen@0.2.129
-      - name: Layout as WASM (crates/strata-layout → packages/layout/pkg)
-        run: pnpm --filter @strata/layout build
+      - name: Layout and the core as WASM (→ packages/layout/pkg, packages/backend/pkg)
+        run: pnpm wasm
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm --filter @strata/ui build
-      - name: WASM for the e2e job
+      # Built once here: the e2e job and the desktop builds take it. On macOS
+      # and Windows the system archiver cannot pack the wasm32 objects of a
+      # core dependency (psm).
+      - name: WASM for the e2e and desktop jobs
         uses: actions/upload-artifact@v7
         with:
-          name: layout-pkg
-          path: packages/layout/pkg
+          name: wasm-pkg
+          path: |
+            packages/layout/pkg
+            packages/backend/pkg
           if-no-files-found: error
+          include-hidden-files: true
           retention-days: 1
 
   # Playwright's own image carries the browsers and their system libraries:
@@ -82,8 +88,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@v7
         with:
-          name: layout-pkg
-          path: packages/layout/pkg
+          name: wasm-pkg
+          path: packages
       - name: Layout and gesture tests (Chromium ≈ WebView2, WebKit ≈ WKWebView)
         run: pnpm --filter @strata/ui e2e
       - uses: actions/upload-artifact@v7
@@ -143,11 +149,10 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - uses: taiki-e/install-action@v2
+      - uses: actions/download-artifact@v7
         with:
-          tool: wasm-pack,wasm-bindgen@0.2.129
-      - name: Layout as WASM (crates/strata-layout → packages/layout/pkg)
-        run: pnpm --filter @strata/layout build
+          name: wasm-pkg
+          path: packages
       - name: Clippy and tests of the shell (the UI is embedded at compile time)
         shell: bash
         run: |

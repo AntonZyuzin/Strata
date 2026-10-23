@@ -15,6 +15,7 @@ fn create(w: &mut Workspace<MemoryStore>, net: &str, kind: NodeKind, name: &str)
         &[Op::CreateNode {
             id: Some(id.clone()),
             kind,
+            class: None,
             name: name.to_owned(),
             net: net.to_owned(),
             x: 10.0,
@@ -61,6 +62,7 @@ fn a_gesture_of_several_ops_is_one_step_of_undo() {
     let mk = |id: &str, name: &str| Op::CreateNode {
         id: Some(id.to_owned()),
         kind: NodeKind::Note,
+        class: None,
         name: name.to_owned(),
         net: root.clone(),
         x: 0.0,
@@ -172,6 +174,7 @@ fn a_failed_list_writes_nothing() {
             Op::CreateNode {
                 id: Some(id.clone()),
                 kind: NodeKind::Note,
+                class: None,
                 name: "Будет".to_owned(),
                 net: root.clone(),
                 x: 0.0,
@@ -206,6 +209,7 @@ fn nodes_live_in_networks_and_the_path_leads_home() {
             &[Op::CreateNode {
                 id: None,
                 kind: NodeKind::Note,
+                class: None,
                 name: "x".to_owned(),
                 net: note,
                 x: 0.0,
@@ -366,4 +370,158 @@ fn a_workspace_opens_again_from_its_store() {
 #[test]
 fn build_info_mentions_version() {
     assert!(crate::build_info().contains(crate::VERSION));
+}
+
+#[test]
+fn the_rest_of_a_gesture_joins_its_step() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Note, "Без имени");
+    let mut label = Label::new("t.named");
+    label.params.insert("name".into(), "Имя".into());
+    w.amend(
+        &[Op::Rename {
+            id: a.clone(),
+            name: "Имя".to_owned(),
+        }],
+        label,
+    )
+    .expect("amend");
+    assert_eq!(names(&mut w, &root), vec!["Имя"]);
+    assert_eq!(w.history().undo.map(|l| l.key), Some("t.named".to_owned()));
+    // One undo takes the node and its name away together.
+    w.undo().expect("undo");
+    assert!(names(&mut w, &root).is_empty());
+    assert_eq!(w.history().undo, None);
+    w.redo().expect("redo");
+    assert_eq!(names(&mut w, &root), vec!["Имя"]);
+    // Only a new label: the step keeps its writes.
+    w.amend(&[], Label::new("t.relabel")).expect("relabel");
+    assert_eq!(
+        w.history().undo.map(|l| l.key),
+        Some("t.relabel".to_owned())
+    );
+}
+
+#[test]
+fn a_cancelled_gesture_leaves_no_step() {
+    let mut w = ws();
+    let root = w.root();
+    create(&mut w, &root, NodeKind::Note, "A");
+    w.cancel().expect("cancel");
+    assert!(names(&mut w, &root).is_empty());
+    assert_eq!(
+        w.history(),
+        crate::History::default(),
+        "nothing to redo either"
+    );
+}
+
+/// The editor's side of a note: its own Loro document, sending updates.
+struct Editor {
+    doc: loro::LoroDoc,
+    sent: loro::VersionVector,
+}
+
+impl Editor {
+    fn open(w: &mut Workspace<MemoryStore>, note: &str) -> Self {
+        let doc = loro::LoroDoc::new();
+        doc.import(
+            &w.doc_snapshot(&format!("content/{note}"))
+                .expect("snapshot"),
+        )
+        .expect("import");
+        let sent = doc.oplog_vv();
+        Self { doc, sent }
+    }
+
+    fn type_text(&mut self, w: &mut Workspace<MemoryStore>, note: &str, text: &str) -> bool {
+        let t = self.doc.get_text("text");
+        t.delete(0, t.len_unicode()).expect("clear");
+        t.insert(0, text).expect("type");
+        self.doc.commit();
+        let update = self
+            .doc
+            .export(loro::ExportMode::updates(&self.sent))
+            .expect("export");
+        self.sent = self.doc.oplog_vv();
+        w.doc_push(&format!("content/{note}"), &update)
+            .expect("push")
+    }
+}
+
+#[test]
+fn links_in_a_note_become_its_text_wires() {
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let board = create(&mut w, &root, NodeKind::Board, "Доска идей");
+    let steps = w.history();
+    let mut ed = Editor::open(&mut w, &note);
+
+    assert!(ed.type_text(&mut w, &note, "См. [[доска идей]] и [[Нет такой]]"));
+    let v = w.network_view(&root).expect("view");
+    assert_eq!(v.edges.len(), 1);
+    let e = &v.edges[0];
+    assert_eq!(
+        (e.from.as_str(), e.to.as_str(), e.text, e.manual),
+        (note.as_str(), board.as_str(), true, false)
+    );
+    assert_eq!(w.history(), steps, "typing is no step of the canvas's undo");
+
+    // The same text again changes nothing.
+    assert!(!ed.type_text(&mut w, &note, "См. [[Доска идей]] и [[Нет такой]]"));
+
+    // A wire drawn by hand outlives its link (05 §8.2 rule 5).
+    w.apply(
+        &[Op::Connect {
+            from: note.clone(),
+            to: board.clone(),
+        }],
+        Label::new("t"),
+    )
+    .expect("connect");
+    assert!(ed.type_text(&mut w, &note, "Без ссылок"));
+    let v = w.network_view(&root).expect("view");
+    assert_eq!(
+        (v.edges.len(), v.edges[0].text, v.edges[0].manual),
+        (1, false, true)
+    );
+    w.apply(
+        &[Op::Disconnect {
+            from: note.clone(),
+            to: board,
+        }],
+        Label::new("t"),
+    )
+    .expect("cut");
+    assert!(w.network_view(&root).expect("view").edges.is_empty());
+
+    // The text is in the core: a second editor opens it.
+    let again = Editor::open(&mut w, &note);
+    assert_eq!(again.doc.get_text("text").to_string(), "Без ссылок");
+}
+
+#[test]
+fn a_network_has_no_content_document() {
+    let mut w = ws();
+    let root = w.root();
+    assert!(w.doc_snapshot(&format!("content/{root}")).is_err());
+    assert!(w.doc_snapshot("net/whatever").is_err());
+}
+
+#[test]
+fn the_browser_keeps_a_workspace_as_bytes() {
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    create(&mut w, &root, NodeKind::Note, "Цель");
+    let mut ed = Editor::open(&mut w, &note);
+    ed.type_text(&mut w, &note, "[[Цель]]");
+    let before = w.network_view(&root).expect("view");
+    let bytes = w.into_store().to_bytes();
+    let mut again = Workspace::open(MemoryStore::from_bytes(&bytes).expect("bytes")).expect("open");
+    assert_eq!(again.network_view(&root).expect("view"), before);
+    let ed = Editor::open(&mut again, &note);
+    assert_eq!(ed.doc.get_text("text").to_string(), "[[Цель]]");
 }

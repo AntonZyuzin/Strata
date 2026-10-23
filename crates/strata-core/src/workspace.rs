@@ -8,6 +8,10 @@
 //! operation checks the invariants of 05 §14 on the state it holds, writes
 //! every touched key, records its value before and after, and commits the
 //! updates of every touched document with the changeset at once (10 §3.3).
+//!
+//! Content documents (`content/<id>`, 10 §2.4) are edited in the UI's own
+//! Loro document and pushed here as updates (15 §3.4); the core stores them
+//! and turns a note's `[[links]]` into its text wires.
 
 use crate::changeset::{Changeset, KeyWrite, Label, RevertReport};
 use crate::ops::Op;
@@ -17,7 +21,7 @@ use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use strata_model::{
-    ChangesetId, ChangesetOrigin, EdgeKey, NodeId, NodeKind, PlacementKey, shard_of,
+    ChangesetId, ChangesetOrigin, EdgeKey, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
 
 /// Version of the documents' layout (10 §13).
@@ -49,6 +53,9 @@ fn invalid(msg: impl Into<String>) -> CoreError {
 pub struct ViewNode {
     pub id: String,
     pub kind: NodeKind,
+    /// The class it was made from (05 §4.3), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
     pub name: String,
     pub x: f64,
     pub y: f64,
@@ -93,12 +100,6 @@ pub struct TrashItem {
 pub struct History {
     pub undo: Option<Label>,
     pub redo: Option<Label>,
-}
-
-fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis() as i64)
 }
 
 pub struct Workspace<S: Store> {
@@ -240,6 +241,11 @@ impl<S: Store> Workspace<S> {
 
     pub fn root(&self) -> String {
         self.root.to_text()
+    }
+
+    /// The workspace's name: its root network's (05 §3).
+    pub fn root_name(&self) -> String {
+        self.name(self.root)
     }
 
     pub fn store(&self) -> &S {
@@ -392,6 +398,55 @@ impl<S: Store> Workspace<S> {
 
     /// Applies the operations as one changeset, one step of undo.
     pub fn apply(&mut self, ops: &[Op], label: Label) -> Result<Changeset> {
+        let changeset = self.commit_ops(ops, label)?;
+        if !changeset.writes.is_empty() {
+            self.undo.push(changeset.clone());
+            self.redo.clear();
+        }
+        Ok(changeset)
+    }
+
+    /// Adds operations to the last step of undo, for a gesture that goes on
+    /// after its first commit: naming a node right after creating it (06
+    /// §5.5), the drop that ends a drag after a shake. The journal keeps
+    /// their changeset apart; undo reverts both at once. `label` renames the
+    /// step; with no operations only the label changes.
+    pub fn amend(&mut self, ops: &[Op], label: Label) -> Result<Option<Changeset>> {
+        let changeset = if ops.is_empty() {
+            None
+        } else {
+            Some(self.commit_ops(ops, label.clone())?)
+        };
+        let written = changeset.as_ref().is_some_and(|c| !c.writes.is_empty());
+        match self.undo.last_mut() {
+            Some(last) => {
+                if let Some(c) = &changeset {
+                    last.writes.extend(c.writes.iter().cloned());
+                }
+                last.label = label;
+            }
+            None => {
+                if let Some(c) = changeset.as_ref().filter(|_| written) {
+                    self.undo.push(c.clone());
+                }
+            }
+        }
+        if written {
+            self.redo.clear();
+        }
+        Ok(changeset)
+    }
+
+    /// Reverts the last step and forgets it: a gesture cancelled with Esc.
+    pub fn cancel(&mut self) -> Result<Option<RevertReport>> {
+        let Some(cs) = self.undo.pop() else {
+            return Ok(None);
+        };
+        self.revert(&cs).map(|(_, report)| Some(report))
+    }
+
+    /// Checks and writes the operations as one changeset, outside undo.
+    fn commit_ops(&mut self, ops: &[Op], label: Label) -> Result<Changeset> {
         // Documents of the networks the operations touch, before the transaction.
         for op in ops {
             match op {
@@ -402,17 +457,12 @@ impl<S: Store> Workspace<S> {
             }
         }
         let plan = self.plan(ops)?;
-        let changeset = self.write(ChangesetOrigin::User, label, |tx| {
+        self.write(ChangesetOrigin::User, label, |tx| {
             for (doc, map, key, value) in plan {
                 tx.set(&doc, &map, &key, value)?;
             }
             Ok(())
-        })?;
-        if !changeset.writes.is_empty() {
-            self.undo.push(changeset.clone());
-            self.redo.clear();
-        }
-        Ok(changeset)
+        })
     }
 
     /// The key writes of `ops`, checked against the model's rules first.
@@ -433,6 +483,7 @@ impl<S: Store> Workspace<S> {
                 Op::CreateNode {
                     id,
                     kind,
+                    class,
                     name,
                     net,
                     x,
@@ -455,6 +506,9 @@ impl<S: Store> Workspace<S> {
                         .unwrap_or_default();
                     put(&index, "kind", &key, Some(Val::str(kind_text)));
                     put(&index, "name", &key, Some(Val::str(name.trim())));
+                    if let Some(class) = class {
+                        put(&index, "class", &key, Some(Val::str(class.clone())));
+                    }
                     put(&index, "createdAt", &key, Some(Val::Int(ts)));
                     put(&index, "primaryNet", &key, Some(Val::str(net.clone())));
                     put(
@@ -629,6 +683,145 @@ impl<S: Store> Workspace<S> {
         }
     }
 
+    /// The node of a content document `content/<id>` (10 §2.4): live and of a
+    /// kind that has content.
+    fn content_node(&self, doc: &str) -> Result<NodeId> {
+        let id = doc
+            .strip_prefix("content/")
+            .ok_or_else(|| invalid(format!("{doc} is not a content document")))?;
+        let n = self.live(id)?;
+        if self.kind(n) == Some(NodeKind::Network) {
+            return Err(invalid("a network has no content document (10 §2.4)"));
+        }
+        Ok(n)
+    }
+
+    /// A content document as one snapshot for an editor in the UI (15 §3.4);
+    /// a node that was never opened gets an empty document.
+    pub fn doc_snapshot(&mut self, doc: &str) -> Result<Vec<u8>> {
+        self.content_node(doc)?;
+        self.ensure_doc(doc)?;
+        self.docs[doc].export(ExportMode::Snapshot).map_err(engine)
+    }
+
+    /// Updates of a content document from an editor (15 §3.4): stored as
+    /// they come, outside undo — the editor keeps its own. A note's links
+    /// then become its text wires; the answer says whether they changed.
+    pub fn doc_push(&mut self, doc: &str, update: &[u8]) -> Result<bool> {
+        let node = self.content_node(doc)?;
+        self.ensure_doc(doc)?;
+        let d = &self.docs[doc];
+        let vv = d.oplog_vv();
+        d.import(update).map_err(engine)?;
+        let fresh = d.export(ExportMode::updates(&vv)).map_err(engine)?;
+        if fresh.is_empty() {
+            return Ok(false);
+        }
+        if let Err(e) = self.store.append(doc, &fresh, now_ms()) {
+            // Memory goes back to what the store holds (10 §3.3).
+            let d = load(&self.store, doc)?.unwrap_or_default();
+            self.docs.insert(doc.to_owned(), d);
+            return Err(e.into());
+        }
+        if self.kind(node) == Some(NodeKind::Note) {
+            return self.relink(node).map(|c| c.is_some());
+        }
+        Ok(false)
+    }
+
+    /// The note's text wires follow its `[[links]]` (05 §8.2 rule 4): a link
+    /// to a live node by its name adds the origin `text`, a link gone takes
+    /// it away, and a wire with no origin left goes. A system changeset,
+    /// outside undo (05 §11). Links to no node become ghosts in 1C (05 §8.5).
+    fn relink(&mut self, note: NodeId) -> Result<Option<Changeset>> {
+        let doc = format!("content/{}", note.to_text());
+        let text = self.docs[&doc].get_text("text").to_string();
+        let mut by_name: HashMap<String, NodeId> = HashMap::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(names) = shard.get_map("name").get_value() else {
+                continue;
+            };
+            for (id, name) in names.iter() {
+                let (Ok(n), Some(name)) = (NodeId::parse(id), name.as_string()) else {
+                    continue;
+                };
+                // One name, several nodes: the oldest wins (UUIDv7 sorts by time).
+                let slot = by_name.entry(name.trim().to_lowercase()).or_insert(n);
+                if n < *slot {
+                    *slot = n;
+                }
+            }
+        }
+        let want: BTreeSet<NodeId> = strata_markdown::scan(&text)
+            .links
+            .iter()
+            .filter_map(|l| by_name.get(&l.target.trim().to_lowercase()).copied())
+            .filter(|&n| n != note && self.alive(n))
+            .collect();
+        let index = self.index_doc(note);
+        let from = note.to_text();
+        let mut have: BTreeMap<NodeId, String> = BTreeMap::new();
+        if let LoroValue::Map(edges) = self.docs[&index].get_map("edge").get_value() {
+            for (key, v) in edges.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                if v.get("from").and_then(Val::as_str) != Some(from.as_str())
+                    || read(&self.docs[&index], "edgeOrigin", &format!("{key}|text")).is_none()
+                {
+                    continue;
+                }
+                if let Some(to) = v
+                    .get("to")
+                    .and_then(Val::as_str)
+                    .and_then(|t| NodeId::parse(t).ok())
+                {
+                    have.insert(to, key.clone());
+                }
+            }
+        }
+        let ts = now_ms();
+        let mut plan: Vec<(&str, String, Option<Val>)> = Vec::new();
+        for &to in want.iter().filter(|t| !have.contains_key(t)) {
+            let edge = EdgeKey::between(note, to).to_text();
+            let ends = Val::map([
+                ("from", Val::str(from.clone())),
+                ("to", Val::str(to.to_text())),
+            ]);
+            plan.push((
+                "edgeOrigin",
+                format!("{edge}|text"),
+                Some(Val::map([("at", Val::Int(ts))])),
+            ));
+            plan.push(("edge", edge, Some(ends)));
+        }
+        for edge in have
+            .iter()
+            .filter(|(t, _)| !want.contains(t))
+            .map(|(_, e)| e)
+        {
+            plan.push(("edgeOrigin", format!("{edge}|text"), None));
+            let other = ["manual", "import"]
+                .iter()
+                .any(|o| read(&self.docs[&index], "edgeOrigin", &format!("{edge}|{o}")).is_some());
+            if !other {
+                plan.push(("edge", edge.clone(), None));
+            }
+        }
+        if plan.is_empty() {
+            return Ok(None);
+        }
+        self.write(
+            ChangesetOrigin::System,
+            Label::new("core.change.links"),
+            |tx| {
+                for (map, key, value) in plan {
+                    tx.set(&index, map, &key, value)?;
+                }
+                Ok(())
+            },
+        )
+        .map(Some)
+    }
+
     /// The network as the canvas draws it (10 §7.3).
     pub fn network_view(&mut self, net: &str) -> Result<NetworkView> {
         let n = self.network(net)?;
@@ -664,6 +857,9 @@ impl<S: Store> Workspace<S> {
             nodes.push(ViewNode {
                 id: id.clone(),
                 kind: self.kind(node).unwrap_or(NodeKind::Note),
+                class: self
+                    .field(node, "class")
+                    .and_then(|v| v.as_str().map(str::to_owned)),
                 name: self.name(node),
                 x,
                 y,

@@ -26,6 +26,12 @@ importers:
 
   packages/backend:
     devDependencies:
+      '@types/node':
+        specifier: ^22.20.5
+        version: 22.20.5
+      loro-crdt:
+        specifier: 1.16.4
+        version: 1.16.4
       typescript:
         specifier: 7.0.2
         version: 7.0.2

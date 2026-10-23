@@ -6,6 +6,8 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::workspace::{History, NetworkView, TrashItem, Workspace};
+use base64::Engine as _;
+use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -17,15 +19,29 @@ pub enum Request {
     View {
         net: String,
     },
-    /// Operations as one changeset, one step of undo.
+    /// Operations as one changeset, one step of undo; with `amend`, added
+    /// to the last step (the rest of a gesture).
     Apply {
         ops: Vec<Op>,
         label: Label,
+        #[serde(default)]
+        amend: bool,
     },
     Undo,
     Redo,
+    /// The last step reverted and forgotten: a gesture cancelled with Esc.
+    Cancel,
     History,
     Trash,
+    /// A content document for an editor (`content/<id>`).
+    OpenDoc {
+        doc: String,
+    },
+    /// An editor's updates of a content document, in base64.
+    PushDoc {
+        doc: String,
+        update: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -38,9 +54,10 @@ pub enum Response {
     View {
         view: NetworkView,
     },
-    /// The step was taken; the undo and redo steps after it.
+    /// The step was taken; the undo and redo steps after it. No changeset
+    /// when an amend only renamed the step.
     Applied {
-        changeset: String,
+        changeset: Option<String>,
         history: History,
     },
     /// An undo or redo: `None` when there was nothing to undo or redo.
@@ -53,6 +70,15 @@ pub enum Response {
     },
     Trash {
         items: Vec<TrashItem>,
+    },
+    /// A content document as a Loro snapshot in base64.
+    Doc {
+        doc: String,
+        snapshot: String,
+    },
+    /// The updates are stored; `wires` when the note's text wires changed.
+    Pushed {
+        wires: bool,
     },
     /// The call failed; `invalid` when the model refused it (nothing was written).
     Error {
@@ -68,10 +94,17 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             root: ws.root(),
         }),
         Request::View { net } => ws.network_view(&net).map(|view| Response::View { view }),
-        Request::Apply { ops, label } => ws.apply(&ops, label).map(|c| Response::Applied {
-            changeset: c.id,
-            history: ws.history(),
-        }),
+        Request::Apply { ops, label, amend } => {
+            let done = if amend {
+                ws.amend(&ops, label)
+            } else {
+                ws.apply(&ops, label).map(Some)
+            };
+            done.map(|c| Response::Applied {
+                changeset: c.map(|c| c.id),
+                history: ws.history(),
+            })
+        }
         Request::Undo => ws.undo().map(|report| Response::Reverted {
             report,
             history: ws.history(),
@@ -80,6 +113,20 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             report,
             history: ws.history(),
         }),
+        Request::Cancel => ws.cancel().map(|report| Response::Reverted {
+            report,
+            history: ws.history(),
+        }),
+        Request::OpenDoc { doc } => ws.doc_snapshot(&doc).map(|bytes| Response::Doc {
+            doc,
+            snapshot: B64.encode(bytes),
+        }),
+        Request::PushDoc { doc, update } => match B64.decode(update) {
+            Ok(bytes) => ws
+                .doc_push(&doc, &bytes)
+                .map(|wires| Response::Pushed { wires }),
+            Err(e) => Err(crate::CoreError::Invalid(format!("update: {e}"))),
+        },
         Request::History => Ok(Response::History {
             history: ws.history(),
         }),

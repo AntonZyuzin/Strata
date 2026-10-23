@@ -14,10 +14,12 @@ default = ["sqlite"]
 sqlite = ["dep:rusqlite"]
 
 [dependencies]
+base64 = "0.22"
 loro = "=1.16.2"
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
 serde.workspace = true
 serde_json.workspace = true
+strata-markdown.workspace = true
 strata-model.workspace = true
 thiserror.workspace = true
 

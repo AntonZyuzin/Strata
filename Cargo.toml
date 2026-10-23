@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/strata-model",
     "crates/strata-core",
+    "crates/strata-core-wasm",
     "crates/strata-cli",
     "crates/strata-layout",
     "crates/strata-layout-wasm",
@@ -33,6 +34,7 @@ authors = ["Strata contributors"]
 strata-model = { path = "crates/strata-model" }
 strata-core = { path = "crates/strata-core" }
 strata-layout = { path = "crates/strata-layout" }
+strata-markdown = { path = "crates/strata-markdown" }
 
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

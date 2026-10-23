@@ -1,17 +1,30 @@
 //! Desktop shell (ADR-0004): one TypeScript SPA talking to the Rust core over
-//! Tauri IPC. `core` takes the core's JSON calls (`strata_core::api`) for the
-//! workspace in the app's data folder; `build_info` feeds «О программе» and
-//! the benchmark.
+//! Tauri IPC. `home` takes the home screen's calls (`strata_core::home`:
+//! the workspaces of this device, ✅ Q-16-12), `core` the calls for the open
+//! workspace (`strata_core::api`); `build_info` feeds «О программе» and the
+//! benchmark.
 
 use serde::Serialize;
 use std::sync::Mutex;
 use strata_core::Workspace;
+use strata_core::home::Home;
 use strata_core::sqlite::SqliteStore;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tauri::Manager;
 
-/// The open workspace, or why it could not be opened.
-struct Core(Mutex<Result<Workspace<SqliteStore>, String>>);
+/// The home screen's list and the open workspace, if any.
+#[derive(Debug)]
+struct App {
+    home: Home,
+    current: Option<Workspace<SqliteStore>>,
+}
+
+/// The app, or why its data folder could not be found.
+struct Core(Mutex<Result<App, String>>);
+
+fn error(message: &str) -> String {
+    serde_json::json!({ "type": "error", "message": message, "invalid": false }).to_string()
+}
 
 #[derive(Debug, Serialize)]
 struct BuildInfo {
@@ -61,38 +74,52 @@ fn build_info() -> BuildInfo {
     }
 }
 
-/// One call of the core as JSON (15 §2.5): the same requests the browser
-/// build answers in WASM.
+/// One call of the core as JSON (15 §2.5) for the open workspace: the same
+/// requests the browser build answers in WASM.
 #[tauri::command]
 fn core(state: tauri::State<'_, Core>, request: String) -> String {
     let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
     match guard.as_mut() {
-        Ok(ws) => strata_core::api::call(ws, &request),
-        Err(e) => {
-            serde_json::json!({ "type": "error", "message": e, "invalid": false }).to_string()
-        }
+        Ok(App {
+            current: Some(ws), ..
+        }) => strata_core::api::call(ws, &request),
+        Ok(_) => error("no workspace is open"),
+        Err(e) => error(e),
+    }
+}
+
+/// One call of the home screen as JSON. A removed workspace's folder goes
+/// to the system trash, so it can be brought back by hand.
+#[tauri::command]
+fn home(state: tauri::State<'_, Core>, request: String) -> String {
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_mut() {
+        Ok(app) => strata_core::home::call(&mut app.home, &mut app.current, &request, &|p| {
+            trash::delete(p).map_err(|e| e.to_string())
+        }),
+        Err(e) => error(e),
     }
 }
 
 /// Starts the desktop application.
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
-            // The workspace folder in the app's data folder (10 §3.1); a
-            // folder of the user's choice comes with «Открыть пространство…».
-            let opened = app
+            // The home list lives in the app's data folder; the app starts
+            // on the home screen with no workspace open.
+            let loaded = app
                 .path()
                 .app_data_dir()
                 .map_err(|e| e.to_string())
-                .and_then(|dir| {
-                    strata_core::sqlite::open_or_create(&dir, "Strata")
-                        .map(|(ws, _)| ws)
-                        .map_err(|e| e.to_string())
+                .map(|dir| App {
+                    home: Home::load(&dir),
+                    current: None,
                 });
-            app.manage(Core(Mutex::new(opened)));
+            app.manage(Core(Mutex::new(loaded)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![build_info, core])
+        .invoke_handler(tauri::generate_handler![build_info, core, home])
         .run(tauri::generate_context!())
         .expect("failed to run the Strata desktop shell");
 }

@@ -14,6 +14,10 @@ sha2.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+# The browser build (wasm32-unknown-unknown) takes time and randomness from JS.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+uuid = { workspace = true, features = ["js"] }
+
 [dev-dependencies]
 serde_json.workspace = true
 

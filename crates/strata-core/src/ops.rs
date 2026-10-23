@@ -15,6 +15,10 @@ pub enum Op {
         #[serde(default)]
         id: Option<String>,
         kind: NodeKind,
+        /// The class it was made from (05 §4.3): `task`, `project`… The
+        /// canvas takes the icon and look from kind and class.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        class: Option<String>,
         name: String,
         net: String,
         x: f64,

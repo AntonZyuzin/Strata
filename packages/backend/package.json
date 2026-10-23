@@ -4,13 +4,17 @@
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./browser": "./src/browser.ts"
   },
   "scripts": {
+    "build": "wasm-pack build ../../crates/strata-core-wasm --target web --out-dir ../../packages/backend/pkg --out-name strata_core --release --no-pack",
     "typecheck": "tsc -p .",
     "test": "vitest run"
   },
   "devDependencies": {
+    "@types/node": "^22.20.5",
+    "loro-crdt": "1.16.4",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
   }

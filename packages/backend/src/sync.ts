@@ -1,4 +1,4 @@
-import type { Core, CoreOp, NetworkView } from './core';
+import type { Core, CoreOp, History, NetworkView } from './core';
 import {
   type Changeset,
   Graph,
@@ -104,6 +104,8 @@ export class CoreSync {
     readonly net: string,
     /** The core refused or failed a step: the caller reads the network again. */
     private readonly onError: (e: unknown) => void,
+    /** The core's undo and redo after each step: the session's, across networks. */
+    private readonly onHistory: (h: History) => void = () => undefined,
   ) {
     this.off = graph.subscribe((e) => this.follow(e));
   }
@@ -117,10 +119,12 @@ export class CoreSync {
     return this.queue.then(() => undefined);
   }
 
-  private send(f: () => Promise<unknown>): void {
+  private send(f: () => Promise<History>): void {
     // After a refusal the steps queued behind it no longer match the core:
     // they are dropped, and the caller starts over from the core's network.
-    this.queue = this.queue.then(() => (this.broken ? undefined : f()));
+    this.queue = this.queue.then(async () => {
+      if (!this.broken) this.onHistory(await f());
+    });
     this.queue = this.queue.catch((e: unknown) => {
       if (this.broken) return;
       this.broken = true;

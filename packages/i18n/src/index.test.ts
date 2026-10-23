@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { detectLocale, formatNumber, pluralIndex, t } from './index';
+import { detectLocale, formatAgo, formatNumber, pluralIndex, t } from './index';
 
 describe('i18n', () => {
   it('uses Russian plural rules', () => {
@@ -37,5 +37,13 @@ describe('i18n', () => {
     expect(detectLocale(['ru-RU', 'en-US'])).toBe('ru');
     expect(detectLocale(['en-GB'])).toBe('en');
     expect(detectLocale([])).toBe('en');
+  });
+
+  it('says how long ago in words of the locale', () => {
+    const now = Date.UTC(2026, 9, 24, 12);
+    expect(formatAgo('ru', now - 5 * 60_000, now)).toBe('5 минут назад');
+    expect(formatAgo('en', now - 5 * 60_000, now)).toBe('5 minutes ago');
+    expect(formatAgo('ru', now - 3_000, now)).toBe('сейчас');
+    expect(formatAgo('en', now - 26 * 3_600_000, now)).toBe('yesterday');
   });
 });

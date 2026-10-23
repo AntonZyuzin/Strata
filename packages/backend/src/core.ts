@@ -168,6 +168,10 @@ export class Core {
     return expect(await this.call({ call: 'cancel' }), 'reverted').history;
   }
 
+  async history(): Promise<History> {
+    return expect(await this.call({ call: 'history' }), 'history').history;
+  }
+
   async trash(): Promise<TrashItem[]> {
     return expect(await this.call({ call: 'trash' }), 'trash').items;
   }

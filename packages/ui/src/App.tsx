@@ -1,14 +1,17 @@
+import type { HomeBackend, Opened } from '@strata/backend';
 import { type Profile, SCENARIO_IDS, type ScenarioId } from '@strata/bench/report';
 import { detectLocale, type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
 import { BenchWindow } from './BenchWindow';
-import { type BuildInfo, closeAppWindow, loadBuildInfo } from './backend';
+import { type BuildInfo, closeAppWindow, loadBuildInfo, openHome } from './backend';
 import { CreditsWindow } from './CreditsWindow';
 import { EngravingWindow } from './EngravingWindow';
 import { FontsWindow } from './FontsWindow';
+import { HomeScreen } from './home/HomeScreen';
 import { LocaleSwitch } from './LocaleSwitch';
 import { loadPixelPrefs, type PixelPrefs } from './pixel';
 import { Prototype } from './proto/Prototype';
+import { WorkspaceScreen } from './workspace/WorkspaceScreen';
 
 /** `?bench` opens the benchmark at start; `?bench=quick` is the e2e profile; `?only=` picks scenarios. */
 function benchFromUrl(): Profile | null {
@@ -24,17 +27,30 @@ function onlyFromUrl(): ScenarioId[] | undefined {
   return ids.length > 0 ? ids : undefined;
 }
 
-type Screen = 'about' | 'proto' | 'bench' | 'fonts' | 'engraving' | 'credits';
+type Screen =
+  | 'home'
+  | 'workspace'
+  | 'about'
+  | 'proto'
+  | 'bench'
+  | 'fonts'
+  | 'engraving'
+  | 'credits';
 
-/** `?proto`, `?bench`, `?fonts`, `?engraving` and `?credits` open a screen at start (e2e and quick checks). */
+/**
+ * The app opens on the home screen (✅ Q-16-12). `?about`, `?proto`, `?bench`,
+ * `?fonts`, `?engraving` and `?credits` open another screen at start (e2e and
+ * quick checks).
+ */
 function screenFromUrl(): Screen {
   const q = new URLSearchParams(window.location.search);
+  if (q.has('about') || q.has('core')) return 'about';
   if (q.has('proto')) return 'proto';
   if (q.has('bench')) return 'bench';
   if (q.has('fonts')) return 'fonts';
   if (q.has('engraving')) return 'engraving';
   if (q.has('credits')) return 'credits';
-  return 'about';
+  return 'home';
 }
 
 export function App() {
@@ -46,6 +62,9 @@ export function App() {
   const [screen, setScreen] = useState<Screen>(screenFromUrl);
   const [bench, setBench] = useState<Profile>(() => benchFromUrl() ?? 'full');
   const [pixel, setPixel] = useState<PixelPrefs>(loadPixelPrefs);
+  const [home, setHome] = useState<HomeBackend | null>(null);
+  const [homeError, setHomeError] = useState<string | null>(null);
+  const [opened, setOpened] = useState<Opened | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -54,6 +73,15 @@ export function App() {
   useEffect(() => {
     loadBuildInfo().then(setInfo);
   }, []);
+
+  // The core of the home screen and the workspaces, once it is needed.
+  const needsHome = screen === 'home' || screen === 'workspace';
+  useEffect(() => {
+    if (!needsHome || home) return;
+    openHome().then(setHome, (e: unknown) =>
+      setHomeError(e instanceof Error ? e.message : String(e)),
+    );
+  }, [needsHome, home]);
 
   const close = async () => {
     if (!(await closeAppWindow())) setOpen(false);
@@ -66,6 +94,46 @@ export function App() {
           {t(locale, 'window.reopen')}
         </button>
       </main>
+    );
+  }
+
+  if (screen === 'workspace' && home && opened) {
+    return (
+      <WorkspaceScreen
+        key={opened.workspace.id}
+        locale={locale}
+        home={home}
+        opened={opened}
+        onHome={() => {
+          setOpened(null);
+          setScreen('home');
+        }}
+      />
+    );
+  }
+
+  if (screen === 'home' || screen === 'workspace') {
+    if (!home) {
+      return (
+        <main className="scene">
+          <p className="home-loading" role={homeError ? 'alert' : undefined}>
+            {homeError ? t(locale, 'home.error', { message: homeError }) : t(locale, 'ws.loading')}
+          </p>
+        </main>
+      );
+    }
+    return (
+      <HomeScreen
+        locale={locale}
+        onLocale={setLocale}
+        home={home}
+        onOpen={(o) => {
+          setOpened(o);
+          setScreen('workspace');
+        }}
+        onAbout={() => setScreen('about')}
+        onClose={close}
+      />
     );
   }
 
@@ -153,6 +221,13 @@ export function App() {
             </dd>
           </dl>
           <div className="about-actions">
+            <button
+              type="button"
+              title={t(locale, 'ws.homeHint')}
+              onClick={() => setScreen('home')}
+            >
+              {t(locale, 'ws.home')}
+            </button>
             <button
               type="button"
               title={t(locale, 'proto.open')}

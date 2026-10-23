@@ -4,6 +4,11 @@
  */
 export const ZOOM_MIN = 0.05;
 export const ZOOM_MAX = 8;
+/**
+ * Framing never magnifies past this: a network of one or two nodes shows them
+ * at a readable size, not filling the screen.
+ */
+export const FIT_ZOOM_MAX = 1.5;
 
 export class Camera {
   /** World point at the screen's top-left corner. */
@@ -36,7 +41,7 @@ export class Camera {
   fit(box: { minX: number; minY: number; maxX: number; maxY: number }, w: number, h: number): void {
     const bw = Math.max(box.maxX - box.minX, 1);
     const bh = Math.max(box.maxY - box.minY, 1);
-    this.zoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(w / bw, h / bh) * 0.9));
+    this.zoom = Math.min(FIT_ZOOM_MAX, Math.max(ZOOM_MIN, Math.min(w / bw, h / bh) * 0.9));
     this.x = (box.minX + box.maxX) / 2 - w / 2 / this.zoom;
     this.y = (box.minY + box.maxY) / 2 - h / 2 / this.zoom;
   }

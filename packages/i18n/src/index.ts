@@ -8,7 +8,7 @@ export type Locale = 'ru' | 'en';
 
 const ru = {
   'app.title': 'Strata',
-  'app.stage': 'Этап 0 · каркас и спайки',
+  'app.stage': 'Этап 1 · веха 1A «Скелет»',
   'app.tagline': 'Нодовая база знаний и проектов',
   'about.core': 'Ядро',
   'about.shell': 'Оболочка',
@@ -18,6 +18,46 @@ const ru = {
   'window.reopen': 'Открыть окно',
   'nodes.count': ['{n} нода', '{n} ноды', '{n} нод'],
   'window.back': 'Назад',
+  'home.title': 'Главная',
+  'home.new': 'Новое пространство',
+  'home.open': 'Открыть…',
+  'home.openHint': 'Открыть папку пространства с диска',
+  'home.about': 'О программе',
+  'home.desktop': 'На этом устройстве',
+  'home.browser': 'В этом браузере',
+  'home.empty': 'Пространств пока нет — создайте первое',
+  'home.opened': 'Открыто {when}',
+  'home.missing': 'Папка не найдена',
+  'home.rename': 'Переименовать',
+  'home.forget': 'Убрать из списка',
+  'home.forgetHint': 'Папка останется на диске',
+  'home.remove': 'Удалить',
+  'home.removeAsk': 'Удалить «{name}»?',
+  'home.removeDesktop': 'Папка пространства уйдёт в корзину системы',
+  'home.removeBrowser': 'Пространство удалится из этого браузера насовсем',
+  'home.name': 'Название',
+  'home.untitled': 'Без названия',
+  'home.create': 'Создать',
+  'home.save': 'Сохранить',
+  'home.cancel': 'Отмена',
+  'home.profile': 'Я',
+  'home.profileHint': 'Ваше имя на этом устройстве: им подписаны изменения',
+  'home.profilePlaceholder': 'Ваше имя',
+  'home.error': 'Не получилось: {message}',
+  'home.change.rename': 'Переименовать пространство в «{name}»',
+  'ws.home': 'Главная',
+  'ws.homeHint': 'К списку пространств',
+  'ws.path': 'Путь',
+  'ws.up': 'Выше',
+  'ws.upHint': 'Выйти из сети · U',
+  'ws.trash': 'Корзина ({n})',
+  'ws.trashTitle': 'Корзина',
+  'ws.trashEmpty': 'Корзина пуста',
+  'ws.restore': 'Вернуть',
+  'ws.change.restore': 'Вернуть «{name}» из корзины',
+  'ws.refused': 'Ядро не приняло шаг: {message}',
+  'ws.loading': 'Открываю пространство…',
+  'ws.notOpenable': 'Списки и медиа откроются в вехе 1B',
   'engraving.open': 'Гравюра',
   'engraving.title': 'Гравюра',
   'engraving.hint': 'Добавьте около 20 разных картинок: фото, логотип, скан гравюры, скриншот',
@@ -236,7 +276,7 @@ type Catalog = {
 
 const en: Catalog = {
   'app.title': 'Strata',
-  'app.stage': 'Stage 0 · scaffold and spikes',
+  'app.stage': 'Stage 1 · milestone 1A “Skeleton”',
   'app.tagline': 'Node-based knowledge and projects',
   'about.core': 'Core',
   'about.shell': 'Shell',
@@ -246,6 +286,46 @@ const en: Catalog = {
   'window.reopen': 'Open window',
   'nodes.count': ['{n} node', '{n} nodes'],
   'window.back': 'Back',
+  'home.title': 'Home',
+  'home.new': 'New workspace',
+  'home.open': 'Open…',
+  'home.openHint': 'Open a workspace folder from disk',
+  'home.about': 'About',
+  'home.desktop': 'On this device',
+  'home.browser': 'In this browser',
+  'home.empty': 'No workspaces yet — create the first one',
+  'home.opened': 'Opened {when}',
+  'home.missing': 'Folder not found',
+  'home.rename': 'Rename',
+  'home.forget': 'Remove from list',
+  'home.forgetHint': 'The folder stays on disk',
+  'home.remove': 'Delete',
+  'home.removeAsk': 'Delete “{name}”?',
+  'home.removeDesktop': 'The workspace folder goes to the system trash',
+  'home.removeBrowser': 'The workspace is deleted from this browser for good',
+  'home.name': 'Name',
+  'home.untitled': 'Untitled',
+  'home.create': 'Create',
+  'home.save': 'Save',
+  'home.cancel': 'Cancel',
+  'home.profile': 'Me',
+  'home.profileHint': 'Your name on this device: changes are signed with it',
+  'home.profilePlaceholder': 'Your name',
+  'home.error': 'Failed: {message}',
+  'home.change.rename': 'Rename workspace to “{name}”',
+  'ws.home': 'Home',
+  'ws.homeHint': 'To the list of workspaces',
+  'ws.path': 'Path',
+  'ws.up': 'Up',
+  'ws.upHint': 'Out of the network · U',
+  'ws.trash': 'Trash ({n})',
+  'ws.trashTitle': 'Trash',
+  'ws.trashEmpty': 'The trash is empty',
+  'ws.restore': 'Restore',
+  'ws.change.restore': 'Restore “{name}” from the trash',
+  'ws.refused': 'The core refused a step: {message}',
+  'ws.loading': 'Opening the workspace…',
+  'ws.notOpenable': 'Checklists and media open in milestone 1B',
   'engraving.open': 'Engraving',
   'engraving.title': 'Engraving',
   'engraving.hint':
@@ -498,4 +578,26 @@ export function formatNumber(locale: Locale, n: number, maxFractionDigits = 1): 
 /** Locale from the system language: Russian for `ru*`, English otherwise. */
 export function detectLocale(languages: readonly string[]): Locale {
   return languages.some((l) => l.toLowerCase().startsWith('ru')) ? 'ru' : 'en';
+}
+
+/**
+ * How long ago, in words of the locale: «5 минут назад», «вчера». The UI
+ * shows when a workspace was last opened (✅ Q-16-12).
+ */
+export function formatAgo(locale: Locale, then: number, now = Date.now()): string {
+  const f = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' });
+  const s = Math.round((then - now) / 1000);
+  const steps: [Intl.RelativeTimeFormatUnit, number][] = [
+    ['second', 60],
+    ['minute', 60],
+    ['hour', 24],
+    ['day', 30],
+    ['month', 12],
+  ];
+  let v = s;
+  for (const [unit, size] of steps) {
+    if (Math.abs(v) < size) return f.format(unit === 'second' && Math.abs(v) < 10 ? 0 : v, unit);
+    v = Math.round(v / size);
+  }
+  return f.format(v, 'year');
 }

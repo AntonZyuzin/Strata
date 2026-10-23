@@ -1,7 +1,9 @@
 /**
- * Stage 0 stand-in for the `Backend` contract (10 §4, 15 §2.5). On desktop it
- * calls the Rust core over Tauri IPC; in a plain browser it reports no core.
+ * The shell's side of the `Backend` contract (10 §4, 15 §2.5): build info,
+ * the window, the home screen's backend and the folder picker.
  */
+
+import { type HomeBackend, jsonHome } from '@strata/backend';
 
 export interface BuildInfo {
   core: string;
@@ -33,4 +35,29 @@ export async function closeAppWindow(): Promise<boolean> {
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
   await getCurrentWindow().close();
   return true;
+}
+
+/**
+ * The home screen's backend (✅ Q-16-12): on desktop the Rust core over
+ * Tauri IPC, workspaces in folders; in a browser the same core as WASM,
+ * workspaces in IndexedDB (e2e, `pnpm dev`).
+ */
+export async function openHome(): Promise<HomeBackend> {
+  if (isTauri()) {
+    const { invoke } = await import('@tauri-apps/api/core');
+    return jsonHome(
+      (request) => invoke<string>('home', { request }),
+      (request) => invoke<string>('core', { request }),
+    );
+  }
+  const { browserHome, indexedDbShelf } = await import('@strata/backend/browser');
+  return browserHome(await indexedDbShelf());
+}
+
+/** «Открыть…» on desktop: the system folder picker; null when cancelled. */
+export async function pickFolder(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const path = await open({ directory: true });
+  return typeof path === 'string' ? path : null;
 }

@@ -1157,3 +1157,265 @@ button:focus-visible {
   display: grid;
   gap: calc(2 * var(--u));
 }
+
+/* Home (✅ Q-16-12): one wide window of workspace cards. Cards are a fixed
+   width in ch, so neither language reflows them; names and dates are
+   one-line values with a tooltip. */
+.home-window {
+  width: min(112ch, calc(100vw - 32px));
+  max-height: calc(100vh - 16 * var(--u));
+  display: flex;
+  flex-direction: column;
+}
+
+.home-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+
+.home-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: calc(4 * var(--u)) calc(6 * var(--u));
+}
+
+.home-bar > button {
+  max-width: 26ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.home-profile {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  margin-left: auto;
+}
+
+.home-profile .field {
+  width: 18ch;
+}
+
+.home-group {
+  margin: calc(8 * var(--u)) 0 calc(4 * var(--u));
+  font: inherit;
+  color: var(--st-color-text-muted);
+}
+
+.home-empty,
+.home-error {
+  margin: calc(2 * var(--u)) 0 calc(6 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.home-error {
+  color: var(--st-color-attention);
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 26ch);
+  gap: calc(6 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-card {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+}
+
+.home-open {
+  display: grid;
+  gap: calc(2 * var(--u));
+  height: auto;
+  padding: calc(3 * var(--u));
+  text-align: left;
+  min-width: 0;
+}
+
+.home-preview {
+  --st-pattern-ink: var(--st-color-surface-raised);
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  background-color: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+}
+
+.home-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.home-preview b {
+  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  text-transform: uppercase;
+}
+
+.home-name,
+.home-meta {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.home-meta,
+.home-card.is-missing .home-name {
+  color: var(--st-color-text-muted);
+}
+
+.home-actions {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: calc(2 * var(--u));
+}
+
+.home-actions button {
+  min-width: 0;
+  padding: 0 calc(2 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Dialogs: a small window over a dimmed screen. */
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 0.45);
+}
+
+.dialog {
+  width: min(56ch, calc(100vw - 32px));
+}
+
+.dialog-field {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+}
+
+.dialog-field .field {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+}
+
+.dialog-text {
+  margin: 0;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(4 * var(--u));
+  margin-top: calc(8 * var(--u));
+}
+
+/* The workspace's bar (milestone 1A): home, the path of networks, up, the
+   trash. Path segments are one-line values with a tooltip. */
+.ws-top {
+  position: absolute;
+  top: calc(6 * var(--u));
+  left: calc(6 * var(--u));
+  width: min(96ch, calc(100vw - 12 * var(--u)));
+}
+
+.ws-bar {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  padding: calc(5 * var(--u)) calc(6 * var(--u));
+}
+
+.ws-bar > button {
+  flex: none;
+  max-width: 18ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ws-path {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ws-path > * {
+  flex: 0 1 auto;
+  min-width: 4ch;
+  max-width: 20ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ws-path > * + *::before {
+  content: "› ";
+  color: var(--st-color-text-muted);
+}
+
+.ws-here {
+  padding: 0 calc(4 * var(--u));
+}
+
+.ws-trash {
+  position: absolute;
+  top: calc(6 * var(--u));
+  right: calc(6 * var(--u));
+  z-index: 6;
+  width: min(44ch, calc(100vw - 12 * var(--u)));
+  max-height: calc(100% - var(--st-size-bar) - 12 * var(--u));
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-trash .window-body {
+  overflow: auto;
+}
+
+.ws-trash-empty {
+  margin: 0;
+  color: var(--st-color-text-muted);
+}
+
+.ws-trash-list {
+  display: grid;
+  gap: calc(3 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ws-trash-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 12ch;
+  align-items: center;
+  gap: calc(4 * var(--u));
+}
+
+.ws-trash-list span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

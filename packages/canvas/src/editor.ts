@@ -76,6 +76,11 @@ export interface EditorEvents {
   layout?(ids: string[] | null): void;
   /** `U`: out of this network into its parent (06 §1.4). */
   up?(): void;
+  /**
+   * Undo or redo with nothing left in this graph: a core behind it may
+   * still hold steps of other networks (05 §11, the session's undo).
+   */
+  historyEmpty?(which: 'undo' | 'redo'): void;
 }
 
 export type MenuChoice =
@@ -217,12 +222,12 @@ export class Editor {
 
   undo(): void {
     this.cancelGesture();
-    this.graph.undo();
+    if (!this.graph.undo()) this.events.historyEmpty?.('undo');
   }
 
   redo(): void {
     this.cancelGesture();
-    this.graph.redo();
+    if (!this.graph.redo()) this.events.historyEmpty?.('redo');
   }
 
   // ── Tab menu (06 §5) ──────────────────────────────────────────────

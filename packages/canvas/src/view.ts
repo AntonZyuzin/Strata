@@ -140,6 +140,28 @@ export class CanvasView {
     return this.app.screen.width;
   }
 
+  /**
+   * The scene as a small PNG, `width` px wide: the workspace's card on the
+   * home screen (✅ Q-16-12). Null when the renderer cannot read it back.
+   */
+  async snapshot(width = 320): Promise<Uint8Array | null> {
+    try {
+      this.app.render();
+      const scene = this.app.renderer.extract.canvas({
+        target: this.app.stage,
+        frame: this.app.screen,
+      }) as HTMLCanvasElement;
+      const out = document.createElement('canvas');
+      out.width = width;
+      out.height = Math.round((width * this.height) / Math.max(1, this.width));
+      out.getContext('2d')?.drawImage(scene, 0, 0, out.width, out.height);
+      const blob = await new Promise<Blob | null>((ok) => out.toBlob(ok, 'image/png'));
+      return blob ? new Uint8Array(await blob.arrayBuffer()) : null;
+    } catch {
+      return null;
+    }
+  }
+
   get height(): number {
     return this.app.screen.height;
   }

@@ -29,7 +29,10 @@ pub use changeset::{Changeset, KeyWrite, Label, RevertReport};
 pub use ops::Op;
 pub use store::{MemoryStore, Store, StoreError, StoredDoc};
 pub use strata_model as model;
-pub use workspace::{CoreError, History, NetworkView, TrashItem, ViewEdge, ViewNode, Workspace};
+pub use workspace::{
+    Attrs, CoreError, Fold, History, Linked, NetworkView, NodeDetails, Person, TrashItem, TreeItem,
+    ViewEdge, ViewNode, Workspace,
+};
 
 /// Version of the core, shared by every binary built from this workspace.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

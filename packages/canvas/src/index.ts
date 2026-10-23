@@ -12,7 +12,14 @@ export {
 export { Camera } from './camera';
 export * from './curve';
 export type { Interaction } from './decor';
-export { Editor, type EditorEvents, type HintKey, type MenuChoice, type WheelMode } from './editor';
+export {
+  Editor,
+  type EditorEvents,
+  type HintKey,
+  type MenuChoice,
+  type MenuTarget,
+  type WheelMode,
+} from './editor';
 export { createIconAtlas, type IconAuthor, type IconCredits, iconCredits } from './icons';
 export {
   DEFAULT_ICONS,

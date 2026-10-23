@@ -7,6 +7,50 @@
 
 import type { ChangeLabel, NodeKind } from './graph';
 
+/** Statuses of a workspace (05 §6.1), in order; the last two are final. */
+export const STATUSES = ['inbox', 'todo', 'doing', 'review', 'done', 'cancelled'] as const;
+export type StatusId = (typeof STATUSES)[number];
+/** Priorities (05 §6.1). */
+export const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
+export type PriorityId = (typeof PRIORITIES)[number];
+
+export function isFinal(status: string | undefined): boolean {
+  return status === 'done' || status === 'cancelled';
+}
+
+/** The fields of 05 §6.1 a node carries, as the core keeps them. */
+export interface NodeAttrs {
+  status?: string;
+  /** `YYYY-MM-DD`. */
+  start?: string;
+  deadline?: string;
+  priority?: string;
+  /** Index into the people palette (07 §2.2). */
+  color?: number;
+  /** Person ids (05 §10). */
+  assignees?: string[];
+  /** The note that describes it: a task's «Описание» (05 §4.3). */
+  description?: string;
+  /** A media node's picture: its asset's SHA-256 (10 §11). */
+  asset?: string;
+}
+
+export type AttrKey =
+  | 'status'
+  | 'start'
+  | 'deadline'
+  | 'priority'
+  | 'color'
+  | 'description'
+  | 'asset';
+
+/** A network's roll-up (05 §6.4): finished of all with a status, the nearest open deadline. */
+export interface CoreFold {
+  done: number;
+  total: number;
+  nearest?: string;
+}
+
 export type CoreOp =
   | {
       op: 'createNode';
@@ -23,7 +67,11 @@ export type CoreOp =
   | { op: 'connect'; from: string; to: string }
   | { op: 'disconnect'; from: string; to: string }
   | { op: 'trash'; ids: string[] }
-  | { op: 'restore'; ids: string[] };
+  | { op: 'restore'; ids: string[] }
+  | { op: 'setAttr'; id: string; key: AttrKey; value: string | number | null }
+  | { op: 'assign'; id: string; person: string; on: boolean }
+  | { op: 'addPerson'; id?: string; name: string; color?: number }
+  | { op: 'renamePerson'; id: string; name: string };
 
 export type CoreRequest =
   | { call: 'workspace' }
@@ -35,15 +83,62 @@ export type CoreRequest =
   | { call: 'history' }
   | { call: 'trash' }
   | { call: 'openDoc'; doc: string }
-  | { call: 'pushDoc'; doc: string; update: string };
+  | { call: 'pushDoc'; doc: string; update: string }
+  | { call: 'node'; id: string }
+  | { call: 'tree' }
+  | { call: 'people' }
+  | { call: 'putAsset'; bytes: string }
+  | { call: 'asset'; sha: string };
 
-export interface ViewNode {
+export interface ViewNode extends NodeAttrs {
   id: string;
   kind: NodeKind;
   class?: string;
   name: string;
   x: number;
   y: number;
+  /** For networks: the roll-up of what is inside. */
+  fold?: CoreFold;
+}
+
+/** A node at the other end of a wire, or inside a network. */
+export interface Linked {
+  id: string;
+  kind: NodeKind;
+  name: string;
+  status?: string;
+}
+
+/** One node with everything the properties panel shows. */
+export interface NodeDetails extends NodeAttrs {
+  id: string;
+  kind: NodeKind;
+  class?: string;
+  name: string;
+  /** The network of its primary placement. */
+  parent?: string;
+  /** Wires in: what it depends on. */
+  inputs: Linked[];
+  /** Wires out: what depends on it. */
+  outputs: Linked[];
+  /** For networks: the nodes inside, a task's subtasks among them. */
+  children: Linked[];
+  fold?: CoreFold;
+}
+
+/** A network in the «Структура» tree; the root has no parent. */
+export interface TreeItem {
+  id: string;
+  name: string;
+  class?: string;
+  parent?: string;
+}
+
+/** A person of the workspace (05 §10). */
+export interface Person {
+  id: string;
+  name: string;
+  color: number;
 }
 
 export interface ViewEdge {
@@ -87,6 +182,10 @@ type CoreResponse =
   | { type: 'trash'; items: TrashItem[] }
   | { type: 'doc'; doc: string; snapshot: string }
   | { type: 'pushed'; wires: boolean }
+  | { type: 'node'; node: NodeDetails }
+  | { type: 'tree'; items: TreeItem[] }
+  | { type: 'people'; people: Person[] }
+  | { type: 'asset'; sha: string; bytes?: string }
   | { type: 'error'; message: string; invalid: boolean };
 
 /** A call the core refused (`invalid`: the model's rules, nothing written) or failed. */
@@ -179,6 +278,28 @@ export class Core {
   /** A content document's snapshot for an editor (`content/<id>`). */
   async openDoc(doc: string): Promise<Uint8Array> {
     return fromBase64(expect(await this.call({ call: 'openDoc', doc }), 'doc').snapshot);
+  }
+
+  async node(id: string): Promise<NodeDetails> {
+    return expect(await this.call({ call: 'node', id }), 'node').node;
+  }
+
+  async tree(): Promise<TreeItem[]> {
+    return expect(await this.call({ call: 'tree' }), 'tree').items;
+  }
+
+  async people(): Promise<Person[]> {
+    return expect(await this.call({ call: 'people' }), 'people').people;
+  }
+
+  /** A picture or a file into the workspace; its SHA-256 back. */
+  async putAsset(bytes: Uint8Array): Promise<string> {
+    return expect(await this.call({ call: 'putAsset', bytes: toBase64(bytes) }), 'asset').sha;
+  }
+
+  async asset(sha: string): Promise<Uint8Array> {
+    const r = expect(await this.call({ call: 'asset', sha }), 'asset');
+    return fromBase64(r.bytes ?? '');
   }
 
   /** An editor's updates; true when the note's text wires changed. */

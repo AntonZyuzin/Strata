@@ -6,6 +6,8 @@
  * same calls; nodes carry their placement in this network directly (05 §9.2).
  */
 
+import type { AttrKey, NodeAttrs } from './core';
+
 export type NodeKind = 'network' | 'note' | 'board' | 'checklist' | 'media';
 export type NodeClass = 'task' | 'project' | 'references' | 'checklist';
 
@@ -53,6 +55,8 @@ export interface GraphNode {
   /** Placement in this network, world units (05 §9.2). */
   x: number;
   y: number;
+  /** The fields as the core keeps them (05 §6.1); the look fields above follow them. */
+  attrs: NodeAttrs;
 }
 
 /** A plain node: open, no deadline, no flags. */
@@ -71,7 +75,57 @@ export function newNode(
     assignees: [],
     color: null,
     fold: null,
+    attrs: {},
     ...base,
+  };
+}
+
+/** A class's colour when the node has none of its own (07 §2.2): the class reads at a glance. */
+export const CLASS_COLOR: Record<NodeClass, number> = {
+  task: 3,
+  project: 4,
+  references: 1,
+  checklist: 0,
+};
+
+/** Days before a deadline when the node starts to glow (05 §6.3, N = 3). */
+export const SOON_DAYS = 3;
+
+/** Today as `YYYY-MM-DD` in the viewer's time zone (05 §6.3: deadlines are the viewer's days). */
+export function today(now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
+}
+
+function daysBetween(a: string, b: string): number {
+  return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
+}
+
+/** A deadline's state for the viewer's day (07 §4.6). */
+export function dueOf(deadline: string | undefined, day: string): Due {
+  if (!deadline) return 'none';
+  const d = daysBetween(day, deadline);
+  if (d < 0) return 'overdue';
+  if (d === 0) return 'today';
+  return d <= SOON_DAYS ? 'soon' : 'far';
+}
+
+/**
+ * The look of a node from its fields (07 §4.5–4.6): status, deadline,
+ * colour, the assignees' dots. A node with no fields keeps its look.
+ */
+export function lookOf(
+  node: GraphNode,
+  day: string,
+  personColor: (id: string) => number,
+): Partial<GraphNode> {
+  const a = node.attrs;
+  const final = a.status === 'done' || a.status === 'cancelled';
+  return {
+    status: a.status === 'done' ? 'done' : a.status === 'cancelled' ? 'cancelled' : 'open',
+    due: final ? 'none' : dueOf(a.deadline, day),
+    color: a.color ?? (node.cls ? CLASS_COLOR[node.cls] : null),
+    assignees: (a.assignees ?? []).map(personColor),
   };
 }
 
@@ -81,7 +135,9 @@ export type Op =
   | { t: 'move'; id: string; x: number; y: number }
   | { t: 'connect'; from: string; to: string }
   | { t: 'disconnect'; from: string; to: string }
-  | { t: 'rename'; id: string; name: string };
+  | { t: 'rename'; id: string; name: string }
+  | { t: 'attr'; id: string; key: AttrKey; value: string | number | null }
+  | { t: 'assign'; id: string; person: string; on: boolean };
 
 /** Human-readable changeset label: an i18n key and its parameters, translated by the UI. */
 export interface ChangeLabel {
@@ -124,6 +180,9 @@ export interface Tx {
   connect(from: string, to: string): boolean;
   disconnect(from: string, to: string): boolean;
   rename(id: string, name: string): void;
+  /** A field of 05 §6.1; null clears it. */
+  attr(id: string, key: AttrKey, value: string | number | null): void;
+  assign(id: string, person: string, on: boolean): void;
 }
 
 export class Graph {
@@ -134,6 +193,12 @@ export class Graph {
   private redoStack: Changeset[] = [];
   private nextId = 1;
   private readonly listeners = new Set<(e: GraphEvent) => void>();
+  /** People's colours (05 §10) for the assignees' dots. */
+  personColor: (id: string) => number = () => 0;
+  /** The viewer's day for deadlines; a fixed one in tests. */
+  day: () => string = () => today();
+  /** A new node of a class takes the class's colour (07 §2.2); off in the prototype's demo. */
+  classColors = false;
 
   subscribe(fn: (e: GraphEvent) => void): () => void {
     this.listeners.add(fn);
@@ -221,6 +286,12 @@ export class Graph {
       rename: (id, name) => {
         run({ t: 'rename', id, name });
       },
+      attr: (id, key, value) => {
+        run({ t: 'attr', id, key, value });
+      },
+      assign: (id, person, on) => {
+        run({ t: 'assign', id, person, on });
+      },
     };
     try {
       build(tx);
@@ -304,7 +375,11 @@ export class Graph {
     switch (op.t) {
       case 'add': {
         if (this.nodes.has(op.node.id)) return null;
-        this.nodes.set(op.node.id, { ...op.node });
+        const node = { ...op.node };
+        if (this.classColors && node.color === null && node.cls && node.attrs.color === undefined) {
+          node.color = CLASS_COLOR[node.cls];
+        }
+        this.nodes.set(op.node.id, node);
         return [{ t: 'remove', id: op.node.id }];
       }
       case 'remove': {
@@ -340,6 +415,29 @@ export class Graph {
         const back: Op = { t: 'rename', id: op.id, name: node.name };
         node.name = op.name;
         return [back];
+      }
+      case 'attr': {
+        const node = this.nodes.get(op.id);
+        if (!node) return null;
+        const before = (node.attrs[op.key] as string | number | undefined) ?? null;
+        if (before === op.value) return null;
+        const attrs: NodeAttrs = { ...node.attrs };
+        if (op.value === null) delete attrs[op.key];
+        else (attrs as Record<string, unknown>)[op.key] = op.value;
+        // A new object: the view redraws a node whose object changed.
+        const next = { ...node, attrs };
+        this.nodes.set(op.id, Object.assign(next, lookOf(next, this.day(), this.personColor)));
+        return [{ t: 'attr', id: op.id, key: op.key, value: before }];
+      }
+      case 'assign': {
+        const node = this.nodes.get(op.id);
+        if (!node) return null;
+        const list = node.attrs.assignees ?? [];
+        if (list.includes(op.person) === op.on) return null;
+        const assignees = op.on ? [...list, op.person].sort() : list.filter((p) => p !== op.person);
+        const next = { ...node, attrs: { ...node.attrs, assignees } };
+        this.nodes.set(op.id, Object.assign(next, lookOf(next, this.day(), this.personColor)));
+        return [{ t: 'assign', id: op.id, person: op.person, on: !op.on }];
       }
       case 'connect': {
         if (op.from === op.to) return null; // 05 §8.2 rule 2: no self-loop

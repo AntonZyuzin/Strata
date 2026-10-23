@@ -1668,3 +1668,224 @@ button:focus-visible {
   background: transparent;
   color: var(--st-color-text);
 }
+
+/* «Структура» (owner's sketch, 2026-10-24): networks as a tree on the left;
+   the one you are in — the accent. */
+.ws-tree {
+  position: absolute;
+  top: calc(6 * var(--u));
+  left: calc(6 * var(--u));
+  z-index: 4;
+  width: 28ch;
+  max-height: calc(100% - 12 * var(--u));
+  overflow: auto;
+  padding: calc(2 * var(--u)) 0;
+}
+
+.ws-tree ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  width: 100%;
+  min-height: var(--st-size-row);
+  padding-right: calc(4 * var(--u));
+  text-align: left;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.tree-row span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tree-row:hover:not(:disabled) {
+  background: var(--st-color-surface-raised);
+}
+
+.tree-row.is-current,
+.tree-row.is-current:hover {
+  color: var(--st-color-accent-on);
+  background: var(--st-color-accent);
+}
+
+/* The properties panel (06 «P», 04 S3 step 5) on the right. */
+.ws-inspector {
+  position: absolute;
+  top: calc(6 * var(--u));
+  right: calc(6 * var(--u));
+  bottom: calc(var(--st-size-control) + 16 * var(--u));
+  z-index: 5;
+  width: 46ch;
+  display: flex;
+  flex-direction: column;
+}
+
+.ins-open {
+  flex: none;
+  min-height: calc(var(--st-size-control) - 4 * var(--u));
+}
+
+.ins-body {
+  display: flex;
+  flex-direction: column;
+  gap: calc(4 * var(--u));
+  min-height: 0;
+  overflow: auto;
+}
+
+.ins-body > .field,
+.ins-body > select {
+  width: 100%;
+}
+
+.ins-fields {
+  display: grid;
+  grid-template-columns: 12ch minmax(0, 1fr);
+  align-items: center;
+  gap: calc(3 * var(--u)) calc(6 * var(--u));
+  margin: 0;
+}
+
+.ins-label {
+  color: var(--st-color-text-muted);
+}
+
+.ins-value {
+  margin: 0;
+  min-width: 0;
+  overflow: visible;
+  white-space: normal;
+}
+
+.ins-fields .field {
+  width: 100%;
+}
+
+.ins-people {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(2 * var(--u));
+}
+
+.ins-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  max-width: 100%;
+  padding: 0 calc(4 * var(--u));
+}
+
+.ins-chip i {
+  flex: none;
+  width: calc(8 * var(--u));
+  height: calc(8 * var(--u));
+  outline: var(--u) solid var(--st-color-frame);
+}
+
+.ins-colors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(3 * var(--u));
+}
+
+.ins-swatch {
+  width: calc(16 * var(--u));
+  min-width: calc(16 * var(--u));
+  min-height: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  padding: 0;
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: none;
+}
+
+.ins-swatch.is-none {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 calc(3 * var(--u)),
+    var(--st-color-divider) 0 calc(4 * var(--u))
+  );
+}
+
+.ins-swatch.is-active {
+  outline: calc(2 * var(--u)) solid var(--st-color-accent);
+  outline-offset: var(--u);
+}
+
+.ins-heading {
+  display: flex;
+  justify-content: space-between;
+  margin: calc(4 * var(--u)) 0 0;
+  font: inherit;
+  color: var(--st-color-text-muted);
+  text-transform: uppercase;
+}
+
+.ins-progress {
+  color: var(--st-color-accent);
+}
+
+.ins-description {
+  min-height: 10em;
+  max-height: 40vh;
+  overflow: auto;
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.ins-picture {
+  display: grid;
+  gap: calc(3 * var(--u));
+}
+
+.ins-picture img {
+  max-width: 100%;
+  max-height: 30vh;
+  object-fit: contain;
+  border: var(--u) solid var(--st-color-frame);
+}
+
+.ins-links {
+  display: grid;
+  gap: calc(2 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ins-links li {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+}
+
+.ins-link {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-align: left;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ins-link:hover:not(:disabled) {
+  border-color: var(--st-color-divider);
+}
+
+.ins-add {
+  width: 100%;
+}

@@ -3,6 +3,7 @@
 //! undo — so a gesture of several primitive changes («вставить в нить»,
 //! `L`) stays one step (05 §11).
 
+use crate::value::Val;
 use serde::{Deserialize, Serialize};
 use strata_model::NodeKind;
 
@@ -53,5 +54,33 @@ pub enum Op {
     /// Back from the trash, to where they were.
     Restore {
         ids: Vec<String>,
+    },
+    /// A built-in attribute (05 §6.1): `status`, `start`, `deadline`,
+    /// `priority`, `color`; `description` — the note that describes a task
+    /// (05 §4.3); `asset` — the picture of a media node (10 §11). `null`
+    /// clears it.
+    SetAttr {
+        id: String,
+        key: String,
+        #[serde(default)]
+        value: Option<Val>,
+    },
+    /// A person among the node's assignees, or out of them (05 §10).
+    Assign {
+        id: String,
+        person: String,
+        on: bool,
+    },
+    /// A person of the workspace (05 §10): name and colour of the people palette.
+    AddPerson {
+        #[serde(default)]
+        id: Option<String>,
+        name: String,
+        #[serde(default)]
+        color: Option<i64>,
+    },
+    RenamePerson {
+        id: String,
+        name: String,
     },
 }

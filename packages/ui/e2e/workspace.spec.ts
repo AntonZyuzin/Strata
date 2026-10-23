@@ -11,10 +11,13 @@ interface Node {
   id: string;
   name: string;
   kind: string;
+  attrs: Record<string, unknown>;
+  color: number | null;
 }
 
 interface WsHook {
   view: {
+    hasPicture(id: string): boolean;
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
     canvas: HTMLCanvasElement;
@@ -321,6 +324,118 @@ test.describe('a workspace on the core', () => {
     await page.getByRole('button', { name: 'Закрыть «Без названия»' }).click();
     await expect(page.locator('.home-card')).toHaveCount(2);
     await expect(page.locator('.tab')).toHaveCount(0);
+  });
+
+  test('a task: its fields, people, description and subtasks in the panel (05 §4.3, §6)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Проекты');
+    // A task from the Tab menu, named at once.
+    await page.mouse.move(640, 400);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('задача');
+    await page.locator('.tab-menu-row', { hasText: 'Задача' }).first().click();
+    await expect(page.locator('.name-input')).toBeVisible();
+    await page.keyboard.type('Боёвка');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Боёвка']);
+    const id = await idOf(page, 'Боёвка');
+    await settled(page);
+    // Its class's colour, and an «Описание» inside, from the core.
+    expect(await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.color, id)).toBe(
+      3,
+    );
+    await select(page, 'Боёвка');
+    const panel = page.locator('.ws-inspector');
+    await expect(panel).toBeVisible();
+    await panel.getByLabel('Статус').selectOption('doing');
+    await panel.getByLabel('Дедлайн').fill('2026-12-01');
+    const attrs = () =>
+      page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.attrs ?? {}, id);
+    await expect.poll(attrs).toMatchObject({ status: 'doing', deadline: '2026-12-01' });
+    // A field is a step of the same undo as the canvas.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await attrs()).deadline).toBeUndefined();
+    await page.keyboard.press('Control+Shift+z');
+    await expect.poll(async () => (await attrs()).deadline).toBe('2026-12-01');
+    // People: a new one, assigned at once.
+    await panel.getByLabel('Добавить…').first().selectOption('+');
+    await panel.getByLabel('Имя человека').fill('Антон');
+    await panel.getByLabel('Имя человека').press('Enter');
+    await expect(panel.locator('.ins-chip')).toHaveText(['Антон']);
+    // The description: Markdown in the task's «Описание» note.
+    await panel.locator('.ins-description .cm-content').click();
+    await page.keyboard.type('**Удар** и _отдача_');
+    // Subtasks: two, one done — «1 из 2».
+    const sub = panel.getByLabel('Новая подзадача');
+    await sub.fill('Анимации');
+    await sub.press('Enter');
+    await expect(panel.locator('.ins-links .check')).toHaveCount(1);
+    await sub.fill('Хитбоксы');
+    await sub.press('Enter');
+    await expect(panel.locator('.ins-links .check')).toHaveCount(2);
+    await panel.locator('.ins-links .check input').first().check();
+    await expect(panel.locator('.ins-progress')).toHaveText('1 из 2');
+    // The tree: the task is a network of the workspace; it goes inside.
+    await page.locator('.tree-row', { hasText: 'Боёвка' }).click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
+    await expect
+      .poll(async () => (await graphNow(page)).names)
+      .toEqual(['Анимации', 'Описание', 'Хитбоксы']);
+    await page.locator('.tree-row', { hasText: 'Проекты' }).click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    // The right button: «Выполнено».
+    const p = await at(page, 'Боёвка');
+    await page.mouse.click(p.x, p.y, { button: 'right' });
+    await page.getByRole('menuitem', { name: 'Выполнено' }).click();
+    await expect.poll(async () => (await attrs()).status).toBe('done');
+    // The description is there after a restart.
+    await settled(page);
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await select(page, 'Боёвка');
+    await expect(page.locator('.ins-description .cm-content')).toContainText('Удар');
+  });
+
+  test('a picture dropped on the canvas is a media node with the picture in its circle', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Медиа');
+    await page.evaluate(async () => {
+      // A small PNG, made here: 8 × 8 of one colour.
+      const c = document.createElement('canvas');
+      c.width = 8;
+      c.height = 8;
+      const g = c.getContext('2d');
+      if (g) {
+        g.fillStyle = '#b6f36b';
+        g.fillRect(0, 0, 8, 8);
+      }
+      const blob = await new Promise<Blob | null>((ok) => c.toBlob(ok, 'image/png'));
+      const dt = new DataTransfer();
+      dt.items.add(new File([blob as Blob], 'Скетч.png', { type: 'image/png' }));
+      document.querySelector('.proto-canvas')?.dispatchEvent(
+        new DragEvent('drop', {
+          dataTransfer: dt,
+          clientX: 600,
+          clientY: 400,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Скетч']);
+    const id = await idOf(page, 'Скетч');
+    await expect
+      .poll(() => page.evaluate((id) => window.__strataWs?.view.hasPicture(id) ?? false, id))
+      .toBe(true);
+    await select(page, 'Скетч');
+    await expect(page.locator('.ins-picture img')).toBeVisible();
   });
 
   test('the profile is kept on this device', async ({ page }) => {

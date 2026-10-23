@@ -6,6 +6,7 @@
 //! ```text
 //! strata.json          workspaceId, formatVersion, name, exportedAt
 //! docs/<doc id>.loro   manifest, sys, index/0/<k>, net/<id>, content/<id>
+//! assets/<sha256>      pictures and files (10 §11)
 //! changesets.jsonl     the journal, oldest first
 //! ```
 
@@ -34,6 +35,7 @@ pub struct ArchiveInfo {
 pub struct Unpacked {
     pub info: ArchiveInfo,
     pub docs: Vec<(String, Vec<u8>)>,
+    pub assets: Vec<(String, Vec<u8>)>,
     pub changesets: Vec<Changeset>,
 }
 
@@ -68,6 +70,15 @@ pub fn export<S: Store>(ws: &Workspace<S>) -> Result<Vec<u8>> {
             .map_err(bad)?;
         zip.write_all(&bytes).map_err(bad)?;
     }
+    // Pictures are compressed already: stored as they are.
+    let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    for sha in ws.store().asset_ids()? {
+        if let Some(bytes) = ws.store().asset(&sha)? {
+            zip.start_file(format!("assets/{sha}"), stored)
+                .map_err(bad)?;
+            zip.write_all(&bytes).map_err(bad)?;
+        }
+    }
     zip.start_file("changesets.jsonl", opts).map_err(bad)?;
     for c in ws.store().changesets()? {
         zip.write_all(&serde_json::to_vec(&c).map_err(bad)?)
@@ -82,6 +93,7 @@ pub fn unpack(bytes: &[u8]) -> Result<Unpacked> {
     let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(bad)?;
     let mut info = None;
     let mut docs = Vec::new();
+    let mut assets = Vec::new();
     let mut changesets = Vec::new();
     for i in 0..zip.len() {
         let mut f = zip.by_index(i).map_err(bad)?;
@@ -105,6 +117,11 @@ pub fn unpack(bytes: &[u8]) -> Result<Unpacked> {
                 return Err(bad(format!("entry {name}")));
             }
             docs.push((id.to_owned(), data));
+        } else if let Some(sha) = name.strip_prefix("assets/") {
+            if sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_hexdigit()) {
+                return Err(bad(format!("entry {name}")));
+            }
+            assets.push((sha.to_owned(), data));
         }
     }
     let info = info.ok_or_else(|| bad("no strata.json"))?;
@@ -117,6 +134,7 @@ pub fn unpack(bytes: &[u8]) -> Result<Unpacked> {
     Ok(Unpacked {
         info,
         docs,
+        assets,
         changesets,
     })
 }
@@ -125,6 +143,9 @@ pub fn unpack(bytes: &[u8]) -> Result<Unpacked> {
 /// id: the device already has the original (10 §3.6).
 pub fn import<S: Store>(unpacked: &Unpacked, mut store: S, copy: bool) -> Result<Workspace<S>> {
     store.restore(&unpacked.docs, &unpacked.changesets)?;
+    for (sha, bytes) in &unpacked.assets {
+        store.put_asset(sha, bytes)?;
+    }
     let mut ws = Workspace::open(store)?;
     if ws.id() != unpacked.info.workspace_id {
         return Err(bad("strata.json and the documents disagree"));

@@ -1,6 +1,6 @@
 import type { Graph, GraphNode } from '@strata/backend';
 import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-tokens';
-import { Application, Container, Graphics, Sprite } from 'pixi.js';
+import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
 import 'pixi.js/unsafe-eval';
 import type { Pixels } from './backdrop';
@@ -193,6 +193,66 @@ export class CanvasView {
     return p95;
   }
 
+  private readonly pictures = new Map<string, Texture>();
+
+  /**
+   * A media node's picture inside its circle (owner, 2026-10-24): cut round
+   * once into a texture and drawn where the icon goes; null takes it away.
+   */
+  setPicture(
+    id: string,
+    image: (CanvasImageSource & { width: number; height: number }) | null,
+  ): void {
+    this.pictures.get(id)?.destroy(true);
+    this.pictures.delete(id);
+    if (image && image.width > 0 && image.height > 0) {
+      const side = 256;
+      const c = document.createElement('canvas');
+      c.width = side;
+      c.height = side;
+      const g = c.getContext('2d');
+      if (g) {
+        g.beginPath();
+        g.arc(side / 2, side / 2, side / 2, 0, Math.PI * 2);
+        g.clip();
+        const k = Math.max(side / image.width, side / image.height);
+        const w = image.width * k;
+        const h = image.height * k;
+        g.drawImage(image, (side - w) / 2, (side - h) / 2, w, h);
+        this.pictures.set(id, Texture.from(c));
+      }
+    }
+    const v = this.views.get(id);
+    if (v) {
+      this.applyPicture(v);
+      this.applyLevel(v);
+    }
+    this.invalidate();
+  }
+
+  /** Forgets every picture: another network or workspace is shown. */
+  clearPictures(): void {
+    for (const tex of this.pictures.values()) tex.destroy(true);
+    this.pictures.clear();
+  }
+
+  /** Whether a node shows a picture. */
+  hasPicture(id: string): boolean {
+    return this.pictures.has(id);
+  }
+
+  private applyPicture(v: NodeView) {
+    const pic = this.pictures.get(v.id);
+    if (pic) {
+      v.icon.texture = pic;
+      v.icon.scale.set((2 * v.r) / pic.width);
+    } else {
+      v.icon.texture =
+        this.icons.textures[v.node.icon % this.icons.textures.length] ?? this.textures.body;
+      v.icon.scale.set(iconScale(2 * v.r));
+    }
+  }
+
   /** Shows `graph` and follows its changes. */
   setGraph(graph: Graph): () => void {
     this.graph = graph;
@@ -344,8 +404,9 @@ export class CanvasView {
     v.body.visible = !n.ghost || lv === 'dot';
     v.body.tint = lv === 'dot' ? dotColor(n) : closed ? hex(fog.scene.doneFill) : PAPER;
     v.body.alpha = lv === 'dot' ? Math.max(a, 0.6) : a;
-    v.icon.visible = lv !== 'dot' && lv !== 'glyph' && !n.ghost;
-    v.icon.tint = closed ? hex(fog.scene.doneInk) : INK;
+    const pic = this.pictures.has(v.id);
+    v.icon.visible = !n.ghost && (pic ? lv !== 'dot' : lv !== 'dot' && lv !== 'glyph');
+    v.icon.tint = pic ? 0xffffff : closed ? hex(fog.scene.doneInk) : INK;
     v.icon.alpha = a;
     if (v.halo) v.halo.visible = lv !== 'dot';
   }
@@ -370,6 +431,14 @@ export class CanvasView {
         continue;
       }
       if (v.node !== node) {
+        // The «soon» halo is made with the view: a deadline change remakes it.
+        if (v.node.due !== node.due || v.node.icon !== node.icon) {
+          v.body.destroy();
+          v.icon.destroy();
+          v.halo?.destroy();
+          this.views.set(node.id, this.createView(node));
+          continue;
+        }
         v.node = node;
         this.applyLevel(v);
       }
@@ -428,6 +497,7 @@ export class CanvasView {
       r,
     };
     this.setPosition(v, node.x, node.y);
+    this.applyPicture(v);
     this.applyLevel(v);
     return v;
   }

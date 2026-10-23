@@ -27,6 +27,48 @@ use strata_model::{
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
 
+/// Statuses of a workspace (05 §6.1), in their order; the last two are final.
+pub const STATUSES: [&str; 6] = ["inbox", "todo", "doing", "review", "done", "cancelled"];
+/// Priorities (05 §6.1).
+pub const PRIORITIES: [&str; 4] = ["low", "medium", "high", "urgent"];
+/// Colours of the people palette (07 §2.2, ☑ Q-05-8).
+pub const COLORS: i64 = 8;
+
+/// A final status: the node is finished (05 §6.3).
+pub fn is_final(status: &str) -> bool {
+    status == "done" || status == "cancelled"
+}
+
+/// `YYYY-MM-DD`, a real day.
+fn is_date(s: &str) -> bool {
+    let b = s.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return false;
+    }
+    let num = |r: std::ops::Range<usize>| s.get(r).and_then(|x| x.parse::<u32>().ok());
+    match (num(0..4), num(5..7), num(8..10)) {
+        (Some(y), Some(m), Some(d)) if (1..=12).contains(&m) && d >= 1 => {
+            let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+            let days = [
+                31,
+                if leap { 29 } else { 28 },
+                31,
+                30,
+                31,
+                30,
+                31,
+                31,
+                30,
+                31,
+                30,
+                31,
+            ];
+            d <= days[(m - 1) as usize]
+        }
+        _ => false,
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error(transparent)]
@@ -48,6 +90,40 @@ fn invalid(msg: impl Into<String>) -> CoreError {
     CoreError::Invalid(msg.into())
 }
 
+/// The fields a node carries besides its name (05 §6.1), as the canvas and
+/// the properties panel read them.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Attrs {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub priority: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<i64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assignees: Vec<String>,
+    /// The note that describes it (a task's «Описание», 05 §4.3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// A media node's picture: the asset's SHA-256 (10 §11).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+}
+
+/// A network's roll-up (05 §6.4, ☑ Q-05-2): over its whole depth, each node
+/// once — finished of all with a status, and the nearest open deadline.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fold {
+    pub done: u32,
+    pub total: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nearest: Option<String>,
+}
+
 /// A node as the canvas draws it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ViewNode {
@@ -59,6 +135,63 @@ pub struct ViewNode {
     pub name: String,
     pub x: f64,
     pub y: f64,
+    #[serde(flatten)]
+    pub attrs: Attrs,
+    /// For networks: the roll-up of what is inside.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<Fold>,
+}
+
+/// A node at the other end of a wire, for the properties panel.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Linked {
+    pub id: String,
+    pub kind: NodeKind,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+}
+
+/// One node with everything the properties panel shows (06, «P»).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NodeDetails {
+    pub id: String,
+    pub kind: NodeKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    pub name: String,
+    #[serde(flatten)]
+    pub attrs: Attrs,
+    /// The network of its primary placement (05 §5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+    /// Wires in: what it depends on (05 §8).
+    pub inputs: Vec<Linked>,
+    /// Wires out: what depends on it.
+    pub outputs: Vec<Linked>,
+    /// For networks: the nodes inside (a task's subtasks among them, 05 §4.3).
+    pub children: Vec<Linked>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fold: Option<Fold>,
+}
+
+/// A network in the «Структура» tree.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TreeItem {
+    pub id: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<String>,
+}
+
+/// A person of the workspace (05 §10).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Person {
+    pub id: String,
+    pub name: String,
+    pub color: i64,
 }
 
 /// A wire between two nodes of the network.
@@ -520,7 +653,12 @@ impl<S: Store> Workspace<S> {
                     x,
                     y,
                 } => {
-                    let parent = self.network(net)?;
+                    // A network made earlier in this list takes nodes too: a
+                    // task and its «Описание» are one step (05 §4.3).
+                    let parent = match self.parse(net) {
+                        Ok(p) if made.get(&p) == Some(&NodeKind::Network) => p,
+                        _ => self.network(net)?,
+                    };
                     let node = match id {
                         Some(id) => self.parse(id)?,
                         None => NodeId::new(),
@@ -570,7 +708,10 @@ impl<S: Store> Workspace<S> {
                     );
                 }
                 Op::Move { net, id, x, y } => {
-                    let parent = self.network(net)?;
+                    let parent = match self.parse(net) {
+                        Ok(p) if made.get(&p) == Some(&NodeKind::Network) => p,
+                        _ => self.network(net)?,
+                    };
                     let n = self.parse(id)?;
                     let placed = made.contains_key(&n) || self.placed(parent, n);
                     if !placed {
@@ -649,6 +790,85 @@ impl<S: Store> Workspace<S> {
                         put(&index, "trashedAt", &key, None);
                         put(&index, "trashBatch", &key, None);
                     }
+                }
+                Op::SetAttr { id, key, value } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    let bad = || invalid(format!("attribute {key}: not a value it takes"));
+                    let ok = match (key.as_str(), value) {
+                        (_, None) => true,
+                        ("status", Some(Val::Str(v))) => STATUSES.contains(&v.as_str()),
+                        ("priority", Some(Val::Str(v))) => PRIORITIES.contains(&v.as_str()),
+                        ("start" | "deadline", Some(Val::Str(v))) => is_date(v),
+                        ("color", Some(Val::Int(v))) => (0..COLORS).contains(v),
+                        ("description", Some(Val::Str(v))) => self.parse(v).ok().is_some_and(|d| {
+                            made.get(&d) == Some(&NodeKind::Note)
+                                || (self.alive(d) && self.kind(d) == Some(NodeKind::Note))
+                        }),
+                        ("asset", Some(Val::Str(v))) => {
+                            v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit())
+                        }
+                        _ => false,
+                    };
+                    if !ok {
+                        return Err(bad());
+                    }
+                    let index = self.index_doc(n);
+                    match key.as_str() {
+                        "status" | "priority" | "start" | "deadline" | "color" => {
+                            put(&index, key, &n.to_text(), value.clone());
+                        }
+                        "description" | "asset" => {
+                            put(
+                                &index,
+                                "attr",
+                                &format!("{}|{key}", n.to_text()),
+                                value.clone(),
+                            );
+                        }
+                        _ => return Err(bad()),
+                    }
+                }
+                Op::Assign { id, person, on } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    if *on && read(&self.docs["manifest"], "people", person).is_none() {
+                        return Err(invalid(format!("no person {person} in this workspace")));
+                    }
+                    let key = format!("{}|assignees|{person}", n.to_text());
+                    put(&self.index_doc(n), "set", &key, on.then_some(Val::Int(1)));
+                }
+                Op::AddPerson { id, name, color } => {
+                    let name = name.trim();
+                    if name.is_empty() {
+                        return Err(invalid("a person needs a name"));
+                    }
+                    let pid = id.clone().unwrap_or_else(|| NodeId::new().to_text());
+                    if read(&self.docs["manifest"], "people", &pid).is_some() {
+                        return Err(invalid(format!("person {pid} already exists")));
+                    }
+                    let c = color.unwrap_or(0).rem_euclid(COLORS);
+                    put(
+                        "manifest",
+                        "people",
+                        &pid,
+                        Some(Val::map([("name", Val::str(name)), ("color", Val::Int(c))])),
+                    );
+                }
+                Op::RenamePerson { id, name } => {
+                    let Some(Val::Map(mut p)) = read(&self.docs["manifest"], "people", id) else {
+                        return Err(invalid(format!("no person {id} in this workspace")));
+                    };
+                    p.insert("name".to_owned(), Val::str(name.trim()));
+                    put("manifest", "people", id, Some(Val::Map(p)));
                 }
             }
         }
@@ -853,6 +1073,221 @@ impl<S: Store> Workspace<S> {
         .map(Some)
     }
 
+    fn text_field(&self, node: NodeId, map: &str) -> Option<String> {
+        self.field(node, map)
+            .and_then(|v| v.as_str().map(str::to_owned))
+    }
+
+    /// The fields of 05 §6.1 a node carries.
+    fn attrs(&self, node: NodeId) -> Attrs {
+        let key = node.to_text();
+        let index = self.docs.get(&self.index_doc(node));
+        let attr = |name: &str| {
+            index
+                .and_then(|d| read(d, "attr", &format!("{key}|{name}")))
+                .and_then(|v| v.as_str().map(str::to_owned))
+        };
+        let mut assignees = Vec::new();
+        if let Some(LoroValue::Map(set)) = index.map(|d| d.get_map("set").get_value()) {
+            let prefix = format!("{key}|assignees|");
+            assignees = set
+                .keys()
+                .filter_map(|k| k.strip_prefix(&prefix).map(str::to_owned))
+                .collect();
+            assignees.sort();
+        }
+        Attrs {
+            status: self.text_field(node, "status"),
+            start: self.text_field(node, "start"),
+            deadline: self.text_field(node, "deadline"),
+            priority: self.text_field(node, "priority"),
+            color: self.field(node, "color").and_then(|v| v.as_i64()),
+            assignees,
+            description: attr("description")
+                .filter(|d| NodeId::parse(d).is_ok_and(|n| self.alive(n))),
+            asset: attr("asset"),
+        }
+    }
+
+    /// Every network's placed nodes: `net → nodes`, from the placements.
+    fn children(&self) -> HashMap<NodeId, Vec<NodeId>> {
+        let mut out: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(m) = shard.get_map("placement").get_value() else {
+                continue;
+            };
+            for key in m.keys() {
+                let Some((net, node)) = key.split_once('/') else {
+                    continue;
+                };
+                if let (Ok(net), Ok(node)) = (NodeId::parse(net), NodeId::parse(node)) {
+                    out.entry(net).or_default().push(node);
+                }
+            }
+        }
+        out
+    }
+
+    /// The roll-up of a network (05 §6.4): nodes with a status over the
+    /// whole depth, each once; the nearest deadline of the open ones.
+    fn fold(&self, net: NodeId, children: &HashMap<NodeId, Vec<NodeId>>) -> Fold {
+        let mut seen = BTreeSet::from([net]);
+        let mut stack = vec![net];
+        let mut fold = Fold::default();
+        while let Some(at) = stack.pop() {
+            for &n in children.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
+                if !seen.insert(n) || !self.alive(n) {
+                    continue;
+                }
+                if let Some(status) = self.text_field(n, "status") {
+                    fold.total += 1;
+                    if is_final(&status) {
+                        fold.done += 1;
+                    } else if let Some(d) = self.text_field(n, "deadline") {
+                        if fold.nearest.as_ref().is_none_or(|x| d < *x) {
+                            fold.nearest = Some(d);
+                        }
+                    }
+                }
+                if self.kind(n) == Some(NodeKind::Network) {
+                    stack.push(n);
+                }
+            }
+        }
+        fold
+    }
+
+    fn linked(&self, n: NodeId) -> Linked {
+        Linked {
+            id: n.to_text(),
+            kind: self.kind(n).unwrap_or(NodeKind::Note),
+            name: self.name(n),
+            status: self.text_field(n, "status"),
+        }
+    }
+
+    /// Everything the properties panel shows about a node.
+    pub fn node_details(&self, id: &str) -> Result<NodeDetails> {
+        let n = self.live(id)?;
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for v in all.values() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let ends = (
+                    v.get("from")
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok()),
+                    v.get("to")
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok()),
+                );
+                let (Some(from), Some(to)) = ends else {
+                    continue;
+                };
+                if to == n && self.alive(from) {
+                    inputs.push(self.linked(from));
+                }
+                if from == n && self.alive(to) {
+                    outputs.push(self.linked(to));
+                }
+            }
+        }
+        let kind = self.kind(n).unwrap_or(NodeKind::Note);
+        let all = self.children();
+        let mut children: Vec<Linked> = all
+            .get(&n)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+            .iter()
+            .filter(|c| self.alive(**c))
+            .map(|c| self.linked(*c))
+            .collect();
+        for list in [&mut inputs, &mut outputs, &mut children] {
+            list.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        }
+        Ok(NodeDetails {
+            id: id.to_owned(),
+            kind,
+            class: self.text_field(n, "class"),
+            name: self.name(n),
+            attrs: self.attrs(n),
+            parent: self.text_field(n, "primaryNet"),
+            inputs,
+            outputs,
+            children,
+            fold: (kind == NodeKind::Network).then(|| self.fold(n, &all)),
+        })
+    }
+
+    /// A picture or a file into the workspace's assets (10 §11); its
+    /// SHA-256 is its id and the value of a media node's `asset`.
+    pub fn put_asset(&mut self, bytes: &[u8]) -> Result<String> {
+        use sha2::Digest;
+        let sha: String = sha2::Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect();
+        self.store.put_asset(&sha, bytes)?;
+        Ok(sha)
+    }
+
+    pub fn asset(&self, sha: &str) -> Result<Option<Vec<u8>>> {
+        Ok(self.store.asset(sha)?)
+    }
+
+    /// Every live network of the workspace with its parent, for the
+    /// «Структура» tree; the root has none.
+    pub fn tree(&self) -> Vec<TreeItem> {
+        let mut out = Vec::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(kinds) = shard.get_map("kind").get_value() else {
+                continue;
+            };
+            for (id, kind) in kinds.iter() {
+                let Ok(n) = NodeId::parse(id) else { continue };
+                if kind.as_string().map(|s| s.as_str()) != Some("network") || !self.alive(n) {
+                    continue;
+                }
+                out.push(TreeItem {
+                    id: id.clone(),
+                    name: self.name(n),
+                    class: self.text_field(n, "class"),
+                    parent: if n == self.root {
+                        None
+                    } else {
+                        self.text_field(n, "primaryNet")
+                    },
+                });
+            }
+        }
+        out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        out
+    }
+
+    /// The people of the workspace (05 §10), by name.
+    pub fn people(&self) -> Vec<Person> {
+        let LoroValue::Map(m) = self.docs["manifest"].get_map("people").get_value() else {
+            return Vec::new();
+        };
+        let mut out: Vec<Person> = m
+            .iter()
+            .filter_map(|(id, v)| {
+                let v = Val::from_loro(v)?;
+                Some(Person {
+                    id: id.clone(),
+                    name: v.get("name")?.as_str()?.to_owned(),
+                    color: v.get("color").and_then(Val::as_i64).unwrap_or(0),
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        out
+    }
+
     /// The network as the canvas draws it (10 §7.3).
     pub fn network_view(&mut self, net: &str) -> Result<NetworkView> {
         let n = self.network(net)?;
@@ -869,6 +1304,7 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
+        let children = self.children();
         let pos = &self.docs[&doc];
         let mut nodes = Vec::new();
         for id in &ids {
@@ -885,15 +1321,16 @@ impl<S: Store> Workspace<S> {
                 ),
                 _ => (0.0, 0.0),
             };
+            let kind = self.kind(node).unwrap_or(NodeKind::Note);
             nodes.push(ViewNode {
                 id: id.clone(),
-                kind: self.kind(node).unwrap_or(NodeKind::Note),
-                class: self
-                    .field(node, "class")
-                    .and_then(|v| v.as_str().map(str::to_owned)),
+                kind,
+                class: self.text_field(node, "class"),
                 name: self.name(node),
                 x,
                 y,
+                attrs: self.attrs(node),
+                fold: (kind == NodeKind::Network).then(|| self.fold(node, &children)),
             });
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();

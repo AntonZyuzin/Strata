@@ -48,6 +48,11 @@ pub trait Store {
         docs: &[(String, Vec<u8>)],
         changesets: &[Changeset],
     ) -> Result<(), StoreError>;
+    /// An asset (10 §11): bytes by their SHA-256, written once, never changed.
+    fn put_asset(&mut self, sha: &str, bytes: &[u8]) -> Result<(), StoreError>;
+    fn asset(&self, sha: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    /// Every asset's SHA-256: an archive takes them all.
+    fn asset_ids(&self) -> Result<Vec<String>, StoreError>;
 }
 
 /// A store in memory: the same contract, nothing on disk. The browser
@@ -56,13 +61,16 @@ pub trait Store {
 pub struct MemoryStore {
     docs: BTreeMap<String, StoredDoc>,
     changesets: Vec<Changeset>,
+    assets: BTreeMap<String, Vec<u8>>,
 }
 
-/// [`MemoryStore`] as JSON: updates in base64.
+/// [`MemoryStore`] as JSON: updates and assets in base64.
 #[derive(Serialize, Deserialize)]
 struct Dump {
     docs: BTreeMap<String, Vec<String>>,
     changesets: Vec<Changeset>,
+    #[serde(default)]
+    assets: BTreeMap<String, String>,
 }
 
 impl MemoryStore {
@@ -78,6 +86,11 @@ impl MemoryStore {
                 })
                 .collect(),
             changesets: self.changesets.clone(),
+            assets: self
+                .assets
+                .iter()
+                .map(|(sha, b)| (sha.clone(), B64.encode(b)))
+                .collect(),
         };
         serde_json::to_vec(&dump).unwrap_or_default()
     }
@@ -100,9 +113,17 @@ impl MemoryStore {
                 },
             );
         }
+        let mut assets = BTreeMap::new();
+        for (sha, b) in dump.assets {
+            assets.insert(
+                sha,
+                B64.decode(b).map_err(|e| StoreError::Io(e.to_string()))?,
+            );
+        }
         Ok(Self {
             docs,
             changesets: dump.changesets,
+            assets,
         })
     }
 }
@@ -161,5 +182,20 @@ impl Store for MemoryStore {
         }
         self.changesets.extend(changesets.iter().cloned());
         Ok(())
+    }
+
+    fn put_asset(&mut self, sha: &str, bytes: &[u8]) -> Result<(), StoreError> {
+        self.assets
+            .entry(sha.to_owned())
+            .or_insert_with(|| bytes.to_vec());
+        Ok(())
+    }
+
+    fn asset(&self, sha: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        Ok(self.assets.get(sha).cloned())
+    }
+
+    fn asset_ids(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self.assets.keys().cloned().collect())
     }
 }

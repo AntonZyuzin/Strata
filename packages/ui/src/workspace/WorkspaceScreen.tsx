@@ -1,5 +1,7 @@
 import {
+  type AttrKey,
   type ChangeLabel,
+  type CoreOp,
   CoreSync,
   followWires,
   type Graph,
@@ -7,8 +9,13 @@ import {
   type History,
   type HomeBackend,
   type NetworkView,
+  type NodeDetails,
+  newId,
+  newNode,
   type Opened,
+  type Person,
   type TrashItem,
+  type TreeItem,
 } from '@strata/backend';
 import {
   BACKDROP_SIDE,
@@ -16,6 +23,7 @@ import {
   Editor,
   type EditorEvents,
   generatePreset,
+  type MenuTarget,
   type Pixels,
   processBackdrop,
   WIRE_END_STYLES,
@@ -24,6 +32,7 @@ import {
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapState } from '../proto/map3d';
@@ -33,6 +42,8 @@ import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
 import { IconButton } from '../TabBar';
 import { CoreDocs } from './docs';
+import { Inspector, type InspectorActions } from './Inspector';
+import { Structure } from './Structure';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -157,6 +168,20 @@ export function WorkspaceScreen(props: {
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [, setVersion] = useState(0);
+  /** The selected node, read from the core for the properties panel. */
+  const [details, setDetails] = useState<NodeDetails | null>(null);
+  const [people, setPeople] = useState<Person[]>([]);
+  const peopleRef = useRef<Person[]>([]);
+  const [tree, setTree] = useState<TreeItem[]>([]);
+  const [ctx, setCtx] = useState<{ x: number; y: number; at: MenuTarget } | null>(null);
+  /** Pictures shown in bubbles: node → asset; and asset → object URL for the panel. */
+  const shown = useRef(new Map<string, string>());
+  const urls = useRef(new Map<string, string>());
+  const [pictureUrl, setPictureUrl] = useState<string | null>(null);
+  const refreshRef = useRef<() => void>(() => undefined);
+  const eventsRef = useRef<EditorEvents | null>(null);
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
 
   const label = (l: ChangeLabel | null) =>
     l ? t(locale, l.key as MessageKey, l.params ?? {}) : t(locale, 'proto.noSteps');
@@ -188,6 +213,7 @@ export function WorkspaceScreen(props: {
     let cancelled = false;
     let view: CanvasView | null = null;
     let trashTimer: ReturnType<typeof setTimeout> | null = null;
+    let detailsTimer: ReturnType<typeof setTimeout> | null = null;
 
     const refused = (e: unknown) => {
       if (cancelled) return;
@@ -205,6 +231,12 @@ export function WorkspaceScreen(props: {
         setVersion((v) => v + 1);
         if (trashTimer) clearTimeout(trashTimer);
         trashTimer = setTimeout(refreshTrash, 300);
+        if (detailsTimer) clearTimeout(detailsTimer);
+        detailsTimer = setTimeout(() => refreshRef.current(), 120);
+      },
+      contextMenu: (e) => {
+        const r = viewRef.current?.canvas.getBoundingClientRect();
+        setCtx({ x: e.sx + (r?.left ?? 0), y: e.sy + (r?.top ?? 0), at: e.at });
       },
       map: () => map3d.current?.toggle(),
       up: () => void up(),
@@ -290,9 +322,19 @@ export function WorkspaceScreen(props: {
       }
       await sync.current?.settled();
       await docs.current?.flush();
-      const [nv, h] = await Promise.all([core.view(id), core.history()]);
+      const [nv, h, ppl, items] = await Promise.all([
+        core.view(id),
+        core.history(),
+        core.people(),
+        core.tree(),
+      ]);
       if (cancelled) return;
       setHistory(h);
+      peopleRef.current = ppl;
+      setPeople(ppl);
+      setTree(items);
+      v.clearPictures();
+      shown.current.clear();
       // A note or board window belongs to its network's canvas.
       if (id !== was) {
         setNote(null);
@@ -302,12 +344,18 @@ export function WorkspaceScreen(props: {
       editor.current?.destroy();
       sync.current?.destroy();
       map3d.current?.destroy();
-      const g = graphOf(nv, (k, c) => v.iconFor(k, c));
+      const g = graphOf(
+        nv,
+        (k, c) => v.iconFor(k, c),
+        (pid) => peopleRef.current.find((p) => p.id === pid)?.color ?? 0,
+      );
       graph.current = g;
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
       editor.current = ed;
-      sync.current = new CoreSync(core, g, id, refused, setHistory);
+      sync.current = new CoreSync(core, g, id, refused, setHistory, {
+        description: t(localeRef.current, 'ins.description'),
+      });
       map3d.current = new Map3D(el, v, g, setView3d);
       netRef.current = id;
       setNet(nv);
@@ -324,9 +372,59 @@ export function WorkspaceScreen(props: {
       }
       v.canvas.focus();
       refreshTrash();
+      setDetails(null);
+      void pictures();
+    };
+
+    /** Pictures of media nodes into their bubbles (owner, 2026-10-24). */
+    const pictures = async () => {
+      const v = viewRef.current;
+      const g = graph.current;
+      if (!v || !g) return;
+      for (const n of g.nodes.values()) {
+        const sha = n.attrs.asset;
+        if (shown.current.get(n.id) === sha) continue;
+        if (!sha) {
+          shown.current.delete(n.id);
+          v.setPicture(n.id, null);
+          continue;
+        }
+        shown.current.set(n.id, sha);
+        try {
+          const bytes = await core.asset(sha);
+          const bmp = await createImageBitmap(new Blob([new Uint8Array(bytes)]));
+          if (graph.current === g) v.setPicture(n.id, bmp);
+        } catch {
+          // Not a picture the browser can draw: the bubble keeps its icon.
+        }
+      }
+    };
+
+    /** The selected node from the core, for the panel; the pictures follow too. */
+    refreshRef.current = () => {
+      void pictures();
+      void (sync.current?.settled() ?? Promise.resolve())
+        .then(() => core.tree())
+        .then((items) => {
+          if (!cancelled) setTree(items);
+        })
+        .catch(() => undefined);
+      const ed = editor.current;
+      const id = ed && ed.selection.size === 1 ? ed.current : null;
+      if (!id) {
+        setDetails(null);
+        return;
+      }
+      void (sync.current?.settled() ?? Promise.resolve())
+        .then(() => core.node(id))
+        .then((d) => {
+          if (editor.current?.current === id) setDetails(d);
+        })
+        .catch(() => setDetails(null));
     };
     const load = (id?: string) => queue(() => show(id ?? netRef.current));
     loadRef.current = load;
+    eventsRef.current = events;
 
     makeDocs.current = () =>
       new CoreDocs(
@@ -483,8 +581,280 @@ export function WorkspaceScreen(props: {
     }
   };
 
+  /**
+   * A step the canvas's graph cannot hold (a node in another network, a
+   * person): written by the core; the graph's own undo is cleared, so undo
+   * goes to the core's history from here (05 §11).
+   */
+  const coreStep = async (
+    ops: CoreOp[],
+    labelKey: string,
+    params?: Record<string, string | number>,
+  ) => {
+    await sync.current?.settled();
+    const h = await core.apply(ops, { key: labelKey, ...(params ? { params } : {}) });
+    graph.current?.clearHistory();
+    setHistory(h);
+    refreshRef.current();
+    void core.tree().then(setTree);
+  };
+
+  const failed = (e: unknown) =>
+    toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
+
+  /** A task inside network `net`, with its «Описание», as the core makes it (05 §4.3). */
+  const taskOps = (net: string, name: string, y: number): { id: string; ops: CoreOp[] } => {
+    const id = newId();
+    const about = newId();
+    return {
+      id,
+      ops: [
+        { op: 'createNode', id, kind: 'network', class: 'task', name, net, x: 0, y },
+        {
+          op: 'createNode',
+          id: about,
+          kind: 'note',
+          name: t(locale, 'ins.description'),
+          net: id,
+          x: 0,
+          y: 0,
+        },
+        { op: 'setAttr', id, key: 'description', value: about },
+        { op: 'setAttr', id, key: 'status', value: 'todo' },
+      ],
+    };
+  };
+
+  // The selected media node's picture for the panel.
+  useEffect(() => {
+    const sha = details?.kind === 'media' ? details.asset : undefined;
+    if (!sha) {
+      setPictureUrl(null);
+      return;
+    }
+    const known = urls.current.get(sha);
+    if (known) {
+      setPictureUrl(known);
+      return;
+    }
+    let live = true;
+    void core.asset(sha).then((bytes) => {
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+      urls.current.set(sha, url);
+      if (live) setPictureUrl(url);
+    });
+    return () => {
+      live = false;
+    };
+  }, [core, details?.kind, details?.asset]);
+
+  /** Images dropped on the canvas become media nodes with their pictures. */
+  const dropFiles = async (files: File[], clientX: number, clientY: number) => {
+    const g = graph.current;
+    const v = viewRef.current;
+    if (!g || !v) return;
+    const r = v.canvas.getBoundingClientRect();
+    const w = v.camera.toWorld(clientX - r.left, clientY - r.top);
+    let i = 0;
+    for (const f of files.filter((x) => x.type.startsWith('image/'))) {
+      const sha = await core.putAsset(new Uint8Array(await f.arrayBuffer()));
+      const id = newId();
+      const name = f.name.replace(/\.[^.]+$/, '') || t(locale, 'kind.media');
+      const x = w.x + i * 90;
+      g.transaction({ key: 'proto.change.create', params: { name } }, (tx) => {
+        tx.add(
+          newNode({
+            id,
+            name,
+            kind: 'media',
+            cls: null,
+            icon: v.iconFor('media', null),
+            x,
+            y: w.y,
+          }),
+        );
+        tx.attr(id, 'asset', sha);
+      });
+      i++;
+    }
+  };
+
   const g = graph.current;
   const ed = editor.current;
+  const field = (key: AttrKey) => t(locale, `ins.${key}` as MessageKey);
+  const actions: InspectorActions | null =
+    details && g
+      ? {
+          rename: (name) =>
+            g.transaction({ key: 'proto.change.rename', params: { name } }, (tx) =>
+              tx.rename(details.id, name),
+            ),
+          attr: (key, value) =>
+            g.transaction(
+              { key: 'change.attr', params: { name: details.name, field: field(key) } },
+              (tx) => tx.attr(details.id, key, value),
+            ),
+          assign: (person, on) =>
+            g.transaction({ key: 'change.assign', params: { name: details.name } }, (tx) =>
+              tx.assign(details.id, person, on),
+            ),
+          addPerson: async (name) => {
+            const id = newId();
+            await coreStep(
+              [{ op: 'addPerson', id, name, color: peopleRef.current.length % 8 }],
+              'change.assign',
+              { name },
+            ).catch(failed);
+            const ppl = await core.people();
+            peopleRef.current = ppl;
+            setPeople(ppl);
+            return id;
+          },
+          description: async () => {
+            const d = docs.current;
+            if (!d) return null;
+            if (details.kind === 'note' || details.kind === 'media') return d.doc(details.id);
+            let about = details.description;
+            if (!about) {
+              about = newId();
+              await coreStep(
+                [
+                  {
+                    op: 'createNode',
+                    id: about,
+                    kind: 'note',
+                    name: t(locale, 'ins.description'),
+                    net: details.id,
+                    x: 0,
+                    y: 0,
+                  },
+                  { op: 'setAttr', id: details.id, key: 'description', value: about },
+                ],
+                'change.attr',
+                { name: details.name, field: t(locale, 'ins.description') },
+              );
+            }
+            return d.doc(about);
+          },
+          canDescribe: details.kind === 'network',
+          picture: (file) =>
+            void file
+              .arrayBuffer()
+              .then((b) => core.putAsset(new Uint8Array(b)))
+              .then((sha) =>
+                g.transaction({ key: 'change.picture', params: { name: details.name } }, (tx) =>
+                  tx.attr(details.id, 'asset', sha),
+                ),
+              )
+              .catch(failed),
+          pictureUrl,
+          open: () => eventsRef.current?.open?.(details.id),
+          focus: (id) => {
+            if (g.nodes.has(id)) {
+              ed?.focusNode(id);
+              return;
+            }
+            void core.node(id).then(async (d) => {
+              if (d.parent) await loadRef.current(d.parent);
+              editor.current?.focusNode(id);
+            });
+          },
+          link: (from, to) =>
+            g.transaction(
+              {
+                key: 'change.link',
+                params: { from: g.nodes.get(from)?.name ?? '', to: details.name },
+              },
+              (tx) => tx.connect(from, to),
+            ),
+          unlink: (from, to) => {
+            if (g.hasEdge(from, to)) {
+              g.transaction({ key: 'proto.change.disconnect' }, (tx) => tx.disconnect(from, to));
+            } else {
+              void coreStep([{ op: 'disconnect', from, to }], 'proto.change.disconnect').catch(
+                failed,
+              );
+            }
+          },
+          candidates: [...g.nodes.values()].map((n) => ({ id: n.id, kind: n.kind, name: n.name })),
+          subtask: (name) => {
+            const count = details.children.filter((c) => c.kind === 'network').length;
+            const made = taskOps(details.id, name, 140 * (count + 1));
+            void coreStep(made.ops, 'proto.change.create', { name }).catch(failed);
+          },
+          subtaskDone: (id, done) =>
+            void coreStep(
+              [{ op: 'setAttr', id, key: 'status', value: done ? 'done' : 'todo' }],
+              'change.attr',
+              { name: details.name, field: t(locale, 'ins.status') },
+            ).catch(failed),
+        }
+      : null;
+
+  /** The right button's menu (06 §5): for a node, a wire, or the bare canvas. */
+  const ctxItems = (at: MenuTarget): MenuEntry[] => {
+    if (!g || !ed) return [];
+    if (at.t === 'empty') {
+      const r = viewRef.current?.canvas.getBoundingClientRect();
+      const sx = (ctx?.x ?? 0) - (r?.left ?? 0);
+      const sy = (ctx?.y ?? 0) - (r?.top ?? 0);
+      return [
+        { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => ed.createAt(sx, sy) },
+        { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => ed.fitAll() },
+      ];
+    }
+    if (at.t === 'wire') {
+      return [
+        { label: t(locale, 'ctx.deleteWire'), hint: 'Del', onSelect: () => ed.deleteSelected() },
+      ];
+    }
+    const n = g.nodes.get(at.id);
+    if (!n) return [];
+    const done = n.attrs.status === 'done';
+    const openable = n.kind === 'network' || n.kind === 'note' || n.kind === 'board';
+    const items: MenuEntry[] = [];
+    if (openable) {
+      items.push({
+        label: t(locale, 'ctx.open'),
+        hint: 'Enter',
+        onSelect: () => eventsRef.current?.open?.(n.id),
+      });
+    }
+    items.push(
+      {
+        label: t(locale, 'ctx.rename'),
+        hint: 'F2',
+        onSelect: () => ed.rename(n.id),
+      },
+      {
+        label: t(locale, done ? 'ctx.undone' : 'ctx.done'),
+        onSelect: () =>
+          g.transaction(
+            { key: 'change.attr', params: { name: n.name, field: t(locale, 'ins.status') } },
+            (tx) => tx.attr(n.id, 'status', done ? 'todo' : 'done'),
+          ),
+      },
+    );
+    if (n.kind === 'network') {
+      items.push({
+        label: t(locale, 'ctx.addSubtask'),
+        onSelect: () => {
+          const made = taskOps(n.id, t(locale, 'ins.newSubtask'), 140);
+          void coreStep(made.ops, 'proto.change.create', {
+            name: t(locale, 'ins.newSubtask'),
+          }).catch(failed);
+        },
+      });
+    }
+    items.push({
+      label: t(locale, 'ctx.delete'),
+      hint: 'Del',
+      separated: true,
+      onSelect: () => ed.deleteSelected(),
+    });
+    return items;
+  };
+
   const nodes: MenuNode[] = g
     ? [...g.nodes.values()].map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
     : [];
@@ -505,7 +875,50 @@ export function WorkspaceScreen(props: {
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
     >
-      <div ref={host} className="proto-canvas" />
+      <div
+        ref={host}
+        className="proto-canvas"
+        role="application"
+        aria-label={net?.name ?? ''}
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+        }}
+        onDrop={(e) => {
+          const files = [...e.dataTransfer.files];
+          if (files.length === 0) return;
+          e.preventDefault();
+          void dropFiles(files, e.clientX, e.clientY).catch(failed);
+        }}
+      />
+      {tree.length > 0 && net ? (
+        <Structure
+          locale={locale}
+          items={tree}
+          current={net.net}
+          onGo={(id) => void loadRef.current(id)}
+        />
+      ) : null}
+      {details && actions ? (
+        <Inspector
+          key={details.id}
+          locale={locale}
+          node={details}
+          people={people}
+          actions={actions}
+        />
+      ) : null}
+      {ctx ? (
+        <ContextMenu
+          x={ctx.x}
+          y={ctx.y}
+          label={t(locale, 'ctx.label')}
+          items={ctxItems(ctx.at)}
+          onClose={() => {
+            setCtx(null);
+            viewRef.current?.canvas.focus();
+          }}
+        />
+      ) : null}
       {trashOpen ? (
         <section className="window ws-trash" aria-labelledby="trash-title">
           <header className="window-title">

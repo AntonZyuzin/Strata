@@ -81,7 +81,18 @@ export interface EditorEvents {
    * still hold steps of other networks (05 §11, the session's undo).
    */
   historyEmpty?(which: 'undo' | 'redo'): void;
+  /**
+   * The right button (06 §5): a node (selected first), a wire, or the bare
+   * canvas at a screen point; the Chrome shows its menu there.
+   */
+  contextMenu?(e: { sx: number; sy: number; at: MenuTarget }): void;
 }
+
+/** What the right button was pressed on. */
+export type MenuTarget =
+  | { t: 'node'; id: string }
+  | { t: 'wire'; from: string; to: string }
+  | { t: 'empty' };
 
 export type MenuChoice =
   | {
@@ -230,6 +241,30 @@ export class Editor {
     if (!this.graph.redo()) this.events.historyEmpty?.('redo');
   }
 
+  /** «Создать…» of the right-button menu: the Tab menu at that screen point (06 §5). */
+  createAt(sx: number, sy: number): void {
+    if (this.mode.t !== 'idle') return;
+    const w = this.view.camera.toWorld(sx, sy);
+    this.openMenu(sx, sy, { ax: w.x, ay: w.y, sources: [], sibling: null, atAnchor: true });
+  }
+
+  /** The menu's «Переименовать» (F2). */
+  rename(id: string): void {
+    if (this.graph.nodes.has(id)) this.openName(id, false);
+  }
+
+  /** The menu's «Удалить»: the selection, or the selected wire (Delete). */
+  deleteSelected(): void {
+    this.deleteSelection();
+  }
+
+  /** Selects one node and keeps it in view (the «Структура» tree, the panel's links). */
+  focusNode(id: string): void {
+    if (!this.graph.nodes.has(id)) return;
+    this.select([id]);
+    this.frameNodes([id]);
+  }
+
   // ── Tab menu (06 §5) ──────────────────────────────────────────────
 
   /** A choice in the Tab menu; `alt` and `shift` are the modifiers of Enter (06 §5.3). */
@@ -352,7 +387,24 @@ export class Editor {
     on(el, 'pointerleave', () => {
       this.pointer.inside = false;
     });
-    on(el, 'contextmenu', (e) => e.preventDefault());
+    on(el, 'contextmenu', (e) => {
+      e.preventDefault();
+      if (this.mode.t !== 'idle' || this.overlayOpen) return;
+      const { sx, sy } = this.local(e);
+      const hit = this.hitTest(sx, sy);
+      let at: MenuTarget = { t: 'empty' };
+      if (hit.t === 'node' || hit.t === 'port') {
+        if (!this.selection.has(hit.id)) this.select([hit.id]);
+        else this.current = hit.id;
+        at = { t: 'node', id: hit.id };
+      } else if (hit.t === 'wire') {
+        this.select([]);
+        this.selectedWire = [hit.from, hit.to];
+        at = { t: 'wire', from: hit.from, to: hit.to };
+      }
+      this.view.invalidate();
+      this.events.contextMenu?.({ sx, sy, at });
+    });
     on(el, 'wheel', (e) => this.onWheel(e), { passive: false });
     // WebKit delivers trackpad pinch as gesture events (06 §3).
     on(el, 'gesturestart' as keyof HTMLElementEventMap, (e) => {

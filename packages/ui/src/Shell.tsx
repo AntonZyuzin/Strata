@@ -45,7 +45,6 @@ export function Shell(props: {
   const { locale, home } = props;
   const [tabs, setTabs] = useState<Tab[]>(loadTabs);
   const [opened, setOpened] = useState<Opened | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** The tab just clicked: lit at once, before its workspace is open. */
   const [pending, setPending] = useState<string | null>(null);
@@ -83,7 +82,6 @@ export function Shell(props: {
   const act = useCallback(async (f: () => Promise<void>) => {
     if (busyRef.current) return;
     busyRef.current = true;
-    setBusy(true);
     setError(null);
     try {
       await f();
@@ -91,7 +89,6 @@ export function Shell(props: {
       setError(message(e));
     } finally {
       busyRef.current = false;
-      setBusy(false);
     }
   }, []);
 
@@ -126,7 +123,6 @@ export function Shell(props: {
         locale={locale}
         tabs={tabs}
         active={pending ?? active}
-        busy={busy}
         onHome={() =>
           void act(async () => {
             if (!opened) return;

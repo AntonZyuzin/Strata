@@ -5,7 +5,7 @@
 use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
-use crate::workspace::{History, NetworkView, TrashItem, Workspace};
+use crate::workspace::{History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, Workspace};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,20 @@ pub enum Request {
     PushDoc {
         doc: String,
         update: String,
+    },
+    /// One node for the properties panel.
+    Node {
+        id: String,
+    },
+    /// Every network for the «Структура» tree.
+    Tree,
+    People,
+    /// A picture or a file, in base64; answers its SHA-256.
+    PutAsset {
+        bytes: String,
+    },
+    Asset {
+        sha: String,
     },
 }
 
@@ -79,6 +93,21 @@ pub enum Response {
     /// The updates are stored; `wires` when the note's text wires changed.
     Pushed {
         wires: bool,
+    },
+    Node {
+        node: Box<NodeDetails>,
+    },
+    Tree {
+        items: Vec<TreeItem>,
+    },
+    People {
+        people: Vec<Person>,
+    },
+    /// An asset: its id, and its bytes in base64 when asked for.
+    Asset {
+        sha: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        bytes: Option<String>,
     },
     /// The call failed; `invalid` when the model refused it (nothing was written).
     Error {
@@ -127,6 +156,26 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 .map(|wires| Response::Pushed { wires }),
             Err(e) => Err(crate::CoreError::Invalid(format!("update: {e}"))),
         },
+        Request::Node { id } => ws.node_details(&id).map(|node| Response::Node {
+            node: Box::new(node),
+        }),
+        Request::Tree => Ok(Response::Tree { items: ws.tree() }),
+        Request::People => Ok(Response::People {
+            people: ws.people(),
+        }),
+        Request::PutAsset { bytes } => match B64.decode(bytes) {
+            Ok(b) => ws
+                .put_asset(&b)
+                .map(|sha| Response::Asset { sha, bytes: None }),
+            Err(e) => Err(crate::CoreError::Invalid(format!("bytes: {e}"))),
+        },
+        Request::Asset { sha } => ws.asset(&sha).and_then(|b| match b {
+            Some(b) => Ok(Response::Asset {
+                sha,
+                bytes: Some(B64.encode(b)),
+            }),
+            None => Err(crate::CoreError::Invalid(format!("no asset {sha}"))),
+        }),
         Request::History => Ok(Response::History {
             history: ws.history(),
         }),

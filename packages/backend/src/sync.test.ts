@@ -3,7 +3,7 @@ import { LoroDoc } from 'loro-crdt';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
 import type { HomeBackend, NetworkView } from './core';
-import { type Graph, newNode } from './graph';
+import { dueOf, type Graph, newNode } from './graph';
 import { CoreSync, followWires, graphOf } from './sync';
 
 beforeAll(async () => {
@@ -152,6 +152,80 @@ describe('the canvas and the core in step', () => {
     followWires(g, await home.core.view(root));
     expect(g.edges()).toEqual([[A, B]]);
     expect(g.undoLabel).toEqual(undoBefore);
+  });
+});
+
+describe('fields of a node (05 §6.1)', () => {
+  it('go to the core as steps of the same undo as gestures', async () => {
+    const { home, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => tx.add(node(A, 'Задача')));
+    g.transaction({ key: 't.status' }, (tx) => {
+      tx.attr(A, 'status', 'doing');
+      tx.attr(A, 'deadline', '2026-11-01');
+    });
+    await sync.settled();
+    let d = await home.core.node(A);
+    expect([d.status, d.deadline]).toEqual(['doing', '2026-11-01']);
+    expect(g.nodes.get(A)?.attrs.status).toBe('doing');
+    g.undo();
+    await sync.settled();
+    d = await home.core.node(A);
+    expect([d.status, d.deadline]).toEqual([undefined, undefined]);
+    expect(g.nodes.get(A)?.attrs).toEqual({});
+    g.redo();
+    await sync.settled();
+    expect((await home.core.node(A)).status).toBe('doing');
+  });
+
+  it('a new task brings its «Описание» inside, in one step', async () => {
+    const { home, root } = await start();
+    const g = graphOf(await home.core.view(root), () => 0);
+    const sync = new CoreSync(
+      home.core,
+      g,
+      root,
+      () => undefined,
+      () => undefined,
+      {
+        description: 'Описание',
+      },
+    );
+    g.transaction({ key: 't' }, (tx) =>
+      tx.add(newNode({ id: A, name: 'Боёвка', kind: 'network', cls: 'task', icon: 0, x: 0, y: 0 })),
+    );
+    await sync.settled();
+    const d = await home.core.node(A);
+    expect(d.children.map((c) => c.name)).toEqual(['Описание']);
+    expect(d.description).toBe(d.children[0]?.id);
+    g.undo();
+    await sync.settled();
+    expect((await home.core.view(root)).nodes).toEqual([]);
+  });
+
+  it('look: deadlines for the viewer day, status and class colour', async () => {
+    expect(dueOf('2026-10-24', '2026-10-24')).toBe('today');
+    expect(dueOf('2026-10-27', '2026-10-24')).toBe('soon');
+    expect(dueOf('2026-10-28', '2026-10-24')).toBe('far');
+    expect(dueOf('2026-10-23', '2026-10-24')).toBe('overdue');
+    const { home, root, g, sync } = await start();
+    g.day = () => '2026-10-24';
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'T', kind: 'network', cls: 'task', icon: 0, x: 0, y: 0 }));
+      tx.attr(A, 'deadline', '2026-10-20');
+    });
+    expect(g.nodes.get(A)?.due).toBe('overdue');
+    expect(g.nodes.get(A)?.color).toBe(3);
+    g.transaction({ key: 't' }, (tx) => tx.attr(A, 'status', 'done'));
+    expect([g.nodes.get(A)?.status, g.nodes.get(A)?.due]).toEqual(['done', 'none']);
+    await sync.settled();
+    // Read back from the core: the same look.
+    const again = graphOf(
+      await home.core.view(root),
+      () => 0,
+      () => 0,
+      () => '2026-10-24',
+    );
+    expect([again.nodes.get(A)?.status, again.nodes.get(A)?.color]).toEqual(['done', 3]);
   });
 });
 

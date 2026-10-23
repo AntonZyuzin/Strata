@@ -525,3 +525,270 @@ fn the_browser_keeps_a_workspace_as_bytes() {
     let ed = Editor::open(&mut again, &note);
     assert_eq!(ed.doc.get_text("text").to_string(), "[[Цель]]");
 }
+
+fn set(
+    w: &mut Workspace<MemoryStore>,
+    id: &str,
+    key: &str,
+    value: Option<crate::value::Val>,
+) -> crate::workspace::Result<crate::Changeset> {
+    w.apply(
+        &[Op::SetAttr {
+            id: id.to_owned(),
+            key: key.to_owned(),
+            value,
+        }],
+        Label::new("t.attr"),
+    )
+}
+
+#[test]
+fn attributes_take_only_the_values_of_05_6() {
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Note, "A");
+    set(&mut w, &a, "status", Some(Val::str("doing"))).expect("status");
+    set(&mut w, &a, "deadline", Some(Val::str("2026-02-28"))).expect("deadline");
+    set(&mut w, &a, "start", Some(Val::str("2024-02-29"))).expect("leap day");
+    set(&mut w, &a, "priority", Some(Val::str("urgent"))).expect("priority");
+    set(&mut w, &a, "color", Some(Val::Int(7))).expect("colour");
+    for (key, bad) in [
+        ("status", Val::str("someday")),
+        ("deadline", Val::str("2026-02-30")),
+        ("deadline", Val::str("30.10.2026")),
+        ("priority", Val::Int(3)),
+        ("color", Val::Int(8)),
+        ("weather", Val::str("sunny")),
+    ] {
+        assert!(
+            set(&mut w, &a, key, Some(bad.clone())).is_err(),
+            "{key} = {bad:?}"
+        );
+    }
+    let n = &w.network_view(&root).expect("view").nodes[0];
+    assert_eq!(n.attrs.status.as_deref(), Some("doing"));
+    assert_eq!(n.attrs.deadline.as_deref(), Some("2026-02-28"));
+    assert_eq!(n.attrs.priority.as_deref(), Some("urgent"));
+    assert_eq!(n.attrs.color, Some(7));
+    // Cleared, and back with undo.
+    set(&mut w, &a, "status", None).expect("clear");
+    assert_eq!(
+        w.network_view(&root).expect("view").nodes[0].attrs.status,
+        None
+    );
+    w.undo().expect("undo");
+    assert_eq!(
+        w.network_view(&root).expect("view").nodes[0]
+            .attrs
+            .status
+            .as_deref(),
+        Some("doing")
+    );
+}
+
+#[test]
+fn people_are_assigned_and_only_people_of_the_workspace() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Note, "A");
+    let anton = NodeId::new().to_text();
+    w.apply(
+        &[Op::AddPerson {
+            id: Some(anton.clone()),
+            name: " Антон ".to_owned(),
+            color: Some(3),
+        }],
+        Label::new("t.person"),
+    )
+    .expect("person");
+    let assign = |w: &mut Workspace<MemoryStore>, person: &str, on: bool| {
+        w.apply(
+            &[Op::Assign {
+                id: a.clone(),
+                person: person.to_owned(),
+                on,
+            }],
+            Label::new("t.assign"),
+        )
+    };
+    assign(&mut w, &anton, true).expect("assign");
+    assert!(
+        assign(&mut w, &NodeId::new().to_text(), true).is_err(),
+        "a stranger"
+    );
+    assert_eq!(
+        w.network_view(&root).expect("view").nodes[0]
+            .attrs
+            .assignees,
+        vec![anton.clone()]
+    );
+    assert_eq!(
+        w.people(),
+        vec![crate::Person {
+            id: anton.clone(),
+            name: "Антон".to_owned(),
+            color: 3
+        }]
+    );
+    assign(&mut w, &anton, false).expect("unassign");
+    assert!(
+        w.network_view(&root).expect("view").nodes[0]
+            .attrs
+            .assignees
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_task_with_subtasks_rolls_them_up() {
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let (task, about, sub1, sub2, deep) = (
+        NodeId::new().to_text(),
+        NodeId::new().to_text(),
+        NodeId::new().to_text(),
+        NodeId::new().to_text(),
+        NodeId::new().to_text(),
+    );
+    let mk = |id: &str, kind, class: Option<&str>, name: &str, net: &str| Op::CreateNode {
+        id: Some(id.to_owned()),
+        kind,
+        class: class.map(str::to_owned),
+        name: name.to_owned(),
+        net: net.to_owned(),
+        x: 0.0,
+        y: 0.0,
+    };
+    // A task as the Tab menu makes it: the network, its «Описание» inside,
+    // the pointer to it — one step (05 §4.3).
+    w.apply(
+        &[
+            mk(&task, NodeKind::Network, Some("task"), "Боёвка", &root),
+            mk(&about, NodeKind::Note, None, "Описание", &task),
+            Op::SetAttr {
+                id: task.clone(),
+                key: "description".to_owned(),
+                value: Some(Val::str(about.clone())),
+            },
+            Op::SetAttr {
+                id: task.clone(),
+                key: "status".to_owned(),
+                value: Some(Val::str("doing")),
+            },
+        ],
+        Label::new("t.task"),
+    )
+    .expect("task");
+    w.apply(
+        &[
+            mk(&sub1, NodeKind::Network, Some("task"), "Анимации", &task),
+            mk(&sub2, NodeKind::Network, Some("task"), "Хитбоксы", &task),
+            mk(&deep, NodeKind::Network, Some("task"), "Глубже", &sub2),
+        ],
+        Label::new("t.subtasks"),
+    )
+    .expect("subtasks");
+    set(&mut w, &sub1, "status", Some(Val::str("done"))).expect("done");
+    set(&mut w, &sub2, "status", Some(Val::str("todo"))).expect("todo");
+    set(&mut w, &sub2, "deadline", Some(Val::str("2026-11-03"))).expect("d2");
+    set(&mut w, &deep, "status", Some(Val::str("todo"))).expect("deep");
+    set(&mut w, &deep, "deadline", Some(Val::str("2026-11-01"))).expect("d3");
+    // A finished one's deadline does not count.
+    set(&mut w, &sub1, "deadline", Some(Val::str("2026-10-01"))).expect("d1");
+
+    let outside = w.network_view(&root).expect("view");
+    let fold = outside.nodes[0].fold.clone().expect("a network has a fold");
+    assert_eq!(
+        (fold.done, fold.total),
+        (1, 3),
+        "over the whole depth (☑ Q-05-2)"
+    );
+    assert_eq!(fold.nearest.as_deref(), Some("2026-11-01"));
+
+    let d = w.node_details(&task).expect("details");
+    assert_eq!(d.attrs.description.as_deref(), Some(about.as_str()));
+    let names: Vec<&str> = d.children.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(names, vec!["Анимации", "Описание", "Хитбоксы"]);
+    assert_eq!(d.parent.as_deref(), Some(root.as_str()));
+
+    // The tree: every network with its parent.
+    let tree = w.tree();
+    let parent_of = |id: &str| {
+        tree.iter()
+            .find(|t| t.id == id)
+            .and_then(|t| t.parent.clone())
+    };
+    assert_eq!(parent_of(&root), None);
+    assert_eq!(parent_of(&task), Some(root.clone()));
+    assert_eq!(parent_of(&deep), Some(sub2.clone()));
+    assert_eq!(tree.len(), 5);
+
+    // A description must be a note.
+    assert!(set(&mut w, &task, "description", Some(Val::str(sub1.clone()))).is_err());
+}
+
+#[test]
+fn dependencies_are_the_wires_in_and_out() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Note, "Прототип");
+    let b = create(&mut w, &root, NodeKind::Note, "Боёвка");
+    let c = create(&mut w, &root, NodeKind::Note, "Плейтест");
+    w.apply(
+        &[
+            Op::Connect {
+                from: a.clone(),
+                to: b.clone(),
+            },
+            Op::Connect {
+                from: b.clone(),
+                to: c.clone(),
+            },
+        ],
+        Label::new("t"),
+    )
+    .expect("wires");
+    let d = w.node_details(&b).expect("details");
+    assert_eq!(
+        d.inputs.iter().map(|l| l.name.as_str()).collect::<Vec<_>>(),
+        vec!["Прототип"]
+    );
+    assert_eq!(
+        d.outputs
+            .iter()
+            .map(|l| l.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["Плейтест"]
+    );
+}
+
+#[test]
+fn a_picture_is_an_asset_by_its_hash_and_travels_in_the_archive() {
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let media = create(&mut w, &root, NodeKind::Media, "Скетч");
+    let png = b"\x89PNG not really".to_vec();
+    let sha = w.put_asset(&png).expect("asset");
+    assert_eq!(sha.len(), 64);
+    assert_eq!(
+        w.put_asset(&png).expect("again"),
+        sha,
+        "the same bytes, the same id"
+    );
+    set(&mut w, &media, "asset", Some(Val::str(sha.clone()))).expect("picture");
+    assert!(set(&mut w, &media, "asset", Some(Val::str("not-a-hash"))).is_err());
+    assert_eq!(w.asset(&sha).expect("read"), Some(png.clone()));
+
+    let zip = crate::archive::export(&w).expect("export");
+    let unpacked = crate::archive::unpack(&zip).expect("unpack");
+    let again = crate::archive::import(&unpacked, MemoryStore::default(), false).expect("import");
+    assert_eq!(again.asset(&sha).expect("read"), Some(png));
+    // And through the browser's bytes.
+    let back =
+        Workspace::open(MemoryStore::from_bytes(&again.into_store().to_bytes()).expect("bytes"))
+            .expect("open");
+    assert!(back.asset(&sha).expect("read").is_some());
+}

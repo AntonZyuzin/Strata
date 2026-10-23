@@ -54,7 +54,6 @@ export function TabBar(props: {
   tabs: Tab[];
   /** The open workspace; null on the home screen. */
   active: string | null;
-  busy: boolean;
   onHome: () => void;
   onImport: () => void;
   /** Absent on the home screen: there a card exports itself. */
@@ -78,16 +77,11 @@ export function TabBar(props: {
         <span aria-hidden="true">Strata</span>
       </button>
       <div className="tabbar-tools">
-        <IconButton
-          glyph="import"
-          label={t(locale, 'home.importHint')}
-          disabled={props.busy}
-          onClick={props.onImport}
-        />
+        <IconButton glyph="import" label={t(locale, 'home.importHint')} onClick={props.onImport} />
         <IconButton
           glyph="export"
           label={t(locale, 'home.exportHint')}
-          disabled={props.busy || !props.onExport}
+          disabled={!props.onExport}
           onClick={() => props.onExport?.()}
         />
       </div>
@@ -100,7 +94,6 @@ export function TabBar(props: {
               aria-selected={tab.id === active}
               className="tab-name"
               title={tab.name}
-              disabled={props.busy}
               onClick={() => props.onSelect(tab.id)}
             >
               <Glyph name="network" />
@@ -110,7 +103,6 @@ export function TabBar(props: {
               glyph="cross"
               className="tab-close"
               label={t(locale, 'tabs.close', { name: tab.name })}
-              disabled={props.busy}
               onClick={() => props.onClose(tab.id)}
             />
           </div>
@@ -119,7 +111,6 @@ export function TabBar(props: {
           glyph="plus"
           className="tab-new"
           label={t(locale, 'home.new')}
-          disabled={props.busy}
           onClick={props.onNew}
         />
       </div>

@@ -17,6 +17,8 @@ fn io(e: impl std::fmt::Display) -> StoreError {
 #[derive(Debug)]
 pub struct SqliteStore {
     db: Connection,
+    /// `assets/` of the workspace folder (10 §3.1); none for a store in memory.
+    assets: Option<PathBuf>,
 }
 
 const SCHEMA: &str = "
@@ -52,14 +54,28 @@ impl SqliteStore {
         db.pragma_update(None, "journal_mode", "WAL").map_err(io)?;
         db.pragma_update(None, "synchronous", "FULL").map_err(io)?;
         db.execute_batch(SCHEMA).map_err(io)?;
-        Ok(Self { db })
+        let assets = path.parent().map(|d| d.join("assets"));
+        Ok(Self { db, assets })
     }
 
     /// A store in memory with the same tables (tests).
     pub fn in_memory() -> std::result::Result<Self, StoreError> {
         let db = Connection::open_in_memory().map_err(io)?;
         db.execute_batch(SCHEMA).map_err(io)?;
-        Ok(Self { db })
+        Ok(Self { db, assets: None })
+    }
+
+    /// `assets/ab/cd/<sha256>` (10 §3.1).
+    fn asset_path(&self, sha: &str) -> std::result::Result<PathBuf, StoreError> {
+        let dir = self
+            .assets
+            .as_ref()
+            .ok_or_else(|| io("a store in memory keeps no assets"))?;
+        let ok = sha.len() == 64 && sha.bytes().all(|c| c.is_ascii_hexdigit());
+        if !ok {
+            return Err(io(format!("not an asset id: {sha}")));
+        }
+        Ok(dir.join(&sha[0..2]).join(&sha[2..4]).join(sha))
     }
 }
 
@@ -192,6 +208,49 @@ impl Store for SqliteStore {
             .map_err(io)?;
         }
         tx.commit().map_err(io)
+    }
+
+    fn put_asset(&mut self, sha: &str, bytes: &[u8]) -> std::result::Result<(), StoreError> {
+        let path = self.asset_path(sha)?;
+        if path.exists() {
+            return Ok(());
+        }
+        let dir = path.parent().ok_or_else(|| io("asset path"))?;
+        std::fs::create_dir_all(dir).map_err(io)?;
+        // Written aside and renamed: an asset is there whole or not at all.
+        let tmp = dir.join(format!("{sha}.tmp"));
+        std::fs::write(&tmp, bytes).map_err(io)?;
+        std::fs::rename(&tmp, &path).map_err(io)
+    }
+
+    fn asset(&self, sha: &str) -> std::result::Result<Option<Vec<u8>>, StoreError> {
+        match std::fs::read(self.asset_path(sha)?) {
+            Ok(b) => Ok(Some(b)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(io(e)),
+        }
+    }
+
+    fn asset_ids(&self) -> std::result::Result<Vec<String>, StoreError> {
+        let mut out = Vec::new();
+        let Some(dir) = &self.assets else {
+            return Ok(out);
+        };
+        let Ok(a) = std::fs::read_dir(dir) else {
+            return Ok(out);
+        };
+        for a in a.flatten() {
+            for b in std::fs::read_dir(a.path()).into_iter().flatten().flatten() {
+                for f in std::fs::read_dir(b.path()).into_iter().flatten().flatten() {
+                    let name = f.file_name().to_string_lossy().into_owned();
+                    if name.len() == 64 && name.bytes().all(|c| c.is_ascii_hexdigit()) {
+                        out.push(name);
+                    }
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     fn changesets(&self) -> std::result::Result<Vec<Changeset>, StoreError> {

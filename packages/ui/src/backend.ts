@@ -54,6 +54,21 @@ export async function openHome(): Promise<HomeBackend> {
   return browserHome(await indexedDbShelf());
 }
 
+/** «Импорт…» on desktop: an archive picked in the system dialog; null when cancelled. */
+export async function pickArchive(): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const path = await open({ filters: [{ name: 'Strata', extensions: ['zip'] }] });
+  return typeof path === 'string' ? path : null;
+}
+
+/** «Экспорт» on desktop: where to save the archive; null when cancelled. */
+export async function pickSavePath(name: string): Promise<string | null> {
+  if (!isTauri()) return null;
+  const { save } = await import('@tauri-apps/plugin-dialog');
+  return save({ defaultPath: name, filters: [{ name: 'Strata', extensions: ['zip'] }] });
+}
+
 /** «Открыть…» on desktop: the system folder picker; null when cancelled. */
 export async function pickFolder(): Promise<string | null> {
   if (!isTauri()) return null;

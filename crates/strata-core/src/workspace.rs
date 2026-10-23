@@ -248,6 +248,37 @@ impl<S: Store> Workspace<S> {
         self.name(self.root)
     }
 
+    /// Every document of the workspace as a Loro snapshot, for an archive
+    /// (10 §3.5); documents not in memory are read from the store.
+    pub fn snapshots(&self) -> Result<Vec<(String, Vec<u8>)>> {
+        let mut out = Vec::new();
+        for id in self.store.doc_ids()? {
+            let bytes = match self.docs.get(&id) {
+                Some(d) => d.export(ExportMode::Snapshot).map_err(engine)?,
+                None => match load(&self.store, &id)? {
+                    Some(d) => d.export(ExportMode::Snapshot).map_err(engine)?,
+                    None => continue,
+                },
+            };
+            out.push((id, bytes));
+        }
+        Ok(out)
+    }
+
+    /// A new workspace id for a copy (10 §3.6, «Сделать независимой»): the
+    /// node ids stay, so links inside keep working.
+    pub fn reidentify(&mut self) -> Result<String> {
+        let id = strata_model::WorkspaceId::new().to_text();
+        let text = id.clone();
+        self.write(
+            ChangesetOrigin::System,
+            Label::new("core.change.copy"),
+            |tx| tx.set("manifest", "ws", "id", Some(Val::str(text))),
+        )?;
+        self.id = id.clone();
+        Ok(id)
+    }
+
     pub fn store(&self) -> &S {
         &self.store
     }

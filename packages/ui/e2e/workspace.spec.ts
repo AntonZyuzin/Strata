@@ -264,6 +264,28 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('#ws-title')).toHaveText('Работа 2026');
   });
 
+  test('a workspace goes out as .strata.zip and comes back as a copy', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Архив');
+    await createNode(page, 600, 400, 'Нода');
+    await settled(page);
+    await page.getByRole('button', { name: 'Главная' }).click();
+    const [file] = await Promise.all([
+      page.waitForEvent('download'),
+      page.locator('.home-card').getByRole('button', { name: 'Экспорт' }).click(),
+    ]);
+    expect(file.suggestedFilename()).toBe('Архив.strata.zip');
+    await expect(page.locator('.home-note')).toContainText('Архив.strata.zip');
+    // This browser has the workspace: the archive opens as a copy.
+    await page.locator('.home-bar input[type="file"]').setInputFiles(await file.path());
+    await expect(page.locator('.workspace')).toBeVisible();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    expect((await graphNow(page)).names).toEqual(['Нода']);
+    await page.getByRole('button', { name: 'Главная' }).click();
+    await expect(page.locator('.home-name')).toHaveText(['Архив', 'Архив']);
+  });
+
   test('the profile is kept on this device', async ({ page }) => {
     await page.goto('/?plain');
     const field = page.locator('.home-profile .field');

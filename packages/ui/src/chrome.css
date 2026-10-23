@@ -1207,7 +1207,8 @@ button:focus-visible {
 }
 
 .home-empty,
-.home-error {
+.home-error,
+.home-note {
   margin: calc(2 * var(--u)) 0 calc(6 * var(--u));
   overflow: hidden;
   white-space: nowrap;
@@ -1277,9 +1278,13 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
+.home-note {
+  color: var(--st-color-text-muted);
+}
+
 .home-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: calc(2 * var(--u));
 }
 

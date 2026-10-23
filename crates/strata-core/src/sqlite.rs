@@ -155,6 +155,45 @@ impl Store for SqliteStore {
         tx.commit().map_err(io)
     }
 
+    fn doc_ids(&self) -> std::result::Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .db
+            .prepare("SELECT doc_id FROM docs ORDER BY doc_id")
+            .map_err(io)?;
+        stmt.query_map([], |r| r.get(0))
+            .map_err(io)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(io)
+    }
+
+    fn restore(
+        &mut self,
+        docs: &[(String, Vec<u8>)],
+        changesets: &[Changeset],
+    ) -> std::result::Result<(), StoreError> {
+        let tx = self.db.transaction().map_err(io)?;
+        let ts = changesets.last().map_or(0, |c| c.ts);
+        for (doc, snapshot) in docs {
+            tx.execute(
+                "INSERT INTO docs (doc_id, kind, snapshot, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                params![doc, doc_kind(doc), snapshot, ts],
+            )
+            .map_err(io)?;
+        }
+        for c in changesets {
+            let body = serde_json::to_vec(c).map_err(io)?;
+            let origin = serde_json::to_string(&c.origin).map_err(io)?;
+            let label = serde_json::to_string(&c.label).map_err(io)?;
+            tx.execute(
+                "INSERT INTO changesets (id, ts, origin, label, reverts, status, body)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6)",
+                params![c.id, c.ts, origin, label, c.reverts, body],
+            )
+            .map_err(io)?;
+        }
+        tx.commit().map_err(io)
+    }
+
     fn changesets(&self) -> std::result::Result<Vec<Changeset>, StoreError> {
         let mut stmt = self
             .db
@@ -199,6 +238,33 @@ pub fn create_folder(dir: &Path, root_name: &str) -> Result<Workspace<SqliteStor
     }
     let store = SqliteStore::open(&dir.join("store.sqlite"))?;
     let ws = Workspace::create(store, root_name)?;
+    let info = FolderInfo {
+        workspace_id: ws.id().to_owned(),
+        format_version: FORMAT_VERSION,
+        mode: "local".to_owned(),
+    };
+    let json = serde_json::to_vec_pretty(&info).map_err(folder_err)?;
+    std::fs::write(&info_path, json).map_err(folder_err)?;
+    Ok(ws)
+}
+
+/// An archive (10 §3.5) into a new folder: its documents and journal, and
+/// `strata.json`. `copy` gives it a new workspace id (10 §3.6).
+pub fn import_folder(
+    dir: &Path,
+    unpacked: &crate::archive::Unpacked,
+    copy: bool,
+) -> Result<Workspace<SqliteStore>> {
+    std::fs::create_dir_all(dir).map_err(folder_err)?;
+    let info_path = dir.join("strata.json");
+    if info_path.exists() {
+        return Err(CoreError::Invalid(format!(
+            "{} is already a workspace",
+            dir.display()
+        )));
+    }
+    let store = SqliteStore::open(&dir.join("store.sqlite"))?;
+    let ws = crate::archive::import(unpacked, store, copy)?;
     let info = FolderInfo {
         workspace_id: ws.id().to_owned(),
         format_version: FORMAT_VERSION,

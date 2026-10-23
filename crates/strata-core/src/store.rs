@@ -39,6 +39,15 @@ pub trait Store {
     /// An update of a content document outside any changeset: an editor's
     /// typing (15 §3.4), which has its own undo.
     fn append(&mut self, doc_id: &str, update: &[u8], ts: i64) -> Result<(), StoreError>;
+    /// Every document in the store: an archive takes them all (10 §3.5).
+    fn doc_ids(&self) -> Result<Vec<String>, StoreError>;
+    /// The documents (as snapshots) and the journal of an archive, into an
+    /// empty store, at once.
+    fn restore(
+        &mut self,
+        docs: &[(String, Vec<u8>)],
+        changesets: &[Changeset],
+    ) -> Result<(), StoreError>;
 }
 
 /// A store in memory: the same contract, nothing on disk. The browser
@@ -129,6 +138,28 @@ impl Store for MemoryStore {
             .or_default()
             .updates
             .push(update.to_vec());
+        Ok(())
+    }
+
+    fn doc_ids(&self) -> Result<Vec<String>, StoreError> {
+        Ok(self.docs.keys().cloned().collect())
+    }
+
+    fn restore(
+        &mut self,
+        docs: &[(String, Vec<u8>)],
+        changesets: &[Changeset],
+    ) -> Result<(), StoreError> {
+        for (id, snapshot) in docs {
+            self.docs.insert(
+                id.clone(),
+                StoredDoc {
+                    snapshot: Some(snapshot.clone()),
+                    updates: Vec::new(),
+                },
+            );
+        }
+        self.changesets.extend(changesets.iter().cloned());
         Ok(())
     }
 }

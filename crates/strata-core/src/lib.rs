@@ -10,9 +10,11 @@
 //!   same for the desktop shell and the browser build;
 //! - [`store`]: where documents and changesets live; [`sqlite`]: the
 //!   workspace folder and its `store.sqlite` (10 §3.1–3.3);
-//! - [`home`]: the workspaces of this device for the home screen (✅ Q-16-12).
+//! - [`home`]: the workspaces of this device for the home screen (✅ Q-16-12);
+//! - [`archive`]: `.strata.zip`, a workspace as one file (10 §3.5).
 
 pub mod api;
+pub mod archive;
 pub mod changeset;
 #[cfg(feature = "sqlite")]
 pub mod home;

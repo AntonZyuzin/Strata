@@ -176,4 +176,31 @@ describe('the home screen in a browser', () => {
     await expect(home.open(b.workspace.id)).rejects.toThrow();
     expect((await home.setProfile({ name: ' Я ' })).profile.name).toBe('Я');
   });
+
+  it('moves a workspace as .strata.zip and makes a copy of a known one', async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Остаётся'));
+      tx.add(node(B, 'Тоже'));
+      tx.connect(A, B);
+    });
+    await sync.settled();
+    const id = (await home.home()).current as string;
+    const zip = await home.exportArchive(id);
+    expect(zip?.subarray(0, 2)).toEqual(new Uint8Array([0x50, 0x4b])); // "PK"
+
+    // Another browser: the same workspace, the same id.
+    const there = await browserHome(memoryShelf());
+    const moved = await there.importArchive(zip as Uint8Array);
+    expect(moved.workspace.id).toBe(id);
+    expect(moved.root).toBe(root);
+    expect(ofView(await there.core.view(root))).toEqual(ofGraph(g));
+
+    // This browser has it: the archive comes in as a copy with its own id.
+    const copy = await home.importArchive(zip as Uint8Array);
+    expect(copy.workspace.id).not.toBe(id);
+    expect(copy.workspace.name).toBe('Тест');
+    expect((await home.home()).workspaces).toHaveLength(2);
+    await expect(home.importArchive(new Uint8Array([1, 2, 3]))).rejects.toThrow();
+  });
 });

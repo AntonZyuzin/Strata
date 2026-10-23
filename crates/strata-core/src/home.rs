@@ -14,7 +14,7 @@
 //! folder synced by iCloud or Dropbox would have two cores writing one
 //! SQLite file (10 §3.6).
 
-use crate::sqlite::{SqliteStore, create_folder, open_folder};
+use crate::sqlite::{SqliteStore, create_folder, import_folder, open_folder};
 use crate::workspace::{CoreError, Result, Workspace};
 use crate::{Label, Op};
 use base64::Engine as _;
@@ -167,12 +167,8 @@ impl Home {
             .ok_or_else(|| invalid(format!("no workspace {id} on this device")))
     }
 
-    /// A new workspace in `<data>/Workspaces`, named `name`, opened.
-    pub fn create(&mut self, name: &str) -> Result<(Workspace<SqliteStore>, Entry)> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(invalid("a workspace needs a name"));
-        }
+    /// A free folder in `<data>/Workspaces` for a workspace called `name`.
+    fn new_folder(&self, name: &str) -> PathBuf {
         let parent = self.dir.join("Workspaces");
         let base = folder_name(name);
         let mut path = parent.join(format!("{base}.strata"));
@@ -181,6 +177,16 @@ impl Home {
             path = parent.join(format!("{base} {n}.strata"));
             n += 1;
         }
+        path
+    }
+
+    /// A new workspace in `<data>/Workspaces`, named `name`, opened.
+    pub fn create(&mut self, name: &str) -> Result<(Workspace<SqliteStore>, Entry)> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err(invalid("a workspace needs a name"));
+        }
+        let path = self.new_folder(name);
         let ws = create_folder(&path, name)?;
         let entry = self.remember(&ws, &path, now_ms());
         self.save()?;
@@ -206,6 +212,23 @@ impl Home {
     pub fn add(&mut self, path: &Path) -> Result<(Workspace<SqliteStore>, Entry)> {
         let ws = open_folder(path)?;
         let entry = self.remember(&ws, path, now_ms());
+        self.save()?;
+        Ok((ws, entry))
+    }
+
+    /// An archive (10 §3.5) as a new workspace in `<data>/Workspaces`,
+    /// opened. A workspace this device already knows comes in as a copy with
+    /// its own id (10 §3.6).
+    pub fn import(&mut self, bytes: &[u8]) -> Result<(Workspace<SqliteStore>, Entry)> {
+        let unpacked = crate::archive::unpack(bytes)?;
+        let known = self
+            .saved
+            .workspaces
+            .iter()
+            .any(|e| e.id == unpacked.info.workspace_id);
+        let path = self.new_folder(&unpacked.info.name);
+        let ws = import_folder(&path, &unpacked, known)?;
+        let entry = self.remember(&ws, &path, now_ms());
         self.save()?;
         Ok((ws, entry))
     }
@@ -297,6 +320,15 @@ pub enum Request {
     },
     SetProfile {
         profile: Profile,
+    },
+    /// The workspace as `.strata.zip` into the file `path` (10 §3.5).
+    Export {
+        id: String,
+        path: String,
+    },
+    /// The archive at `path` as a new workspace, opened.
+    Import {
+        path: String,
     },
 }
 
@@ -409,6 +441,26 @@ pub fn handle(
         }),
         Request::SetProfile { profile } => {
             home.set_profile(profile).map(|()| home_of(home, current))
+        }
+        Request::Export { id, path } => {
+            let bytes = match current.as_ref().filter(|w| w.id() == id) {
+                Some(ws) => crate::archive::export(ws),
+                None => home
+                    .entry(&id)
+                    .map(|e| e.path.clone())
+                    .and_then(|p| open_folder(&p))
+                    .and_then(|ws| crate::archive::export(&ws)),
+            };
+            bytes
+                .and_then(|b| std::fs::write(&path, b).map_err(io))
+                .map(|()| Response::Done)
+        }
+        Request::Import { path } => {
+            *current = None;
+            let done = std::fs::read(&path)
+                .map_err(io)
+                .and_then(|b| home.import(&b));
+            opened(current, done)
         }
     };
     result.unwrap_or_else(|e| Response::Error {
@@ -602,6 +654,55 @@ mod tests {
             Some(id.as_str())
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn archives_go_out_and_come_back_as_copies() {
+        let dir = temp_dir();
+        let mut home = Home::load(&dir);
+        let mut current = None;
+        let made = ask(
+            &mut home,
+            &mut current,
+            json!({ "call": "create", "name": "Проект" }),
+        );
+        let id = made["workspace"]["id"].as_str().expect("id").to_owned();
+        let zip = dir.join("Проект.strata.zip");
+        let out = ask(
+            &mut home,
+            &mut current,
+            json!({ "call": "export", "id": id, "path": zip.to_string_lossy() }),
+        );
+        assert_eq!(out["type"], "done");
+        // The same device knows it: the archive comes in as a copy.
+        let copy = ask(
+            &mut home,
+            &mut current,
+            json!({ "call": "import", "path": zip.to_string_lossy() }),
+        );
+        assert_eq!(copy["type"], "opened");
+        assert_ne!(copy["workspace"]["id"], id.as_str());
+        assert_eq!(copy["workspace"]["name"], "Проект");
+        let list = ask(&mut home, &mut current, json!({ "call": "home" }));
+        assert_eq!(list["workspaces"].as_array().map(Vec::len), Some(2));
+        // Another device does not: the same id.
+        let other = temp_dir();
+        let mut there = Home::load(&other);
+        let mut none = None;
+        let moved = ask(
+            &mut there,
+            &mut none,
+            json!({ "call": "import", "path": zip.to_string_lossy() }),
+        );
+        assert_eq!(moved["workspace"]["id"], id.as_str());
+        let bad = ask(
+            &mut there,
+            &mut none,
+            json!({ "call": "import", "path": dir.join("home.json").to_string_lossy() }),
+        );
+        assert_eq!(bad["type"], "error");
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     #[test]

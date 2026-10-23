@@ -1,7 +1,7 @@
 import type { HomeBackend, HomeState, Opened, WorkspaceEntry } from '@strata/backend';
 import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pickFolder } from '../backend';
+import { pickArchive, pickFolder, pickSavePath } from '../backend';
 import { LocaleSwitch } from '../LocaleSwitch';
 
 /**
@@ -34,6 +34,8 @@ export function HomeScreen(props: {
   const [error, setError] = useState<string | null>(null);
   const [profile, setProfile] = useState('');
   const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const archiveInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let live = true;
@@ -78,6 +80,7 @@ export function HomeScreen(props: {
       if (busy) return;
       setBusy(true);
       setError(null);
+      setNote(null);
       try {
         const r = await f();
         if (r && 'root' in r) onOpen(r);
@@ -146,6 +149,40 @@ export function HomeScreen(props: {
                 {t(locale, 'home.open')}
               </button>
             ) : null}
+            <button
+              type="button"
+              title={t(locale, 'home.importHint')}
+              disabled={busy}
+              onClick={() => {
+                if (home.where === 'browser') {
+                  archiveInput.current?.click();
+                  return;
+                }
+                void run(async () => {
+                  const path = await pickArchive();
+                  return path ? home.importArchive(path) : undefined;
+                });
+              }}
+            >
+              {t(locale, 'home.import')}
+            </button>
+            <input
+              ref={archiveInput}
+              className="sr-only"
+              type="file"
+              accept=".zip,application/zip"
+              tabIndex={-1}
+              aria-label={t(locale, 'home.importHint')}
+              onChange={(e) => {
+                const file = e.currentTarget.files?.[0];
+                e.currentTarget.value = '';
+                if (file) {
+                  void run(async () =>
+                    home.importArchive(new Uint8Array(await file.arrayBuffer())),
+                  );
+                }
+              }}
+            />
             <label className="home-profile" title={t(locale, 'home.profileHint')}>
               <span>{t(locale, 'home.profile')}</span>
               <input
@@ -177,6 +214,11 @@ export function HomeScreen(props: {
               title={t(locale, 'home.error', { message: error })}
             >
               {t(locale, 'home.error', { message: error })}
+            </p>
+          ) : null}
+          {note ? (
+            <p className="home-note" role="status" title={note}>
+              {note}
             </p>
           ) : null}
           {state && list.length === 0 ? (
@@ -215,6 +257,28 @@ export function HomeScreen(props: {
                       onClick={() => setDialog({ t: 'rename', entry: w })}
                     >
                       {t(locale, 'home.rename')}
+                    </button>
+                    <button
+                      type="button"
+                      title={t(locale, 'home.exportHint')}
+                      disabled={busy || w.missing}
+                      onClick={() =>
+                        void run(async () => {
+                          const file = `${w.name}.strata.zip`;
+                          if (home.where === 'desktop') {
+                            const to = await pickSavePath(file);
+                            if (!to) return undefined;
+                            await home.exportArchive(w.id, to);
+                          } else {
+                            const bytes = await home.exportArchive(w.id);
+                            if (bytes) download(file, bytes);
+                          }
+                          setNote(t(locale, 'home.exported', { name: file }));
+                          return undefined;
+                        })
+                      }
+                    >
+                      {t(locale, 'home.export')}
                     </button>
                     <button
                       type="button"
@@ -297,6 +361,16 @@ export function HomeScreen(props: {
       ) : null}
     </main>
   );
+}
+
+/** Saves bytes as a file through the browser's download. */
+function download(name: string, bytes: Uint8Array): void {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/zip' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 /** A small window with one name field: create or rename a workspace. */

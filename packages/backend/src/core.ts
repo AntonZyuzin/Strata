@@ -232,6 +232,16 @@ export interface HomeBackend {
   setPreview(id: string, png: Uint8Array): Promise<void>;
   preview(id: string): Promise<Uint8Array | null>;
   setProfile(profile: Profile): Promise<HomeState>;
+  /**
+   * The workspace as `.strata.zip` (10 §3.5): on desktop into the file `to`
+   * (nothing comes back), in a browser as bytes to download.
+   */
+  exportArchive(id: string, to?: string): Promise<Uint8Array | null>;
+  /**
+   * An archive as a new workspace, opened: a file path on desktop, bytes in a
+   * browser. A workspace this device has comes in as a copy (10 §3.6).
+   */
+  importArchive(from: string | Uint8Array): Promise<Opened>;
   /** Calls for the open workspace. */
   readonly core: Core;
 }
@@ -274,5 +284,14 @@ export function jsonHome(home: Transport, core: Transport): HomeBackend {
       return r.type === 'preview' && r.png ? fromBase64(r.png) : null;
     },
     setProfile: (profile) => state({ call: 'setProfile', profile }),
+    exportArchive: async (id, to) => {
+      if (!to) throw new CoreError('the desktop exports into a file', true);
+      await call({ call: 'export', id, path: to });
+      return null;
+    },
+    importArchive: (from) => {
+      if (typeof from !== 'string') throw new CoreError('the desktop imports a file', true);
+      return opened({ call: 'import', path: from });
+    },
   };
 }

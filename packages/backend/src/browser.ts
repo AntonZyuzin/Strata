@@ -210,5 +210,21 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         await save();
         return state();
       }),
+    exportArchive: (id) =>
+      later(async () => {
+        if (current?.id === id) return current.core.exportArchive();
+        const c = await load(id);
+        try {
+          return c.exportArchive();
+        } finally {
+          c.free();
+        }
+      }),
+    importArchive: (from) =>
+      later(async () => {
+        if (typeof from === 'string') throw new CoreError('a browser imports bytes', true);
+        const known = saved.workspaces.some((e) => e.id === WasmCore.archiveId(from));
+        return remember(WasmCore.importArchive(from, known));
+      }),
   };
 }

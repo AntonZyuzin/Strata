@@ -22,6 +22,8 @@ serde_json.workspace = true
 strata-markdown.workspace = true
 strata-model.workspace = true
 thiserror.workspace = true
+# `.strata.zip` (10 §3.5); deflate in pure Rust, so the browser build has it too.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [lints]
 workspace = true

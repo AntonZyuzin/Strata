@@ -200,8 +200,8 @@ button:active:not(:disabled) {
 }
 
 button.is-default {
-  /* The default button of retro systems: one more outer frame. */
-  outline: var(--u) solid var(--st-color-frame);
+  /* The default button of retro systems: one more outer frame, in the accent. */
+  outline: var(--u) solid var(--st-color-accent);
   outline-offset: var(--u);
 }
 
@@ -1362,8 +1362,8 @@ button:focus-visible {
   font-size: var(--st-font-ui-size);
   line-height: calc(12 * var(--u));
   text-align: center;
-  color: var(--st-color-title-fg);
-  background: var(--st-color-title-bg);
+  color: var(--st-color-accent-on);
+  background: var(--st-color-accent);
 }
 
 .ws-trash {
@@ -1533,9 +1533,27 @@ button:focus-visible {
 }
 
 .tabbar-logo,
-.tabbar-tools,
-.tab-new {
+.tabbar-tools {
   align-self: center;
+}
+
+/* «+» stands with the tabs, flat, on the same line. */
+.tab-new {
+  align-self: flex-end;
+  height: calc(var(--st-size-control) + 2 * var(--u));
+  color: var(--st-color-text-muted);
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.tab-new:hover:not(:disabled) {
+  color: var(--st-color-accent);
+  background: transparent;
+}
+
+.tabbar-logo .kind-icon {
+  color: var(--st-color-accent);
 }
 
 .tabbar-logo {
@@ -1595,18 +1613,26 @@ button:focus-visible {
   height: calc(var(--st-size-control) + 2 * var(--u));
   padding-left: calc(4 * var(--u));
   color: var(--st-color-text-muted);
-  background: var(--st-color-surface-sunken);
-  border: var(--u) solid var(--st-color-frame);
+  /* Behind the active one: the bar's own ground, a quiet outline. */
+  background: transparent;
+  border: var(--u) solid var(--st-color-divider);
   border-bottom: 0;
+}
+
+.tab:hover {
+  color: var(--st-color-text);
 }
 
 .tab.is-active {
   position: relative;
   z-index: 1;
+  /* The accent along the top: which workspace is in front. */
+  box-shadow: inset 0 calc(2 * var(--u)) 0 var(--st-color-accent);
   height: calc(var(--st-size-control) + 6 * var(--u));
   margin-bottom: calc(-1 * var(--u));
   color: var(--st-color-text);
   background: var(--st-color-surface);
+  border-color: var(--st-color-frame);
   border-bottom: var(--u) solid var(--st-color-surface);
 }
 

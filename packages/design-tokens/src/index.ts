@@ -25,6 +25,8 @@ export const palette = {
   red700: '#b3261e',
   blueBsod: '#0000aa',
   pink400: '#ff6fae',
+  /** The signal of the Chrome (owner, 2026-10-24): one bright accent on the dark. */
+  lime400: '#b6f36b',
   pink700: '#c2185b',
 } as const;
 
@@ -66,9 +68,12 @@ export const fog = {
     bevelLo2: palette.ink900,
     titleBg: palette.fogText,
     titleFg: palette.ink850,
-    selectionBg: palette.fogText,
+    selectionBg: palette.lime400,
     selectionFg: palette.ink850,
-    focus: palette.fogText,
+    focus: palette.lime400,
+    /** The one accent: the active tab, the default action, selection (owner, 2026-10-24). */
+    accent: palette.lime400,
+    accentOn: palette.ink850,
     attention: palette.yellow500,
     attentionOn: palette.ink850,
     overdue: palette.red500,
@@ -98,6 +103,8 @@ export const fog = {
     labelPlate: 'rgba(0, 0, 0, 0.7)',
     attention: palette.yellow500,
     overdue: palette.red500,
+    /** Hover, selection and the current node: the Chrome's accent. */
+    accent: palette.lime400,
     haloAlpha: 0.45,
     bgMaxL: 0.1,
     grainOpacity: 0.04,

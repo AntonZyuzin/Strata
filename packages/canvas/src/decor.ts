@@ -57,6 +57,7 @@ const PAPER = hex(palette.paper);
 const INK = hex(palette.ink850);
 const YELLOW = hex(palette.yellow500);
 const RED = hex(palette.red500);
+const ACCENT = hex(fog.scene.accent);
 const RIM = fog.scene.rimAlpha;
 /** One «today» pulse and the count (07 §4.5): 3 × 800 ms on first sight, then still. */
 const PULSE_MS = fog.dur.pulse;
@@ -286,13 +287,13 @@ export class Decor {
           const running = !this.reducedMotion && t < ANTS_MS;
           if (running) animating = true;
           rings.add(s.x, s.y, R + 10 * U, 2 * U, {
-            color: PAPER,
+            color: ACCENT,
             dash: 3 * U,
             gap: 3 * U,
             offset: running ? (t / 50) * U : 0,
           });
         } else {
-          rings.add(s.x, s.y, R + 10 * U, 2 * U, { color: PAPER });
+          rings.add(s.x, s.y, R + 10 * U, 2 * U, { color: ACCENT });
         }
         const k = R + 12 * U;
         const arm = 4 * U;
@@ -305,7 +306,7 @@ export class Decor {
         }
         corners = true;
       } else if (hovered) {
-        rings.add(s.x, s.y, R + 10 * U, U, { color: PAPER });
+        rings.add(s.x, s.y, R + 10 * U, U, { color: ACCENT });
       }
 
       // Assignees: dots 8u with an ink outline at 12 o'clock, up to 3 and «+N» (07 §4.5).
@@ -370,7 +371,7 @@ export class Decor {
         this.label(v.id, n.name, s.x, s.y + R + 13 * U, 2 * R > 160);
       }
     }
-    if (corners) g.stroke({ width: U, color: PAPER });
+    if (corners) g.stroke({ width: U, color: ACCENT });
     if (hatched) this.hatching.stroke({ width: U, color: INK, alpha: 0.5 * fog.scene.pauseAlpha });
     rings.upload();
     this.arrows.upload();

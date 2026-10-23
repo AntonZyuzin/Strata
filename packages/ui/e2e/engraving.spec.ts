@@ -7,6 +7,8 @@ import { box, LAYOUTS, overflowing } from './helpers';
 
 /** Adds three generated pictures through the file input: a logo, a photo-like gradient, a cut-out. */
 async function addPictures(page: Page) {
+  // The window draws its file input after the app's fonts load (CLAUDE.md).
+  await page.locator('input[type="file"]').first().waitFor({ state: 'attached' });
   await page.evaluate(async () => {
     const make = async (name: string, draw: (c: CanvasRenderingContext2D) => void) => {
       const canvas = document.createElement('canvas');

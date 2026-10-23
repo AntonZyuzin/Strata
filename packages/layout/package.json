@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./worker": "./src/worker.ts"
+    "./worker": "./src/worker.ts",
+    "./net-worker": "./src/net-worker.ts"
   },
   "scripts": {
     "build": "wasm-pack build ../../crates/strata-layout-wasm --target web --out-dir ../../packages/layout/pkg --out-name strata_layout --release --no-pack",

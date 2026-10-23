@@ -45,6 +45,8 @@ interface Hook {
     outputs(id: string): Iterable<string>;
     hasEdge(a: string, b: string): boolean;
   };
+  /** Time of the last `L` in the worker, ms. */
+  layoutMs(): number | null;
   /** The open board's scene (BoardHandle). */
   board?: { elements(): { type: string }[]; activeTool(): string; files(): string[] };
 }
@@ -678,6 +680,56 @@ test('M flies to the star map and back over the camera bridge (08 §7)', async (
 
 test.describe('gestures', () => {
   test.use({ viewport: { width: 1280, height: 800 }, locale: 'ru-RU' });
+
+  test('L lays the network out top to bottom in one step of undo (06 §9)', async ({ page }) => {
+    await open(page);
+    const state = () =>
+      page.evaluate(() => {
+        const { graph, view } = window.__strataProto as Hook;
+        const nodes = [...graph.nodes.values()];
+        return {
+          pos: Object.fromEntries(nodes.map((n) => [n.id, [n.x as number, n.y as number]])),
+          r: Object.fromEntries(nodes.map((n) => [n.id, view.nodeAt(n.id)?.r ?? 0])),
+          gallery: nodes.slice(-20).map((n) => n.id),
+          edges: graph.edges(),
+        };
+      });
+    const before = await state();
+    const spot = await emptySpot(page, 40);
+    await page.mouse.click(spot.x, spot.y);
+    await page.keyboard.press('KeyL');
+    await expect
+      .poll(() => page.evaluate(() => (window.__strataProto as Hook).layoutMs()))
+      .not.toBeNull();
+    await expect(page.locator('.proto-status .last-step')).toContainText('Раскладка 200 нод');
+    const after = await state();
+    const ids = Object.keys(after.pos).filter((id) => !after.gallery.includes(id));
+    const moved = ids.filter((id) => after.pos[id]?.[0] !== before.pos[id]?.[0]);
+    expect(moved.length).toBeGreaterThan(150);
+    // The gallery stays; no two bubbles overlap; wires point down.
+    for (const id of after.gallery) expect(after.pos[id]).toEqual(before.pos[id]);
+    let closest = Number.POSITIVE_INFINITY;
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) {
+        const a = ids[i] as string;
+        const b = ids[j] as string;
+        const [ax = 0, ay = 0] = after.pos[a] ?? [];
+        const [bx = 0, by = 0] = after.pos[b] ?? [];
+        closest = Math.min(
+          closest,
+          Math.hypot(ax - bx, ay - by) - (after.r[a] ?? 0) - (after.r[b] ?? 0),
+        );
+      }
+    }
+    expect(closest).toBeGreaterThan(10);
+    const down = after.edges.filter(
+      ([a, b]) => (after.pos[b]?.[1] ?? 0) > (after.pos[a]?.[1] ?? 0),
+    );
+    expect(down.length / after.edges.length).toBeGreaterThan(0.95);
+    // One step: Ctrl+Z puts every node back.
+    await page.keyboard.press('Control+z');
+    expect((await state()).pos).toEqual(before.pos);
+  });
 
   test('Tab menu creates a named note, Ctrl+Z takes it back', async ({ page }) => {
     await open(page);

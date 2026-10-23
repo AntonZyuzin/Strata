@@ -137,9 +137,18 @@ function rng(seed: number): () => number {
 /** Nodes in the gallery above the demo network. */
 export const GALLERY_SIZE = GALLERY.length;
 
+/**
+ * Shapes of the network: the demo grid of chains and fans, or a synthetic
+ * network for `L` (spike 10) — a DAG with long wires and a few cycles, a
+ * bushy tree, a random graph — scattered so a layout has work to do.
+ */
+export type SeedShape = 'demo' | 'dag' | 'tree' | 'mesh';
+
 export function seedGraph(
-  opts: { nodes?: number; locale?: 'ru' | 'en'; seed?: number } = {},
+  opts: { nodes?: number; locale?: 'ru' | 'en'; seed?: number; shape?: SeedShape } = {},
 ): Graph {
+  const shape = opts.shape ?? 'demo';
+  if (shape !== 'demo') return seedShape(shape, opts);
   const n = opts.nodes ?? 200;
   const r = rng(opts.seed ?? 11);
   const rs = rng((opts.seed ?? 11) + 1);
@@ -217,6 +226,94 @@ export function seedGraph(
         const to = ids[j];
         const from = ids[i];
         if (from && to) tx.connect(from, to);
+      }
+    }
+  });
+  graph.clearHistory();
+  return graph;
+}
+
+/** Seeds of the synthetic shapes: their ids differ from the demo's. */
+const SHAPE_SEEDS: Record<Exclude<SeedShape, 'demo'>, number> = { dag: 101, tree: 102, mesh: 103 };
+
+function seedShape(
+  shape: Exclude<SeedShape, 'demo'>,
+  opts: { nodes?: number; locale?: 'ru' | 'en'; seed?: number },
+): Graph {
+  const n = opts.nodes ?? 300;
+  const seed = opts.seed ?? SHAPE_SEEDS[shape];
+  const r = rng(seed);
+  const ri = rng(seed + 2);
+  const seedId = (ms: number) =>
+    newId(ms, (b) => {
+      for (let k = 0; k < b.length; k++) b[k] = Math.floor(ri() * 256);
+    });
+  const words = opts.locale === 'en' ? WORDS_EN : WORDS_RU;
+  const side = Math.sqrt(n) * SEED_SPACING.x;
+  const graph = new Graph();
+  const ids: string[] = [];
+  const t0 = 1_760_000_000_000;
+  graph.transaction({ key: 'proto.seed' }, (tx) => {
+    for (let i = 0; i < n; i++) {
+      const kind = KINDS[Math.floor(r() * KINDS.length)] ?? 'note';
+      const node = newNode({
+        id: seedId(t0 + i),
+        name: `${words[Math.floor(r() * words.length)]} ${i + 1}`,
+        kind,
+        cls: null,
+        icon: Math.floor(r() * ICON_COUNT),
+        key: r() < 0.05,
+        // Scattered: the layout has to find the shape.
+        x: r() * side,
+        y: r() * side * 0.7,
+      });
+      tx.add(node);
+      ids.push(node.id);
+    }
+    // The gallery to the left, clear of whatever `L` makes of the network.
+    GALLERY.forEach((g, k) => {
+      tx.add(
+        newNode({
+          id: seedId(t0 + n + k),
+          name: opts.locale === 'en' ? g.en : g.ru,
+          cls: null,
+          icon: g.icon,
+          x: -side - 900 + (k % 5) * 150,
+          y: Math.floor(k / 5) * 120,
+          ...g.node,
+        }),
+      );
+    });
+    const link = (a: number, b: number) => {
+      const from = ids[a];
+      const to = ids[b];
+      if (from && to && a !== b) tx.connect(from, to);
+    };
+    if (shape === 'dag') {
+      // About 12 levels: each node takes one or two inputs from the level
+      // above, now and then one from further up (a long wire).
+      const levels = Math.max(2, Math.round(Math.sqrt(n) * 0.7));
+      const per = Math.ceil(n / levels);
+      for (let b = per; b < n; b++) {
+        const lv = Math.floor(b / per);
+        const above = (k: number) => Math.min(b - 1, (lv - k) * per + Math.floor(r() * per));
+        link(above(1), b);
+        if (r() < 0.4) link(above(1), b);
+        if (lv >= 3 && r() < 0.1) link(above(2 + Math.floor(r() * (lv - 2))), b);
+      }
+      // A few wires back up: cycles, allowed in a network (05 §8.2).
+      for (let k = 0; k < n / 60; k++)
+        link(per + Math.floor(r() * (n - per)), Math.floor(r() * per));
+    } else if (shape === 'tree') {
+      for (let b = 1; b < n; b++) link(Math.floor(r() * r() * b), b);
+    } else {
+      // Communities of about 20: a tree and a few loops inside, rare wires between.
+      const size = 20;
+      for (let b = 0; b < n; b++) {
+        const c = Math.floor(b / size) * size;
+        if (b > c) link(c + Math.floor(r() * (b - c)), b);
+        if (r() < 0.3) link(b, c + Math.floor(r() * Math.min(size, n - c)));
+        if (r() < 0.03) link(b, Math.floor(r() * n));
       }
     }
   });

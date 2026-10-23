@@ -4,6 +4,7 @@ import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
 import { describeError } from './errors';
 import { onStallWait } from './frame-loop';
+import { runLayoutScenario } from './layout';
 import { runLookScenario } from './look';
 import { runLoroIndex, runLoroText } from './loro';
 import { runNoteScenario } from './note';
@@ -148,6 +149,13 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
           vsyncMs: env.vsyncMs,
           stallMs: q ? QUICK_STALL_MS : undefined,
         }),
+    },
+    // Spike 10: `L` in its worker on 500 and 5 000 nodes (NFR-08).
+    {
+      id: 'layout-l',
+      spike: 10,
+      draws: false,
+      run: () => runLayoutScenario(q ? [100, 500] : [500, 5_000]),
     },
     // Spike 6: the note editor on T-1M (NFR-29, NFR-33).
     {

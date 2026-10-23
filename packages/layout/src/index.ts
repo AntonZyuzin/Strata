@@ -1,8 +1,9 @@
-import init, { Physics3d } from '../pkg/strata_layout.js';
+import init, { layoutNet, Physics3d } from '../pkg/strata_layout.js';
 
 /**
  * Layouts of `crates/strata-layout` as WASM (15 §2.6, ☑ Q-06-9): the star
- * map's force layout (08 §3.2) runs here, in a worker of the UI (worker.ts).
+ * map's force layout (08 §3.2) and `L` on a network (06 §9.2) run here, in
+ * workers of the UI (worker.ts, net-worker.ts).
  * The module is built by `pnpm --filter @strata/layout build` (wasm-pack) into
  * `pkg/`, which is not committed.
  */
@@ -57,5 +58,61 @@ export function createForce3d(
     p.centre,
     p.decay,
     p.maxStep,
+  );
+}
+
+/** The algorithm of `L` by the network's direction (06 §9.2). */
+export type NetLayout = 'layered' | 'radial' | 'force';
+
+/** A network for `L`: nodes by index, wires as parallel arrays. */
+export interface LayoutNet {
+  /** `[x, y]` per node, where it is now. */
+  pos: Float32Array;
+  /** Bubble radius per node. */
+  radius: Float32Array;
+  /** 1 for a pinned node (06 §9.1). */
+  pinned: Uint8Array;
+  from: Uint32Array;
+  to: Uint32Array;
+  /** 1 for a wire only from text (☑ Q-13-3). */
+  text: Uint8Array;
+}
+
+/** Gaps of a layout, world units: bubble to bubble, layer to layer. */
+export interface LayoutSpacing {
+  gap: number;
+  layer: number;
+}
+
+const KINDS: Record<NetLayout, number> = { layered: 0, radial: 1, force: 2 };
+
+/**
+ * Lays out `net`; returns `[x, y]` per node. Checks the arrays first: a wrong
+ * one would abort the WASM module. Call after `loadLayout`.
+ */
+export function layoutNetwork(
+  net: LayoutNet,
+  kind: NetLayout,
+  spacing: LayoutSpacing,
+): Float32Array {
+  const n = net.radius.length;
+  const ok =
+    net.pos.length === n * 2 &&
+    net.pinned.length === n &&
+    net.to.length === net.from.length &&
+    net.text.length === net.from.length &&
+    net.from.every((i) => i < n) &&
+    net.to.every((i) => i < n);
+  if (!ok) throw new Error('layoutNetwork: arrays do not match');
+  return layoutNet(
+    KINDS[kind],
+    net.pos,
+    net.radius,
+    net.pinned,
+    net.from,
+    net.to,
+    net.text,
+    spacing.gap,
+    spacing.layer,
   );
 }

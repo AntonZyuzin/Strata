@@ -1,9 +1,9 @@
 //! WASM bindings of `strata-layout` for the UI (15 §2.6): the star map's force
-//! layout runs in a worker (08 §3.1). Arrays cross the boundary as typed
-//! arrays; positions can be read without a copy through `positions_ptr` and
-//! the module's memory.
+//! layout runs in a worker (08 §3.1), and so does `L` on a network (06 §9.2).
+//! Arrays cross the boundary as typed arrays; positions can be read without a
+//! copy through `positions_ptr` and the module's memory.
 
-use strata_layout::{Force3d, Params, Springs};
+use strata_layout::{Force3d, Kind, Net, Params, Spacing, Springs};
 use wasm_bindgen::prelude::*;
 
 /// The force layout of 08 §3.2 over `n` bodies.
@@ -90,4 +90,35 @@ impl Physics3d {
         p[i * 3 + 1] = y;
         p[i * 3 + 2] = z;
     }
+}
+
+/// `L` on a network (06 §9.2): `kind` 0 layered, 1 radial, 2 force; positions
+/// `[x, y]` per node; wires as parallel arrays, `text` 1 for a wire only from
+/// text (☑ Q-13-3). Returns `[x, y]` per node; the caller checks the arrays.
+#[wasm_bindgen(js_name = layoutNet)]
+#[allow(clippy::too_many_arguments)]
+pub fn layout_net(
+    kind: u8,
+    pos: Vec<f32>,
+    radius: Vec<f32>,
+    pinned: Vec<u8>,
+    from: Vec<u32>,
+    to: Vec<u32>,
+    text: Vec<u8>,
+    gap: f32,
+    layer: f32,
+) -> Vec<f32> {
+    let net = Net {
+        pos,
+        radius,
+        pinned: pinned.iter().map(|&p| p != 0).collect(),
+        edges: from.iter().zip(&to).map(|(&a, &b)| [a, b]).collect(),
+        text: text.iter().map(|&t| t != 0).collect(),
+    };
+    let kind = match kind {
+        0 => Kind::Layered,
+        1 => Kind::Radial,
+        _ => Kind::Force,
+    };
+    strata_layout::layout(&net, kind, Spacing { gap, layer })
 }

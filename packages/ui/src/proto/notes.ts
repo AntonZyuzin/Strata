@@ -63,6 +63,11 @@ export class NoteStore {
     }
   }
 
+  /** The wire a → b came from the text of note a (origin `text`, ☑ Q-13-3). */
+  fromText(a: string, b: string): boolean {
+    return this.linked.get(a)?.has(b) ?? false;
+  }
+
   /** A board's scene changed: save a moment later. */
   touch(id: string): void {
     this.later(`save:${id}`, SAVE_MS, () => this.save(id));

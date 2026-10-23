@@ -72,6 +72,8 @@ export interface EditorEvents {
   map?(): void;
   /** Double click or `Enter` on a node: open its content (06 §13.1). */
   open?(id: string): void;
+  /** `L`: lay out the selection, or the whole network when nothing is selected (06 §9.1). */
+  layout?(ids: string[] | null): void;
 }
 
 export type MenuChoice =
@@ -844,6 +846,10 @@ export class Editor {
       case 'KeyM':
         if (mod) return;
         this.events.map?.();
+        return;
+      case 'KeyL':
+        if (mod) return;
+        this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);
         return;
       case 'Enter':
       case 'NumpadEnter':

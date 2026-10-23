@@ -1,4 +1,10 @@
-import { type ChangeLabel, GALLERY_SIZE, type Graph, seedGraph } from '@strata/backend';
+import {
+  type ChangeLabel,
+  GALLERY_SIZE,
+  type Graph,
+  type SeedShape,
+  seedGraph,
+} from '@strata/backend';
 import {
   BACKDROP_SIDE,
   CanvasView,
@@ -17,9 +23,11 @@ import {
   type WireEndStyle,
 } from '@strata/canvas';
 import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
+import type { NetLayout } from '@strata/layout';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
 import { BoardWindow } from './BoardWindow';
+import { Layouter } from './layouter';
 import { Map3D, type MapState } from './map3d';
 import { type MenuItem, type MenuNode, remember } from './menu';
 import { NameInput } from './NameInput';
@@ -94,6 +102,41 @@ async function photo(file: File): Promise<{ px: Pixels; p95: number }> {
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
+/** The network's direction for `L` (06 §9.2), kept between reloads. */
+const LAYOUT_KEY = 'strata.proto.layout';
+const LAYOUTS: NetLayout[] = ['layered', 'radial', 'force'];
+/** The prototype's networks (`?net=`): the demo and the three of spike 10. */
+const NETS: SeedShape[] = ['demo', 'dag', 'tree', 'mesh'];
+/** The direction a network starts with: its shape asks for it. */
+const NET_LAYOUT: Record<SeedShape, NetLayout> = {
+  demo: 'layered',
+  dag: 'layered',
+  tree: 'radial',
+  mesh: 'force',
+};
+
+function netFromUrl(): SeedShape {
+  const v = new URLSearchParams(window.location.search).get('net');
+  return NETS.find((s) => s === v) ?? 'demo';
+}
+
+function loadLayout(net: SeedShape): NetLayout {
+  try {
+    const v = localStorage.getItem(LAYOUT_KEY);
+    return LAYOUTS.find((s) => s === v) ?? NET_LAYOUT[net];
+  } catch {
+    return NET_LAYOUT[net];
+  }
+}
+
+function saveLayout(kind: NetLayout): void {
+  try {
+    localStorage.setItem(LAYOUT_KEY, kind);
+  } catch {
+    // A preference; private windows may refuse storage.
+  }
+}
+
 function loadEnds(): WireEndStyle {
   try {
     const v = localStorage.getItem(ENDS_KEY);
@@ -143,6 +186,13 @@ export function Prototype(props: {
   const [wheel, setWheel] = useState<WheelMode>('mouse');
   const [ends, setEnds] = useState<WireEndStyle>(loadEnds);
   const endsRef = useRef(ends);
+  const netRef = useRef(netFromUrl());
+  const net = netRef.current;
+  const [direction, setDirection] = useState<NetLayout>(() => loadLayout(net));
+  const directionRef = useRef(direction);
+  const layouter = useRef<Layouter | null>(null);
+  /** The gallery of looks stays put when `L` lays out the whole network. */
+  const gallery = useRef(new Set<string>());
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [, setVersion] = useState(0);
   const toastId = useRef(0);
@@ -173,6 +223,32 @@ export function Prototype(props: {
       hint: (k) => setHint(k),
       change: () => setVersion((v) => v + 1),
       map: () => map3d.current?.toggle(),
+      layout: (ids) => {
+        const g = graph.current;
+        const v = viewRef.current;
+        if (!g || !v) return;
+        const chosen = ids ?? [...g.nodes.keys()].filter((id) => !gallery.current.has(id));
+        layouter.current ??= new Layouter();
+        layouter.current
+          .layout(
+            g,
+            v,
+            chosen,
+            directionRef.current,
+            (a, b) => notes.current?.fromText(a, b) ?? false,
+          )
+          .then((pos) => {
+            if (!pos || cancelled) return;
+            // One step of undo for the whole layout (06 §9.1); the view animates it.
+            g.transaction({ key: 'proto.change.layout', params: { n: chosen.length } }, (tx) => {
+              chosen.forEach((id, i) => {
+                tx.move(id, pos[i * 2] ?? 0, pos[i * 2 + 1] ?? 0);
+              });
+            });
+            events.toast({ key: 'proto.toast.layout', params: { n: chosen.length } });
+          })
+          .catch((e: unknown) => console.error('layout', e));
+      },
       open: (id) => {
         const v = viewRef.current;
         const n = graph.current?.nodes.get(id);
@@ -216,8 +292,9 @@ export function Prototype(props: {
       } else {
         setP95(v.setBackground(preset('fog').px));
       }
-      const g = seedGraph({ locale: seedLocale.current });
+      const g = seedGraph({ locale: seedLocale.current, shape: netRef.current });
       graph.current = g;
+      gallery.current = new Set([...g.nodes.keys()].slice(-GALLERY_SIZE));
       const ed = new Editor(v, g, events);
       editor.current = ed;
       const store = new NoteStore(g);
@@ -230,12 +307,17 @@ export function Prototype(props: {
         if (!cancelled) void m3.prepare();
       }, 1_000);
       // Test hook for e2e: where the bubbles are drawn.
-      (window as unknown as { __strataProto: unknown }).__strataProto = { view: v, graph: g };
+      (window as unknown as { __strataProto: unknown }).__strataProto = {
+        view: v,
+        graph: g,
+        layoutMs: () => layouter.current?.lastMs ?? null,
+      };
       setWheel(ed.wheelMode);
       ed.fitAll();
       // The design check opens on the gallery of looks, big enough for icons
       // (07 §4.9: ≥ 32 px) and clear of the top window; `plain` keeps «show all».
-      if (!new URLSearchParams(window.location.search).has('plain')) {
+      // A synthetic network for `L` opens on the network, not on the gallery.
+      if (!new URLSearchParams(window.location.search).has('plain') && netRef.current === 'demo') {
         const top = document.querySelector('.proto-top')?.getBoundingClientRect().bottom ?? 0;
         frameGallery(v, g, top - v.canvas.getBoundingClientRect().top);
       }
@@ -250,6 +332,8 @@ export function Prototype(props: {
       notes.current?.flush();
       map3d.current?.destroy();
       map3d.current = null;
+      layouter.current?.destroy();
+      layouter.current = null;
       editor.current?.destroy();
       editor.current = null;
       viewRef.current = null;
@@ -431,6 +515,65 @@ export function Prototype(props: {
                   </label>
                 );
               })}
+            </fieldset>
+          </div>
+          <div className="proto-ends-row">
+            <span
+              className="proto-ends-caption"
+              aria-hidden="true"
+              title={t(locale, 'proto.layout')}
+            >
+              {t(locale, 'proto.layout')}
+            </span>
+            <fieldset className="segmented proto-layouts">
+              <legend className="sr-only">{t(locale, 'proto.layout')}</legend>
+              {LAYOUTS.map((s) => (
+                <label
+                  key={s}
+                  className={direction === s ? 'is-active' : undefined}
+                  title={t(locale, `proto.layout.${s}Hint` as const)}
+                >
+                  <input
+                    type="radio"
+                    name="layout"
+                    value={s}
+                    checked={direction === s}
+                    onChange={() => {
+                      setDirection(s);
+                      directionRef.current = s;
+                      saveLayout(s);
+                    }}
+                  />
+                  <span>{t(locale, `proto.layout.${s}` as const)}</span>
+                </label>
+              ))}
+            </fieldset>
+          </div>
+          <div className="proto-ends-row">
+            <span className="proto-ends-caption" aria-hidden="true" title={t(locale, 'proto.net')}>
+              {t(locale, 'proto.net')}
+            </span>
+            <fieldset className="segmented proto-nets" title={t(locale, 'proto.net.hint')}>
+              <legend className="sr-only">{t(locale, 'proto.net')}</legend>
+              {NETS.map((s) => (
+                <label key={s} className={net === s ? 'is-active' : undefined}>
+                  <input
+                    type="radio"
+                    name="net"
+                    value={s}
+                    checked={net === s}
+                    onChange={() => {
+                      // Another network is another seed: the page starts over with it.
+                      saveLayout(NET_LAYOUT[s]);
+                      const url = new URL(window.location.href);
+                      if (s === 'demo') url.searchParams.delete('net');
+                      else url.searchParams.set('net', s);
+                      window.location.assign(url);
+                    }}
+                  />
+                  <span>{t(locale, `proto.net.${s}` as const)}</span>
+                </label>
+              ))}
             </fieldset>
           </div>
           <input

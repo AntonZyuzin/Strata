@@ -992,6 +992,16 @@ button:focus-visible {
   padding: 0;
 }
 
+.proto-top .proto-layouts label {
+  width: 11ch;
+  padding: 0;
+}
+
+.proto-top .proto-nets label {
+  width: 10ch;
+  padding: 0;
+}
+
 .contrast {
   flex: 1 0 100%;
   display: grid;

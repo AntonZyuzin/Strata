@@ -2,6 +2,7 @@ import type { BoardResult } from './board';
 import type { BridgeResult } from './bridge';
 import type { CanvasResult } from './canvas';
 import type { Environment } from './env';
+import type { LayoutResult } from './layout';
 import type { LookResult } from './look';
 import type { LoroIndexResult, LoroTextResult } from './loro';
 import type { NoteResult } from './note';
@@ -17,6 +18,7 @@ export type {
   BridgeResult,
   CanvasResult,
   Environment,
+  LayoutResult,
   LookResult,
   LoroIndexResult,
   LoroTextResult,
@@ -42,6 +44,7 @@ export const SCENARIO_IDS = [
   'loro-index-100k-k16',
   'loro-text-1mb',
   'board-b2k',
+  'layout-l',
   'note-1mb',
 ] as const;
 
@@ -86,6 +89,7 @@ export type Headline =
   | { kind: 'bridge'; p95: number; firstFrame: number; diff: number }
   | { kind: 'note'; openMs: number; keyP95: number }
   | { kind: 'board'; fps: number; p95: number; openMs: number }
+  | { kind: 'layout'; sizes: [number, number]; small: number; large: number; mainGap: number }
   | {
       kind: 'index';
       importMs: number;
@@ -100,10 +104,24 @@ export type Headline =
 export function headline(o: ScenarioOutcome): Headline {
   if (!o.ok) return { kind: 'error', message: firstLine(o.error) };
   const r = o.result as Partial<
-    CanvasResult & BridgeResult & BoardResult & LoroIndexResult & LoroTextResult & NoteResult
+    CanvasResult &
+      BridgeResult &
+      BoardResult &
+      LayoutResult &
+      LoroIndexResult &
+      LoroTextResult &
+      NoteResult
   >;
   if (r.openMs !== undefined && r.keyWorkMs)
     return { kind: 'note', openMs: r.openMs, keyP95: r.keyWorkMs.p95 };
+  if (r.smallMs !== undefined && r.largeMs !== undefined && r.sizes && r.mainGapMs !== undefined)
+    return {
+      kind: 'layout',
+      sizes: r.sizes,
+      small: r.smallMs,
+      large: r.largeMs,
+      mainGap: r.mainGapMs,
+    };
   if (r.boardOpenMs !== undefined && r.fps !== undefined && r.p95Ms !== undefined)
     return { kind: 'board', fps: r.fps, p95: r.p95Ms, openMs: r.boardOpenMs };
   if (r.frame0Diff !== undefined && r.firstFrameMs && r.p95Ms !== undefined)
@@ -153,6 +171,11 @@ export const THRESHOLDS = {
   },
   /** NFR-30: a B-2k board's first frame. */
   boardOpenMs: 1000,
+  /** NFR-08: `L` in the worker on 500 and 5 000 nodes; no main-thread task over 50 ms. */
+  layoutSmallMs: 200,
+  layoutLargeMs: 2000,
+  /** 50 ms and the 10 ms period of the timer that watches. */
+  layoutMainGapMs: 60,
   /** NFR-15: `M` → first 3D frame with the layout cached. */
   firstFrameMs: 100,
   /** NFR-29: a 1 MB note opens in ≤ 1 s; NFR-33: a character shows in ≤ 16 ms p95. */
@@ -189,6 +212,12 @@ export function verdict(o: ScenarioOutcome, timerResolutionMs = 0): Verdict {
       return h.p95 <= THRESHOLDS.frameP95Ms['bridge-2d-3d'] + slack &&
         h.firstFrame <= THRESHOLDS.firstFrameMs &&
         h.diff <= THRESHOLDS.frame0Diff
+        ? 'pass'
+        : 'fail';
+    case 'layout':
+      return h.small <= THRESHOLDS.layoutSmallMs &&
+        h.large <= THRESHOLDS.layoutLargeMs &&
+        h.mainGap <= THRESHOLDS.layoutMainGapMs
         ? 'pass'
         : 'fail';
     case 'board':

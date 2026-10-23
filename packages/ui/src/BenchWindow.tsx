@@ -172,6 +172,13 @@ function formatHeadline(locale: Locale, h: Headline): string {
   switch (h.kind) {
     case 'canvas':
       return t(locale, 'bench.r.canvas', { fps: n(h.fps), p95: n(h.p95) });
+    case 'layout':
+      return t(locale, 'bench.r.layout', {
+        a: n(h.sizes[0], 0),
+        small: n(h.small, 0),
+        b: n(h.sizes[1], 0),
+        large: n(h.large, 0),
+      });
     case 'board':
       return t(locale, 'bench.r.board', { open: n(h.openMs, 0), fps: n(h.fps), p95: n(h.p95) });
     case 'note':

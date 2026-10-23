@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { createForce3d, loadLayout } from './index';
+import { createForce3d, layoutNetwork, loadLayout } from './index';
 
 const bytes = readFileSync(new URL('../pkg/strata_layout_bg.wasm', import.meta.url));
 const params = { repulsion: 30, theta: 0.8, centre: 0.001, decay: 0.4, maxStep: 50 };
@@ -43,5 +43,45 @@ describe('strata-layout in WASM (08 §3.2)', () => {
     sim.run(50, 0.001);
     expect(sim.positions().every(Number.isFinite)).toBe(true);
     sim.free();
+  });
+});
+
+describe('L in WASM (06 §9.2)', () => {
+  const ring = (n: number) => ({
+    pos: Float32Array.from({ length: n * 2 }, (_, i) => Math.cos(i * 1.7) * 300),
+    radius: new Float32Array(n).fill(18),
+    pinned: new Uint8Array(n),
+    from: Uint32Array.from({ length: n - 1 }, (_, i) => i),
+    to: Uint32Array.from({ length: n - 1 }, (_, i) => i + 1),
+    text: new Uint8Array(n - 1),
+  });
+
+  it('lays a chain out top to bottom with every kind keeping bubbles apart', async () => {
+    await loadLayout(bytes);
+    const net = ring(30);
+    const layered = layoutNetwork(net, 'layered', { gap: 24, layer: 80 });
+    for (let i = 0; i + 1 < 30; i++) {
+      expect(layered[(i + 1) * 2 + 1] ?? 0).toBeGreaterThan(layered[i * 2 + 1] ?? 0);
+    }
+    for (const kind of ['layered', 'radial', 'force'] as const) {
+      const p = layoutNetwork(net, kind, { gap: 24, layer: 80 });
+      let closest = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < 30; i++)
+        for (let j = i + 1; j < 30; j++)
+          closest = Math.min(
+            closest,
+            Math.hypot(
+              (p[i * 2] ?? 0) - (p[j * 2] ?? 0),
+              (p[i * 2 + 1] ?? 0) - (p[j * 2 + 1] ?? 0),
+            ),
+          );
+      expect(closest, kind).toBeGreaterThan(36 + 12);
+    }
+  });
+
+  it('refuses arrays that do not match instead of aborting the module', async () => {
+    await loadLayout(bytes);
+    const net = { ...ring(5), to: Uint32Array.of(1, 2, 3, 9) };
+    expect(() => layoutNetwork(net, 'force', { gap: 24, layer: 80 })).toThrow(/do not match/);
   });
 });

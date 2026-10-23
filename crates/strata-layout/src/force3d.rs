@@ -209,6 +209,8 @@ pub struct Force3d {
     vel: Vec<f32>,
     force: Vec<f32>,
     mass: Vec<f32>,
+    /// Bodies that do not move (a pinned node, 06 §9.1); they still push and pull.
+    fixed: Vec<bool>,
     springs: Springs,
     params: Params,
     /// Bodies in tree order: a permutation of `0..n`, kept between ticks.
@@ -249,6 +251,7 @@ impl Force3d {
             vel: vec![0.0; n * 3],
             force: vec![0.0; n * 3],
             mass,
+            fixed: vec![false; n],
             springs,
             params,
             order: (0..n as u32).collect(),
@@ -278,6 +281,18 @@ impl Force3d {
     /// Positions to move bodies by hand (a pinned body, a drag in 3D).
     pub fn positions_mut(&mut self) -> &mut [f32] {
         &mut self.pos
+    }
+
+    /// Fixes body `i` in place, or frees it.
+    ///
+    /// # Panics
+    ///
+    /// When `i` is not a body.
+    pub fn set_fixed(&mut self, i: usize, fixed: bool) {
+        self.fixed[i] = fixed;
+        if fixed {
+            self.vel[i * 3..i * 3 + 3].fill(0.0);
+        }
     }
 
     /// One tick at cooling `alpha`; a full layout cools 1 → 0.001 (08 §3.3).
@@ -499,6 +514,9 @@ impl Force3d {
         let keep = 1.0 - self.params.decay;
         let max = self.params.max_step;
         for i in 0..self.len() {
+            if self.fixed[i] {
+                continue;
+            }
             let m = self.mass[i];
             let mut v = [0.0f32; 3];
             for (a, va) in v.iter_mut().enumerate() {

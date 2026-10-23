@@ -11,7 +11,7 @@
 | Путь | Что |
 |---|---|
 | `crates/strata-model` | Типы домена без IO: ID (UUIDv7, Crockford base32), детерминированные ключи, виды нод, источники наборов изменений |
-| `crates/strata-core` | Ядро: доменные операции, инварианты, хранилище, проекция |
+| `crates/strata-core` | Ядро (веха 1A): `workspace.rs` — документы Loro по 10 §2, операции 10 §4 с проверкой 05 §14, наборы изменений «до/после» и отмена 05 §11, выписка сети и корзина; `sqlite.rs` — `store.sqlite` и папка пространства (10 §3); `api.rs` — все вызовы как JSON для Tauri (`core`) и сборки для браузера |
 | `crates/strata-cli` | Бинарник `strata` |
 | `crates/strata-desktop` | Десктоп на Tauri 2 (ADR-0004); не входит в `default-members`, нужен WebView |
 | `crates/strata-layout` | Раскладки без IO: физика звёздной карты — Барнс — Хат по группам с SIMD (`force3d.rs`, ADR-0005); `L` на сети (`net.rs`: слоистая `layered.rs`, радиальная `radial.rs`, силовая `force2d.rs`, спайк 10); замер — `cargo run --release -p strata-layout --example layout2d_speed` |

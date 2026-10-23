@@ -6,6 +6,7 @@ members = [
     "crates/strata-cli",
     "crates/strata-layout",
     "crates/strata-layout-wasm",
+    "crates/strata-markdown",
     "crates/strata-desktop",
     "spikes/loro-index",
 ]
@@ -17,6 +18,7 @@ default-members = [
     "crates/strata-core",
     "crates/strata-cli",
     "crates/strata-layout",
+    "crates/strata-markdown",
 ]
 
 [workspace.package]

@@ -1,0 +1,16 @@
+[package]
+name = "strata-markdown"
+description = "Strata's reading of Markdown: [[links]], embeds, tags and properties for text wires and import (15 §2, spike 11)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+pulldown-cmark = { version = "0.13.5", default-features = false }
+saphyr = "0.2.2"
+
+[lints]
+workspace = true

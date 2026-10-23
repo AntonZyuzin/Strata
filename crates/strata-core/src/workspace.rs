@@ -1,0 +1,757 @@
+//! A workspace: its documents (10 §2), the domain operations on them
+//! (10 §4), the changeset journal and undo (05 §11), the view of a network
+//! for the canvas (10 §7.3).
+//!
+//! Documents follow 10 §2.3–2.4: the index shards hold node fields,
+//! placements and outgoing wires as maps keyed by node, placement or wire;
+//! a network's document holds positions. The core is the only writer: an
+//! operation checks the invariants of 05 §14 on the state it holds, writes
+//! every touched key, records its value before and after, and commits the
+//! updates of every touched document with the changeset at once (10 §3.3).
+
+use crate::changeset::{Changeset, KeyWrite, Label, RevertReport};
+use crate::ops::Op;
+use crate::store::{Store, StoreError, StoredDoc};
+use crate::value::Val;
+use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use strata_model::{
+    ChangesetId, ChangesetOrigin, EdgeKey, NodeId, NodeKind, PlacementKey, shard_of,
+};
+
+/// Version of the documents' layout (10 §13).
+pub const SCHEMA: i64 = 1;
+
+#[derive(Debug, thiserror::Error)]
+pub enum CoreError {
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("document engine: {0}")]
+    Engine(String),
+    /// The operation breaks the model's rules; nothing was written.
+    #[error("{0}")]
+    Invalid(String),
+}
+
+pub type Result<T> = std::result::Result<T, CoreError>;
+
+fn engine(e: impl std::fmt::Display) -> CoreError {
+    CoreError::Engine(e.to_string())
+}
+
+fn invalid(msg: impl Into<String>) -> CoreError {
+    CoreError::Invalid(msg.into())
+}
+
+/// A node as the canvas draws it.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewNode {
+    pub id: String,
+    pub kind: NodeKind,
+    pub name: String,
+    pub x: f64,
+    pub y: f64,
+}
+
+/// A wire between two nodes of the network.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewEdge {
+    pub from: String,
+    pub to: String,
+    /// It comes (also) from a `[[link]]` in text.
+    pub text: bool,
+    /// It was drawn by hand or imported.
+    pub manual: bool,
+}
+
+/// One network for the canvas (10 §7.3): its nodes, the wires between them,
+/// the way from the root.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct NetworkView {
+    pub net: String,
+    pub name: String,
+    /// From the root to this network, both included: `[id, name]`.
+    pub path: Vec<(String, String)>,
+    pub nodes: Vec<ViewNode>,
+    pub edges: Vec<ViewEdge>,
+}
+
+/// A node in the trash.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrashItem {
+    pub id: String,
+    pub kind: NodeKind,
+    pub name: String,
+    pub trashed_at: i64,
+    /// The changeset that put it there: nodes trashed together come back together.
+    pub batch: String,
+}
+
+/// The undo and redo steps the UI shows.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct History {
+    pub undo: Option<Label>,
+    pub redo: Option<Label>,
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as i64)
+}
+
+pub struct Workspace<S: Store> {
+    store: S,
+    docs: HashMap<String, LoroDoc>,
+    k: u32,
+    id: String,
+    root: NodeId,
+    clock: fn() -> i64,
+    undo: Vec<Changeset>,
+    redo: Vec<Changeset>,
+}
+
+impl<S: Store> std::fmt::Debug for Workspace<S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Workspace")
+            .field("id", &self.id)
+            .field("root", &self.root.to_text())
+            .field("k", &self.k)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The writes of one operation in progress.
+struct Tx<'a> {
+    docs: &'a mut HashMap<String, LoroDoc>,
+    before: HashMap<String, VersionVector>,
+    writes: Vec<KeyWrite>,
+}
+
+fn read(doc: &LoroDoc, map: &str, key: &str) -> Option<Val> {
+    match doc.get_map(map).get(key)? {
+        ValueOrContainer::Value(v) => Val::from_loro(&v),
+        ValueOrContainer::Container(_) => None,
+    }
+}
+
+impl Tx<'_> {
+    fn set(&mut self, doc: &str, map: &str, key: &str, value: Option<Val>) -> Result<()> {
+        let d = self
+            .docs
+            .get(doc)
+            .ok_or_else(|| engine(format!("document {doc} is not loaded")))?;
+        self.before
+            .entry(doc.to_owned())
+            .or_insert_with(|| d.oplog_vv());
+        let before = read(d, map, key);
+        if before == value {
+            return Ok(());
+        }
+        let m = d.get_map(map);
+        match &value {
+            Some(v) => m.insert(key, LoroValue::from(v.clone())).map_err(engine)?,
+            None => m.delete(key).map_err(engine)?,
+        }
+        self.writes.push(KeyWrite {
+            doc: doc.to_owned(),
+            map: map.to_owned(),
+            key: key.to_owned(),
+            before,
+            after: value,
+        });
+        Ok(())
+    }
+}
+
+impl<S: Store> Workspace<S> {
+    /// A new workspace in an empty store: its manifest and the root network (05 §3).
+    pub fn create(store: S, root_name: &str) -> Result<Self> {
+        let mut ws = Self {
+            store,
+            docs: HashMap::new(),
+            k: 1,
+            id: strata_model::WorkspaceId::new().to_text(),
+            root: NodeId::new(),
+            clock: now_ms,
+            undo: Vec::new(),
+            redo: Vec::new(),
+        };
+        for doc in ["manifest", "sys"] {
+            ws.docs.insert(doc.to_owned(), LoroDoc::new());
+        }
+        ws.load_index()?;
+        let root = ws.root.to_text();
+        let ts = (ws.clock)();
+        let id = ws.id.clone();
+        let index = ws.index_doc(ws.root);
+        ws.write(
+            ChangesetOrigin::System,
+            Label::new("core.change.create"),
+            |tx| {
+                tx.set("manifest", "ws", "id", Some(Val::str(id)))?;
+                tx.set("manifest", "ws", "root", Some(Val::str(root.clone())))?;
+                tx.set("sys", "sys", "schema", Some(Val::Int(SCHEMA)))?;
+                tx.set("sys", "sys", "k", Some(Val::Int(1)))?;
+                tx.set(&index, "kind", &root, Some(Val::str("network")))?;
+                tx.set(&index, "name", &root, Some(Val::str(root_name)))?;
+                tx.set(&index, "createdAt", &root, Some(Val::Int(ts)))?;
+                Ok(())
+            },
+        )?;
+        Ok(ws)
+    }
+
+    /// A workspace from its store.
+    pub fn open(store: S) -> Result<Self> {
+        let mut docs = HashMap::new();
+        for doc in ["manifest", "sys"] {
+            let d =
+                load(&store, doc)?.ok_or_else(|| invalid(format!("no {doc}: not a workspace")))?;
+            docs.insert(doc.to_owned(), d);
+        }
+        let id = read(&docs["manifest"], "ws", "id")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .ok_or_else(|| invalid("the manifest has no workspace id"))?;
+        let root = read(&docs["manifest"], "ws", "root")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .ok_or_else(|| invalid("the manifest has no root network"))?;
+        let k = read(&docs["sys"], "sys", "k")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(1) as u32;
+        let mut ws = Self {
+            store,
+            docs,
+            k,
+            id,
+            root: NodeId::parse(&root).map_err(|e| invalid(e.to_string()))?,
+            clock: now_ms,
+            undo: Vec::new(),
+            redo: Vec::new(),
+        };
+        ws.load_index()?;
+        Ok(ws)
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn root(&self) -> String {
+        self.root.to_text()
+    }
+
+    pub fn store(&self) -> &S {
+        &self.store
+    }
+
+    /// The store back, to open the workspace again (tests, closing).
+    pub fn into_store(self) -> S {
+        self.store
+    }
+
+    /// A fixed clock for tests.
+    pub fn set_clock(&mut self, clock: fn() -> i64) {
+        self.clock = clock;
+    }
+
+    fn load_index(&mut self) -> Result<()> {
+        for k in 0..self.k {
+            let id = format!("index/0/{k}");
+            let d = load(&self.store, &id)?.unwrap_or_default();
+            self.docs.insert(id, d);
+        }
+        Ok(())
+    }
+
+    fn index_doc(&self, node: NodeId) -> String {
+        format!("index/0/{}", shard_of(node, self.k))
+    }
+
+    fn index_shards(&self) -> impl Iterator<Item = &LoroDoc> {
+        (0..self.k).filter_map(|k| self.docs.get(&format!("index/0/{k}")))
+    }
+
+    /// A network's document, loaded on first use (10 §6).
+    fn ensure_doc(&mut self, doc: &str) -> Result<()> {
+        if !self.docs.contains_key(doc) {
+            let d = load(&self.store, doc)?.unwrap_or_default();
+            self.docs.insert(doc.to_owned(), d);
+        }
+        Ok(())
+    }
+
+    fn field(&self, node: NodeId, map: &str) -> Option<Val> {
+        read(self.docs.get(&self.index_doc(node))?, map, &node.to_text())
+    }
+
+    fn kind(&self, node: NodeId) -> Option<NodeKind> {
+        let v = self.field(node, "kind")?;
+        serde_json::from_value(serde_json::Value::String(v.as_str()?.to_owned())).ok()
+    }
+
+    fn alive(&self, node: NodeId) -> bool {
+        self.kind(node).is_some() && self.field(node, "trashedAt").is_none()
+    }
+
+    fn name(&self, node: NodeId) -> String {
+        self.field(node, "name")
+            .and_then(|v| v.as_str().map(str::to_owned))
+            .unwrap_or_default()
+    }
+
+    fn parse(&self, id: &str) -> Result<NodeId> {
+        NodeId::parse(id).map_err(|e| invalid(format!("node id {id}: {e}")))
+    }
+
+    fn network(&self, id: &str) -> Result<NodeId> {
+        let n = self.parse(id)?;
+        if self.kind(n) != Some(NodeKind::Network) || !self.alive(n) {
+            return Err(invalid(format!("{id} is not a live network")));
+        }
+        Ok(n)
+    }
+
+    fn live(&self, id: &str) -> Result<NodeId> {
+        let n = self.parse(id)?;
+        if !self.alive(n) {
+            return Err(invalid(format!(
+                "node {id} does not exist or is in the trash"
+            )));
+        }
+        Ok(n)
+    }
+
+    /// Networks above `net` by primary placements, up to the root (05 §9.3).
+    fn ancestors(&self, net: NodeId) -> Vec<NodeId> {
+        let mut out = Vec::new();
+        let mut at = net;
+        while let Some(parent) = self
+            .field(at, "primaryNet")
+            .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()))
+        {
+            if out.contains(&parent) || out.len() > 1000 {
+                break;
+            }
+            out.push(parent);
+            at = parent;
+        }
+        out
+    }
+
+    /// Runs `build` as one changeset and commits it; nothing is kept if it fails.
+    fn write(
+        &mut self,
+        origin: ChangesetOrigin,
+        label: Label,
+        build: impl FnOnce(&mut Tx<'_>) -> Result<()>,
+    ) -> Result<Changeset> {
+        let mut tx = Tx {
+            docs: &mut self.docs,
+            before: HashMap::new(),
+            writes: Vec::new(),
+        };
+        let built = build(&mut tx);
+        let Tx { before, writes, .. } = tx;
+        if let Err(e) = built {
+            // The documents in memory go back to the store's state (10 §3.3).
+            for doc in before.keys() {
+                let d = load(&self.store, doc)?.unwrap_or_default();
+                self.docs.insert(doc.clone(), d);
+            }
+            return Err(e);
+        }
+        let changeset = Changeset {
+            id: ChangesetId::new().to_text(),
+            ts: (self.clock)(),
+            origin,
+            label,
+            reverts: None,
+            writes,
+        };
+        let mut updates = Vec::new();
+        for (doc, vv) in &before {
+            let d = &self.docs[doc];
+            d.commit();
+            let bytes = d.export(ExportMode::updates(vv)).map_err(engine)?;
+            if !bytes.is_empty() {
+                updates.push((doc.clone(), bytes));
+            }
+        }
+        updates.sort();
+        if let Err(e) = self.store.commit(&changeset, &updates) {
+            for doc in before.keys() {
+                let d = load(&self.store, doc)?.unwrap_or_default();
+                self.docs.insert(doc.clone(), d);
+            }
+            return Err(e.into());
+        }
+        Ok(changeset)
+    }
+
+    /// Applies the operations as one changeset, one step of undo.
+    pub fn apply(&mut self, ops: &[Op], label: Label) -> Result<Changeset> {
+        // Documents of the networks the operations touch, before the transaction.
+        for op in ops {
+            match op {
+                Op::CreateNode { net, .. } | Op::Move { net, .. } => {
+                    self.ensure_doc(&format!("net/{net}"))?;
+                }
+                _ => {}
+            }
+        }
+        let plan = self.plan(ops)?;
+        let changeset = self.write(ChangesetOrigin::User, label, |tx| {
+            for (doc, map, key, value) in plan {
+                tx.set(&doc, &map, &key, value)?;
+            }
+            Ok(())
+        })?;
+        if !changeset.writes.is_empty() {
+            self.undo.push(changeset.clone());
+            self.redo.clear();
+        }
+        Ok(changeset)
+    }
+
+    /// The key writes of `ops`, checked against the model's rules first.
+    #[allow(clippy::type_complexity)]
+    fn plan(&self, ops: &[Op]) -> Result<Vec<(String, String, String, Option<Val>)>> {
+        let ts = (self.clock)();
+        let batch = ChangesetId::new().to_text();
+        let mut out = Vec::new();
+        let mut put = |doc: &str, map: &str, key: &str, v: Option<Val>| {
+            out.push((doc.to_owned(), map.to_owned(), key.to_owned(), v));
+        };
+        // Nodes made earlier in this list count as existing for the ops after them.
+        let mut made: HashMap<NodeId, NodeKind> = HashMap::new();
+        let exists =
+            |n: NodeId, made: &HashMap<NodeId, NodeKind>| made.contains_key(&n) || self.alive(n);
+        for op in ops {
+            match op {
+                Op::CreateNode {
+                    id,
+                    kind,
+                    name,
+                    net,
+                    x,
+                    y,
+                } => {
+                    let parent = self.network(net)?;
+                    let node = match id {
+                        Some(id) => self.parse(id)?,
+                        None => NodeId::new(),
+                    };
+                    if self.kind(node).is_some() || made.contains_key(&node) {
+                        return Err(invalid(format!("node {} already exists", node.to_text())));
+                    }
+                    made.insert(node, *kind);
+                    let key = node.to_text();
+                    let index = self.index_doc(node);
+                    let kind_text = serde_json::to_value(kind)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    put(&index, "kind", &key, Some(Val::str(kind_text)));
+                    put(&index, "name", &key, Some(Val::str(name.trim())));
+                    put(&index, "createdAt", &key, Some(Val::Int(ts)));
+                    put(&index, "primaryNet", &key, Some(Val::str(net.clone())));
+                    put(
+                        &index,
+                        "placement",
+                        &PlacementKey::new(parent, node).to_text(),
+                        Some(Val::map([("at", Val::Int(ts))])),
+                    );
+                    put(
+                        &format!("net/{net}"),
+                        "pos",
+                        &key,
+                        Some(Val::List(vec![Val::Float(*x), Val::Float(*y)])),
+                    );
+                }
+                Op::Rename { id, name } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    put(
+                        &self.index_doc(n),
+                        "name",
+                        &n.to_text(),
+                        Some(Val::str(name.trim())),
+                    );
+                }
+                Op::Move { net, id, x, y } => {
+                    let parent = self.network(net)?;
+                    let n = self.parse(id)?;
+                    let placed = made.contains_key(&n) || self.placed(parent, n);
+                    if !placed {
+                        return Err(invalid(format!("node {id} is not placed in {net}")));
+                    }
+                    put(
+                        &format!("net/{net}"),
+                        "pos",
+                        &n.to_text(),
+                        Some(Val::List(vec![Val::Float(*x), Val::Float(*y)])),
+                    );
+                }
+                Op::Connect { from, to } => {
+                    let (a, b) = (self.parse(from)?, self.parse(to)?);
+                    if a == b {
+                        return Err(invalid("a wire needs two different nodes (05 §8.2)"));
+                    }
+                    for n in [a, b] {
+                        if !exists(n, &made) {
+                            return Err(invalid(format!("node {} does not exist", n.to_text())));
+                        }
+                    }
+                    let edge = EdgeKey::between(a, b).to_text();
+                    let index = self.index_doc(a);
+                    put(
+                        &index,
+                        "edge",
+                        &edge,
+                        Some(Val::map([
+                            ("from", Val::str(from.clone())),
+                            ("to", Val::str(to.clone())),
+                        ])),
+                    );
+                    put(
+                        &index,
+                        "edgeOrigin",
+                        &format!("{edge}|manual"),
+                        Some(Val::map([("at", Val::Int(ts))])),
+                    );
+                }
+                Op::Disconnect { from, to } => {
+                    let (a, b) = (self.parse(from)?, self.parse(to)?);
+                    let edge = EdgeKey::between(a, b).to_text();
+                    let index = self.index_doc(a);
+                    let doc = &self.docs[&index];
+                    if read(doc, "edge", &edge).is_none() {
+                        return Err(invalid("there is no such wire"));
+                    }
+                    put(&index, "edgeOrigin", &format!("{edge}|manual"), None);
+                    put(&index, "edgeOrigin", &format!("{edge}|import"), None);
+                    // The wire lives while it has an origin (10 §2.3).
+                    if read(doc, "edgeOrigin", &format!("{edge}|text")).is_none() {
+                        put(&index, "edge", &edge, None);
+                    }
+                }
+                Op::Trash { ids } => {
+                    for id in ids {
+                        let n = self.live(id)?;
+                        if n == self.root {
+                            return Err(invalid("the root network cannot go to the trash"));
+                        }
+                        let index = self.index_doc(n);
+                        let key = n.to_text();
+                        put(&index, "trashedAt", &key, Some(Val::Int(ts)));
+                        put(&index, "trashBatch", &key, Some(Val::str(batch.clone())));
+                    }
+                }
+                Op::Restore { ids } => {
+                    for id in ids {
+                        let n = self.parse(id)?;
+                        if self.field(n, "trashedAt").is_none() {
+                            return Err(invalid(format!("node {id} is not in the trash")));
+                        }
+                        let index = self.index_doc(n);
+                        let key = n.to_text();
+                        put(&index, "trashedAt", &key, None);
+                        put(&index, "trashBatch", &key, None);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn placed(&self, net: NodeId, node: NodeId) -> bool {
+        let key = PlacementKey::new(net, node).to_text();
+        self.docs
+            .get(&self.index_doc(node))
+            .is_some_and(|d| read(d, "placement", &key).is_some())
+    }
+
+    /// Writes the old value back where a key still holds the new one (05 §11).
+    fn revert(&mut self, cs: &Changeset) -> Result<(Changeset, RevertReport)> {
+        for w in &cs.writes {
+            self.ensure_doc(&w.doc)?;
+        }
+        let mut skipped = Vec::new();
+        let mut plan = Vec::new();
+        for w in cs.writes.iter().rev() {
+            let now = read(&self.docs[&w.doc], &w.map, &w.key);
+            if now == w.after {
+                plan.push(w.clone());
+            } else {
+                skipped.push(w.clone());
+            }
+        }
+        let mut out = self.write(cs.origin.clone(), cs.label.clone(), |tx| {
+            for w in plan {
+                tx.set(&w.doc, &w.map, &w.key, w.before)?;
+            }
+            Ok(())
+        })?;
+        out.reverts = Some(cs.id.clone());
+        Ok((out, RevertReport { skipped }))
+    }
+
+    /// Undoes the last step of this session's user (05 §11).
+    pub fn undo(&mut self) -> Result<Option<RevertReport>> {
+        let Some(cs) = self.undo.pop() else {
+            return Ok(None);
+        };
+        let (back, report) = self.revert(&cs)?;
+        self.redo.push(back);
+        Ok(Some(report))
+    }
+
+    /// Redoes the last undone step.
+    pub fn redo(&mut self) -> Result<Option<RevertReport>> {
+        let Some(cs) = self.redo.pop() else {
+            return Ok(None);
+        };
+        let (again, report) = self.revert(&cs)?;
+        self.undo.push(again);
+        Ok(Some(report))
+    }
+
+    pub fn history(&self) -> History {
+        History {
+            undo: self.undo.last().map(|c| c.label.clone()),
+            redo: self.redo.last().map(|c| c.label.clone()),
+        }
+    }
+
+    /// The network as the canvas draws it (10 §7.3).
+    pub fn network_view(&mut self, net: &str) -> Result<NetworkView> {
+        let n = self.network(net)?;
+        let doc = format!("net/{net}");
+        self.ensure_doc(&doc)?;
+        let prefix = format!("{net}/");
+        let mut ids = BTreeSet::new();
+        for shard in self.index_shards() {
+            if let LoroValue::Map(m) = shard.get_map("placement").get_value() {
+                for key in m.keys() {
+                    if let Some(node) = key.strip_prefix(&prefix) {
+                        ids.insert(node.to_owned());
+                    }
+                }
+            }
+        }
+        let pos = &self.docs[&doc];
+        let mut nodes = Vec::new();
+        for id in &ids {
+            let Ok(node) = NodeId::parse(id) else {
+                continue;
+            };
+            if !self.alive(node) {
+                continue;
+            }
+            let (x, y) = match read(pos, "pos", id) {
+                Some(Val::List(p)) => (
+                    p.first().and_then(Val::as_f64).unwrap_or(0.0),
+                    p.get(1).and_then(Val::as_f64).unwrap_or(0.0),
+                ),
+                _ => (0.0, 0.0),
+            };
+            nodes.push(ViewNode {
+                id: id.clone(),
+                kind: self.kind(node).unwrap_or(NodeKind::Note),
+                name: self.name(node),
+                x,
+                y,
+            });
+        }
+        let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();
+        let mut edges = Vec::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            let origins: BTreeMap<String, ()> = match shard.get_map("edgeOrigin").get_value() {
+                LoroValue::Map(o) => o.keys().map(|k| (k.clone(), ())).collect(),
+                _ => BTreeMap::new(),
+            };
+            for (key, v) in all.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let (Some(from), Some(to)) = (
+                    v.get("from").and_then(Val::as_str),
+                    v.get("to").and_then(Val::as_str),
+                ) else {
+                    continue;
+                };
+                if !shown.contains(from) || !shown.contains(to) {
+                    continue;
+                }
+                let has = |o: &str| origins.contains_key(&format!("{key}|{o}"));
+                edges.push(ViewEdge {
+                    from: from.to_owned(),
+                    to: to.to_owned(),
+                    text: has("text"),
+                    manual: has("manual") || has("import"),
+                });
+            }
+        }
+        edges.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+        let mut path: Vec<(String, String)> = self
+            .ancestors(n)
+            .into_iter()
+            .rev()
+            .map(|a| (a.to_text(), self.name(a)))
+            .collect();
+        path.push((net.to_owned(), self.name(n)));
+        Ok(NetworkView {
+            net: net.to_owned(),
+            name: self.name(n),
+            path,
+            nodes,
+            edges,
+        })
+    }
+
+    /// Nodes in the trash, newest first.
+    pub fn trash(&self) -> Vec<TrashItem> {
+        let mut out = Vec::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(m) = shard.get_map("trashedAt").get_value() else {
+                continue;
+            };
+            for (id, at) in m.iter() {
+                let Ok(n) = NodeId::parse(id) else { continue };
+                out.push(TrashItem {
+                    id: id.clone(),
+                    kind: self.kind(n).unwrap_or(NodeKind::Note),
+                    name: self.name(n),
+                    trashed_at: Val::from_loro(at).and_then(|v| v.as_i64()).unwrap_or(0),
+                    batch: self
+                        .field(n, "trashBatch")
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default(),
+                });
+            }
+        }
+        out.sort_by(|a, b| b.trashed_at.cmp(&a.trashed_at).then(a.id.cmp(&b.id)));
+        out
+    }
+}
+
+fn load<S: Store>(store: &S, doc: &str) -> Result<Option<LoroDoc>> {
+    let Some(StoredDoc { snapshot, updates }) = store.load(doc)? else {
+        return Ok(None);
+    };
+    let d = LoroDoc::new();
+    if let Some(s) = snapshot {
+        d.import(&s).map_err(engine)?;
+    }
+    if !updates.is_empty() {
+        d.import_batch(&updates).map_err(engine)?;
+    }
+    Ok(Some(d))
+}

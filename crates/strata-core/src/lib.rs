@@ -1,11 +1,30 @@
 //! Strata core (15 §2.2).
 //!
-//! Domain operations, invariants, the CRDT document engine, the SQLite
-//! projection, assets and the changeset journal live here. The engine is
-//! chosen by spike 4 (ADR-0003); until then this crate only exposes build
-//! information so the CLI and the desktop shell can link against it.
+//! Domain operations, invariants, the CRDT documents, the changeset journal
+//! and undo live here (15 §1.4 principle 1): the desktop shell, the CLI, the
+//! browser build and later MCP and the server call the same code.
+//!
+//! - [`workspace`]: documents of 10 §2, operations of 10 §4, changesets and
+//!   undo of 05 §11, the network view of 10 §7.3;
+//! - [`ops`]: the operations the UI sends; [`api`]: every call as JSON, the
+//!   same for the desktop shell and the browser build;
+//! - [`store`]: where documents and changesets live; [`sqlite`]: the
+//!   workspace folder and its `store.sqlite` (10 §3.1–3.3).
 
+pub mod api;
+pub mod changeset;
+pub mod ops;
+#[cfg(feature = "sqlite")]
+pub mod sqlite;
+pub mod store;
+pub mod value;
+pub mod workspace;
+
+pub use changeset::{Changeset, KeyWrite, Label, RevertReport};
+pub use ops::Op;
+pub use store::{MemoryStore, Store, StoreError, StoredDoc};
 pub use strata_model as model;
+pub use workspace::{CoreError, History, NetworkView, TrashItem, ViewEdge, ViewNode, Workspace};
 
 /// Version of the core, shared by every binary built from this workspace.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -20,9 +39,4 @@ pub fn build_info() -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn build_info_mentions_version() {
-        assert!(super::build_info().contains(super::VERSION));
-    }
-}
+mod tests;

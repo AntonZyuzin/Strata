@@ -8,8 +8,18 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+default = ["sqlite"]
+# The workspace folder's store.sqlite (10 §3.2); off in the browser build.
+sqlite = ["dep:rusqlite"]
+
 [dependencies]
+loro = "=1.16.2"
+rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
+serde.workspace = true
+serde_json.workspace = true
 strata-model.workspace = true
+thiserror.workspace = true
 
 [lints]
 workspace = true

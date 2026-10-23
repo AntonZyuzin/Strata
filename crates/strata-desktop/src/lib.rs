@@ -1,8 +1,17 @@
 //! Desktop shell (ADR-0004): one TypeScript SPA talking to the Rust core over
-//! Tauri IPC. Commands grow with the roadmap; stage 0 exposes build info only.
+//! Tauri IPC. `core` takes the core's JSON calls (`strata_core::api`) for the
+//! workspace in the app's data folder; `build_info` feeds «О программе» and
+//! the benchmark.
 
 use serde::Serialize;
+use std::sync::Mutex;
+use strata_core::Workspace;
+use strata_core::sqlite::SqliteStore;
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
+use tauri::Manager;
+
+/// The open workspace, or why it could not be opened.
+struct Core(Mutex<Result<Workspace<SqliteStore>, String>>);
 
 #[derive(Debug, Serialize)]
 struct BuildInfo {
@@ -52,10 +61,38 @@ fn build_info() -> BuildInfo {
     }
 }
 
+/// One call of the core as JSON (15 §2.5): the same requests the browser
+/// build answers in WASM.
+#[tauri::command]
+fn core(state: tauri::State<'_, Core>, request: String) -> String {
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_mut() {
+        Ok(ws) => strata_core::api::call(ws, &request),
+        Err(e) => {
+            serde_json::json!({ "type": "error", "message": e, "invalid": false }).to_string()
+        }
+    }
+}
+
 /// Starts the desktop application.
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![build_info])
+        .setup(|app| {
+            // The workspace folder in the app's data folder (10 §3.1); a
+            // folder of the user's choice comes with «Открыть пространство…».
+            let opened = app
+                .path()
+                .app_data_dir()
+                .map_err(|e| e.to_string())
+                .and_then(|dir| {
+                    strata_core::sqlite::open_or_create(&dir, "Strata")
+                        .map(|(ws, _)| ws)
+                        .map_err(|e| e.to_string())
+                });
+            app.manage(Core(Mutex::new(opened)));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![build_info, core])
         .run(tauri::generate_context!())
         .expect("failed to run the Strata desktop shell");
 }

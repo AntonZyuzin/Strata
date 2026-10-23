@@ -7,9 +7,13 @@ let counter = 0;
  * A 26-character time-ordered id in the Crockford base32 form of 05 §4.1:
  * 48 bits of milliseconds, then 80 random bits, like the text form of
  * UUIDv7 that strata-model produces. The prototype makes ids in the UI;
- * from milestone 1A the core does.
+ * from milestone 1A the core does. `fill` gives the random bits: the seed
+ * passes its own generator, so its ids are the same on every load.
  */
-export function newId(now = Date.now()): string {
+export function newId(
+  now = Date.now(),
+  fill: (bytes: Uint8Array<ArrayBuffer>) => void = (b) => crypto.getRandomValues(b),
+): string {
   if (now === lastMs) counter++;
   else {
     lastMs = now;
@@ -22,7 +26,7 @@ export function newId(now = Date.now()): string {
     ms = Math.floor(ms / 32);
   }
   const random = new Uint8Array(16);
-  crypto.getRandomValues(random);
+  fill(random);
   // Keep ids made in the same millisecond ordered: the counter leads the random part.
   chars[10] = ALPHABET[(counter >> 5) & 31] ?? '0';
   chars[11] = ALPHABET[counter & 31] ?? '0';

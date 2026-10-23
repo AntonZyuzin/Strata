@@ -180,6 +180,14 @@ describe('ids and seed', () => {
     expect(g.canUndo).toBe(false);
     expect([...g.nodes.keys()].some((id) => g.inputs(id).length >= 2)).toBe(true);
   });
+
+  it('gives the seed the same ids on every load and in both locales', () => {
+    const a = [...seedGraph({ locale: 'ru' }).nodes.keys()];
+    const b = [...seedGraph({ locale: 'en' }).nodes.keys()];
+    expect(b).toEqual(a);
+    expect(new Set(a).size).toBe(a.length);
+    expect(a.every((id) => /^[0-9A-HJKMNP-TV-Z]{26}$/.test(id))).toBe(true);
+  });
 });
 
 describe('derived changes (05 §11, source system)', () => {

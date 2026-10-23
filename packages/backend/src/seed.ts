@@ -143,6 +143,13 @@ export function seedGraph(
   const n = opts.nodes ?? 200;
   const r = rng(opts.seed ?? 11);
   const rs = rng((opts.seed ?? 11) + 1);
+  // Ids from their own generator: the same on every load and in both locales,
+  // so what is stored per node (note texts, board scenes) survives a reload.
+  const ri = rng((opts.seed ?? 11) + 2);
+  const seedId = (ms: number) =>
+    newId(ms, (b) => {
+      for (let k = 0; k < b.length; k++) b[k] = Math.floor(ri() * 256);
+    });
   const words = opts.locale === 'en' ? WORDS_EN : WORDS_RU;
   const cols = Math.ceil(Math.sqrt(n * 1.6));
   const rows = Math.ceil(n / cols);
@@ -171,7 +178,7 @@ export function seedGraph(
       const x = col * SEED_SPACING.x + (r() - 0.5) * 30;
       const y = row * SEED_SPACING.y + (r() - 0.5) * 20;
       const node = newNode({
-        id: newId(t0 + i),
+        id: seedId(t0 + i),
         name,
         kind,
         cls,
@@ -187,7 +194,7 @@ export function seedGraph(
     GALLERY.forEach((g, k) => {
       tx.add(
         newNode({
-          id: newId(t0 + n + k),
+          id: seedId(t0 + n + k),
           name: opts.locale === 'en' ? g.en : g.ru,
           cls: null,
           icon: g.icon,

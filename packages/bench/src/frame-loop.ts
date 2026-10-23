@@ -90,6 +90,12 @@ export interface FrameOptions {
   runMs: number;
   runs: number;
   vsyncMs: number;
+  /**
+   * A frame slower than this voids its run as «the display slept». The
+   * `quick` profile of CI turns it off: software WebGL there draws a heavy
+   * frame in over a second, and CI judges no frame times (14 §17).
+   */
+  stallMs?: number | undefined;
 }
 
 /** A frame slower than this means the display slept or the window was hidden. */
@@ -186,7 +192,9 @@ export function runFrames(
           return;
         }
         const interval = now - last;
-        if (interval > STALL_MS || document.visibilityState !== 'visible') stalled = true;
+        if (interval > (opts.stallMs ?? STALL_MS) || document.visibilityState !== 'visible') {
+          stalled = true;
+        }
         intervals.push(interval);
         last = now;
         const t0 = performance.now();

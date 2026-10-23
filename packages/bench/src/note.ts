@@ -23,10 +23,13 @@ export interface NoteResult {
   keyFrameMs: Summary;
 }
 
-const KEYS = 120;
 const frame = () => new Promise<number>((r) => requestAnimationFrame(r));
 
-export async function runNoteScenario(stage: HTMLElement, sizeBytes: number): Promise<NoteResult> {
+export async function runNoteScenario(
+  stage: HTMLElement,
+  sizeBytes: number,
+  keyCount = 120,
+): Promise<NoteResult> {
   const host = document.createElement('div');
   host.style.cssText = 'position:absolute;inset:0;font-size:15px';
   stage.replaceChildren(host);
@@ -61,7 +64,7 @@ export async function runNoteScenario(stage: HTMLElement, sizeBytes: number): Pr
     await frame();
     const work: number[] = [];
     const frames: number[] = [];
-    for (let k = 0; k < KEYS; k++) {
+    for (let k = 0; k < keyCount; k++) {
       const at = view.state.selection.main.head;
       const s = performance.now();
       view.dispatch({

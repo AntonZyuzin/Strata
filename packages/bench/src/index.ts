@@ -37,6 +37,12 @@ async function requestWakeLock(): Promise<{ release(): Promise<void> } | null> {
   }
 }
 
+/**
+ * CI's software WebGL draws a heavy frame in over a second: in the `quick`
+ * profile such a frame is not «the display slept» (frame-loop.ts).
+ */
+const QUICK_STALL_MS = 60_000;
+
 export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
   const q = profile === 'quick';
   // Frame method of 14 §1.4: 2 s warmup, 5 runs of 10 s, median p95.
@@ -52,6 +58,7 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
         runMs: q ? 1_500 : 10_000,
         runs: q ? 1 : 5,
         vsyncMs: env.vsyncMs,
+        stallMs: q ? QUICK_STALL_MS : undefined,
       });
   return [
     { id: 'canvas-pan-zoom-n5k', spike: 1, draws: true, run: canvas('pan-zoom', 5_000, 7_500) },
@@ -69,6 +76,8 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
           runMs: q ? 1_500 : 10_000,
           runs: q ? 1 : 5,
           vsyncMs: env.vsyncMs,
+          stallMs: q ? QUICK_STALL_MS : undefined,
+          gpuFrames: q ? 6 : 120,
         }),
     },
     // NFR-12: 20 000 stars, 30 000 wires, fog, bloom at ½ (08 §8.1).
@@ -85,6 +94,8 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
           runMs: q ? 1_500 : 10_000,
           runs: q ? 1 : 5,
           vsyncMs: env.vsyncMs,
+          stallMs: q ? QUICK_STALL_MS : undefined,
+          gpuFrames: q ? 6 : 120,
         }),
     },
     // Spike 3: frame 0 ≤ 1 % of pixels, NFR-15, the 600 ms flight (08 §7).
@@ -100,6 +111,8 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
           runMs: q ? 1_200 : 9_600,
           runs: q ? 1 : 5,
           vsyncMs: env.vsyncMs,
+          stallMs: q ? QUICK_STALL_MS : undefined,
+          tries: q ? 2 : 5,
         }),
     },
     // One shard up to ≈ 20k nodes, 16 above (10 §2.7); one commit per node, as in S4.
@@ -123,7 +136,7 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
       id: 'note-1mb',
       spike: 6,
       draws: true,
-      run: (s) => runNoteScenario(s, q ? 200_000 : 1_000_000),
+      run: (s) => runNoteScenario(s, q ? 200_000 : 1_000_000, q ? 20 : 120),
     },
   ];
 }

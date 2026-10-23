@@ -33,6 +33,9 @@ export interface BridgeScenario {
   runMs: number;
   runs: number;
   vsyncMs: number;
+  stallMs?: number | undefined;
+  /** Tries of `M` → first frame: 5 in the full run. */
+  tries: number;
 }
 
 export interface BridgeResult extends FrameReport {
@@ -45,8 +48,6 @@ export interface BridgeResult extends FrameReport {
   setupMs: number;
   renderer: string;
 }
-
-const TRIES = 5;
 
 function pixels(gl: WebGLRenderingContext | WebGL2RenderingContext): Uint8Array {
   const w = gl.drawingBufferWidth;
@@ -142,7 +143,7 @@ export async function runBridgeScenario(
     // `M` → first 3D frame with everything prepared, waiting for the GPU.
     const pixel = new Uint8Array(4);
     const first: number[] = [];
-    for (let k = 0; k < TRIES; k++) {
+    for (let k = 0; k < sc.tries; k++) {
       await new Promise((r) => requestAnimationFrame(r));
       const s = performance.now();
       view.renderNow();
@@ -154,13 +155,10 @@ export async function runBridgeScenario(
 
     // There and back, over and over: 600 ms each way.
     const cycles = Math.max(1, Math.round(sc.runMs / (2 * BRIDGE_MS)));
-    const report = await runFrames(
-      { warmupMs: sc.warmupMs, runMs: sc.runMs, runs: sc.runs, vsyncMs: sc.vsyncMs },
-      (p) => {
-        const phase = (p * cycles) % 1;
-        bridge.frame((phase < 0.5 ? phase * 2 : (1 - phase) * 2) * BRIDGE_MS);
-      },
-    );
+    const report = await runFrames(sc, (p) => {
+      const phase = (p * cycles) % 1;
+      bridge.frame((phase < 0.5 ? phase * 2 : (1 - phase) * 2) * BRIDGE_MS);
+    });
     const info = gl.getExtension('WEBGL_debug_renderer_info');
     return {
       ...report,

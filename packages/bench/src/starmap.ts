@@ -20,6 +20,9 @@ export interface MapScenario {
   runMs: number;
   runs: number;
   vsyncMs: number;
+  stallMs?: number | undefined;
+  /** Frames of `gpuSyncMs`: 120 in the full run, a few in CI. */
+  gpuFrames: number;
 }
 
 export interface MapResult extends FrameReport {
@@ -40,8 +43,6 @@ export interface MapResult extends FrameReport {
   setupMs: number;
   renderer: string;
 }
-
-const GPU_FRAMES = 120;
 
 export async function runMapScenario(stage: HTMLElement, sc: MapScenario): Promise<MapResult> {
   const t0 = performance.now();
@@ -86,15 +87,12 @@ export async function runMapScenario(stage: HTMLElement, sc: MapScenario): Promi
       const calls = map.render();
       if (timed) drawCalls.push(calls);
     };
-    const report = await runFrames(
-      { warmupMs: sc.warmupMs, runMs: sc.runMs, runs: sc.runs, vsyncMs: sc.vsyncMs },
-      frame,
-    );
+    const report = await runFrames(sc, frame);
     const gl = map.renderer.getContext();
     const pixel = new Uint8Array(4);
     const gpuSync: number[] = [];
-    for (let f = 0; f < GPU_FRAMES; f++) {
-      place(f / GPU_FRAMES);
+    for (let f = 0; f < sc.gpuFrames; f++) {
+      place(f / sc.gpuFrames);
       const s = performance.now();
       map.render();
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);

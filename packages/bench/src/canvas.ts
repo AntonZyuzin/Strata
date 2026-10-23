@@ -31,6 +31,7 @@ export interface CanvasScenario {
   runMs: number;
   runs: number;
   vsyncMs: number;
+  stallMs?: number | undefined;
 }
 
 /**
@@ -401,10 +402,7 @@ export async function runCanvasScenario(
       if (timed) drawCalls.push(calls);
     };
 
-    const report = await runFrames(
-      { warmupMs: sc.warmupMs, runMs: sc.runMs, runs: sc.runs, vsyncMs: sc.vsyncMs },
-      frame,
-    );
+    const report = await runFrames(sc, frame);
     if (lost) throw new Error('WebGL context was lost during the run; its numbers are void');
     return {
       ...report,

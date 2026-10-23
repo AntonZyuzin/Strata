@@ -18,6 +18,9 @@ export interface LookScenario {
   runMs: number;
   runs: number;
   vsyncMs: number;
+  stallMs?: number | undefined;
+  /** Frames of `gpuSyncMs`: 120 in the full run, a few in CI. */
+  gpuFrames: number;
 }
 
 export interface LookResult extends FrameReport {
@@ -27,8 +30,6 @@ export interface LookResult extends FrameReport {
   gpuSyncMs: Summary;
   setupMs: number;
 }
-
-const GPU_FRAMES = 120;
 
 export async function runLookScenario(stage: HTMLElement, sc: LookScenario): Promise<LookResult> {
   const t0 = performance.now();
@@ -68,18 +69,15 @@ export async function runLookScenario(stage: HTMLElement, sc: LookScenario): Pro
       cam.x = cx - w / 2 / zoom;
       cam.y = cy - h / 2 / zoom;
     };
-    const report = await runFrames(
-      { warmupMs: sc.warmupMs, runMs: sc.runMs, runs: sc.runs, vsyncMs: sc.vsyncMs },
-      (p) => {
-        place(p);
-        view.renderNow();
-      },
-    );
+    const report = await runFrames(sc, (p) => {
+      place(p);
+      view.renderNow();
+    });
     const gl = (view.renderer as unknown as { gl: WebGL2RenderingContext }).gl;
     const pixel = new Uint8Array(4);
     const sync: number[] = [];
-    for (let f = 0; f < GPU_FRAMES; f++) {
-      place(f / GPU_FRAMES);
+    for (let f = 0; f < sc.gpuFrames; f++) {
+      place(f / sc.gpuFrames);
       const s = performance.now();
       view.renderNow();
       gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);

@@ -266,19 +266,23 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
   });
 }
 
-/** The gallery's board, «Доска» / «Board», brought to the middle of the canvas. */
+/** The gallery's board, «Доска» / «Board», brought clear of the top window. */
 async function galleryBoard(page: Page): Promise<Pt & { id: string }> {
   const at = await page.evaluate(() => {
     const { graph, view } = window.__strataProto as Hook;
     const b = [...graph.nodes.values()].slice(-20).find((n) => n.kind === 'board');
     const p = b && view.nodeAt(b.id);
     if (!b || !p) throw new Error('no board in the gallery');
-    // The small window does not show the whole gallery.
+    // The small window does not show the whole gallery; the top window
+    // covers the top left, so the board goes below and right of the middle.
     const { camera, canvas } = view;
-    camera.x = p.x - canvas.clientWidth / 2 / camera.zoom;
-    camera.y = p.y - canvas.clientHeight / 2 / camera.zoom;
+    camera.x = p.x - (canvas.clientWidth * 0.65) / camera.zoom;
+    camera.y = p.y - (canvas.clientHeight * 0.7) / camera.zoom;
     view.invalidate();
-    return { id: b.id, ...(window.__e2e as Probe).node(b.id) };
+    const e = window.__e2e as Probe;
+    const at = e.node(b.id);
+    if (!e.free(at.x, at.y, 4)) throw new Error('the board is under the Chrome');
+    return { id: b.id, ...at };
   });
   // The camera's move on screen before the double click.
   await page.evaluate(

@@ -474,7 +474,9 @@ export class Editor {
 
   private click(hit: Hit, sx: number, sy: number, e: PointerEvent) {
     const mod = e.metaKey || e.ctrlKey;
-    const now = performance.now();
+    // When the click happened, not when it is handled: a busy frame between
+    // the two clicks of a double click must not split it.
+    const now = e.timeStamp;
     const double =
       now - this.lastClick.time < DOUBLE_CLICK_MS &&
       Math.hypot(sx - this.lastClick.sx, sy - this.lastClick.sy) <= DRAG_PX;

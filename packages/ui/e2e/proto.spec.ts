@@ -278,20 +278,28 @@ async function galleryBoard(page: Page): Promise<Pt & { id: string }> {
     view.invalidate();
     return { id: b.id, ...(window.__e2e as Probe).node(b.id) };
   });
-  await page.waitForTimeout(100);
+  // The camera's move on screen before the double click.
+  await page.evaluate(
+    () => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))),
+  );
   return at;
 }
+
+/** Excalidraw's chunk loads on the first board: slow on CI's software rendering. */
+const BOARD_LOAD = { timeout: 30_000 };
 
 for (const { viewport, deviceScaleFactor } of LAYOUTS) {
   test(`the board window is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
     browser,
   }) => {
+    test.setTimeout(90_000);
     const sides = [];
     for (const locale of ['ru-RU', 'en-US']) {
       const side = await openIn(browser, locale, viewport, deviceScaleFactor);
       const at = await galleryBoard(side.page);
       await side.page.mouse.dblclick(at.x, at.y);
-      await expect(side.page.locator('.board-window .excalidraw')).toBeVisible();
+      await expect(side.page.locator('.board-window')).toBeVisible();
+      await expect(side.page.locator('.board-window .excalidraw')).toBeVisible(BOARD_LOAD);
       // Strata's Chrome only: Excalidraw's own DOM is not ours to measure.
       expect(
         await overflowing(side.page, '.board-window .window-title, .board-window .board-tools'),
@@ -487,6 +495,7 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
 test('a board opens in its window; what is drawn stays in its document (ADR-0006)', async ({
   page,
 }) => {
+  test.setTimeout(90_000);
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
   await open(page, false);
@@ -499,7 +508,8 @@ test('a board opens in its window; what is drawn stays in its document (ADR-0006
   const openBoard = async () => {
     const at = await galleryBoard(page);
     await page.mouse.dblclick(at.x, at.y);
-    await expect(win.locator('.excalidraw')).toBeVisible();
+    await expect(win).toBeVisible();
+    await expect(win.locator('.excalidraw')).toBeVisible(BOARD_LOAD);
   };
   const pick = (tool: string) =>
     win.locator('.board-tools label', { has: page.locator(`input[value="${tool}"]`) }).click();

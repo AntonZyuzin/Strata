@@ -100,14 +100,26 @@ export interface FrameOptions {
 
 /** A frame slower than this means the display slept or the window was hidden. */
 const STALL_MS = 1_000;
+/** Frames in a row at a normal pace that tell the window is back. */
+const BACK_FRAMES = 30;
+/** How long a scenario waits for the window before it gives up. */
+const WAIT_MAX_MS = 10 * 60_000;
+
+let waitListener: ((waiting: boolean) => void) | null = null;
+
+/** Who hears that the runs wait for the window to come back (the bench window). */
+export function onStallWait(listener: ((waiting: boolean) => void) | null): void {
+  waitListener = listener;
+}
 
 /**
  * Drives `frame(progress, timed)` from requestAnimationFrame. The warmup plays the
  * whole path once, faster, so the timed runs start with compiled shaders,
  * uploaded buffers and warm code; each run then plays the path from 0 to 1.
- * A run during which the window was hidden or the display slept is voided and
- * replayed, up to two extra runs. An exception in `frame` rejects instead of
- * stopping the loop silently.
+ * A run during which the window was hidden or the display slept is voided at
+ * once; the loop waits until frames come at a normal pace again, warms up
+ * again and replays it, up to two extra runs. An exception in `frame` rejects
+ * instead of stopping the loop silently.
  */
 export function runFrames(
   opts: FrameOptions,
@@ -117,16 +129,18 @@ export function runFrames(
     const intervals: number[] = [];
     const work: number[] = [];
     const runs: RunReport[] = [];
+    const stallMs = opts.stallMs ?? STALL_MS;
     // Counted runs' samples only: voided runs are cut back out.
     let phaseStart = -1;
     let last = 0;
-    let warm = true;
+    let mode: 'warm' | 'run' | 'wait' = 'warm';
     let runFrom = 0;
-    let stalled = false;
     let counted = 0;
+    let waitFrom = 0;
+    let good = 0;
     const maxRuns = opts.runs + 2;
 
-    const finishRun = (now: number) => {
+    const finishRun = (now: number, stalled: boolean) => {
       const xs = intervals.slice(runFrom);
       const elapsed = now - phaseStart;
       const grid = vsyncGrid(xs, opts.vsyncMs);
@@ -171,32 +185,61 @@ export function runFrames(
       });
     };
 
+    const next = () => {
+      if (counted < opts.runs && runs.length < maxRuns) {
+        requestAnimationFrame(tick);
+        return;
+      }
+      finish();
+    };
+
     const tick = (now: number) => {
       try {
         if (phaseStart < 0) {
           phaseStart = now;
           last = now;
         }
-        const elapsed = now - phaseStart;
-        if (warm) {
-          // Warmup: not counted.
-          frame(Math.min(1, elapsed / opts.warmupMs), false);
-          if (elapsed >= opts.warmupMs) {
-            warm = false;
+        const interval = now - last;
+        last = now;
+        const slow = interval > stallMs || document.visibilityState !== 'visible';
+        if (mode === 'wait') {
+          // Nothing drawn: wait for frames at a normal pace, then warm up again.
+          good = slow ? 0 : good + 1;
+          if (good >= BACK_FRAMES || now - waitFrom > WAIT_MAX_MS) {
+            waitListener?.(false);
+            if (good < BACK_FRAMES) {
+              finish();
+              return;
+            }
+            mode = 'warm';
             phaseStart = now;
-            runFrom = intervals.length;
-            stalled = false;
           }
-          last = now;
           requestAnimationFrame(tick);
           return;
         }
-        const interval = now - last;
-        if (interval > (opts.stallMs ?? STALL_MS) || document.visibilityState !== 'visible') {
-          stalled = true;
+        const elapsed = now - phaseStart;
+        if (mode === 'warm') {
+          // Warmup: not counted.
+          frame(Math.min(1, elapsed / opts.warmupMs), false);
+          if (elapsed >= opts.warmupMs) {
+            mode = 'run';
+            phaseStart = now;
+            runFrom = intervals.length;
+          }
+          requestAnimationFrame(tick);
+          return;
+        }
+        if (slow) {
+          // Hidden or asleep: void the run now, not after it plays out blind.
+          finishRun(now, true);
+          mode = 'wait';
+          waitFrom = now;
+          good = 0;
+          if (runs.length < maxRuns) waitListener?.(true);
+          next();
+          return;
         }
         intervals.push(interval);
-        last = now;
         const t0 = performance.now();
         frame(Math.min(1, elapsed / opts.runMs), true);
         work.push(performance.now() - t0);
@@ -204,15 +247,10 @@ export function runFrames(
           requestAnimationFrame(tick);
           return;
         }
-        finishRun(now);
-        if (counted < opts.runs && runs.length < maxRuns) {
-          phaseStart = now;
-          runFrom = intervals.length;
-          stalled = false;
-          requestAnimationFrame(tick);
-          return;
-        }
-        finish();
+        finishRun(now, false);
+        phaseStart = now;
+        runFrom = intervals.length;
+        next();
       } catch (e) {
         reject(e);
       }

@@ -1,0 +1,278 @@
+{
+  "report": "strata-bench",
+  "version": 1,
+  "profile": "full",
+  "summary": {
+    "verdicts": {
+      "canvas-pan-zoom-n5k": "pass",
+      "canvas-drag-n5k": "pass",
+      "canvas-pan-zoom-n10k": "pass",
+      "canvas-look-n5k": "fail",
+      "map-orbit-20k": "fail",
+      "bridge-2d-3d": "pass",
+      "loro-index-20k": "pass",
+      "loro-index-100k-k16": "pass",
+      "loro-text-1mb": "pass",
+      "note-1mb": "pass"
+    },
+    "workers": true
+  },
+  "app": {
+    "core": null,
+    "shell": "web"
+  },
+  "wakeLock": false,
+  "startedAt": "2026-10-23T14:20:54.858Z",
+  "env": {
+    "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Claude/2.42304.2 Chrome/152.0.7977.149 Safari/537.36",
+    "platform": "MacIntel",
+    "language": "ru",
+    "devicePixelRatio": 2,
+    "screen": {
+      "width": 1440,
+      "height": 900
+    },
+    "viewport": {
+      "width": 667,
+      "height": 762
+    },
+    "hardwareConcurrency": 8,
+    "deviceMemoryGb": 16,
+    "webgl": {
+      "version": "WebGL 2.0 (OpenGL ES 3.0 Chromium)",
+      "vendor": "Google Inc. (Apple)",
+      "renderer": "ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"
+    },
+    "refreshHzEstimate": 60,
+    "vsyncMs": 16.592,
+    "timerResolutionMs": 0.1
+  },
+  "outcomes": [
+    {
+      "id": "canvas-pan-zoom-n5k",
+      "spike": 1,
+      "ok": true,
+      "result": {
+        "warmupMs": 2000,
+        "runMs": 10000,
+        "vsyncMs": 16.592,
+        "runs": [
+          { "durationMs": 10017, "frames": 601, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.5, "missedShare": 0, "stalled": false }
+        ],
+        "fps": 60,
+        "p95Ms": 16.667,
+        "rawP95Ms": 17.6,
+        "stalledRuns": 0,
+        "intervalMs": { "n": 3001, "mean": 16.667, "p50": 16.7, "p95": 17.6, "p99": 17.7, "max": 17.8 },
+        "workMs": { "n": 3001, "mean": 0.248, "p50": 0.2, "p95": 0.5, "p99": 0.5, "max": 7.1 },
+        "missedShare": 0,
+        "over16ms": 0.018,
+        "over33ms": 0,
+        "frames": 3001,
+        "mode": "pan-zoom",
+        "nodes": 5000,
+        "wires": 7500,
+        "icons": 200,
+        "dragged": 0,
+        "drawCalls": { "n": 3001, "mean": 4.395, "p50": 4, "p95": 5, "p99": 5, "max": 5 },
+        "setupMs": 811,
+        "renderer": "webgl"
+      },
+      "wallMs": 52871
+    },
+    {
+      "id": "canvas-drag-n5k",
+      "spike": 1,
+      "ok": true,
+      "result": {
+        "warmupMs": 2000,
+        "runMs": 10000,
+        "vsyncMs": 16.592,
+        "runs": [
+          { "durationMs": 10001, "frames": 600, "fps": 60, "p95Ms": 16.668, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10017, "frames": 601, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10017, "frames": 601, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.5, "missedShare": 0, "stalled": false },
+          { "durationMs": 10000, "frames": 597, "fps": 59.7, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0.005, "stalled": false },
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false }
+        ],
+        "fps": 60,
+        "p95Ms": 16.667,
+        "rawP95Ms": 17.6,
+        "stalledRuns": 0,
+        "intervalMs": { "n": 2999, "mean": 16.684, "p50": 16.7, "p95": 17.6, "p99": 17.7, "max": 33.4 },
+        "workMs": { "n": 2999, "mean": 0.252, "p50": 0.2, "p95": 0.5, "p99": 0.6, "max": 19.5 },
+        "missedShare": 0.001,
+        "over16ms": 0.02,
+        "over33ms": 0,
+        "frames": 2999,
+        "mode": "drag",
+        "nodes": 5000,
+        "wires": 7500,
+        "icons": 200,
+        "dragged": 100,
+        "drawCalls": { "n": 2999, "mean": 6, "p50": 6, "p95": 6, "p99": 6, "max": 6 },
+        "setupMs": 266,
+        "renderer": "webgl"
+      },
+      "wallMs": 52369
+    },
+    {
+      "id": "canvas-pan-zoom-n10k",
+      "spike": 1,
+      "ok": true,
+      "result": {
+        "warmupMs": 2000,
+        "runMs": 10000,
+        "vsyncMs": 16.592,
+        "runs": [
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 10017, "frames": 601, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.5, "missedShare": 0, "stalled": false },
+          { "durationMs": 10017, "frames": 601, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.4, "missedShare": 0, "stalled": false },
+          { "durationMs": 10000, "frames": 600, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.4, "missedShare": 0, "stalled": false },
+          { "durationMs": 11633, "frames": 487, "fps": 41.9, "p95Ms": 16.667, "rawP95Ms": 17.4, "missedShare": 0.302, "stalled": true },
+          { "durationMs": 10016, "frames": 10, "fps": 1, "p95Ms": 1999.807, "rawP95Ms": 2000, "missedShare": 0.983, "stalled": true },
+          { "durationMs": 10001, "frames": 6, "fps": 0.6, "p95Ms": 2016.889, "rawP95Ms": 2016.7, "missedShare": 0.99, "stalled": true }
+        ],
+        "fps": 60,
+        "p95Ms": 16.667,
+        "rawP95Ms": 17.45,
+        "stalledRuns": 3,
+        "intervalMs": { "n": 2402, "mean": 16.667, "p50": 16.7, "p95": 17.5, "p99": 17.7, "max": 17.8 },
+        "workMs": { "n": 2402, "mean": 0.256, "p50": 0.3, "p95": 0.5, "p99": 0.5, "max": 20.2 },
+        "missedShare": 0,
+        "over16ms": 0.015,
+        "over33ms": 0,
+        "frames": 2402,
+        "mode": "pan-zoom",
+        "nodes": 10000,
+        "wires": 15000,
+        "icons": 200,
+        "dragged": 0,
+        "drawCalls": { "n": 2905, "mean": 4.41, "p50": 4, "p95": 5, "p99": 5, "max": 5 },
+        "setupMs": 444,
+        "renderer": "webgl"
+      },
+      "wallMs": 73837
+    },
+    {
+      "id": "canvas-look-n5k",
+      "spike": 9,
+      "ok": false,
+      "error": "Error: every run stalled: the window was hidden or the display slept\n    at h (http://localhost:4173/assets/src-BX3fqOtn.js:25:1469)\n    at g (http://localhost:4173/assets/src-BX3fqOtn.js:25:2318)",
+      "wallMs": 85046
+    },
+    {
+      "id": "map-orbit-20k",
+      "spike": 2,
+      "ok": false,
+      "error": "Error: every run stalled: the window was hidden or the display slept\n    at h (http://localhost:4173/assets/src-BX3fqOtn.js:25:1469)\n    at g (http://localhost:4173/assets/src-BX3fqOtn.js:25:2318)",
+      "wallMs": 93006
+    },
+    {
+      "id": "bridge-2d-3d",
+      "spike": 3,
+      "ok": true,
+      "result": {
+        "warmupMs": 2000,
+        "runMs": 9600,
+        "vsyncMs": 16.592,
+        "runs": [
+          { "durationMs": 9600, "frames": 576, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.4, "missedShare": 0, "stalled": false },
+          { "durationMs": 9600, "frames": 576, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 9600, "frames": 576, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false },
+          { "durationMs": 9600, "frames": 576, "fps": 60, "p95Ms": 16.667, "rawP95Ms": 17.5, "missedShare": 0, "stalled": false },
+          { "durationMs": 9616, "frames": 577, "fps": 60, "p95Ms": 16.666, "rawP95Ms": 17.6, "missedShare": 0, "stalled": false }
+        ],
+        "fps": 60,
+        "p95Ms": 16.667,
+        "rawP95Ms": 17.6,
+        "stalledRuns": 0,
+        "intervalMs": { "n": 2881, "mean": 16.667, "p50": 16.7, "p95": 17.6, "p99": 17.7, "max": 17.8 },
+        "workMs": { "n": 2881, "mean": 1.049, "p50": 0.8, "p95": 1.8, "p99": 2, "max": 2.4 },
+        "missedShare": 0,
+        "over16ms": 0.019,
+        "over33ms": 0,
+        "frames": 2881,
+        "stars": 20221,
+        "members": 220,
+        "frame0Diff": 0,
+        "firstFrameMs": { "n": 5, "mean": 19.36, "p50": 20.5, "p95": 22.4, "p99": 22.4, "max": 22.4 },
+        "setupMs": 10049,
+        "renderer": "Pixi + three.js, ANGLE (Apple, ANGLE Metal Renderer: Apple M1, Unspecified Version)"
+      },
+      "wallMs": 72188
+    },
+    {
+      "id": "loro-index-20k",
+      "spike": 4,
+      "ok": true,
+      "result": {
+        "nodes": 20000,
+        "shards": 1,
+        "importMs": 28.5,
+        "countNamesMs": 9.4,
+        "firstEditMs": 15.7,
+        "editMs": { "n": 500, "mean": 0.007, "p50": 0, "p95": 0.1, "p99": 0.1, "max": 0.2 },
+        "editMeanMs": 0.0076,
+        "baseMemoryMib": 1.5,
+        "importMemoryMib": 26.8,
+        "wasmMemoryMib": 26.8,
+        "commitEvery": 1,
+        "buildMs": 965,
+        "snapshotMib": 12.5,
+        "isolated": true
+      },
+      "wallMs": 1134
+    },
+    {
+      "id": "loro-index-100k-k16",
+      "spike": 4,
+      "ok": true,
+      "result": {
+        "nodes": 100000,
+        "shards": 16,
+        "importMs": 48.7,
+        "countNamesMs": 39.6,
+        "firstEditMs": 4.3,
+        "editMs": { "n": 500, "mean": 0.128, "p50": 0, "p95": 0.1, "p99": 3.9, "max": 4.8 },
+        "editMeanMs": 0.1286,
+        "baseMemoryMib": 1.5,
+        "importMemoryMib": 87.3,
+        "wasmMemoryMib": 99.6,
+        "commitEvery": 1,
+        "buildMs": 4237,
+        "snapshotMib": 64.3,
+        "isolated": true
+      },
+      "wallMs": 4808
+    },
+    {
+      "id": "loro-text-1mb",
+      "spike": 4,
+      "ok": true,
+      "result": {
+        "chars": 1000025,
+        "insert1MbMs": 34.1,
+        "keystrokeMs": { "n": 1000, "mean": 0.013, "p50": 0, "p95": 0.1, "p99": 0.1, "max": 0.3 },
+        "keystrokeMeanMs": 0.0135
+      },
+      "wallMs": 73
+    },
+    {
+      "id": "note-1mb",
+      "spike": 6,
+      "ok": true,
+      "result": {
+        "bytes": 1000555,
+        "openMs": 70,
+        "keyWorkMs": { "n": 120, "mean": 7.958, "p50": 7.4, "p95": 8.8, "p99": 31.2, "max": 32.2 },
+        "keyFrameMs": { "n": 120, "mean": 18.357, "p50": 16.7, "p95": 23.7, "p99": 35.4, "max": 206.8 }
+      },
+      "wallMs": 2382
+    }
+  ]
+}

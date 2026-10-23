@@ -36,6 +36,7 @@ export function BenchWindow(props: {
   const { locale } = props;
   const stage = useRef<HTMLDivElement>(null);
   const [run, setRun] = useState<Run>({ state: 'idle' });
+  const [waiting, setWaiting] = useState(false);
 
   const start = async () => {
     const el = stage.current;
@@ -51,6 +52,7 @@ export function BenchWindow(props: {
         ...(props.only ? { only: props.only } : {}),
         onProgress: (current, done) =>
           setRun({ state: 'running', current: current?.id ?? null, outcomes: [...done] }),
+        onWait: setWaiting,
       });
       setRun({ state: 'done', report, copy: 'none' });
     } catch (e) {
@@ -151,11 +153,13 @@ export function BenchWindow(props: {
         <div ref={stage} className="bench-canvas" />
         {run.state === 'running' ? (
           <p className="bench-hud">
-            {t(locale, 'bench.progress', {
-              done: run.outcomes.length + 1,
-              total: props.only?.length ?? SCENARIO_IDS.length,
-              name: run.current ? name(run.current) : '',
-            })}
+            {waiting
+              ? t(locale, 'bench.waiting')
+              : t(locale, 'bench.progress', {
+                  done: run.outcomes.length + 1,
+                  total: props.only?.length ?? SCENARIO_IDS.length,
+                  name: run.current ? name(run.current) : '',
+                })}
           </p>
         ) : null}
       </div>

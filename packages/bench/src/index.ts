@@ -2,6 +2,7 @@ import { runBridgeScenario } from './bridge';
 import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
 import { describeError } from './errors';
+import { onStallWait } from './frame-loop';
 import { runLookScenario } from './look';
 import { runLoroIndex, runLoroText } from './loro';
 import { runNoteScenario } from './note';
@@ -150,16 +151,20 @@ export async function runBench(opts: {
   only?: readonly ScenarioId[];
   /** Called before each scenario with its id, and after each with its outcome. */
   onProgress?: ProgressFn;
+  /** The runs wait for the window to come back (it was hidden or the display slept). */
+  onWait?: (waiting: boolean) => void;
 }): Promise<BenchReport> {
   const profile = opts.profile ?? 'full';
   const list = scenarios(profile).filter((s) => !opts.only || opts.only.includes(s.id));
-  // Keep the display on: on battery a Mac sleeps it after 2 minutes, the run takes 3.
+  // Keep the display on: on battery a Mac sleeps it after 2 minutes, the run takes 6.
   // Asked first, while the click on «Запустить» still counts as user activation.
-  // Runs that stall anyway are voided by runFrames.
+  // Runs that stall anyway are voided by runFrames, which waits for the window.
   const wakeLock = await requestWakeLock();
+  onStallWait(opts.onWait ?? null);
   try {
     return await runList(list, opts, profile, wakeLock !== null);
   } finally {
+    onStallWait(null);
     await wakeLock?.release().catch(() => undefined);
   }
 }

@@ -1,0 +1,27 @@
+{
+  "name": "@strata/board",
+  "private": true,
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./binding": "./src/binding.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@excalidraw/excalidraw": "0.18.0-43a92e6",
+    "@strata/design-tokens": "workspace:*",
+    "loro-crdt": "1.16.4",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "7.0.2",
+    "vitest": "5.0.5"
+  }
+}

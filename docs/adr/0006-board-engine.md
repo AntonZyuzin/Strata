@@ -1,6 +1,6 @@
 # ADR-0006. Движок досок
 
-- Статус: Принято (2026-10-19, по делегированию владельца); подтверждается спайком 5 ([15 §7](../15-architecture.md), [16 §3.2](../16-roadmap.md))
+- Статус: Принято (2026-10-19, по делегированию владельца); подтверждается спайком 5 ([15 §7](../15-architecture.md), [16 §3.2](../16-roadmap.md)). Часть 1 спайка ([S5](../spikes/S5-board.md), 2026-10-23): п. 1, 3 и биндинг п. 7 работают, B-2k открывается за 129 мс и панорамируется с p95 16,7 мс на M1; виджеты (п. 4) и `.excalidraw.md` — часть 2
 - Дата: 2026-10-14
 - Связано: [05-domain-model.md](../05-domain-model.md) (§4.2, §12, §13), [06-canvas-ux.md](../06-canvas-ux.md) §13.2, [07-design-system.md](../07-design-system.md) (§3.2, §8.4), [10-storage-sync-collab.md](../10-storage-sync-collab.md) (§2.4, §8.4, §9.2, §11, §13), [12-mcp-ai.md](../12-mcp-ai.md) §7, [13-interop.md](../13-interop.md) §2.8, [14-nfr.md](../14-nfr.md), [15-architecture.md](../15-architecture.md) (§2.3, §7, §8.4, §8.5), [16-roadmap.md](../16-roadmap.md) (§5.2, §8.2), [ADR-0003](0003-sync-engine.md), [ADR-0004](0004-app-shell.md), [ADR-0005](0005-rendering.md), [ADR-0007](0007-text-editor.md); исследования [R5](../research/R5-board-engine.md) (главное), [R3](../research/R3-crdt-sync.md), [R2](../research/R2-obsidian-format.md), [R4](../research/R4-app-shell-rendering.md)
 
@@ -46,10 +46,10 @@
 
    Всё специфичное для Excalidraw — внутри: переименования API, `customData`, `reconcileElements`, подъём схемы при открытии доски ([10](../10-storage-sync-collab.md) §13). Остальная Strata видит только адаптер и Loro-документ.
 3. **Окно доски** — ретро-окно Strata ([06](../06-canvas-ux.md) §13.2, [07](../07-design-system.md) §8.4):
-   - Excalidraw с `ui={false}`: встроенные тулбар, меню и панели не рисуются. Свой пиксельный тулбар и панель свойств вызывают `setActiveTool` и `updateScene`;
+   - Excalidraw с `ui={false}`: встроенные тулбар, меню и панели не рисуются. Свой пиксельный тулбар задаёт инструмент через `activeTool` под управлением хоста (спайк 5: без него Excalidraw после фигуры сам возвращается к «Выбору» и расходится с тулбаром), панель свойств вызывает `updateScene`;
    - тема `light` (в `dark` Excalidraw инвертирует каждый цвет элемента), `viewBackgroundColor: "transparent"` — за доской туманный фон Strata;
    - по умолчанию `roughness: 0`, цвет линии — бумага, палитра Strata в `colorTopPicks`; шрифт — Excalifont или Nunito, у обоих есть кириллица. ☑ Q-15-6: по умолчанию строгий вид; ретро — в рамке, тулбаре и виджетах; пиксельный шрифт на холсте доски — этап 2 через мягкий форк, если понадобится;
-   - шрифты и ассеты — в сборке через `EXCALIDRAW_ASSET_PATH`, а не с `esm.sh`; `aiEnabled={false}`, без каталога библиотек, без внешних iframe (NFR-84);
+   - шрифты и ассеты — в сборке через `EXCALIDRAW_ASSET_PATH`, а не с `esm.sh`; источник `esm.sh`, который Excalidraw всё равно дописывает в каждый шрифт, вырезается (спайк 5); `aiEnabled={false}`, без каталога библиотек, без внешних iframe (NFR-84);
    - клавиши: `handleKeyboardGlobally={false}`. Strata в фазе capture перехватывает только `U`, `Tab`, `Esc`, `F6`, `Ctrl+W`; остальные буквы — инструменты Excalidraw (`L` здесь — линия).
 4. **Виджеты** — свои React-компоненты в элементах `embeddable`:
    - элемент: `{type: "embeddable", link: "strata://<workspace-id>/widget/<board-id>/<widget-id>", customData: {strata: {widget, v}}}` — формат ссылки по грамматике глубоких ссылок ([05](../05-domain-model.md) §9.4), `<board-id>` — ID ноды-доски. `validateEmbeddable` пропускает только такие ссылки, `renderEmbeddable` рисует компонент вместо `<iframe>`;

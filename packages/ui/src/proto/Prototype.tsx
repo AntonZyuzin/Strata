@@ -19,6 +19,7 @@ import {
 import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
+import { BoardWindow } from './BoardWindow';
 import { Map3D, type MapState } from './map3d';
 import { type MenuItem, type MenuNode, remember } from './menu';
 import { NameInput } from './NameInput';
@@ -121,6 +122,8 @@ export function Prototype(props: {
   const editor = useRef<Editor | null>(null);
   const map3d = useRef<Map3D | null>(null);
   const notes = useRef<NoteStore | null>(null);
+  const [board, setBoard] = useState<string | null>(null);
+  const [boardFocus, setBoardFocus] = useState(false);
   const [note, setNote] = useState<{
     id: string;
     at: { x: number; y: number; side: 'left' | 'right' };
@@ -175,6 +178,10 @@ export function Prototype(props: {
         const n = graph.current?.nodes.get(id);
         const p = v?.nodeAt(id);
         if (!v || !n || !p) return;
+        if (n.kind === 'board') {
+          setBoard(id);
+          return;
+        }
         if (n.kind !== 'note') {
           events.toast({ key: 'proto.toast.notOpenable' });
           return;
@@ -252,8 +259,8 @@ export function Prototype(props: {
 
   useEffect(() => {
     // In 3D the canvas's keys are off; `M` comes back here (08 §5.2).
-    editor.current?.setOverlayOpen(menu !== null || name !== null || view3d !== '2d');
-  }, [menu, name, view3d]);
+    editor.current?.setOverlayOpen(menu !== null || name !== null || view3d !== '2d' || boardFocus);
+  }, [menu, name, view3d, boardFocus]);
 
   useEffect(() => {
     if (view3d !== '3d') return;
@@ -516,6 +523,28 @@ export function Prototype(props: {
           onCancel={() => {
             setMenu(null);
             ed?.menuCancel();
+            host.current?.querySelector('canvas')?.focus();
+          }}
+        />
+      ) : null}
+      {board && notes.current ? (
+        <BoardWindow
+          key={board}
+          locale={locale}
+          name={g?.nodes.get(board)?.name ?? ''}
+          doc={notes.current.doc(board)}
+          onChange={() => notes.current?.touch(board)}
+          onFocus={setBoardFocus}
+          onReady={(handle) => {
+            // For e2e: the scene of the open board.
+            const debug = (window as unknown as { __strataProto?: Record<string, unknown> })
+              .__strataProto;
+            if (debug) debug.board = handle;
+          }}
+          onClose={() => {
+            notes.current?.flush();
+            setBoard(null);
+            setBoardFocus(false);
             host.current?.querySelector('canvas')?.focus();
           }}
         />

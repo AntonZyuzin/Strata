@@ -1,3 +1,4 @@
+import { runBoardScenario } from './board';
 import { runBridgeScenario } from './bridge';
 import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
@@ -132,6 +133,22 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
       run: () => runLoroIndex(q ? 10_000 : 100_000, 1, 16),
     },
     { id: 'loro-text-1mb', spike: 4, draws: false, run: () => runLoroText() },
+    // Spike 5: the board on B-2k (NFR-30, the spike's pan criterion).
+    {
+      id: 'board-b2k',
+      spike: 5,
+      draws: true,
+      run: (s, env) =>
+        runBoardScenario(s, {
+          elements: q ? 400 : 2_000,
+          images: q ? 40 : 200,
+          warmupMs: q ? 300 : 2_000,
+          runMs: q ? 1_500 : 10_000,
+          runs: q ? 1 : 5,
+          vsyncMs: env.vsyncMs,
+          stallMs: q ? QUICK_STALL_MS : undefined,
+        }),
+    },
     // Spike 6: the note editor on T-1M (NFR-29, NFR-33).
     {
       id: 'note-1mb',

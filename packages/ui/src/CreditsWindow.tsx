@@ -7,7 +7,8 @@ import oflText from './fonts/DepartureMono-OFL.txt?raw';
  * «Благодарности» (07 §3.5, §6.3, ☑ Q-07-3, Q-07-11): Strata's licence, the
  * bundled fonts with their copyright lines and the OFL text, and every
  * game-icons author whose icons ship, with the change CC BY 3.0 §4(b) asks to
- * state. Font lines are copied from each font's LICENSE.
+ * state. Font lines are copied from each font's LICENSE or, for the board's
+ * fonts, from the font's name table and its maker's page.
  */
 
 const FONTS: { family: string; line: string }[] = [
@@ -30,6 +31,15 @@ const FONTS: { family: string; line: string }[] = [
   {
     family: 'JetBrains Mono',
     line: 'Copyright 2020 The JetBrains Mono Project Authors (github.com/JetBrains/JetBrainsMono). OFL 1.1',
+  },
+  // Boards (ADR-0006): Excalidraw's subsets, served by the app (vite.config.ts).
+  {
+    family: 'Nunito',
+    line: 'Copyright 2014 The Nunito Project Authors (github.com/googlefonts/nunito). OFL 1.1',
+  },
+  {
+    family: 'Excalifont',
+    line: 'Copyright 2024 Excalidraw (plus.excalidraw.com/excalifont). OFL 1.1',
   },
 ];
 

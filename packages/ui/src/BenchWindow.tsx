@@ -172,6 +172,8 @@ function formatHeadline(locale: Locale, h: Headline): string {
   switch (h.kind) {
     case 'canvas':
       return t(locale, 'bench.r.canvas', { fps: n(h.fps), p95: n(h.p95) });
+    case 'board':
+      return t(locale, 'bench.r.board', { open: n(h.openMs, 0), fps: n(h.fps), p95: n(h.p95) });
     case 'note':
       return t(locale, 'bench.r.note', { open: n(h.openMs, 0), key: n(h.keyP95) });
     case 'bridge':

@@ -16,15 +16,16 @@
 | `crates/strata-desktop` | Десктоп на Tauri 2 (ADR-0004); не входит в `default-members`, нужен WebView |
 | `crates/strata-layout` | Раскладки без IO: физика звёздной карты — Барнс — Хат по группам с SIMD (`force3d.rs`, ADR-0005); дальше — 2D-раскладки спайка 10 |
 | `crates/strata-layout-wasm` | Обёртка wasm-bindgen над `strata-layout`; свои lints (без `forbid(unsafe_code)` — его нарушают экспорты wasm-bindgen) |
-| `packages/ui` | SPA на React 19 + Vite, общая для десктопа и веба; `src/proto` — Хром прототипа холста (`?proto`), `map3d.ts` — звёздная карта по `M`; окна «Шрифты и окна» (`?fonts`), «Гравюра» (`?engraving`), «Благодарности» (`?credits`); `src/fonts` — шрифты OFL в сборке; `tests` — Node-тесты (cmap шрифтов) |
+| `packages/ui` | SPA на React 19 + Vite, общая для десктопа и веба; `src/proto` — Хром прототипа холста (`?proto`), `map3d.ts` — звёздная карта по `M`, окна заметки и доски, `notes.ts` — их содержимое в `localStorage`; окна «Шрифты и окна» (`?fonts`), «Гравюра» (`?engraving`), «Благодарности» (`?credits`); `src/fonts` — шрифты OFL в сборке; `tests` — Node-тесты (cmap шрифтов) |
 | `packages/backend` | Пока — граф в памяти для прототипа: правила `05 §8`, наборы изменений, отмена; потом `Backend` к ядру (`15 §1.4`) |
 | `packages/canvas` | Холст на Pixi вне React: сцена, нити-шейдер, хит-тест на rbush, камера, машина жестов (`06 §5–6`); `decor.ts` + `rings.ts` — экранный слой бабла (кольца одним инстансным шейдером, значки, подписи), `looks.ts` — правила вида (`07 §4.5–4.9`), `icons.ts` — атлас game-icons (`scripts/game-icons.*`), `backdrop.ts` / `background.ts` — фоны и контраст (`07 §7`, `§2.2`), `stylize.ts` — «привести к стилю» (`07 §6.5`) |
 | `packages/view3d` | Звёздная карта (без React): 3D-выписка (`08 §8.3`), начальная раскладка (`08 §3.3`), `relax.ts` — модель сил и полная раскладка в WASM, `starmap.ts` — рендер three.js (`08 §4.1`, `§8.2`: звёзды, нити, туман, bloom ½), `bridge.ts` — «камера-мост» (`08 §7`, спайк 3), `graph-extract.ts` — выписка из графа прототипа; вход `@strata/view3d/map` — без спайковых кандидатов физики (`physics.ts`, замер — `STRATA_BENCH=1 … vitest run physics.bench --silent=false`) |
 | `packages/layout` | `strata-layout` как WASM: `pkg/` собирает `pnpm wasm` (wasm-pack, не коммитится), загрузчик и воркер физики |
+| `packages/board` | Доска (ADR-0006, спайк 5): холст Excalidraw `next` с `ui={false}` (Excalidraw импортирует только этот пакет, холст грузится лениво); `binding.ts` — элементы и файлы в Loro и правило слияния Excalidraw; `assets.ts` — шрифты из сборки без CDN; `synth.ts` — B-2k для бенчмарка |
 | `packages/editor` | Редактор заметок (ADR-0007, спайк 6): CodeMirror 6, live preview, OFM на Lezer, `loro-codemirror`, исходник ↔ `LoroText` с `meta` (BOM, переводы строк), корпус V-synth |
 | `packages/design-tokens` | Токены «Тумана» (`07 §2.2`) → CSS-переменные и числа для сцены; пиксельная единица и шкала пиксельных кеглей (`07 §2.3–2.4`); свои 1-битные значки (`07 §6.2`) |
 | `packages/i18n` | Строки RU + EN (✅ R2) |
-| `packages/bench` | Харнесс бенчмарка шага 0.3: сценарии холста (Pixi), звёздной карты (`map-orbit-20k`, `docs/spikes/S2-starmap.md`) и Loro в WebView, формат отчёта (`docs/spikes/S1-canvas.md`) |
+| `packages/bench` | Харнесс бенчмарка шага 0.3: сценарии холста (Pixi), звёздной карты (`map-orbit-20k`, `docs/spikes/S2-starmap.md`), моста, заметки, доски (`board-b2k`) и Loro в WebView, формат отчёта (`docs/spikes/S1-canvas.md`); `?bench&only=<id>` — один сценарий |
 
 Команды:
 

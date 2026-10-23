@@ -18,6 +18,7 @@
     "@fontsource/tiny5": "5.3.0",
     "@strata/backend": "workspace:*",
     "@strata/bench": "workspace:*",
+    "@strata/board": "workspace:*",
     "@strata/canvas": "workspace:*",
     "@strata/design-tokens": "workspace:*",
     "@strata/editor": "workspace:*",

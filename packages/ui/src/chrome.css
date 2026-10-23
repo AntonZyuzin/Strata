@@ -420,6 +420,67 @@ button:focus-visible {
   box-shadow: var(--st-bevel-sunken);
 }
 
+/* A board's window: 80 % of the canvas (06 §13.1), toolbar on the left (ADR-0006). */
+.board-window {
+  position: absolute;
+  z-index: 5;
+  inset: 10% 10% calc(10% + var(--st-size-bar));
+  /* The base window has a width in ch; a board takes the canvas's share. */
+  width: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.board-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.board-tools {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  width: 12ch;
+  margin: 0;
+  padding: calc(4 * var(--u));
+  border: 0;
+  gap: var(--u);
+}
+
+.board-tool {
+  display: block;
+  padding: var(--u) calc(4 * var(--u));
+  border: var(--u) solid var(--st-color-frame);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.board-tool.is-active {
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
+}
+
+.board-tool:has(input:focus-visible) {
+  outline: calc(2 * var(--u)) solid var(--st-color-focus);
+  outline-offset: var(--u);
+}
+
+.board-tool input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.board-stage {
+  flex: 1;
+  min-width: 0;
+  position: relative;
+  box-shadow: var(--st-bevel-sunken);
+}
+
 /* The star map over the canvas (08 §7): hidden in 2D, so the canvas gets input. */
 .proto-canvas .proto-map {
   position: absolute;

@@ -13,15 +13,20 @@
   },
   "dependencies": {
     "@strata/backend": "workspace:*",
+    "@strata/board": "workspace:*",
     "@strata/canvas": "workspace:*",
     "@strata/design-tokens": "workspace:*",
     "@strata/editor": "workspace:*",
     "@strata/layout": "workspace:*",
     "@strata/view3d": "workspace:*",
     "loro-crdt": "1.16.4",
-    "pixi.js": "8.22.0"
+    "pixi.js": "8.22.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
   },
   "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
     "typescript": "7.0.2",
     "vitest": "5.0.5"
   }

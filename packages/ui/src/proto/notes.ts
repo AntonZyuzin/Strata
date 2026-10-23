@@ -3,8 +3,8 @@ import { noteText, wikiTargets } from '@strata/editor';
 import { LoroDoc } from 'loro-crdt';
 
 /**
- * The prototype's note contents (10 §2.4: `content/{nodeId}`, a LoroDoc with
- * `text`), kept as Loro snapshots in localStorage until the core stores them
+ * The prototype's node contents (10 §2.4: `content/{nodeId}`; a note's LoroDoc has
+ * `text`, a board's `elements`), kept as Loro snapshots in localStorage until the core stores them
  * (milestone 1A). Seed nodes have stable ids, so a note survives a reload.
  *
  * `[[Name]]` in a note's text is a wire note → Name (05 §8.2 rule 4, ✅ C8):
@@ -61,6 +61,11 @@ export class NoteStore {
       const id = key.slice(KEY.length);
       if (this.graph.nodes.has(id)) this.link(id, noteText(this.doc(id)).toString());
     }
+  }
+
+  /** A board's scene changed: save a moment later. */
+  touch(id: string): void {
+    this.later(`save:${id}`, SAVE_MS, () => this.save(id));
   }
 
   /** The text changed in the editor: save a moment later, rewire. */

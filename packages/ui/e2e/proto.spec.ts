@@ -45,6 +45,8 @@ interface Hook {
     outputs(id: string): Iterable<string>;
     hasEdge(a: string, b: string): boolean;
   };
+  /** The open board's scene (BoardHandle). */
+  board?: { elements(): { type: string }[]; activeTool(): string; files(): string[] };
 }
 
 interface Probe {
@@ -262,6 +264,53 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
   });
 }
 
+/** The gallery's board, «Доска» / «Board», brought to the middle of the canvas. */
+async function galleryBoard(page: Page): Promise<Pt & { id: string }> {
+  const at = await page.evaluate(() => {
+    const { graph, view } = window.__strataProto as Hook;
+    const b = [...graph.nodes.values()].slice(-20).find((n) => n.kind === 'board');
+    const p = b && view.nodeAt(b.id);
+    if (!b || !p) throw new Error('no board in the gallery');
+    // The small window does not show the whole gallery.
+    const { camera, canvas } = view;
+    camera.x = p.x - canvas.clientWidth / 2 / camera.zoom;
+    camera.y = p.y - canvas.clientHeight / 2 / camera.zoom;
+    view.invalidate();
+    return { id: b.id, ...(window.__e2e as Probe).node(b.id) };
+  });
+  await page.waitForTimeout(100);
+  return at;
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS) {
+  test(`the board window is locale-independent at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }) => {
+    const sides = [];
+    for (const locale of ['ru-RU', 'en-US']) {
+      const side = await openIn(browser, locale, viewport, deviceScaleFactor);
+      const at = await galleryBoard(side.page);
+      await side.page.mouse.dblclick(at.x, at.y);
+      await expect(side.page.locator('.board-window .excalidraw')).toBeVisible();
+      // Strata's Chrome only: Excalidraw's own DOM is not ours to measure.
+      expect(
+        await overflowing(side.page, '.board-window .window-title, .board-window .board-tools'),
+      ).toEqual([]);
+      sides.push(side);
+    }
+    const [ru, en] = sides as [(typeof sides)[number], (typeof sides)[number]];
+    for (const sel of ['.board-window', '.board-tools', '.board-stage']) {
+      const a = await box(ru.page, sel);
+      const b = await box(en.page, sel);
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(a[k] - b[k]), `${sel} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+    await ru.context.close();
+    await en.context.close();
+  });
+}
+
 test('backgrounds keep the Scene readable: every preset and a white photo (07 §7, §2.2)', async ({
   page,
 }) => {
@@ -433,6 +482,103 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
   expect(sockets.target).toBeLessThan(0.3);
   expect(sockets.bright).toBeLessThan(100);
   await context.close();
+});
+
+test('a board opens in its window; what is drawn stays in its document (ADR-0006)', async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await open(page, false);
+  await page.evaluate(() => localStorage.clear());
+  const win = page.locator('.board-window');
+  const scene = () =>
+    page.evaluate(
+      () => (window.__strataProto as Hook).board?.elements().map((e) => e.type) ?? null,
+    );
+  const openBoard = async () => {
+    const at = await galleryBoard(page);
+    await page.mouse.dblclick(at.x, at.y);
+    await expect(win.locator('.excalidraw')).toBeVisible();
+  };
+  const pick = (tool: string) =>
+    win.locator('.board-tools label', { has: page.locator(`input[value="${tool}"]`) }).click();
+  const drag = async (x0: number, y0: number, x1: number, y1: number) => {
+    const s = await box(page, '.board-stage');
+    await page.mouse.move(s.x + s.width * x0, s.y + s.height * y0);
+    await page.mouse.down();
+    await page.mouse.move(s.x + s.width * x1, s.y + s.height * y1, { steps: 8 });
+    await page.mouse.up();
+  };
+
+  await openBoard();
+  await expect.poll(scene).toEqual([]);
+  // A tool stays on after use (the host's tool): two rectangles in a row.
+  await pick('rectangle');
+  await drag(0.1, 0.1, 0.3, 0.3);
+  await drag(0.1, 0.4, 0.3, 0.6);
+  await pick('ellipse');
+  await drag(0.5, 0.1, 0.7, 0.3);
+  await expect.poll(scene).toEqual(['rectangle', 'rectangle', 'ellipse']);
+  // Text in Cyrillic, in Nunito from the app itself (the CSP blocks esm.sh).
+  await pick('text');
+  const s = await box(page, '.board-stage');
+  await page.mouse.click(s.x + s.width * 0.5, s.y + s.height * 0.7);
+  await expect(win.locator('textarea')).toBeFocused();
+  await page.keyboard.type('Свет и туман');
+  await page.keyboard.press('Escape');
+  await expect.poll(scene).toEqual(['rectangle', 'rectangle', 'ellipse', 'text']);
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        [...document.fonts].some(
+          (f) => f.family.replaceAll('"', '') === 'Nunito' && f.status === 'loaded',
+        ),
+      ),
+    )
+    .toBe(true);
+
+  // An image dropped from the system: an element and its file.
+  await page.evaluate(async () => {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 48;
+    const g = c.getContext('2d') as CanvasRenderingContext2D;
+    g.fillStyle = '#c33';
+    g.fillRect(0, 0, 64, 48);
+    const blob = await new Promise<Blob>((done) =>
+      c.toBlob((b) => done(b as Blob), 'image/jpeg', 0.9),
+    );
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], 'swatch.jpg', { type: 'image/jpeg' }));
+    const target = document.querySelector('.board-window .excalidraw') as HTMLElement;
+    const r = target.getBoundingClientRect();
+    target.dispatchEvent(
+      new DragEvent('drop', {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: dt,
+        clientX: r.left + r.width * 0.7,
+        clientY: r.top + r.height * 0.6,
+      }),
+    );
+  });
+  const drawn = ['rectangle', 'rectangle', 'ellipse', 'text', 'image'];
+  await expect.poll(scene).toEqual(drawn);
+  const files = () => page.evaluate(() => (window.__strataProto as Hook).board?.files().length);
+  await expect.poll(files).toBe(1);
+
+  // Closed and opened again, then after a reload: the same scene from the document.
+  await win.locator('.window-close').click();
+  await expect(win).toHaveCount(0);
+  await openBoard();
+  await expect.poll(scene).toEqual(drawn);
+  await win.locator('.window-close').click();
+  await open(page, false);
+  await openBoard();
+  await expect.poll(scene).toEqual(drawn);
+  await expect.poll(files).toBe(1);
+  expect(errors).toEqual([]);
 });
 
 /** A note of the demo network on the bare canvas, and another node to link it to by name. */

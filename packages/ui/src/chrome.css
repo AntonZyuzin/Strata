@@ -90,9 +90,8 @@ body {
 }
 
 .window-close {
+  position: relative;
   flex: none;
-  display: grid;
-  place-items: center;
   width: var(--st-size-control);
   height: var(--st-size-control);
   padding: 0;
@@ -100,8 +99,10 @@ body {
   box-shadow: none;
   background: transparent;
   color: inherit;
-  /* The pixel × below is the glyph; the text × stays for the accessible name only. */
+  /* The pixel × below is the glyph; the text × stays for the accessible name
+     only, with no size and no line: a line of its own pushed the glyph up. */
   font-size: 0;
+  line-height: 0;
   cursor: pointer;
 }
 
@@ -112,6 +113,9 @@ body {
 
 .window-close::before {
   content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
   width: calc(10 * var(--u));
   height: calc(10 * var(--u));
   background: currentColor;

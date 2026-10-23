@@ -1,0 +1,128 @@
+import { type GlyphName, glyphUrl } from '@strata/design-tokens';
+import { type Locale, t } from '@strata/i18n';
+import type { CSSProperties, ReactNode } from 'react';
+
+/**
+ * The app's bar, a retro browser's (✅ Q-16-12): the logo goes home, two
+ * icon tools — import and export — then the tabs of open workspaces and «+»
+ * right after the last tab. The tools sit on a raised strip, the tabs on the
+ * darker ground below it, so the two never read as one row of buttons.
+ */
+
+export interface Tab {
+  id: string;
+  name: string;
+}
+
+/** A 1-bit glyph of 07 §6.2 in the current text colour. */
+export function Glyph(props: { name: GlyphName }) {
+  return (
+    <span
+      className="kind-icon"
+      style={{ '--glyph': glyphUrl(props.name) } as CSSProperties}
+      aria-hidden="true"
+    />
+  );
+}
+
+/** A square button with a glyph; its name is the tooltip and the accessible name. */
+export function IconButton(props: {
+  glyph: GlyphName;
+  label: string;
+  disabled?: boolean | undefined;
+  className?: string | undefined;
+  onClick: () => void;
+  children?: ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      className={['icon-button', props.className].filter(Boolean).join(' ')}
+      aria-label={props.label}
+      title={props.label}
+      disabled={props.disabled}
+      onClick={props.onClick}
+    >
+      <Glyph name={props.glyph} />
+      {props.children}
+    </button>
+  );
+}
+
+export function TabBar(props: {
+  locale: Locale;
+  tabs: Tab[];
+  /** The open workspace; null on the home screen. */
+  active: string | null;
+  busy: boolean;
+  onHome: () => void;
+  onImport: () => void;
+  /** Absent on the home screen: there a card exports itself. */
+  onExport: (() => void) | undefined;
+  onSelect: (id: string) => void;
+  onClose: (id: string) => void;
+  onNew: () => void;
+}) {
+  const { locale, active } = props;
+  return (
+    <nav className="tabbar" aria-label={t(locale, 'tabs.label')}>
+      <button
+        type="button"
+        className="tabbar-logo"
+        aria-label={t(locale, 'ws.home')}
+        title={t(locale, 'ws.homeHint')}
+        aria-current={active === null ? 'page' : undefined}
+        onClick={props.onHome}
+      >
+        <Glyph name="logo" />
+        <span aria-hidden="true">Strata</span>
+      </button>
+      <div className="tabbar-tools">
+        <IconButton
+          glyph="import"
+          label={t(locale, 'home.importHint')}
+          disabled={props.busy}
+          onClick={props.onImport}
+        />
+        <IconButton
+          glyph="export"
+          label={t(locale, 'home.exportHint')}
+          disabled={props.busy || !props.onExport}
+          onClick={() => props.onExport?.()}
+        />
+      </div>
+      <div className="tabbar-tabs" role="tablist" aria-label={t(locale, 'tabs.label')}>
+        {props.tabs.map((tab) => (
+          <div key={tab.id} className={tab.id === active ? 'tab is-active' : 'tab'}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab.id === active}
+              className="tab-name"
+              title={tab.name}
+              disabled={props.busy}
+              onClick={() => props.onSelect(tab.id)}
+            >
+              <Glyph name="network" />
+              <span className="tab-label">{tab.name}</span>
+            </button>
+            <IconButton
+              glyph="cross"
+              className="tab-close"
+              label={t(locale, 'tabs.close', { name: tab.name })}
+              disabled={props.busy}
+              onClick={() => props.onClose(tab.id)}
+            />
+          </div>
+        ))}
+        <IconButton
+          glyph="plus"
+          className="tab-new"
+          label={t(locale, 'home.new')}
+          disabled={props.busy}
+          onClick={props.onNew}
+        />
+      </div>
+    </nav>
+  );
+}

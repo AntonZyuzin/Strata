@@ -1,4 +1,4 @@
-import type { HomeBackend, Opened } from '@strata/backend';
+import type { HomeBackend } from '@strata/backend';
 import { type Profile, SCENARIO_IDS, type ScenarioId } from '@strata/bench/report';
 import { detectLocale, type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
@@ -7,11 +7,10 @@ import { type BuildInfo, closeAppWindow, loadBuildInfo, openHome } from './backe
 import { CreditsWindow } from './CreditsWindow';
 import { EngravingWindow } from './EngravingWindow';
 import { FontsWindow } from './FontsWindow';
-import { HomeScreen } from './home/HomeScreen';
 import { LocaleSwitch } from './LocaleSwitch';
 import { loadPixelPrefs, type PixelPrefs } from './pixel';
 import { Prototype } from './proto/Prototype';
-import { WorkspaceScreen } from './workspace/WorkspaceScreen';
+import { Shell } from './Shell';
 
 /** `?bench` opens the benchmark at start; `?bench=quick` is the e2e profile; `?only=` picks scenarios. */
 function benchFromUrl(): Profile | null {
@@ -64,7 +63,6 @@ export function App() {
   const [pixel, setPixel] = useState<PixelPrefs>(loadPixelPrefs);
   const [home, setHome] = useState<HomeBackend | null>(null);
   const [homeError, setHomeError] = useState<string | null>(null);
-  const [opened, setOpened] = useState<Opened | null>(null);
 
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -75,7 +73,7 @@ export function App() {
   }, []);
 
   // The core of the home screen and the workspaces, once it is needed.
-  const needsHome = screen === 'home' || screen === 'workspace';
+  const needsHome = screen === 'home';
   useEffect(() => {
     if (!needsHome || home) return;
     openHome().then(setHome, (e: unknown) =>
@@ -97,22 +95,7 @@ export function App() {
     );
   }
 
-  if (screen === 'workspace' && home && opened) {
-    return (
-      <WorkspaceScreen
-        key={opened.workspace.id}
-        locale={locale}
-        home={home}
-        opened={opened}
-        onHome={() => {
-          setOpened(null);
-          setScreen('home');
-        }}
-      />
-    );
-  }
-
-  if (screen === 'home' || screen === 'workspace') {
+  if (screen === 'home') {
     if (!home) {
       return (
         <main className="scene">
@@ -123,17 +106,7 @@ export function App() {
       );
     }
     return (
-      <HomeScreen
-        locale={locale}
-        onLocale={setLocale}
-        home={home}
-        onOpen={(o) => {
-          setOpened(o);
-          setScreen('workspace');
-        }}
-        onAbout={() => setScreen('about')}
-        onClose={close}
-      />
+      <Shell locale={locale} onLocale={setLocale} home={home} onAbout={() => setScreen('about')} />
     );
   }
 

@@ -1158,41 +1158,31 @@ button:focus-visible {
   gap: calc(2 * var(--u));
 }
 
-/* Home (✅ Q-16-12): one wide window of workspace cards. Cards are a fixed
-   width in ch, so neither language reflows them; names and dates are
-   one-line values with a tooltip. */
-.home-window {
-  width: min(112ch, calc(100vw - 32px));
-  max-height: calc(100vh - 16 * var(--u));
+/* Home (✅ Q-16-12): the whole window, like Figma's file browser — a bar of
+   actions on top, the cards below. Cards are a fixed width in ch, so neither
+   language reflows them; names and dates are one-line values with a tooltip. */
+.home {
+  position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
+  background: var(--st-color-bg);
 }
 
-.home-body {
-  display: flex;
-  flex-direction: column;
-  min-height: 0;
-  overflow: auto;
-}
-
-.home-bar {
+.home-top {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: calc(4 * var(--u)) calc(6 * var(--u));
-}
-
-.home-bar > button {
-  max-width: 26ch;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  min-height: calc(var(--st-size-bar) + 4 * var(--u));
+  padding: calc(3 * var(--u)) calc(8 * var(--u));
+  background: var(--st-color-surface);
+  border-bottom: var(--u) solid var(--st-color-frame);
 }
 
 .home-profile {
   display: inline-flex;
   align-items: center;
-  gap: calc(4 * var(--u));
   margin-left: auto;
 }
 
@@ -1200,8 +1190,15 @@ button:focus-visible {
   width: 18ch;
 }
 
+.home-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: calc(8 * var(--u)) calc(12 * var(--u));
+}
+
 .home-group {
-  margin: calc(8 * var(--u)) 0 calc(4 * var(--u));
+  margin: 0 0 calc(6 * var(--u));
   font: inherit;
   color: var(--st-color-text-muted);
 }
@@ -1221,7 +1218,7 @@ button:focus-visible {
 
 .home-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 26ch);
+  grid-template-columns: repeat(auto-fill, 30ch);
   gap: calc(6 * var(--u));
   margin: 0;
   padding: 0;
@@ -1282,20 +1279,6 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
-.home-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: calc(2 * var(--u));
-}
-
-.home-actions button {
-  min-width: 0;
-  padding: 0 calc(2 * var(--u));
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
 /* Dialogs: a small window over a dimmed screen. */
 .dialog-backdrop {
   position: fixed;
@@ -1333,64 +1316,63 @@ button:focus-visible {
   margin-top: calc(8 * var(--u));
 }
 
-/* The workspace's bar (milestone 1A): home, the path of networks, up, the
-   trash. Path segments are one-line values with a tooltip. */
-.ws-top {
+/* Icon buttons: a square of one control with a 16u glyph (07 §6.2). */
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: var(--st-size-control);
+  min-width: var(--st-size-control);
+  padding: 0;
+}
+
+/* The workspace (milestone 1A): the canvas fills the screen under the tabs;
+   undo, redo and the trash are icons in the bottom-right corner. */
+.proto.workspace {
   position: absolute;
-  top: calc(6 * var(--u));
-  left: calc(6 * var(--u));
-  width: min(96ch, calc(100vw - 12 * var(--u)));
 }
 
-.ws-bar {
+.workspace .proto-canvas {
+  inset: 0;
+}
+
+.ws-tools {
+  position: absolute;
+  right: calc(6 * var(--u));
+  bottom: calc(6 * var(--u));
+  z-index: 4;
   display: flex;
-  align-items: center;
-  gap: calc(4 * var(--u));
-  padding: calc(5 * var(--u)) calc(6 * var(--u));
-}
-
-.ws-bar > button {
-  flex: none;
-  max-width: 18ch;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.ws-path {
-  display: flex;
-  flex: 1 1 auto;
-  align-items: center;
   gap: calc(2 * var(--u));
-  min-width: 0;
-  overflow: hidden;
+  padding: calc(2 * var(--u));
+  background: var(--st-color-surface);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
 }
 
-.ws-path > * {
-  flex: 0 1 auto;
-  min-width: 4ch;
-  max-width: 20ch;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.ws-tools .icon-button {
+  position: relative;
 }
 
-.ws-path > * + *::before {
-  content: "› ";
-  color: var(--st-color-text-muted);
-}
-
-.ws-here {
-  padding: 0 calc(4 * var(--u));
+/* How many nodes are in the trash, over the icon's corner. */
+.ws-count {
+  position: absolute;
+  top: calc(-4 * var(--u));
+  right: calc(-4 * var(--u));
+  min-width: calc(12 * var(--u));
+  padding: 0 var(--u);
+  font-size: var(--st-font-ui-size);
+  line-height: calc(12 * var(--u));
+  text-align: center;
+  color: var(--st-color-title-fg);
+  background: var(--st-color-title-bg);
 }
 
 .ws-trash {
   position: absolute;
-  top: calc(6 * var(--u));
+  bottom: calc(var(--st-size-control) + 16 * var(--u));
   right: calc(6 * var(--u));
   z-index: 6;
   width: min(44ch, calc(100vw - 12 * var(--u)));
-  max-height: calc(100% - var(--st-size-bar) - 12 * var(--u));
+  max-height: calc(100% - var(--st-size-control) - 24 * var(--u));
   display: flex;
   flex-direction: column;
 }
@@ -1419,8 +1401,245 @@ button:focus-visible {
   gap: calc(4 * var(--u));
 }
 
-.ws-trash-list span {
+.ws-trash-name {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* Context menu (07 §8.2): the Tab menu's rows, a key on the right. */
+.context-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 24ch;
+  max-width: 40ch;
+  padding: var(--u) 0;
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
+  outline: none;
+}
+
+.context-menu-row {
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  min-height: var(--st-size-row);
+  padding: 0 calc(6 * var(--u));
+  cursor: pointer;
+}
+
+.context-menu-row.is-current {
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
+}
+
+.context-menu-row.is-disabled {
+  color: var(--st-color-text-disabled);
+  cursor: default;
+}
+
+.context-menu-row.is-separated {
+  margin-top: calc(3 * var(--u));
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--st-color-divider) 0 calc(2 * var(--u)),
+    transparent 0 calc(4 * var(--u))
+  );
+  background-size: 100% var(--u);
+  background-repeat: no-repeat;
+}
+
+.context-menu-row.is-separated.is-current {
+  background-color: var(--st-color-selection-bg);
+}
+
+.context-menu-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.context-menu-hint {
+  flex: none;
+  color: var(--st-color-text-muted);
+}
+
+.context-menu-row.is-current .context-menu-hint {
+  color: inherit;
+}
+
+.home-card {
+  position: relative;
+}
+
+.home-action {
+  flex: none;
+  max-width: 26ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* A card's actions: icons over the top-right corner of its picture. */
+.home-icons {
+  position: absolute;
+  top: calc(5 * var(--u));
+  right: calc(5 * var(--u));
+  display: flex;
+  gap: calc(2 * var(--u));
+}
+
+/* The app: the bar of tabs on top, the screen below (✅ Q-16-12). */
+.app {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--st-color-bg);
+}
+
+.app-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.shell-error {
+  margin: 0;
+  padding: calc(2 * var(--u)) calc(8 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-attention);
+  background: var(--st-color-surface);
+  border-bottom: var(--u) solid var(--st-color-frame);
+}
+
+/* A retro browser's bar: the logo, the tools on a raised strip, a dashed
+   divider, then tabs standing on the bar's bottom line — the active tab
+   opens into the screen below it, the others sit lower and darker. */
+.tabbar {
+  display: flex;
+  flex: none;
+  align-items: flex-end;
+  gap: calc(6 * var(--u));
+  min-height: calc(var(--st-size-control) + 12 * var(--u));
+  padding: 0 calc(6 * var(--u));
+  background: var(--st-color-bg);
+  border-bottom: var(--u) solid var(--st-color-frame);
+}
+
+.tabbar-logo,
+.tabbar-tools,
+.tab-new {
+  align-self: center;
+}
+
+.tabbar-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  padding: 0 calc(4 * var(--u));
+  background: transparent;
+  border: var(--u) solid transparent;
+  box-shadow: none;
+  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  text-transform: uppercase;
+}
+
+.tabbar-tools {
+  display: flex;
+  gap: calc(2 * var(--u));
+  padding: calc(2 * var(--u));
+  background: var(--st-color-surface);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
+}
+
+.tabbar-tools .icon-button {
+  border-color: transparent;
+  box-shadow: none;
+  background: transparent;
+}
+
+.tabbar-tools .icon-button:hover:not(:disabled) {
+  background: var(--st-color-surface-raised);
+  border-color: var(--st-color-frame);
+}
+
+.tabbar-tabs {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: flex-end;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+  align-self: stretch;
+  padding-left: calc(8 * var(--u));
+  background:
+    repeating-linear-gradient(
+      180deg,
+      var(--st-color-divider) 0 calc(2 * var(--u)),
+      transparent 0 calc(4 * var(--u))
+    )
+    left center / var(--u) 60% no-repeat;
+}
+
+.tab {
+  display: flex;
+  flex: 0 1 28ch;
+  align-items: center;
+  min-width: 10ch;
+  height: calc(var(--st-size-control) + 2 * var(--u));
+  padding-left: calc(4 * var(--u));
+  color: var(--st-color-text-muted);
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  border-bottom: 0;
+}
+
+.tab.is-active {
+  position: relative;
+  z-index: 1;
+  height: calc(var(--st-size-control) + 6 * var(--u));
+  margin-bottom: calc(-1 * var(--u));
+  color: var(--st-color-text);
+  background: var(--st-color-surface);
+  border-bottom: var(--u) solid var(--st-color-surface);
+}
+
+.tab-name {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.tab-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.tab .icon-button {
+  color: inherit;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.tab .icon-button:hover:not(:disabled),
+.tab-name:hover:not(:disabled) {
+  background: transparent;
+  color: var(--st-color-text);
 }

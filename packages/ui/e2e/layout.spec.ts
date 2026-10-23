@@ -35,7 +35,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
     });
 
     test('the pixel × sits in the middle of its button', async ({ page }) => {
-      await page.goto('/');
+      await page.goto('/?about');
       const close = page.locator('.window-close');
       for (const hover of [false, true]) {
         if (hover) await close.hover();
@@ -75,7 +75,7 @@ async function inkMargins(page: Page, png: Buffer) {
 }
 
 test('close button hides the window in a browser and it can be reopened', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/?about');
   await page.locator('.window-close').click();
   await expect(page.locator('.window')).toHaveCount(0);
   await page.getByRole('button').click();

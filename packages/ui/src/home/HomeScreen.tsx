@@ -1,13 +1,16 @@
 import type { HomeBackend, HomeState, Opened, WorkspaceEntry } from '@strata/backend';
 import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pickArchive, pickFolder, pickSavePath } from '../backend';
+import { pickFolder, pickSavePath } from '../backend';
+import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { LocaleSwitch } from '../LocaleSwitch';
+import { IconButton } from '../TabBar';
 
 /**
  * The home screen (✅ Q-16-12): the workspaces of this device as cards, last
  * opened first, like the files of Figma; a new one, a folder from disk, the
- * local profile (✅ Q-16-14). A card opens its workspace on the canvas.
+ * local profile (✅ Q-16-14). A card opens its workspace in a tab; its
+ * actions are icons on the card and its right-button menu.
  */
 
 type Dialog =
@@ -19,13 +22,24 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Saves bytes as a file through the browser's download. */
+export function download(name: string, bytes: Uint8Array): void {
+  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/zip' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 10_000);
+}
+
 export function HomeScreen(props: {
   locale: Locale;
   onLocale: (l: Locale) => void;
   home: HomeBackend;
   onOpen: (opened: Opened) => void;
   onAbout: () => void;
-  onClose: () => void;
+  onRenamed: (id: string, name: string) => void;
+  onRemoved: (id: string) => void;
 }) {
   const { locale, home, onOpen } = props;
   const [state, setState] = useState<HomeState | null>(null);
@@ -35,7 +49,8 @@ export function HomeScreen(props: {
   const [profile, setProfile] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
-  const archiveInput = useRef<HTMLInputElement>(null);
+  const [menu, setMenu] = useState<{ x: number; y: number; entry: WorkspaceEntry } | null>(null);
+  const busyRef = useRef(false);
 
   useEffect(() => {
     let live = true;
@@ -60,11 +75,12 @@ export function HomeScreen(props: {
     Promise.all(
       state.workspaces.map(async (w) => {
         const png = await home.preview(w.id).catch(() => null);
-        if (png)
+        if (png) {
           urls.set(
             w.id,
             URL.createObjectURL(new Blob([new Uint8Array(png)], { type: 'image/png' })),
           );
+        }
       }),
     ).then(() => {
       if (live) setPreviews(urls);
@@ -77,7 +93,8 @@ export function HomeScreen(props: {
 
   const run = useCallback(
     async (f: () => Promise<HomeState | Opened | undefined>) => {
-      if (busy) return;
+      if (busyRef.current) return;
+      busyRef.current = true;
       setBusy(true);
       setError(null);
       setNote(null);
@@ -89,10 +106,11 @@ export function HomeScreen(props: {
       } catch (e) {
         setError(message(e));
       } finally {
+        busyRef.current = false;
         setBusy(false);
       }
     },
-    [busy, onOpen],
+    [onOpen],
   );
 
   const saveProfile = () => {
@@ -101,212 +119,203 @@ export function HomeScreen(props: {
     }
   };
 
+  const exportArchive = (w: WorkspaceEntry) =>
+    run(async () => {
+      const file = `${w.name}.strata.zip`;
+      if (home.where === 'desktop') {
+        const to = await pickSavePath(file);
+        if (!to) return undefined;
+        await home.exportArchive(w.id, to);
+      } else {
+        const bytes = await home.exportArchive(w.id);
+        if (bytes) download(file, bytes);
+      }
+      setNote(t(locale, 'home.exported', { name: file }));
+      return undefined;
+    });
+
+  const rename = (w: WorkspaceEntry, name: string) =>
+    run(async () => {
+      const s = await home.rename(w.id, name);
+      props.onRenamed(w.id, name);
+      return s;
+    });
+
+  const remove = (w: WorkspaceEntry) =>
+    run(async () => {
+      const s = await home.remove(w.id);
+      props.onRemoved(w.id);
+      return s;
+    });
+
+  /** A card's actions in its right-button menu (06 §5). */
+  const actions = (w: WorkspaceEntry): MenuEntry[] => [
+    {
+      label: t(locale, 'home.openCard'),
+      disabled: w.missing,
+      onSelect: () => void run(() => home.open(w.id)),
+    },
+    {
+      label: t(locale, 'home.rename'),
+      disabled: w.missing,
+      onSelect: () => setDialog({ t: 'rename', entry: w }),
+    },
+    { label: t(locale, 'home.export'), disabled: w.missing, onSelect: () => void exportArchive(w) },
+    {
+      label: t(locale, 'home.remove'),
+      separated: true,
+      onSelect: () => setDialog({ t: 'remove', entry: w }),
+    },
+  ];
+
   const where = home.where === 'desktop' ? 'home.desktop' : 'home.browser';
   const list = state?.workspaces ?? [];
 
   return (
-    <main className="scene">
-      <section
-        className="window home-window"
-        aria-labelledby="home-title"
-        data-profile={state?.profile.name ?? ''}
-      >
-        <header className="window-title">
-          <h1 id="home-title">{t(locale, 'home.title')}</h1>
+    <main
+      className="home"
+      aria-label={t(locale, 'home.title')}
+      data-profile={state?.profile.name ?? ''}
+    >
+      <div className="home-top">
+        <button
+          type="button"
+          className="is-default home-new home-action"
+          title={t(locale, 'home.new')}
+          disabled={busy}
+          onClick={() => setDialog({ t: 'create' })}
+        >
+          {t(locale, 'home.new')}
+        </button>
+        {home.add ? (
           <button
             type="button"
-            className="window-close"
-            aria-label={t(locale, 'window.close')}
-            title={t(locale, 'window.close')}
-            onClick={props.onClose}
+            className="home-action"
+            title={t(locale, 'home.openHint')}
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                const path = await pickFolder();
+                return path && home.add ? home.add(path) : undefined;
+              })
+            }
           >
-            ×
+            {t(locale, 'home.open')}
           </button>
-        </header>
-        <div className="window-body home-body">
-          <div className="home-bar">
-            <button
-              type="button"
-              className="is-default home-new"
-              title={t(locale, 'home.new')}
-              disabled={busy}
-              onClick={() => setDialog({ t: 'create' })}
-            >
-              {t(locale, 'home.new')}
-            </button>
-            {home.add ? (
-              <button
-                type="button"
-                title={t(locale, 'home.openHint')}
-                disabled={busy}
-                onClick={() =>
-                  void run(async () => {
-                    const path = await pickFolder();
-                    return path && home.add ? home.add(path) : undefined;
-                  })
-                }
-              >
-                {t(locale, 'home.open')}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              title={t(locale, 'home.importHint')}
-              disabled={busy}
-              onClick={() => {
-                if (home.where === 'browser') {
-                  archiveInput.current?.click();
-                  return;
-                }
-                void run(async () => {
-                  const path = await pickArchive();
-                  return path ? home.importArchive(path) : undefined;
-                });
-              }}
-            >
-              {t(locale, 'home.import')}
-            </button>
-            <input
-              ref={archiveInput}
-              className="sr-only"
-              type="file"
-              accept=".zip,application/zip"
-              tabIndex={-1}
-              aria-label={t(locale, 'home.importHint')}
-              onChange={(e) => {
-                const file = e.currentTarget.files?.[0];
-                e.currentTarget.value = '';
-                if (file) {
-                  void run(async () =>
-                    home.importArchive(new Uint8Array(await file.arrayBuffer())),
-                  );
-                }
-              }}
-            />
-            <label className="home-profile" title={t(locale, 'home.profileHint')}>
-              <span>{t(locale, 'home.profile')}</span>
-              <input
-                className="field"
-                value={profile}
-                placeholder={t(locale, 'home.profilePlaceholder')}
-                maxLength={80}
-                onChange={(e) => setProfile(e.currentTarget.value)}
-                onBlur={saveProfile}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') e.currentTarget.blur();
+        ) : null}
+        <label className="home-profile" title={t(locale, 'home.profileHint')}>
+          <span className="sr-only">{t(locale, 'home.profileHint')}</span>
+          <input
+            className="field"
+            value={profile}
+            placeholder={t(locale, 'home.profilePlaceholder')}
+            maxLength={80}
+            onChange={(e) => setProfile(e.currentTarget.value)}
+            onBlur={saveProfile}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur();
+            }}
+          />
+        </label>
+        <LocaleSwitch
+          locale={locale}
+          onChange={props.onLocale}
+          label={t(locale, 'about.language')}
+        />
+        <button
+          type="button"
+          className="home-action"
+          title={t(locale, 'home.about')}
+          onClick={props.onAbout}
+        >
+          {t(locale, 'home.about')}
+        </button>
+      </div>
+      <div className="home-content">
+        <h1 className="home-group">{t(locale, where)}</h1>
+        {error ? (
+          <p
+            className="home-error"
+            role="alert"
+            title={t(locale, 'home.error', { message: error })}
+          >
+            {t(locale, 'home.error', { message: error })}
+          </p>
+        ) : null}
+        {note ? (
+          <p className="home-note" role="status" title={note}>
+            {note}
+          </p>
+        ) : null}
+        {state && list.length === 0 ? (
+          <p className="home-empty">{t(locale, 'home.empty')}</p>
+        ) : null}
+        <ul className="home-grid" aria-label={t(locale, where)}>
+          {list.map((w) => {
+            const meta = w.missing
+              ? t(locale, 'home.missing')
+              : t(locale, 'home.opened', { when: formatAgo(locale, w.openedAt) });
+            const preview = previews.get(w.id);
+            return (
+              <li
+                key={w.id}
+                className={w.missing ? 'home-card is-missing' : 'home-card'}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setMenu({ x: e.clientX, y: e.clientY, entry: w });
                 }}
-              />
-            </label>
-            <LocaleSwitch
-              locale={locale}
-              onChange={props.onLocale}
-              label={t(locale, 'about.language')}
-            />
-            <button type="button" title={t(locale, 'home.about')} onClick={props.onAbout}>
-              {t(locale, 'home.about')}
-            </button>
-          </div>
-          <h2 className="home-group">{t(locale, where)}</h2>
-          {error ? (
-            <p
-              className="home-error"
-              role="alert"
-              title={t(locale, 'home.error', { message: error })}
-            >
-              {t(locale, 'home.error', { message: error })}
-            </p>
-          ) : null}
-          {note ? (
-            <p className="home-note" role="status" title={note}>
-              {note}
-            </p>
-          ) : null}
-          {state && list.length === 0 ? (
-            <p className="home-empty">{t(locale, 'home.empty')}</p>
-          ) : null}
-          <ul className="home-grid" aria-label={t(locale, where)}>
-            {list.map((w) => {
-              const meta = w.missing
-                ? t(locale, 'home.missing')
-                : t(locale, 'home.opened', { when: formatAgo(locale, w.openedAt) });
-              const preview = previews.get(w.id);
-              return (
-                <li key={w.id} className={w.missing ? 'home-card is-missing' : 'home-card'}>
-                  <button
-                    type="button"
-                    className="home-open"
-                    title={w.path ? `${w.name} · ${w.path}` : w.name}
+              >
+                <button
+                  type="button"
+                  className="home-open"
+                  title={w.path ? `${w.name} · ${w.path}` : w.name}
+                  disabled={busy || w.missing}
+                  onClick={() => void run(() => home.open(w.id))}
+                >
+                  <span className="home-preview st-pattern-50" aria-hidden="true">
+                    {preview ? <img src={preview} alt="" /> : <b>{[...w.name][0] ?? '·'}</b>}
+                  </span>
+                  <span className="home-name" title={w.name}>
+                    {w.name}
+                  </span>
+                  <span className="home-meta" title={meta}>
+                    {meta}
+                  </span>
+                </button>
+                <div className="home-icons">
+                  <IconButton
+                    glyph="pencil"
+                    label={t(locale, 'home.rename')}
                     disabled={busy || w.missing}
-                    onClick={() => void run(() => home.open(w.id))}
-                  >
-                    <span className="home-preview st-pattern-50" aria-hidden="true">
-                      {preview ? <img src={preview} alt="" /> : <b>{[...w.name][0] ?? '·'}</b>}
-                    </span>
-                    <span className="home-name" title={w.name}>
-                      {w.name}
-                    </span>
-                    <span className="home-meta" title={meta}>
-                      {meta}
-                    </span>
-                  </button>
-                  <div className="home-actions">
-                    <button
-                      type="button"
-                      title={t(locale, 'home.rename')}
-                      disabled={busy || w.missing}
-                      onClick={() => setDialog({ t: 'rename', entry: w })}
-                    >
-                      {t(locale, 'home.rename')}
-                    </button>
-                    <button
-                      type="button"
-                      title={t(locale, 'home.exportHint')}
-                      disabled={busy || w.missing}
-                      onClick={() =>
-                        void run(async () => {
-                          const file = `${w.name}.strata.zip`;
-                          if (home.where === 'desktop') {
-                            const to = await pickSavePath(file);
-                            if (!to) return undefined;
-                            await home.exportArchive(w.id, to);
-                          } else {
-                            const bytes = await home.exportArchive(w.id);
-                            if (bytes) download(file, bytes);
-                          }
-                          setNote(t(locale, 'home.exported', { name: file }));
-                          return undefined;
-                        })
-                      }
-                    >
-                      {t(locale, 'home.export')}
-                    </button>
-                    <button
-                      type="button"
-                      title={
-                        home.where === 'desktop'
-                          ? t(locale, 'home.forgetHint')
-                          : t(locale, 'home.forget')
-                      }
-                      disabled={busy}
-                      onClick={() => void run(() => home.forget(w.id))}
-                    >
-                      {t(locale, 'home.forget')}
-                    </button>
-                    <button
-                      type="button"
-                      title={t(locale, 'home.remove')}
-                      disabled={busy}
-                      onClick={() => setDialog({ t: 'remove', entry: w })}
-                    >
-                      {t(locale, 'home.remove')}
-                    </button>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </section>
+                    onClick={() => setDialog({ t: 'rename', entry: w })}
+                  />
+                  <IconButton
+                    glyph="export"
+                    label={t(locale, 'home.exportHint')}
+                    disabled={busy || w.missing}
+                    onClick={() => void exportArchive(w)}
+                  />
+                  <IconButton
+                    glyph="trash"
+                    label={t(locale, 'home.remove')}
+                    disabled={busy}
+                    onClick={() => setDialog({ t: 'remove', entry: w })}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          label={t(locale, 'home.actions', { name: menu.entry.name })}
+          items={actions(menu.entry)}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
       {dialog?.t === 'create' || dialog?.t === 'rename' ? (
         <NameDialog
           locale={locale}
@@ -316,9 +325,7 @@ export function HomeScreen(props: {
           busy={busy}
           onCancel={() => setDialog(null)}
           onCommit={(name) =>
-            void run(() =>
-              dialog.t === 'create' ? home.create(name) : home.rename(dialog.entry.id, name),
-            )
+            void (dialog.t === 'create' ? run(() => home.create(name)) : rename(dialog.entry, name))
           }
         />
       ) : null}
@@ -350,7 +357,7 @@ export function HomeScreen(props: {
                   type="button"
                   className="is-default"
                   disabled={busy}
-                  onClick={() => void run(() => home.remove(dialog.entry.id))}
+                  onClick={() => void remove(dialog.entry)}
                 >
                   {t(locale, 'home.remove')}
                 </button>
@@ -361,16 +368,6 @@ export function HomeScreen(props: {
       ) : null}
     </main>
   );
-}
-
-/** Saves bytes as a file through the browser's download. */
-function download(name: string, bytes: Uint8Array): void {
-  const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/zip' }));
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
 /** A small window with one name field: create or rename a workspace. */

@@ -16,14 +16,14 @@ import {
   Editor,
   type EditorEvents,
   generatePreset,
-  type HintKey,
+  type Pixels,
   processBackdrop,
   WIRE_END_STYLES,
   type WireEndStyle,
 } from '@strata/canvas';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapState } from '../proto/map3d';
@@ -31,6 +31,7 @@ import { type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
+import { IconButton } from '../TabBar';
 import { CoreDocs } from './docs';
 
 /**
@@ -79,11 +80,33 @@ function loadEnds(): WireEndStyle {
 
 const pair = (a: string, b: string) => `${a}\u0000${b}`;
 
+let fogPixels: Pixels | null = null;
+
+/** The «Туман» background (07 §7), made once per page: every tab shows it. */
+function fog(): Pixels {
+  if (!fogPixels) {
+    fogPixels = generatePreset('fog', BACKDROP_SIDE / 2, Math.round((BACKDROP_SIDE / 2) * 0.625));
+    processBackdrop(fogPixels);
+  }
+  return fogPixels;
+}
+
+/** What the app's tabs ask of an open workspace before they switch away. */
+export interface WorkspaceBridge {
+  /** Every step and every typed letter written by the core. */
+  save(): Promise<void>;
+  /**
+   * Saved, and the picture for its card taken; `picture` is its write,
+   * which goes on in the background.
+   */
+  leave(): Promise<{ picture: Promise<void> }>;
+}
+
 export function WorkspaceScreen(props: {
   locale: Locale;
   home: HomeBackend;
   opened: Opened;
-  onHome: () => void;
+  bridge: MutableRefObject<WorkspaceBridge | null>;
 }) {
   const { locale, home, opened } = props;
   const core = home.core;
@@ -96,6 +119,8 @@ export function WorkspaceScreen(props: {
   const map3d = useRef<Map3D | null>(null);
   const layouter = useRef<Layouter | null>(null);
   const netRef = useRef(opened.root);
+  /** The open workspace; a tab switch changes it under the same canvas. */
+  const openedRef = useRef(opened);
   const cameras = useRef(new Map<string, Camera>());
   const textWires = useRef(new Set<string>());
   /** Shows a network (the current one when none is given), after what is queued. */
@@ -103,6 +128,14 @@ export function WorkspaceScreen(props: {
   /** Loads and undo through the core, one after another (they replace the graph). */
   const busy = useRef<Promise<unknown>>(Promise.resolve());
   const leaving = useRef(false);
+  const makeDocs = useRef<() => CoreDocs>(
+    () =>
+      new CoreDocs(
+        core,
+        () => undefined,
+        () => undefined,
+      ),
+  );
   const toastId = useRef(0);
   const [net, setNet] = useState<NetworkView | null>(null);
   const [menu, setMenu] = useState<{ sx: number; sy: number; query: string } | null>(null);
@@ -110,7 +143,6 @@ export function WorkspaceScreen(props: {
     null,
   );
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const [hint, setHint] = useState<HintKey>('proto.hint.empty');
   const [note, setNote] = useState<{
     id: string;
     doc: LoroDoc;
@@ -167,7 +199,8 @@ export function WorkspaceScreen(props: {
       tabMenu: (e) => setMenu(e),
       nameInput: (e) => setName(e),
       toast: (e) => toast(e.key, e.params, e.key !== 'proto.toast.exists'),
-      hint: (k) => setHint(k),
+      // No explanatory lines on screen: hints live in tooltips and menus.
+      hint: () => undefined,
       change: () => {
         setVersion((v) => v + 1);
         if (trashTimer) clearTimeout(trashTimer);
@@ -289,28 +322,29 @@ export function WorkspaceScreen(props: {
       } else {
         ed.fitAll();
       }
-      if (nv.nodes.length === 0) setHint('proto.hint.empty');
       v.canvas.focus();
       refreshTrash();
     };
     const load = (id?: string) => queue(() => show(id ?? netRef.current));
     loadRef.current = load;
 
-    docs.current = new CoreDocs(
-      core,
-      () => {
-        // The core rewired a note's links: its wires follow, outside undo.
-        void core.view(netRef.current).then((nv) => {
-          const g = graph.current;
-          if (!g || cancelled || nv.net !== netRef.current) return;
-          textWires.current = new Set(
-            nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)),
-          );
-          followWires(g, nv);
-        });
-      },
-      refused,
-    );
+    makeDocs.current = () =>
+      new CoreDocs(
+        core,
+        () => {
+          // The core rewired a note's links: its wires follow, outside undo.
+          void core.view(netRef.current).then((nv) => {
+            const g = graph.current;
+            if (!g || cancelled || nv.net !== netRef.current) return;
+            textWires.current = new Set(
+              nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)),
+            );
+            followWires(g, nv);
+          });
+        },
+        refused,
+      );
+    docs.current = makeDocs.current();
 
     CanvasView.create(el).then((v) => {
       if (cancelled) {
@@ -325,13 +359,7 @@ export function WorkspaceScreen(props: {
       if (new URLSearchParams(window.location.search).has('plain')) {
         v.background.container.visible = false;
       } else {
-        const px = generatePreset(
-          'fog',
-          BACKDROP_SIDE / 2,
-          Math.round((BACKDROP_SIDE / 2) * 0.625),
-        );
-        processBackdrop(px);
-        v.setBackground(px);
+        v.setBackground(fog());
       }
       // Test hook for e2e: the canvas, the graph and when the core has it all.
       (window as unknown as { __strataWs: unknown }).__strataWs = {
@@ -344,7 +372,7 @@ export function WorkspaceScreen(props: {
           await sync.current?.settled();
         },
       };
-      void load(opened.root);
+      void load(openedRef.current.root);
     });
 
     const leave = () => void docs.current?.flush();
@@ -401,19 +429,46 @@ export function WorkspaceScreen(props: {
   );
 
   /** Back to the home screen: everything written, a picture for the card. */
-  const goHome = async () => {
-    if (leaving.current) return;
-    leaving.current = true;
-    try {
+  // The tabs ask this screen to write everything before they switch away.
+  useEffect(() => {
+    const save = async () => {
+      await busy.current;
       await docs.current?.flush();
       await sync.current?.settled();
-      const png = await viewRef.current?.snapshot();
-      if (png) await home.setPreview(opened.workspace.id, png).catch(() => undefined);
-      await home.close();
-    } finally {
-      props.onHome();
-    }
-  };
+    };
+    props.bridge.current = {
+      save,
+      leave: async () => {
+        if (leaving.current) return { picture: Promise.resolve() };
+        leaving.current = true;
+        await save();
+        // The picture is read at once; encoding and saving it go on in the
+        // background, so the next tab does not wait for them.
+        const id = opened.workspace.id;
+        const shot = viewRef.current?.snapshot() ?? Promise.resolve(null);
+        const picture = shot
+          .then((png) => (png ? home.setPreview(id, png) : undefined))
+          .catch(() => undefined);
+        return { picture };
+      },
+    };
+  }, [home, opened.workspace.id, props.bridge]);
+
+  // Another tab: the same canvas, the other workspace's root network.
+  useEffect(() => {
+    if (openedRef.current.workspace.id === opened.workspace.id) return;
+    openedRef.current = opened;
+    leaving.current = false;
+    cameras.current.clear();
+    docs.current?.destroy();
+    docs.current = makeDocs.current();
+    setNote(null);
+    setBoard(null);
+    setTrash(null);
+    setTrashOpen(false);
+    netRef.current = opened.root;
+    void loadRef.current(opened.root);
+  }, [opened]);
 
   const restore = async (item: TrashItem) => {
     try {
@@ -445,59 +500,12 @@ export function WorkspaceScreen(props: {
     <div
       className="proto workspace"
       data-net={net?.net ?? ''}
+      data-depth={path.length}
       data-nodes={g?.nodes.size ?? 0}
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
     >
       <div ref={host} className="proto-canvas" />
-      <section className="window ws-top" aria-labelledby="ws-title">
-        <header className="window-title">
-          <h1 id="ws-title" title={opened.workspace.name}>
-            {path[0]?.[1] ?? opened.workspace.name}
-          </h1>
-        </header>
-        <div className="window-body ws-bar">
-          <button type="button" title={t(locale, 'ws.homeHint')} onClick={() => void goHome()}>
-            {t(locale, 'ws.home')}
-          </button>
-          <nav className="ws-path" aria-label={t(locale, 'ws.path')}>
-            {path.map(([id, n], i) =>
-              i === path.length - 1 ? (
-                <span key={id} className="ws-here" aria-current="location" title={n}>
-                  {n}
-                </span>
-              ) : (
-                <button key={id} type="button" title={n} onClick={() => void loadRef.current(id)}>
-                  {n}
-                </button>
-              ),
-            )}
-          </nav>
-          <button
-            type="button"
-            title={t(locale, 'ws.upHint')}
-            disabled={path.length < 2}
-            onClick={() => {
-              const parent = path.at(-2);
-              if (parent) void loadRef.current(parent[0]);
-            }}
-          >
-            {t(locale, 'ws.up')}
-          </button>
-          <button
-            type="button"
-            className={trashOpen ? 'is-default' : undefined}
-            title={t(locale, 'ws.trash', { n: trashCount })}
-            aria-expanded={trashOpen}
-            onClick={() => {
-              setTrashOpen((o) => !o);
-              refreshTrash();
-            }}
-          >
-            {t(locale, 'ws.trash', { n: trashCount })}
-          </button>
-        </div>
-      </section>
       {trashOpen ? (
         <section className="window ws-trash" aria-labelledby="trash-title">
           <header className="window-title">
@@ -522,7 +530,9 @@ export function WorkspaceScreen(props: {
               <ul className="ws-trash-list">
                 {(trash ?? []).map((item) => (
                   <li key={item.id}>
-                    <span title={item.name}>{item.name || t(locale, 'note.untitled')}</span>
+                    <span className="ws-trash-name" title={item.name}>
+                      {item.name || t(locale, 'note.untitled')}
+                    </span>
                     <button type="button" onClick={() => void restore(item)}>
                       {t(locale, 'ws.restore')}
                     </button>
@@ -533,27 +543,31 @@ export function WorkspaceScreen(props: {
           </div>
         </section>
       ) : null}
-      <footer className="proto-status">
-        <span className="hint">
-          {net === null
-            ? t(locale, 'ws.loading')
-            : t(locale, view3d === '2d' ? hint : 'proto.hint.map')}
-        </span>
-        <span className="last-step" title={lastStep}>
-          {lastStep}
-        </span>
-        <button
-          type="button"
+      <div className="ws-tools">
+        <IconButton
+          glyph="undo"
+          label={canUndo ? lastStep : t(locale, 'proto.undo')}
           disabled={!canUndo}
-          title={canUndo ? lastStep : undefined}
           onClick={() => ed?.undo()}
+        />
+        <IconButton
+          glyph="redo"
+          label={t(locale, 'proto.redo')}
+          disabled={!canRedo}
+          onClick={() => ed?.redo()}
+        />
+        <IconButton
+          glyph="trash"
+          className={trashOpen ? 'is-default' : undefined}
+          label={t(locale, 'ws.trash', { n: trashCount })}
+          onClick={() => {
+            setTrashOpen((o) => !o);
+            refreshTrash();
+          }}
         >
-          {t(locale, 'proto.undo')}
-        </button>
-        <button type="button" disabled={!canRedo} onClick={() => ed?.redo()}>
-          {t(locale, 'proto.redo')}
-        </button>
-      </footer>
+          {trashCount > 0 ? <span className="ws-count">{trashCount}</span> : null}
+        </IconButton>
+      </div>
       <ul className="toasts" aria-live="polite">
         {toasts.map((x) => (
           <li key={x.id} className="toast">

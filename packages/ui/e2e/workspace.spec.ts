@@ -36,7 +36,7 @@ declare global {
 
 /** Creates a workspace from the home screen and waits for its canvas. */
 async function createWorkspace(page: Page, name: string) {
-  await page.getByRole('button', { name: /Новое пространство|New workspace/ }).click();
+  await page.locator('.home-new').click();
   const field = page.locator('.dialog .field');
   await field.fill(name);
   await page.locator('.dialog button[type="submit"]').click();
@@ -96,6 +96,17 @@ async function select(page: Page, name: string) {
   await page.mouse.click(p.x, p.y);
 }
 
+/** A card's action: its icon, or its right-button menu. */
+async function cardAction(page: Page, card: string, action: string, right = false) {
+  const el = page.locator('.home-card', { hasText: card });
+  if (!right) {
+    await el.getByRole('button', { name: action }).click();
+    return;
+  }
+  await el.locator('.home-open').click({ button: 'right' });
+  await page.getByRole('menuitem', { name: action }).click();
+}
+
 /** Every step so far is written by the core. */
 const settled = (page: Page) => page.evaluate(() => window.__strataWs?.settled());
 
@@ -103,17 +114,17 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
   test.describe(`home ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, () => {
     test.use({ viewport, deviceScaleFactor, locale: 'ru-RU' });
 
-    test('the home window keeps its size when the language changes', async ({ page }) => {
+    test('the home bar keeps its size when the language changes', async ({ page }) => {
       await page.goto('/?plain');
       await createWorkspace(page, 'Очень длинное название пространства для проверки обрезки');
       await page.getByRole('button', { name: 'Главная' }).click();
       await expect(page.locator('.home-card')).toHaveCount(1);
-      const ru = await box(page, '.home-window');
-      expect(await overflowing(page), 'RU text must fit').toEqual([]);
+      const ru = await box(page, '.home-top');
+      expect(await overflowing(page, '.home'), 'RU text must fit').toEqual([]);
       await page.locator('.segmented label', { hasText: 'EN' }).click();
-      await expect(page.locator('#home-title')).toHaveText('Home');
-      const en = await box(page, '.home-window');
-      expect(await overflowing(page), 'EN text must fit').toEqual([]);
+      await expect(page.locator('.home-new')).toHaveText('New workspace');
+      const en = await box(page, '.home-top');
+      expect(await overflowing(page, '.home'), 'EN text must fit').toEqual([]);
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[k] - ru[k]), `home ${k}: RU ${ru[k]} → EN ${en[k]}`).toBeLessThanOrEqual(
           0.5,
@@ -131,7 +142,7 @@ test.describe('a workspace on the core', () => {
     await page.goto('/?plain');
     await expect(page.locator('.home-empty')).toBeVisible();
     await createWorkspace(page, 'Игра');
-    await expect(page.locator('.ws-path')).toHaveText('Игра');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
 
     // Nodes through Tab, a wire between them.
     await createNode(page, 400, 300, 'Сценарий');
@@ -176,11 +187,11 @@ test.describe('a workspace on the core', () => {
     // Into the network and out (06 §1.4).
     await select(page, 'Глава 1');
     await page.keyboard.press('Enter');
-    await expect(page.locator('.ws-path')).toHaveText(/Игра.*Глава 1/);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '0');
     await createNode(page, 600, 400, 'Внутри');
     await page.keyboard.press('KeyU');
-    await expect(page.locator('.ws-path')).toHaveText('Игра');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '4');
     // Undo reaches the step made inside, from outside: the session's history.
     await page.keyboard.press('Control+z');
@@ -244,16 +255,12 @@ test.describe('a workspace on the core', () => {
     // The card has a picture of the canvas once the workspace was open.
     await expect(page.locator('.home-preview img')).toHaveCount(2);
 
-    const work = page.locator('.home-card', { hasText: 'Работа' });
-    await work.getByRole('button', { name: 'Переименовать' }).click();
+    await cardAction(page, 'Работа', 'Переименовать');
     await page.locator('.dialog .field').fill('Работа 2026');
     await page.locator('.dialog button[type="submit"]').click();
     await expect(page.locator('.home-name')).toHaveText(['Личное', 'Работа 2026']);
 
-    await page
-      .locator('.home-card', { hasText: 'Личное' })
-      .getByRole('button', { name: 'Удалить' })
-      .click();
+    await cardAction(page, 'Личное', 'Удалить', true);
     await expect(page.locator('.dialog')).toContainText('из этого браузера');
     await page.locator('.dialog button.is-default').click();
     await expect(page.locator('.home-name')).toHaveText(['Работа 2026']);
@@ -261,7 +268,7 @@ test.describe('a workspace on the core', () => {
     await page.reload();
     await expect(page.locator('.home-name')).toHaveText(['Работа 2026']);
     await page.locator('.home-open').click();
-    await expect(page.locator('#ws-title')).toHaveText('Работа 2026');
+    await expect(page.locator('.tab.is-active')).toHaveText('Работа 2026');
   });
 
   test('a workspace goes out as .strata.zip and comes back as a copy', async ({ page }) => {
@@ -272,12 +279,13 @@ test.describe('a workspace on the core', () => {
     await page.getByRole('button', { name: 'Главная' }).click();
     const [file] = await Promise.all([
       page.waitForEvent('download'),
-      page.locator('.home-card').getByRole('button', { name: 'Экспорт' }).click(),
+      cardAction(page, 'Архив', 'Экспорт', true),
     ]);
     expect(file.suggestedFilename()).toBe('Архив.strata.zip');
     await expect(page.locator('.home-note')).toContainText('Архив.strata.zip');
     // This browser has the workspace: the archive opens as a copy.
-    await page.locator('.home-bar input[type="file"]').setInputFiles(await file.path());
+    // «Импорт» in the bar: this browser has the workspace, so it opens as a copy.
+    await page.locator('input[type="file"][accept*="zip"]').setInputFiles(await file.path());
     await expect(page.locator('.workspace')).toBeVisible();
     await page.waitForFunction(() => window.__strataWs?.graph() != null);
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
@@ -286,13 +294,43 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.home-name')).toHaveText(['Архив', 'Архив']);
   });
 
+  test('workspaces open in tabs; the logo goes home', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Первое');
+    await expect(page.locator('.tab')).toHaveText(['Первое']);
+    // «+» right after the last tab: a new workspace in a new tab.
+    await page.locator('.tab-new').click();
+    await expect(page.locator('.tab')).toHaveText(['Первое', 'Без названия']);
+    await expect(page.locator('.tab.is-active')).toHaveText('Без названия');
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await createNode(page, 600, 400, 'Во второй');
+    // Switching tabs keeps each workspace's own canvas.
+    await page.locator('.tab', { hasText: 'Первое' }).locator('.tab-name').click();
+    await expect(page.locator('.tab.is-active')).toHaveText('Первое');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '0');
+    await page.locator('.tab', { hasText: 'Без названия' }).locator('.tab-name').click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    // The logo: home, with both cards; the tabs stay.
+    await page.getByRole('button', { name: 'Главная' }).click();
+    await expect(page.locator('.home-card')).toHaveCount(2);
+    await expect(page.locator('.tab')).toHaveCount(2);
+    // Closing the open tab moves to its neighbour; the last one goes home.
+    await page.locator('.tab', { hasText: 'Первое' }).locator('.tab-name').click();
+    await page.getByRole('button', { name: 'Закрыть «Первое»' }).click();
+    await expect(page.locator('.tab.is-active')).toHaveText('Без названия');
+    await page.getByRole('button', { name: 'Закрыть «Без названия»' }).click();
+    await expect(page.locator('.home-card')).toHaveCount(2);
+    await expect(page.locator('.tab')).toHaveCount(0);
+  });
+
   test('the profile is kept on this device', async ({ page }) => {
     await page.goto('/?plain');
+    await expect(page.locator('.home-empty')).toBeVisible();
     const field = page.locator('.home-profile .field');
     await field.fill('Антон');
     await field.press('Enter');
     // Written to this device before the reload.
-    await expect(page.locator('.home-window')).toHaveAttribute('data-profile', 'Антон');
+    await expect(page.locator('.home')).toHaveAttribute('data-profile', 'Антон');
     await page.reload();
     await expect(page.locator('.home-profile .field')).toHaveValue('Антон');
   });

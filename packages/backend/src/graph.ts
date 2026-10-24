@@ -6,7 +6,7 @@
  * same calls; nodes carry their placement in this network directly (05 §9.2).
  */
 
-import type { AttrKey, NodeAttrs } from './core';
+import type { AttrKey, NodeAttrs, WireShape } from './core';
 
 /**
  * Kinds of 05 §4.2 (ADR-0010): a folder (`network`), a project — a task one
@@ -159,7 +159,9 @@ export type Op =
   | { t: 'disconnect'; from: string; to: string }
   | { t: 'rename'; id: string; name: string }
   | { t: 'attr'; id: string; key: AttrKey; value: string | number | null }
-  | { t: 'assign'; id: string; person: string; on: boolean };
+  | { t: 'assign'; id: string; person: string; on: boolean }
+  /** The network's wire style (06 §6.2); null — Bézier. */
+  | { t: 'wireShape'; value: WireShape | null };
 
 /** Human-readable changeset label: an i18n key and its parameters, translated by the UI. */
 export interface ChangeLabel {
@@ -207,6 +209,7 @@ export interface Tx {
   /** A field of 05 §6.1; null clears it. */
   attr(id: string, key: AttrKey, value: string | number | null): void;
   assign(id: string, person: string, on: boolean): void;
+  wireShape(value: WireShape | null): void;
 }
 
 export class Graph {
@@ -223,6 +226,12 @@ export class Graph {
   day: () => string = () => today();
   /** A new task, project or list takes its kind's colour (07 §2.2); off in the prototype's demo. */
   kindColors = false;
+  /** How this network draws its wires (05 §9.2, 06 §6.2); null — Bézier. Set through `Tx`. */
+  private shape: WireShape | null = null;
+
+  get wireShape(): WireShape {
+    return this.shape ?? 'bezier';
+  }
 
   subscribe(fn: (e: GraphEvent) => void): () => void {
     this.listeners.add(fn);
@@ -315,6 +324,9 @@ export class Graph {
       },
       assign: (id, person, on) => {
         run({ t: 'assign', id, person, on });
+      },
+      wireShape: (value) => {
+        run({ t: 'wireShape', value });
       },
     };
     try {
@@ -501,6 +513,12 @@ export class Graph {
         this.outs.get(op.from)?.delete(op.to);
         this.ins.get(op.to)?.delete(op.from);
         return [{ t: 'connect', from: op.from, to: op.to }];
+      }
+      case 'wireShape': {
+        if (this.shape === op.value) return null;
+        const back: Op = { t: 'wireShape', value: this.shape };
+        this.shape = op.value;
+        return [back];
       }
     }
   }

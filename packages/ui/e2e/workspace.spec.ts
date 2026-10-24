@@ -26,6 +26,7 @@ interface WsHook {
   };
   graph(): {
     nodes: Map<string, Node>;
+    wireShape: 'straight' | 'bezier' | 'kinetic';
     edges(): [string, string][];
     transaction(label: { key: string }, build: (tx: unknown) => void): unknown;
   } | null;
@@ -1279,6 +1280,32 @@ test.describe('a workspace on the core', () => {
     // Empty inside: a project can be a task again.
     await menu('Сделать задачей');
     await expect.poll(kind).toBe('task');
+  });
+
+  test("a network keeps its wires' style in the core: Shift+S and the menu (06 §6.2)", async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Нити');
+    const shape = () => page.evaluate(() => window.__strataWs?.graph()?.wireShape);
+    expect(await shape()).toBe('bezier');
+    await page.mouse.move(640, 400);
+    await page.keyboard.press('Shift+S');
+    expect(await shape()).toBe('kinetic');
+    // The right button on the bare canvas offers the style after it.
+    await page.mouse.click(640, 400, { button: 'right' });
+    await page.getByRole('menuitem', { name: 'Нити: прямые' }).click();
+    expect(await shape()).toBe('straight');
+    // One step of undo each.
+    await page.keyboard.press('Control+z');
+    expect(await shape()).toBe('kinetic');
+    await page.keyboard.press('Control+Shift+z');
+    expect(await shape()).toBe('straight');
+    await settled(page);
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    expect(await shape()).toBe('straight');
   });
 
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {

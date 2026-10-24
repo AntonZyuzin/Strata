@@ -6,6 +6,7 @@ import 'pixi.js/unsafe-eval';
 import type { Pixels } from './backdrop';
 import { BackgroundLayer } from './background';
 import { Camera } from './camera';
+import { controls } from './curve';
 import { Decor, type DecorNode, type Interaction } from './decor';
 import {
   createIconAtlas,
@@ -15,6 +16,7 @@ import {
   iconScale,
   pixelIconScale,
 } from './icons';
+import { Kinetics } from './kinetic';
 import { defaultIcon, dotColor, isClosed, levelOf, nodeAlpha, type WireEndStyle } from './looks';
 import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
@@ -82,6 +84,10 @@ export class CanvasView {
   private readonly decor: Decor;
   private readonly views = new Map<string, NodeView>();
   private wireList: [string, string][] = [];
+  /** Kinetic wires' lag and jitter (06 §6.8); the ends selected last frame start the jitter. */
+  private readonly kinetics = new Kinetics();
+  private kinetic = false;
+  private jittered = new Set<string>();
   private tweens: Tween[] = [];
   private scheduled = false;
   private graph: Graph | null = null;
@@ -104,6 +110,8 @@ export class CanvasView {
   ) {
     const dpr = app.renderer.resolution;
     this.decor = new Decor(pixelUnit(dpr), dpr, uiFontPx(dpr));
+    this.wires.setUnit(pixelUnit(dpr) / dpr);
+    this.decor.curveOf = (a, b) => this.curveOf(a, b);
     this.world.addChild(this.wires.mesh, this.layer.halos, this.layer.bodies, this.layer.icons);
     app.stage.addChild(this.background.container, this.world, this.decor.container, this.overlay);
   }
@@ -405,7 +413,7 @@ export class CanvasView {
     this.background.follow(cam, this.width, this.height);
     this.wires.setZoom(cam.zoom);
     this.wires.setTime(now / 1000);
-    this.writeWires();
+    const swaying = this.writeWires(now);
     this.overlay.clear();
     this.onFrame?.(now);
     const animating = this.decor.draw(
@@ -417,13 +425,27 @@ export class CanvasView {
       now,
     );
     this.app.render();
-    if (moving || animating) this.invalidate();
+    if (moving || animating || swaying) this.invalidate();
   }
 
-  private writeWires() {
+  /** Writes the wires for this frame; true while kinetic wires still move. */
+  private writeWires(now: number): boolean {
     const list = this.wireList;
     // Far zoom: wires become texture, 1 px at 40 % (07 §4.9), unless highlighted.
     const far = SIZE.m * this.camera.zoom < 12;
+    const shape = this.graph?.wireShape ?? 'bezier';
+    const straight = shape === 'straight';
+    // «Меньше движения»: a kinetic network draws Bézier wires (06 §6.2).
+    const kinetic = shape === 'kinetic' && !this.motionReduced;
+    this.decor.straight = straight;
+    if (kinetic) {
+      this.kinetics.frame(now);
+      this.jitterSelected();
+    } else if (this.kinetic) {
+      this.kinetics.reset();
+    }
+    this.kinetic = kinetic;
+    const zoom = this.camera.zoom;
     this.wires.setCount(list.length);
     for (let i = 0; i < list.length; i++) {
       const [from, to] = list[i] as [string, string];
@@ -431,11 +453,41 @@ export class CanvasView {
       const b = this.views.get(to);
       if (!a || !b) continue;
       // Both ends run into their sockets on the rim (07 §5); same as editor.wireEnds.
-      this.wires.set(i, { ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r });
+      const ends = { ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight };
+      this.wires.set(i, ends);
+      this.wires.setKick(i, kinetic ? this.kinetics.follow(i, controls(ends), zoom) : null);
       const style = this.wireStyle(from, to);
       this.wires.setStyle(i, far && style === NORMAL_WIRE ? FAR_WIRE : style);
     }
     this.wires.upload();
+    return kinetic && this.kinetics.moving;
+  }
+
+  /** The wires of a node selected since the last frame sway three times (06 §6.8). */
+  private jitterSelected() {
+    const selection = this.interaction().selection;
+    for (const id of selection) {
+      if (this.jittered.has(id)) continue;
+      const v = this.views.get(id);
+      if (!v) continue;
+      for (const src of v.inputs) this.kinetics.shake(wireKey(src.id, id));
+      for (const dst of v.outputs) this.kinetics.shake(wireKey(id, dst.id));
+    }
+    this.jittered = new Set(selection);
+  }
+
+  /** World control points of a wire as drawn this frame, a kinetic one's lag included. */
+  private curveOf(a: DecorNode, b: DecorNode): readonly number[] {
+    const straight = this.graph?.wireShape === 'straight';
+    const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight });
+    const k = this.kinetic ? this.kinetics.kickOf(wireKey(a.id, b.id)) : null;
+    if (k) {
+      c[2] += k[0] ?? 0;
+      c[3] += k[1] ?? 0;
+      c[4] += k[2] ?? 0;
+      c[5] += k[3] ?? 0;
+    }
+    return c;
   }
 
   private setPosition(v: NodeView, x: number, y: number) {
@@ -501,6 +553,7 @@ export class CanvasView {
       if (v.x !== node.x || v.y !== node.y) moved.push(node.id);
     }
     this.wireList = graph.edges();
+    this.kinetics.bind(this.wireList.map(([from, to]) => wireKey(from, to)));
     for (const v of this.views.values()) {
       v.inputs.length = 0;
       v.outputs.length = 0;
@@ -571,6 +624,10 @@ const FAR_WIRE: WireStyle = {
   width: fog.scene.edgeWidthFar,
   dot: false,
 };
+
+function wireKey(from: string, to: string): string {
+  return `${from}\u0000${to}`;
+}
 
 /** cubic-bezier(.2,.8,.2,1) of 06 §1.4, close enough as an ease-out cubic. */
 function easeOut(k: number): number {

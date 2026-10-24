@@ -1,6 +1,6 @@
 import type { GraphNode, NodeKind } from '@strata/backend';
 import { fog, type GlyphName, hex, palette } from '@strata/design-tokens';
-import { axisOf, pointAt } from './curve';
+import { pointAt, sideOf } from './curve';
 import type { Plate } from './textures';
 
 /**
@@ -67,15 +67,20 @@ export const WIRE_END_STYLES: WireEndStyle[] = ['sockets', 'arrow', 'both'];
 
 /**
  * Direction from the centre of `node` to the socket of the wire from `src`:
- * the wire leaves and enters on the line of centres (06 §6.2). Null when the
- * bubbles overlap and the wire has no length to show.
+ * along the wire's axis, or on the line of centres when the network's wires
+ * are straight (06 §6.2). Null when the bubbles overlap and the wire has no
+ * length to show.
  */
-export function socketAt(node: Circle, src: Circle): { dx: number; dy: number } | null {
+export function socketAt(
+  node: Circle,
+  src: Circle,
+  straight = false,
+): { dx: number; dy: number } | null {
   const dx = src.x - node.x;
   const dy = src.y - node.y;
   if (Math.hypot(dx, dy) <= node.r + src.r) return null;
-  // Where the wire meets the rim: along its axis (curve.ts axisOf).
-  const u = axisOf(dx, dy);
+  // Where the wire meets the rim, as curve.ts draws it.
+  const u = sideOf(dx, dy, straight);
   return { dx: u.x, dy: u.y };
 }
 

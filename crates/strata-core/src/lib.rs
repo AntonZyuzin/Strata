@@ -26,7 +26,7 @@ pub mod value;
 pub mod workspace;
 
 pub use changeset::{Changeset, KeyWrite, Label, RevertReport};
-pub use ops::Op;
+pub use ops::{Op, WireStyle};
 pub use store::{MemoryStore, Store, StoreError, StoredDoc};
 pub use strata_model as model;
 pub use workspace::{

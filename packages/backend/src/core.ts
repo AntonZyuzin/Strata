@@ -134,7 +134,9 @@ export type CoreOp =
   | { op: 'setAttr'; id: string; key: AttrKey; value: string | number | null }
   | { op: 'assign'; id: string; person: string; on: boolean }
   | { op: 'addPerson'; id?: string; name: string; color?: number }
-  | { op: 'renamePerson'; id: string; name: string };
+  | { op: 'renamePerson'; id: string; name: string }
+  /** The network's wire style (05 §9.2, 06 §6.2); null — Bézier. */
+  | { op: 'setWireStyle'; net: string; style: WireShape | null };
 
 export type CoreRequest =
   | { call: 'workspace' }
@@ -243,6 +245,9 @@ export interface ViewEdge {
   manual: boolean;
 }
 
+/** How a network draws its wires (06 §6.2): a segment, an S-curve, an S-curve that follows the hand. */
+export type WireShape = 'straight' | 'bezier' | 'kinetic';
+
 /** One network for the canvas (10 §7.3). */
 export interface NetworkView {
   net: string;
@@ -251,6 +256,8 @@ export interface NetworkView {
   path: [string, string][];
   nodes: ViewNode[];
   edges: ViewEdge[];
+  /** The network's wire style; none — Bézier. */
+  wire_style?: WireShape;
 }
 
 export interface History {

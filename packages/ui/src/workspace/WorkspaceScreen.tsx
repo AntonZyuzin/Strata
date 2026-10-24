@@ -470,6 +470,8 @@ export function WorkspaceScreen(props: {
       });
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
+      // Scissors leave wires from text alone (06 §6.7).
+      ed.textWire = (a, b) => textWires.current.has(pair(a, b));
       // The properties panel covers the canvas's right edge while one node is
       // chosen: framing keeps clear of it (review 2026-10-24).
       ed.coveredRight = () =>
@@ -1082,6 +1084,13 @@ export function WorkspaceScreen(props: {
       return [
         { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => ed.createAt(sx, sy) },
         { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => ed.fitAll() },
+        // The style the network's wires go to next (06 §6.2).
+        {
+          label: t(locale, `proto.change.wires.${ed.nextWireShape}` as MessageKey),
+          hint: 'Shift+S',
+          separated: true,
+          onSelect: () => ed.cycleWireShape(),
+        },
       ];
     }
     if (at.t === 'wire') {

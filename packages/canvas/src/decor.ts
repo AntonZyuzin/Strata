@@ -113,6 +113,14 @@ export class Decor {
    * «сегодня», «−3 дн.»; 07 §4.6, Q-07-22); none for the rest.
    */
   dueWord: (n: GraphNode) => string | null = () => null;
+  /** The network's wires are straight (06 §6.2): sockets sit on the line of centres. */
+  straight = false;
+  /**
+   * World control points of the wire `a → b` as the wire layer draws it, a
+   * kinetic wire's lag included (06 §6.8): arrowheads ride the drawn curve.
+   */
+  curveOf: (a: DecorNode, b: DecorNode) => readonly number[] = (a, b) =>
+    controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight: this.straight });
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -229,20 +237,20 @@ export class Decor {
       };
       if (lv !== 'glyph') {
         for (const dst of v.outputs) {
-          const p = socketAt(v, dst);
+          const p = socketAt(v, dst, this.straight);
           if (!p) continue;
           taken.push({ angle: Math.atan2(p.dy, p.dx), reach: SOCKET * U });
           socket(s.x + p.dx * R, s.y + p.dy * R);
         }
         for (const src of v.inputs) {
-          const p = socketAt(v, src);
+          const p = socketAt(v, src, this.straight);
           if (!p) continue;
           // An arrowhead touches the rim with its tip only.
           const reach = this.ends === 'arrow' ? (ARROW.half / 2) * U : SOCKET * U;
           taken.push({ angle: Math.atan2(p.dy, p.dx), reach });
           if (this.ends !== 'arrow') socket(s.x + p.dx * R, s.y + p.dy * R);
           if (this.ends === 'sockets') continue;
-          const c = screenCurve(cam, src, v);
+          const c = toScreen(cam, this.curveOf(src, v));
           const head = this.ends === 'arrow' ? ARROW : MID;
           // The midway arrow only on wires long enough to carry it.
           const span = Math.hypot((c[6] ?? 0) - (c[0] ?? 0), (c[7] ?? 0) - (c[1] ?? 0));
@@ -523,9 +531,8 @@ function hideFrom(pool: { visible: boolean }[], used: number): void {
   }
 }
 
-/** Control points of the wire `a → b` on screen, as wires.ts draws it (06 §6.2). */
-function screenCurve(cam: Camera, a: DecorNode, b: DecorNode): number[] {
-  const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r });
+/** World control points on screen. */
+function toScreen(cam: Camera, c: readonly number[]): number[] {
   return c.map((v, i) => (v - (i % 2 === 0 ? cam.x : cam.y)) * cam.zoom);
 }
 

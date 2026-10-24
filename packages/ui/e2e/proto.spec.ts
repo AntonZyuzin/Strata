@@ -16,6 +16,7 @@ const HINTS: MessageKey[] = [
   'proto.hint.dragInsert',
   'proto.hint.wireDrag',
   'proto.hint.marquee',
+  'proto.hint.cut',
   'proto.hint.map',
 ];
 
@@ -40,6 +41,7 @@ interface Hook {
   };
   graph: {
     nodes: Map<string, { id: string; name: string } & Record<string, unknown>>;
+    wireShape: 'straight' | 'bezier' | 'kinetic';
     edges(): [string, string][];
     inputs(id: string): Iterable<string>;
     outputs(id: string): Iterable<string>;
@@ -174,6 +176,58 @@ function emptySpot(page: Page, clear: number): Promise<{ x: number; y: number }>
     if (best.d < clear) throw new Error(`no empty spot, best ${best.d}`);
     return { x: best.x, y: best.y };
   }, clear);
+}
+
+/**
+ * The longest wire on screen with nothing near its middle, but `skip`: its
+ * ends, the middle and the unit along it on screen.
+ */
+function freeWire(
+  page: Page,
+  skip = '',
+): Promise<{
+  from: string;
+  to: string;
+  x: number;
+  y: number;
+  ux: number;
+  uy: number;
+}> {
+  return page.evaluate((skip) => {
+    const { view, graph } = window.__strataProto as Hook;
+    const e = window.__e2e as Probe;
+    const nodes = [...view.eachNode()];
+    let best: { from: string; to: string; mx: number; my: number; len: number } | null = null;
+    let unit = { x: 0, y: 0 };
+    for (const [from, to] of graph.edges()) {
+      const a = view.nodeAt(from);
+      const b = view.nodeAt(to);
+      if (!a || !b) continue;
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy);
+      const ux = dx / len;
+      const uy = dy / len;
+      // Middle of the S-curve of 06 §6.2: the middle of its ends, where its
+      // axis (the larger of dx, dy) meets the rims.
+      const ax = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
+      const ay = ax === 0 ? Math.sign(dy) : 0;
+      const mx = (a.x + ax * a.r + b.x - ax * b.r) / 2;
+      const my = (a.y + ay * a.r + b.y - ay * b.r) / 2;
+      const s = e.screen(mx, my);
+      if (!e.free(s.x, s.y, 40)) continue;
+      const crowded = nodes.some(
+        ([id, n]) => id !== skip && Math.hypot(n.x - mx, n.y - my) < n.r + 60,
+      );
+      if (!crowded && (!best || len > best.len)) {
+        best = { from, to, mx, my, len };
+        unit = { x: ux, y: uy };
+      }
+    }
+    if (!best) throw new Error('no free wire');
+    const s = e.screen(best.mx, best.my);
+    return { from: best.from, to: best.to, x: s.x, y: s.y, ux: unit.x, uy: unit.y };
+  }, skip);
 }
 
 /** Moves in small steps so the editor sees a drag, not a jump. */
@@ -897,33 +951,7 @@ test.describe('gestures', () => {
     const start = await counts(page);
     const spot = await emptySpot(page, 40);
     const x = await createNote(page, spot.x, spot.y, 'Вставка');
-    // The longest wire on screen with nothing else near its middle.
-    const wire = await page.evaluate((x) => {
-      const { view, graph } = window.__strataProto as Hook;
-      const e = window.__e2e as Probe;
-      const nodes = [...view.eachNode()];
-      let best: { from: string; to: string; mx: number; my: number; len: number } | null = null;
-      for (const [from, to] of graph.edges()) {
-        const a = view.nodeAt(from);
-        const b = view.nodeAt(to);
-        if (!a || !b) continue;
-        const len = Math.hypot(b.x - a.x, b.y - a.y);
-        const ux = (b.x - a.x) / len;
-        const uy = (b.y - a.y) / len;
-        // Middle of the cubic of 06 §6.2: the middle of its ends on the circles.
-        const mx = (a.x + ux * (a.r + 1) + b.x - ux * (b.r + 1)) / 2;
-        const my = (a.y + uy * (a.r + 1) + b.y - uy * (b.r + 1)) / 2;
-        const s = e.screen(mx, my);
-        if (!e.free(s.x, s.y, 40)) continue;
-        const crowded = nodes.some(
-          ([id, n]) => id !== x && Math.hypot(n.x - mx, n.y - my) < n.r + 60,
-        );
-        if (!crowded && (!best || len > best.len)) best = { from, to, mx, my, len };
-      }
-      if (!best) throw new Error('no free wire');
-      const s = e.screen(best.mx, best.my);
-      return { from: best.from, to: best.to, x: s.x, y: s.y };
-    }, x);
+    const wire = await freeWire(page, x);
     const a = await screenOf(page, x);
     await page.mouse.move(a.x, a.y);
     await page.mouse.down();
@@ -945,6 +973,155 @@ test.describe('gestures', () => {
     await page.keyboard.press('Control+z');
     await page.keyboard.press('Control+z');
     expect(await counts(page)).toEqual(start);
+  });
+
+  test('scissors: Y and a stroke cut the wires it crosses in one step (06 §6.7)', async ({
+    page,
+  }) => {
+    await open(page);
+    const start = await counts(page);
+    const wire = await freeWire(page);
+    // Across the wire, 40 px to each side of its middle.
+    const a = { x: wire.x - wire.uy * 40, y: wire.y + wire.ux * 40 };
+    const b = { x: wire.x + wire.uy * 40, y: wire.y - wire.ux * 40 };
+    const has = () =>
+      page.evaluate(({ from, to }) => (window.__strataProto as Hook).graph.hasEdge(from, to), wire);
+    await page.mouse.move(a.x, a.y);
+    await page.keyboard.down('y');
+    await page.mouse.down();
+    await glide(page, a, b);
+    // Marked while the stroke goes; cut only when it ends.
+    expect(await has()).toBe(true);
+    await page.mouse.up();
+    await page.keyboard.up('y');
+    expect(await has()).toBe(false);
+    const cut = start.edges - (await counts(page)).edges;
+    expect(cut).toBeGreaterThan(0);
+    await expect(page.locator('.proto-status .last-step')).toContainText(`Разрезать ${cut}`);
+    await page.keyboard.press('Control+z');
+    expect(await counts(page)).toEqual(start);
+    // The alias: Mod and the right button (06 §17: Cmd on macOS), and no menu.
+    const mod = (await page.evaluate(() => /Mac/.test(navigator.platform))) ? 'Meta' : 'Control';
+    await page.mouse.move(a.x, a.y);
+    await page.keyboard.down(mod);
+    await page.mouse.down({ button: 'right' });
+    await glide(page, a, b);
+    await page.mouse.up({ button: 'right' });
+    await page.keyboard.up(mod);
+    expect(await has()).toBe(false);
+    await expect(page.locator('.context-menu')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    // Esc in the middle of a stroke cuts nothing.
+    await page.keyboard.press('Control+z');
+    await page.mouse.move(a.x, a.y);
+    await page.keyboard.down('y');
+    await page.mouse.down();
+    await glide(page, a, b);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await page.keyboard.up('y');
+    expect(await counts(page)).toEqual(start);
+  });
+
+  test('Shift and a drag from the middle of a wire branch it from its source (06 §6.5)', async ({
+    page,
+  }) => {
+    await open(page);
+    const start = await counts(page);
+    const wire = await freeWire(page);
+    const spot = await emptySpot(page, 50);
+    await page.mouse.move(wire.x, wire.y);
+    await page.keyboard.down('Shift');
+    await page.mouse.down();
+    await glide(page, wire, spot);
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    // Released on the bare canvas: a note at once, then its name (06 §5.5).
+    const input = page.locator('.name-input');
+    await expect(input).toBeVisible();
+    await input.fill('Ветка');
+    await input.press('Enter');
+    await expect(input).toHaveCount(0);
+    const after = await page.evaluate(({ from, to }) => {
+      const { graph } = window.__strataProto as Hook;
+      const n = [...graph.nodes.values()].find((x) => x.name === 'Ветка');
+      if (!n) return null;
+      return [graph.hasEdge(from, n.id), graph.hasEdge(from, to), graph.hasEdge(to, n.id)];
+    }, wire);
+    // A → C beside A → B, which stays.
+    expect(after).toEqual([true, true, false]);
+    expect(await counts(page)).toEqual({ nodes: start.nodes + 1, edges: start.edges + 1 });
+    await page.keyboard.press('Control+z');
+    expect(await counts(page)).toEqual(start);
+  });
+
+  test('Shift+S: straight, Bézier, kinetic wires, one step each; the hit test follows (06 §6.2)', async ({
+    page,
+  }) => {
+    await open(page);
+    const shape = () => page.evaluate(() => (window.__strataProto as Hook).graph.wireShape);
+    expect(await shape()).toBe('bezier');
+    const spot = await emptySpot(page, 40);
+    await page.mouse.move(spot.x, spot.y);
+    await page.keyboard.press('Shift+S');
+    expect(await shape()).toBe('kinetic');
+    await expect(page.locator('.proto-status .last-step')).toContainText('Нити: кинетические');
+    // Closer, so wires are long on screen.
+    for (let i = 0; i < 4; i++) await page.keyboard.press('Equal');
+    // A third of the way along the wire whose segment runs farthest from its
+    // S-curve (curve.ts: the axis, control points at half the gap, 16…240).
+    const q = await page.evaluate(() => {
+      const { view, graph } = window.__strataProto as Hook;
+      const e = window.__e2e as Probe;
+      const nodes = [...view.eachNode()];
+      const zoom = view.camera.zoom;
+      let best: { x: number; y: number; off: number } | null = null;
+      for (const [from, to] of graph.edges()) {
+        const a = view.nodeAt(from);
+        const b = view.nodeAt(to);
+        if (!a || !b) continue;
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const len = Math.hypot(dx, dy);
+        const x = a.x + (dx / len) * a.r + (dx - (dx / len) * (a.r + b.r)) / 3;
+        const y = a.y + (dy / len) * a.r + (dy - (dy / len) * (a.r + b.r)) / 3;
+        const ux = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
+        const uy = ux === 0 ? Math.sign(dy) : 0;
+        const p0 = [a.x + ux * a.r, a.y + uy * a.r];
+        const p3 = [b.x - ux * b.r, b.y - uy * b.r];
+        const along = Math.abs(dx * ux + dy * uy) - a.r - b.r;
+        const h = Math.min(Math.max(0.5 * Math.max(along, 0), 16), 240);
+        const p1 = [(p0[0] ?? 0) + ux * h, (p0[1] ?? 0) + uy * h];
+        const p2 = [(p3[0] ?? 0) - ux * h, (p3[1] ?? 0) - uy * h];
+        // The S-curve's nearest point to (x, y), sampled.
+        let off = Number.POSITIVE_INFINITY;
+        for (let i = 0; i <= 96; i++) {
+          const t = i / 96;
+          const k = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t ** 3];
+          const pts = [p0, p1, p2, p3];
+          const cx = pts.reduce((sum, p, j) => sum + (k[j] ?? 0) * (p[0] ?? 0), 0);
+          const cy = pts.reduce((sum, p, j) => sum + (k[j] ?? 0) * (p[1] ?? 0), 0);
+          off = Math.min(off, Math.hypot(cx - x, cy - y) * zoom);
+        }
+        const s = e.screen(x, y);
+        if (!e.free(s.x, s.y, 10)) continue;
+        // Clear of every bubble and its port ring (06 §1.3).
+        if (nodes.some(([, n]) => Math.hypot(n.x - x, n.y - y) * zoom < n.r * zoom + 16)) continue;
+        if (!best || off > best.off) best = { ...s, off };
+      }
+      if (!best || best.off < 10) throw new Error(`no wire far from its curve: ${best?.off}`);
+      return best;
+    });
+    const hint = page.locator('.proto-status .hint');
+    // Kinetic wires are S-curves: nothing to hit there.
+    await page.mouse.move(q.x, q.y);
+    await expect(hint).not.toHaveText(t('ru', 'proto.hint.wire'));
+    await page.keyboard.press('Shift+S');
+    expect(await shape()).toBe('straight');
+    await page.mouse.move(q.x + 1, q.y);
+    await expect(hint).toHaveText(t('ru', 'proto.hint.wire'));
+    await page.keyboard.press('Control+z');
+    expect(await shape()).toBe('kinetic');
   });
 
   test('shaking a node in a chain detaches it and heals the chain', async ({ page }) => {

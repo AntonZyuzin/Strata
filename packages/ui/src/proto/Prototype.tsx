@@ -300,6 +300,7 @@ export function Prototype(props: {
       const store = new NoteStore(g);
       notes.current = store;
       store.restore();
+      ed.textWire = (a, b) => store.fromText(a, b);
       const m3 = new Map3D(el, v, g, setView3d);
       map3d.current = m3;
       // The space and its layout ahead of `M`, off the first interactions (08 §7.2).

@@ -78,6 +78,7 @@ export function graphOf(
       tx.add(node);
     }
     for (const e of view.edges) tx.connect(e.from, e.to);
+    tx.wireShape(view.wire_style ?? null);
   });
   g.clearHistory();
   return g;
@@ -129,6 +130,8 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       return { op: 'setAttr', id: op.id, key: op.key, value: op.value };
     case 'assign':
       return { op: 'assign', id: op.id, person: op.person, on: op.on };
+    case 'wireShape':
+      return { op: 'setWireStyle', net, style: op.value };
   }
 }
 

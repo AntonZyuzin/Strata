@@ -9,10 +9,11 @@ import {
   newId,
   newNode,
   shake,
+  type WireShape,
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
-import { closest, controls, pointAt, type WireEnds, bounds as wireBounds } from './curve';
+import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
 import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
 import type { WireStyle } from './wires';
@@ -37,6 +38,14 @@ const INSERT_GAP = 24;
 /** autoPlace (06 §5.4) for a top-down network. */
 const PLACE_DOWN = 110;
 const PLACE_GAP = 16;
+/** Scissors (06 §6.7): a stroke point every 3 px; dashes of the stroke, px, and of a crossed wire, u (07 §5). */
+const CUT_STEP_PX = 3;
+const STROKE_DASH = 4;
+const CUT_DASH = 4;
+/** Mod of the gestures (06 §17): Cmd on macOS, Ctrl elsewhere. */
+const MAC = /Mac/.test(navigator.platform);
+/** `Shift+S` goes through the styles of 06 §6.2 in the order of its table. */
+const WIRE_SHAPES: WireShape[] = ['straight', 'bezier', 'kinetic'];
 
 const PAPER = 0xf2efe6;
 const INK = 0x0b0c0e;
@@ -44,6 +53,8 @@ const ATTENTION = Number.parseInt(fog.scene.attention.slice(1), 16);
 const ACTIVE_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false };
 const RUNNING_WIRE: WireStyle = { ...ACTIVE_WIRE, dot: true };
 const CANDIDATE_WIRE: WireStyle = { color: ATTENTION, alpha: 1, width: 2.5, dot: false };
+/** Crossed by the scissors: dashed, not red — red is only for overdue (06 §6.7). */
+const CUT_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false, dash: CUT_DASH };
 
 export type WheelMode = 'mouse' | 'trackpad';
 
@@ -56,7 +67,8 @@ export type HintKey =
   | 'proto.hint.drag'
   | 'proto.hint.dragInsert'
   | 'proto.hint.wireDrag'
-  | 'proto.hint.marquee';
+  | 'proto.hint.marquee'
+  | 'proto.hint.cut';
 
 export interface EditorEvents {
   /** Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5). */
@@ -122,7 +134,15 @@ interface Candidate {
 type Mode =
   | { t: 'idle' }
   | { t: 'pan'; lastX: number; lastY: number }
-  | { t: 'press'; hit: Hit; sx: number; sy: number; button: number; alt: boolean }
+  | {
+      t: 'press';
+      hit: Hit;
+      sx: number;
+      sy: number;
+      button: number;
+      alt: boolean;
+      shift: boolean;
+    }
   | {
       t: 'drag';
       ids: string[];
@@ -141,6 +161,18 @@ type Mode =
       ey: number;
       target: string | null;
       twoClick: boolean;
+      /**
+       * A branch (06 §6.5, «а»): where the wire was grabbed, world units. The
+       * new wire comes from the old one's source; the fork shows only now.
+       */
+      fork: { x: number; y: number } | null;
+    }
+  | {
+      t: 'cut';
+      /** The stroke so far, screen px. */
+      stroke: { x: number; y: number }[];
+      /** Crossed wires by key: their ends. */
+      crossed: Map<string, { from: string; to: string }>;
     }
   | {
       t: 'marquee';
@@ -182,6 +214,11 @@ export class Editor {
    * properties panel): framing and zoom keep to the canvas one can see.
    */
   coveredRight: () => number = () => 0;
+  /**
+   * The wire comes from a `[[link]]` in text (05 §8.2 rule 4): the scissors
+   * leave it alone, it lives while its link is in the text (06 §6.7).
+   */
+  textWire: (from: string, to: string) => boolean = () => false;
   private mode: Mode = { t: 'idle' };
   private hover: Hit = { t: 'empty' };
   private selectedWire: [string, string] | null = null;
@@ -293,6 +330,23 @@ export class Editor {
     if (!this.graph.nodes.has(id)) return;
     this.select([id]);
     this.frameNodes([id]);
+  }
+
+  /** The style `Shift+S` turns the network's wires to next (06 §6.2). */
+  get nextWireShape(): WireShape {
+    const i = WIRE_SHAPES.indexOf(this.graph.wireShape);
+    return WIRE_SHAPES[(i + 1) % WIRE_SHAPES.length] ?? 'bezier';
+  }
+
+  /** `Shift+S`: the network's wires in the next style, one step of undo (06 §6.2, 05 §9.2). */
+  cycleWireShape(): void {
+    if (this.mode.t !== 'idle') return;
+    const next = this.nextWireShape;
+    const label = { key: `proto.change.wires.${next}` };
+    this.graph.transaction(label, (tx) => tx.wireShape(next));
+    this.events.toast(label);
+    this.indexDirty = true;
+    this.view.invalidate();
   }
 
   // ── Tab menu (06 §5) ──────────────────────────────────────────────
@@ -418,7 +472,8 @@ export class Editor {
     });
     on(el, 'contextmenu', (e) => {
       e.preventDefault();
-      if (this.mode.t !== 'idle' || this.overlayOpen) return;
+      // Mod + the right button is the scissors' alias (06 §6.7), not the menu.
+      if (this.mode.t !== 'idle' || this.overlayOpen || cutMod(e)) return;
       const { sx, sy } = this.local(e);
       const hit = this.hitTest(sx, sy);
       let at: MenuTarget = { t: 'empty' };
@@ -461,8 +516,12 @@ export class Editor {
     on(window, 'keyup', (e) => {
       this.held.delete(e.code);
       if (e.code === 'Digit8') this.view.invalidate();
+      if (e.code === 'KeyY') this.scissorsCursor();
     });
-    on(window, 'blur', () => this.held.clear());
+    on(window, 'blur', () => {
+      this.held.clear();
+      this.scissorsCursor();
+    });
   }
 
   private local(e: { clientX: number; clientY: number }) {
@@ -485,8 +544,24 @@ export class Editor {
       this.mode = { t: 'pan', lastX: sx, lastY: sy };
       return;
     }
+    // Scissors (06 §6.7): hold `Y` and stroke with the left button, or Mod + the right.
+    if ((e.button === 0 && this.held.has('KeyY')) || (e.button === 2 && cutMod(e))) {
+      e.preventDefault();
+      this.mode = { t: 'cut', stroke: [{ x: sx, y: sy }], crossed: new Map() };
+      this.events.hint('proto.hint.cut');
+      this.view.invalidate();
+      return;
+    }
     if (e.button !== 0) return;
-    this.mode = { t: 'press', hit: this.hitTest(sx, sy), sx, sy, button: e.button, alt: e.altKey };
+    this.mode = {
+      t: 'press',
+      hit: this.hitTest(sx, sy),
+      sx,
+      sy,
+      button: e.button,
+      alt: e.altKey,
+      shift: e.shiftKey,
+    };
   }
 
   private onMove(e: PointerEvent) {
@@ -530,6 +605,9 @@ export class Editor {
         m.sy1 = sy;
         this.view.invalidate();
         return;
+      case 'cut':
+        this.cutTo(m, sx, sy);
+        return;
       default:
         return;
     }
@@ -555,6 +633,10 @@ export class Editor {
       case 'marquee':
         this.finishMarquee(m);
         return;
+      case 'cut':
+        this.cutTo(m, sx, sy);
+        this.finishCut(m);
+        return;
       default:
         return;
     }
@@ -579,6 +661,7 @@ export class Editor {
         ey: w.y,
         target: null,
         twoClick: true,
+        fork: null,
       };
       this.events.hint('proto.hint.wireDrag');
       this.view.invalidate();
@@ -633,8 +716,28 @@ export class Editor {
         ey: w.y,
         target: null,
         twoClick: false,
+        fork: null,
       };
       this.events.hint('proto.hint.wireDrag');
+      return;
+    }
+    if (hit.t === 'wire' && m.shift) {
+      // A branch from the middle of A → B (06 §6.5, «а»): a new wire from A.
+      const grab = this.view.camera.toWorld(m.sx, m.sy);
+      const at = closest(this.wireEnds(hit.from, hit.to), grab.x, grab.y);
+      const w = this.view.camera.toWorld(sx, sy);
+      this.selectedWire = null;
+      this.mode = {
+        t: 'wire',
+        sources: [hit.from],
+        ex: w.x,
+        ey: w.y,
+        target: null,
+        twoClick: false,
+        fork: { x: at.x, y: at.y },
+      };
+      this.events.hint('proto.hint.wireDrag');
+      this.view.invalidate();
       return;
     }
     if (hit.t === 'node') {
@@ -864,6 +967,50 @@ export class Editor {
     this.afterGesture();
   }
 
+  /** The stroke goes on to (sx, sy): wires it crosses on the way are marked (06 §6.7). */
+  private cutTo(m: Extract<Mode, { t: 'cut' }>, sx: number, sy: number) {
+    const last = m.stroke.at(-1);
+    if (!last || Math.hypot(sx - last.x, sy - last.y) < CUT_STEP_PX) return;
+    m.stroke.push({ x: sx, y: sy });
+    this.refreshIndex();
+    const cam = this.view.camera;
+    const p = cam.toWorld(last.x, last.y);
+    const q = cam.toWorld(sx, sy);
+    for (const b of this.wireIndex.search({
+      minX: Math.min(p.x, q.x),
+      minY: Math.min(p.y, q.y),
+      maxX: Math.max(p.x, q.x),
+      maxY: Math.max(p.y, q.y),
+    })) {
+      const key = wireKey(b.id, b.to);
+      if (m.crossed.has(key) || this.textWire(b.id, b.to)) continue;
+      if (crossing(this.wireEnds(b.id, b.to), p.x, p.y, q.x, q.y)) {
+        m.crossed.set(key, { from: b.id, to: b.to });
+      }
+    }
+    this.view.invalidate();
+  }
+
+  /** Every wire the stroke crossed goes, one step of undo (05 §8.4 «Разрезать ножом»). */
+  private finishCut(m: Extract<Mode, { t: 'cut' }>) {
+    this.mode = { t: 'idle' };
+    const cut = [...m.crossed.values()];
+    if (cut.length > 0) {
+      this.graph.transaction({ key: 'proto.change.cut', params: { n: cut.length } }, (tx) => {
+        for (const w of cut) tx.disconnect(w.from, w.to);
+      });
+      if (this.selectedWire && m.crossed.has(wireKey(...this.selectedWire))) {
+        this.selectedWire = null;
+      }
+    }
+    this.afterGesture();
+  }
+
+  /** A cross-hair while `Y` is held over the canvas: the left button cuts now. */
+  private scissorsCursor() {
+    this.view.canvas.style.cursor = this.held.has('KeyY') ? 'crosshair' : '';
+  }
+
   private onWheel(e: WheelEvent) {
     e.preventDefault();
     const { sx, sy } = this.local(e);
@@ -935,6 +1082,15 @@ export class Editor {
       case 'KeyM':
         if (mod) return;
         this.events.map?.();
+        return;
+      case 'KeyS':
+        if (mod || !e.shiftKey) return;
+        e.preventDefault();
+        this.cycleWireShape();
+        return;
+      case 'KeyY':
+        if (mod) return;
+        this.scissorsCursor();
         return;
       case 'KeyL':
         if (mod) return;
@@ -1268,6 +1424,7 @@ export class Editor {
       // Both ends run into their sockets on the rim (07 §5).
       ra: a?.r ?? 0,
       rb: b?.r ?? 0,
+      straight: this.graph.wireShape === 'straight',
     };
   }
 
@@ -1317,6 +1474,7 @@ export class Editor {
 
   private styleOf(from: string, to: string): WireStyle {
     const m = this.mode;
+    if (m.t === 'cut') return m.crossed.has(wireKey(from, to)) ? CUT_WIRE : NORMAL_WIRE;
     if (m.t === 'drag' && m.candidate && m.candidate.from === from && m.candidate.to === to) {
       return this.candidateReady(m, performance.now()) ? CANDIDATE_WIRE : ACTIVE_WIRE;
     }
@@ -1350,19 +1508,23 @@ export class Editor {
       }
     }
     const m = this.mode;
+    const straight = this.graph.wireShape === 'straight';
     if (m.t === 'wire') {
       const end = cam.toScreen(m.ex, m.ey);
       for (const src of m.sources) {
         const p = this.view.nodeAt(src);
         if (!p) continue;
         const tgt = m.target ? this.view.nodeAt(m.target) : null;
+        // A branch grows out of the fork on the old wire (06 §6.5).
+        const from = m.fork ? { x: m.fork.x, y: m.fork.y, r: -1 } : p;
         const c = controls({
-          ax: p.x,
-          ay: p.y,
+          ax: from.x,
+          ay: from.y,
           bx: tgt ? tgt.x : m.ex,
           by: tgt ? tgt.y : m.ey,
-          ra: p.r + 1,
+          ra: from.r + 1,
           rb: tgt ? tgt.r + 1 : 0,
+          straight,
         });
         const q = { x: 0, y: 0 };
         for (let i = 0; i <= 16; i++) {
@@ -1373,12 +1535,21 @@ export class Editor {
         }
         g.stroke({ color: PAPER, width: 2 });
       }
+      if (m.fork) {
+        const f = cam.toScreen(m.fork.x, m.fork.y);
+        g.circle(f.x, f.y, 4).fill(PAPER).stroke({ color: INK, width: 1 });
+      }
       if (m.target) {
         const s = screen(m.target);
         if (s) g.circle(s.x, s.y, s.r + 10).stroke({ color: PAPER, width: 2 });
       } else {
         g.circle(end.x, end.y, 3).fill(PAPER);
       }
+    }
+    if (m.t === 'cut') {
+      // The stroke dashed (06 §6.7); the wires it crossed are dashed with serifs (CUT_WIRE).
+      dashed(g, m.stroke, STROKE_DASH);
+      g.stroke({ color: PAPER, width: 1, alpha: 0.9 });
     }
     if (m.t === 'marquee') {
       const x = Math.min(m.sx0, m.sx1);
@@ -1409,6 +1580,44 @@ export class Editor {
       } else {
         // Keep drawing until the 200 ms hold turns the candidate yellow.
         this.view.invalidate();
+      }
+    }
+  }
+}
+
+/** Mod + the right button cuts (06 §6.7, §17): Cmd on macOS, where Ctrl + click is the right click. */
+function cutMod(e: MouseEvent): boolean {
+  return MAC ? e.metaKey : e.ctrlKey;
+}
+
+function wireKey(from: string, to: string): string {
+  return `${from}\u0000${to}`;
+}
+
+/** A polyline as dashes and gaps of `dash` px each, added to the path of `g`. */
+function dashed(g: CanvasView['overlay'], pts: readonly { x: number; y: number }[], dash: number) {
+  let on = true;
+  let left = dash;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1] as { x: number; y: number };
+    const b = pts[i] as { x: number; y: number };
+    const len = Math.hypot(b.x - a.x, b.y - a.y);
+    let at = 0;
+    while (at < len) {
+      const step = Math.min(left, len - at);
+      if (on) {
+        const k0 = at / len;
+        const k1 = (at + step) / len;
+        g.moveTo(a.x + (b.x - a.x) * k0, a.y + (b.y - a.y) * k0).lineTo(
+          a.x + (b.x - a.x) * k1,
+          a.y + (b.y - a.y) * k1,
+        );
+      }
+      at += step;
+      left -= step;
+      if (left <= 0) {
+        on = !on;
+        left = dash;
       }
     }
   }

@@ -71,6 +71,21 @@ describe('the canvas and the core in step', () => {
     expect(errors).toEqual([]);
   });
 
+  it("keeps the network's wire style in the core, one step of undo (06 §6.2)", async () => {
+    const { home, root, g, sync, errors } = await start();
+    expect(g.wireShape).toBe('bezier');
+    g.transaction({ key: 't.style' }, (tx) => tx.wireShape('straight'));
+    g.transaction({ key: 't.style' }, (tx) => tx.wireShape('kinetic'));
+    await sync.settled();
+    expect((await home.core.view(root)).wire_style).toBe('kinetic');
+    expect(graphOf(await home.core.view(root), () => 0).wireShape).toBe('kinetic');
+    g.undo();
+    await sync.settled();
+    expect(g.wireShape).toBe('straight');
+    expect((await home.core.view(root)).wire_style).toBe('straight');
+    expect(errors).toEqual([]);
+  });
+
   it('forgets a cancelled gesture in the core too', async () => {
     const { home, root, g, sync } = await start();
     g.transaction({ key: 't.create' }, (tx) => tx.add(node(A, 'A')));

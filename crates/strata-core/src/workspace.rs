@@ -14,7 +14,7 @@
 //! and turns a note's `[[links]]` into its text wires.
 
 use crate::changeset::{Changeset, KeyWrite, Label, RevertReport};
-use crate::ops::Op;
+use crate::ops::{Op, WireStyle};
 use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
@@ -315,6 +315,9 @@ pub struct NetworkView {
     pub path: Vec<(String, String)>,
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
+    /// The network's wire style (05 §9.2); none — Bézier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wire_style: Option<WireStyle>,
 }
 
 /// A node in the trash.
@@ -715,7 +718,9 @@ impl<S: Store> Workspace<S> {
         // Documents of the networks the operations touch, before the transaction.
         for op in ops {
             match op {
-                Op::CreateNode { net, .. } | Op::Move { net, .. } => {
+                Op::CreateNode { net, .. }
+                | Op::Move { net, .. }
+                | Op::SetWireStyle { net, .. } => {
                     self.ensure_doc(&format!("net/{net}"))?;
                 }
                 _ => {}
@@ -1038,6 +1043,21 @@ impl<S: Store> Workspace<S> {
                     };
                     p.insert("name".to_owned(), Val::str(name.trim()));
                     put("manifest", "people", id, Some(Val::Map(p)));
+                }
+                Op::SetWireStyle { net, style } => {
+                    // A setting of the network's own document (05 §9.2).
+                    match self.parse(net) {
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => {}
+                        _ => {
+                            self.network(net)?;
+                        }
+                    }
+                    put(
+                        &format!("net/{net}"),
+                        "settings",
+                        "wireStyle",
+                        style.map(|s| Val::str(s.as_str())),
+                    );
                 }
             }
         }
@@ -1788,12 +1808,15 @@ impl<S: Store> Workspace<S> {
             .map(|a| (a.to_text(), self.name(a)))
             .collect();
         path.push((net.to_owned(), self.name(n)));
+        let wire_style =
+            read(pos, "settings", "wireStyle").and_then(|v| v.as_str().and_then(WireStyle::parse));
         Ok(NetworkView {
             net: net.to_owned(),
             name: self.name(n),
             path,
             nodes,
             edges,
+            wire_style,
         })
     }
 

@@ -32,17 +32,38 @@ export interface WireEnds {
   ra: number;
   rb: number;
   bend?: number;
+  /** The network's style is «Прямая» (06 §6.2): a segment on the line of centres. */
+  straight?: boolean;
+}
+
+/** Where a wire leaves a bubble towards (dx, dy): its axis, or the line of centres when straight. */
+export function sideOf(dx: number, dy: number, straight = false): { x: number; y: number } {
+  if (!straight) return axisOf(dx, dy);
+  const len = Math.hypot(dx, dy);
+  return len > 0 ? { x: dx / len, y: dy / len } : { x: 1, y: 0 };
 }
 
 /**
  * Control points: the ends where the axis meets the rims, the tangents along
- * the axis — square to the rim at both ends, an S between them.
+ * the axis — square to the rim at both ends, an S between them. A straight
+ * wire is the segment between the rims on the line of centres, its control
+ * points at the thirds: the same cubic maths draws, hits and cuts both.
  */
 export function controls(
   w: WireEnds,
 ): [number, number, number, number, number, number, number, number] {
   const dx = w.bx - w.ax;
   const dy = w.by - w.ay;
+  if (w.straight) {
+    const u = sideOf(dx, dy, true);
+    const a0 = w.ax + u.x * w.ra;
+    const a1 = w.ay + u.y * w.ra;
+    const b0 = w.bx - u.x * w.rb;
+    const b1 = w.by - u.y * w.rb;
+    const tx = (b0 - a0) / 3;
+    const ty = (b1 - a1) / 3;
+    return [a0, a1, a0 + tx, a1 + ty, b0 - tx, b1 - ty, b0, b1];
+  }
   const u = axisOf(dx, dy);
   const a0 = w.ax + u.x * w.ra;
   const a1 = w.ay + u.y * w.ra;
@@ -106,4 +127,48 @@ export function bounds(w: WireEnds): { minX: number; minY: number; maxX: number;
     maxX: Math.max(c[0], c[2], c[4], c[6]),
     maxY: Math.max(c[1], c[3], c[5], c[7]),
   };
+}
+
+/**
+ * Where the segment p → q crosses the drawn polyline of the wire (06 §6.7,
+ * scissors): the crossing point, the wire's direction there and its
+ * parameter t; null when it does not cross.
+ */
+export function crossing(
+  w: WireEnds,
+  px: number,
+  py: number,
+  qx: number,
+  qy: number,
+): { x: number; y: number; dx: number; dy: number; t: number } | null {
+  const c = controls(w);
+  const rx = qx - px;
+  const ry = qy - py;
+  pointAt(c, 0, p);
+  for (let i = 1; i <= SEGMENTS; i++) {
+    pointAt(c, i / SEGMENTS, q);
+    const sx = q.x - p.x;
+    const sy = q.y - p.y;
+    const den = rx * sy - ry * sx;
+    if (den !== 0) {
+      // p + k·r = a + m·s, both k and m in [0, 1].
+      const ax = p.x - px;
+      const ay = p.y - py;
+      const k = (ax * sy - ay * sx) / den;
+      const m = (ax * ry - ay * rx) / den;
+      if (k >= 0 && k <= 1 && m >= 0 && m <= 1) {
+        const len = Math.hypot(sx, sy) || 1;
+        return {
+          x: p.x + sx * m,
+          y: p.y + sy * m,
+          dx: sx / len,
+          dy: sy / len,
+          t: (i - 1 + m) / SEGMENTS,
+        };
+      }
+    }
+    p.x = q.x;
+    p.y = q.y;
+  }
+  return null;
 }

@@ -1150,3 +1150,56 @@ fn a_kind_changes_between_task_project_and_folder_only() {
             .is_err()
     );
 }
+
+#[test]
+fn a_network_keeps_its_wire_style_one_step_of_undo() {
+    use crate::WireStyle;
+    let mut w = ws();
+    let root = w.root();
+    assert_eq!(
+        w.network_view(&root).expect("view").wire_style,
+        None,
+        "a network draws Bézier wires until it is told otherwise (06 §6.2)"
+    );
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let style = |w: &mut Workspace<MemoryStore>, net: &str, s: Option<WireStyle>| {
+        w.apply(
+            &[Op::SetWireStyle {
+                net: net.to_owned(),
+                style: s,
+            }],
+            Label::new("t.style"),
+        )
+    };
+    style(&mut w, &root, Some(WireStyle::Straight)).expect("straight");
+    assert_eq!(
+        w.network_view(&root).expect("view").wire_style,
+        Some(WireStyle::Straight)
+    );
+    assert_eq!(
+        w.network_view(&folder).expect("view").wire_style,
+        None,
+        "the style is the network's own (05 §9.2): the folder inside keeps its"
+    );
+    style(&mut w, &root, Some(WireStyle::Kinetic)).expect("kinetic");
+    w.undo().expect("undo");
+    assert_eq!(
+        w.network_view(&root).expect("view").wire_style,
+        Some(WireStyle::Straight),
+        "a change of style is one step of undo"
+    );
+    style(&mut w, &root, None).expect("clear");
+    assert_eq!(w.network_view(&root).expect("view").wire_style, None);
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    assert!(
+        style(&mut w, &note, Some(WireStyle::Bezier)).is_err(),
+        "only a folder or a project has a network to style"
+    );
+    style(&mut w, &folder, Some(WireStyle::Kinetic)).expect("kinetic");
+    let mut again = Workspace::open(w.into_store()).expect("open");
+    assert_eq!(
+        again.network_view(&folder).expect("view").wire_style,
+        Some(WireStyle::Kinetic),
+        "the style is written with its network's document"
+    );
+}

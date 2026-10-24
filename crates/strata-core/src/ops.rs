@@ -86,4 +86,40 @@ pub enum Op {
         id: String,
         name: String,
     },
+    /// The default style of the wires in network `net` (05 §9.2, 06 §6.2);
+    /// `null` takes it away, and the network draws Bézier wires.
+    SetWireStyle {
+        net: String,
+        #[serde(default)]
+        style: Option<WireStyle>,
+    },
+}
+
+/// How a network draws its wires (06 §6.2): a segment, an S-curve, an
+/// S-curve that follows the hand.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WireStyle {
+    Straight,
+    Bezier,
+    Kinetic,
+}
+
+impl WireStyle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Straight => "straight",
+            Self::Bezier => "bezier",
+            Self::Kinetic => "kinetic",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "straight" => Some(Self::Straight),
+            "bezier" => Some(Self::Bezier),
+            "kinetic" => Some(Self::Kinetic),
+            _ => None,
+        }
+    }
 }

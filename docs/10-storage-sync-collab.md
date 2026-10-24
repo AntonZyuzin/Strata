@@ -147,7 +147,7 @@ hidden:    LoroMap<EdgeId, 1>                         // «скрыта здес
 box:       LoroMap<BoxId, { rect: Rect; title: string; color: Color; collapsed: boolean }>
 boxMember: LoroMap<`${BoxId}|${NodeId}`, 1>
 sticky:    LoroMap<StickyId, { rect: Rect; text: string; color: Color }>
-settings:  LoroMap<string, unknown>                   // фон (07 §7), направление раскладки, стиль нитей
+settings:  LoroMap<string, unknown>                   // фон (07 §7), направление раскладки; wireStyle: 'straight' | 'bezier' | 'kinetic' (06 §6.2), нет ключа — Безье
 ```
 
 | Вид (05 §4.2) | `content/{nodeId}` | Подробности |

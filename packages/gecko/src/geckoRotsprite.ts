@@ -45,6 +45,7 @@ export function sampleTurn(
   pivot: readonly [number, number],
   to: readonly [number, number],
   mirror = false,
+  scale = 1,
 ): void {
   const W = w * ROTSPRITE,
     H = h * ROTSPRITE;
@@ -52,12 +53,40 @@ export function sampleTurn(
     sin = Math.sin(-angle);
   for (let y = 0; y < h; y++)
     for (let x = 0; x < w; x++) {
-      const dx = x + 0.5 - to[0],
-        dy = y + 0.5 - to[1];
+      const dx = (x + 0.5 - to[0]) / scale,
+        dy = (y + 0.5 - to[1]) / scale;
       const fx = pivot[0] + dx * cos - dy * sin,
         fy = pivot[1] + dx * sin + dy * cos;
       const sx = Math.floor((mirror ? w - fx : fx) * ROTSPRITE),
         sy = Math.floor(fy * ROTSPRITE);
       out[y * w + x] = sx >= 0 && sy >= 0 && sx < W && sy < H ? big[sy * W + sx]! : 0;
     }
+}
+
+/** Keep the complete silhouette inside its native canvas when it turns vertically. */
+export function fitTurnScale(
+  pixels: Uint32Array,
+  width: number,
+  height: number,
+  angle: number,
+  pivot: readonly [number, number],
+  to: readonly [number, number],
+  mirror = false,
+): number {
+  const cos = Math.cos(angle),
+    sin = Math.sin(angle);
+  let scale = 1;
+  for (let y = 0; y < height; y++)
+    for (let x = 0; x < width; x++) {
+      if (!(pixels[y * width + x]! >>> 24)) continue;
+      const dx = (mirror ? width - x - 0.5 : x + 0.5) - pivot[0];
+      const dy = y + 0.5 - pivot[1];
+      const tx = dx * cos - dy * sin,
+        ty = dx * sin + dy * cos;
+      if (tx < 0) scale = Math.min(scale, (to[0] - 2) / -tx);
+      if (tx > 0) scale = Math.min(scale, (width - to[0] - 2) / tx);
+      if (ty < 0) scale = Math.min(scale, (to[1] - 2) / -ty);
+      if (ty > 0) scale = Math.min(scale, (height - to[1] - 2) / ty);
+    }
+  return Math.max(0.1, scale);
 }

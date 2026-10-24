@@ -1,3 +1,9 @@
+import {
+  type ConnectedMesh,
+  createConnectedMesh,
+  deformConnectedMesh,
+  type PixelTransform,
+} from './geckoDeform';
 import { enlarge, sampleTurn } from './geckoRotsprite';
 import type { GeckoAnimation, GeckoDrawOptions } from './geckoSprite';
 
@@ -20,7 +26,21 @@ export interface GeckoRig {
   parts: Record<PartName, Part>;
   bones: Record<LimbName, Bone>;
   kind: 'seated' | 'walk' | 'drag' | 'sleep' | 'balance';
+  mesh: ConnectedMesh;
+  bodyMesh: ConnectedMesh;
+  faceMesh: ConnectedMesh;
 }
+
+const ANATOMY: readonly PartName[] = [
+  'body',
+  'head',
+  'armFar',
+  'armNear',
+  'legFar',
+  'legNear',
+  'tailBase',
+  'tailTip',
+];
 
 export const GECKO_ANIMATION_VARIANTS: Record<GeckoAnimation, readonly [string, string, string]> = {
   idle: ['Looks around', 'Plays with its tail', 'Shifts its feet'],
@@ -30,6 +50,7 @@ export const GECKO_ANIMATION_VARIANTS: Record<GeckoAnimation, readonly [string, 
   sleep: ['Sound asleep', 'Twitches in its sleep', 'Covers itself with its tail'],
   balance: ['Holds steady', 'Catches its balance', 'Glances at the wires'],
   climb: ['Hand over hand', 'Big swings', 'Hold, then pull'],
+  'tail-hang': ['Gentle sway', 'Looks down', 'Tucks its paws'],
   'task-created': ['Notices the task', 'Checks the task', 'Glad of a start'],
   'project-created': ['Looks at the folder', 'Brings the folder', 'Nods to the project'],
   'file-created': ['Reads the sheet', 'Takes it carefully', 'Shows the find'],
@@ -129,7 +150,7 @@ function islands(mask: Uint8Array): number[][] {
  * reuse those same pixels so a rotating shoulder never exposes a cutout hole. */
 export function createGeckoRig(
   source: HTMLCanvasElement,
-  state: Exclude<GeckoAnimation, 'climb'>,
+  state: Exclude<GeckoAnimation, 'climb' | 'tail-hang'>,
 ): GeckoRig {
   const kind =
     state === 'walk'
@@ -147,11 +168,15 @@ export function createGeckoRig(
   if (kind === 'walk') {
     polygons = {
       head: [
-        [64, 11],
-        [87, 11],
-        [87, 36],
-        [68, 36],
-        [62, 30],
+        [68, 16],
+        [79, 15],
+        [86, 18],
+        [88, 28],
+        [83, 35],
+        [71, 37],
+        [62, 32],
+        [62, 28],
+        [65, 22],
       ],
       armFar: [
         [59, 25],
@@ -396,6 +421,7 @@ export function createGeckoRig(
       (key) => [key, new Uint8Array(96 * 72)],
     ),
   ) as Record<PartName, Uint8Array>;
+  const owners = new Uint8Array(96 * 72).fill(255);
   const hasProp = !['idle', 'walk', 'drag', 'sleep', 'balance'].includes(state);
   const limbKeys: LimbName[] = ['armFar', 'armNear', 'legFar', 'legNear'];
   // A prop is a piece of the drawing apart from the gecko (the largest piece):
@@ -412,8 +438,17 @@ export function createGeckoRig(
       const index = y * 96 + x;
       if (!original.data[index * 4 + 3]) continue;
       let owner: PartName = 'body';
+      const distal = limbKeys.find((key) => {
+        const b = bones[key],
+          dx = b.tip[0] - b.root[0],
+          dy = b.tip[1] - b.root[1],
+          projection =
+            ((x + 0.5 - b.root[0]) * dx + (y + 0.5 - b.root[1]) * dy) / (dx * dx + dy * dy);
+        return projection > 0.55 && polygons[key] && inside(x + 0.5, y + 0.5, polygons[key]!);
+      });
       if (propPixel[index]) owner = 'prop';
       else if (polygons.head && inside(x + 0.5, y + 0.5, polygons.head)) owner = 'head';
+      else if (distal) owner = distal;
       else if (polygons.tail && inside(x + 0.5, y + 0.5, polygons.tail)) {
         const split =
           kind === 'walk'
@@ -445,6 +480,7 @@ export function createGeckoRig(
           }
       }
       masks[owner][index] = 1;
+      if (owner !== 'prop') owners[index] = ANATOMY.indexOf(owner);
       if (owner !== 'prop' && owner !== 'body') {
         if (
           near(x, y, headPivot, 2.8) ||
@@ -454,6 +490,59 @@ export function createGeckoRig(
           masks.body[index] = 1;
       }
     }
+  // Grow fingers only along the paw's connected branch. A nearby eye or
+  // tail across an air gap must never be pulled into the wrist transform.
+  const headPieces = islands(masks.head),
+    protectedHead = new Set(
+      headPieces.reduce((a, b) => (b.length > a.length ? b : a), [] as number[]),
+    );
+  for (const key of limbKeys) {
+    const owner = ANATOMY.indexOf(key),
+      b = bones[key],
+      dx = b.tip[0] - b.root[0],
+      dy = b.tip[1] - b.root[1],
+      distal = (index: number) => {
+        const x = (index % 96) + 0.5,
+          y = Math.floor(index / 96) + 0.5;
+        return ((x - b.root[0]) * dx + (y - b.root[1]) * dy) / (dx * dx + dy * dy) > 0.6;
+      },
+      queue: number[] = [],
+      distances = new Map<number, number>();
+    for (let i = 0; i < owners.length; i++)
+      if (owners[i] === owner && distal(i)) {
+        queue.push(i);
+        distances.set(i, 0);
+      }
+    for (const index of queue) {
+      const distance = distances.get(index) ?? 0;
+      if (distance >= 4) continue;
+      const x = index % 96,
+        y = Math.floor(index / 96);
+      for (let sy = -1; sy <= 1; sy++)
+        for (let sx = -1; sx <= 1; sx++) {
+          const nx = x + sx,
+            ny = y + sy,
+            next = ny * 96 + nx;
+          if (
+            nx < 0 ||
+            ny < 0 ||
+            nx >= 96 ||
+            ny >= 72 ||
+            owners[next] === 255 ||
+            protectedHead.has(next) ||
+            distances.has(next) ||
+            !distal(next)
+          )
+            continue;
+          const previous = ANATOMY[owners[next] ?? 0] ?? 'body';
+          masks[previous][next] = 0;
+          masks[key][next] = 1;
+          owners[next] = owner;
+          queue.push(next);
+          distances.set(next, distance + 1);
+        }
+    }
+  }
   // A moving part turns as one piece. A bit of it joined to its main piece
   // only through the body's pixels (a toe) takes those few pixels along, as
   // a copy, so it turns with the paw; a bit farther off stays with the body.
@@ -561,7 +650,20 @@ export function createGeckoRig(
       }
     parts[name] = { image, pivot, center: n ? [cx / n, cy / n] : pivot };
   }
-  return { parts, bones, kind };
+  const mesh = createConnectedMesh(new Uint32Array(original.data.buffer), owners, 96, 72);
+  const facePixels = mesh.pixels.map((colour, index) => (owners[index] === 1 ? colour : 0));
+  const faceOwners = owners.map((owner) => (owner === 1 ? 0 : 255));
+  return {
+    parts,
+    bones,
+    kind,
+    mesh,
+    bodyMesh: {
+      ...mesh,
+      pixels: mesh.pixels.map((colour, index) => (owners[index] === 1 ? 0 : colour)),
+    },
+    faceMesh: createConnectedMesh(facePixels, faceOwners, 96, 72),
+  };
 }
 
 /**
@@ -578,6 +680,14 @@ export interface FrameTurn {
 }
 
 type Shift = readonly [number, number];
+const collecting = new WeakMap<CanvasRenderingContext2D, Map<Part, PixelTransform>>();
+const identity: PixelTransform = (x, y) => [x, y];
+const rigid =
+  (item: Part, angle: number, dx = 0, dy = 0): PixelTransform =>
+  (x, y) => {
+    const p = turnPoint([x, y], item.pivot, angle);
+    return [p[0] + dx, p[1] + dy];
+  };
 const turnPoint = (p: Point, pivot: Point, angle: number): Point => {
   const c = Math.cos(angle),
     s = Math.sin(angle),
@@ -647,6 +757,11 @@ function turned(item: Part, angle: number): HTMLCanvasElement {
 
 /** Parts land on whole pixels; `geckoSprite` mends the seams with the pose's own pixels. */
 function put(ctx: CanvasRenderingContext2D, item: Part, at: Shift) {
+  const pose = collecting.get(ctx);
+  if (pose) {
+    pose.set(item, (x, y) => [x + at[0], y + at[1]]);
+    return;
+  }
   ctx.drawImage(item.image, at[0], at[1]);
 }
 function part(
@@ -657,21 +772,12 @@ function part(
   dy = 0,
   base: Shift = [0, 0],
 ) {
+  const pose = collecting.get(ctx);
+  if (pose) {
+    pose.set(item, rigid(item, angle, base[0] + dx, base[1] + dy));
+    return;
+  }
   ctx.drawImage(turned(item, angle), base[0] + Math.round(dx), base[1] + Math.round(dy));
-}
-/** A limb turned at its root to point at `target`; not stretched. */
-function bone(
-  ctx: CanvasRenderingContext2D,
-  rig: GeckoRig,
-  name: LimbName,
-  target: Point,
-  base: Shift = [0, 0],
-) {
-  const b = rig.bones[name];
-  const angle =
-    Math.atan2(target[1] - b.root[1], target[0] - b.root[0]) -
-    Math.atan2(b.tip[1] - b.root[1], b.tip[0] - b.root[0]);
-  part(ctx, rig.parts[name], angle, 0, 0, base);
 }
 /** The tail: its base swings by `a` at its root, its tip is carried and swings by `b` more. */
 function tails(
@@ -923,17 +1029,18 @@ function drawSeated(
   v: number,
 ) {
   const p = seatedPose(state, ms, v),
-    hip: Point = [49, 52];
-  tails(ctx, rig, p.tail, p.tip);
+    hip: Point = [49, 52],
+    lean = travel(rig.parts.body, hip, p.bodyAngle),
+    upper = whole(lean[0] + p.bodyX, lean[1] + p.bodyY, 1);
+  tails(ctx, rig, p.tail, p.tip, 0, 0, upper);
   part(ctx, rig.parts.legFar, p.legFar);
   part(ctx, rig.parts.legNear, p.legNear);
   // The upper body leans as one piece: one whole-pixel shift for all of it.
-  const lean = travel(rig.parts.body, hip, p.bodyAngle),
-    upper = whole(lean[0] + p.bodyX, lean[1] + p.bodyY, 1);
   part(ctx, rig.parts.armFar, p.armFar, 0, 0, upper);
   put(ctx, rig.parts.body, upper);
   part(ctx, rig.parts.armNear, p.armNear, 0, 0, upper);
-  part(ctx, rig.parts.head, p.head, p.headX, p.headY, upper);
+  // Keep eyes and mouth as one unchanged bitmap during small idle glances.
+  put(ctx, rig.parts.head, plus(upper, whole(p.headX - p.head * 5, p.headY + p.head * 2, 2)));
   part(ctx, rig.parts.prop, p.propAngle, p.propX, p.propY);
 }
 
@@ -963,7 +1070,7 @@ function dangle(
   part(ctx, rig.parts.armFar);
   put(ctx, rig.parts.body, body);
   part(ctx, rig.parts.armNear, -0.12 * w + (v === 2 ? 0.18 : 0), 0, 0, body);
-  part(ctx, rig.parts.head, -angle * 0.38 + 0.025 * Math.sin(t * 1.4), 0, 0, body);
+  put(ctx, rig.parts.head, plus(body, whole(angle * 2, 0, 1)));
 }
 
 /** Local paw travel: a long planted stance followed by a lifted return arc. */
@@ -974,18 +1081,250 @@ function stepMotion(phase: number, stance: number, length: number, lift: number)
   return [mix(-length / 2, length / 2, smooth(p)), -Math.sin(p * Math.PI) * lift];
 }
 
-function drawWalk(ctx: CanvasRenderingContext2D, rig: GeckoRig, ms: number, v: number) {
+type TailCoordinate = { u: number; normal: number; segment: number; fraction: number };
+type TailAtlas = {
+  project(x: number, y: number): TailCoordinate;
+  positive: Float64Array;
+  negative: Float64Array;
+  at(u: number): { point: Point; normal: Point };
+  extent(u: number, side: number): number;
+  sample(u: number, fraction: number): number;
+  outline: number;
+};
+const tailAtlases = new WeakMap<GeckoRig, TailAtlas>();
+
+/** The same source coordinates drive the straight tail and its gripping curl. */
+function tailAtlas(rig: GeckoRig): TailAtlas {
+  const cached = tailAtlases.get(rig);
+  if (cached) return cached;
+  const points: Point[] = [
+      rig.parts.tailBase.pivot,
+      [28, 38],
+      [19, 43],
+      [17, 51],
+      [23, 58],
+      [32, 61],
+      [38, 64],
+      [41, 67],
+    ],
+    lengths = points.slice(1).map((p, i) => Math.hypot(p[0] - points[i]![0], p[1] - points[i]![1])),
+    total = lengths.reduce((sum, value) => sum + value, 0),
+    memo = new Map<string, TailCoordinate>(),
+    project = (x: number, y: number): TailCoordinate => {
+      const key = `${x},${y}`,
+        known = memo.get(key);
+      if (known) return known;
+      let best = Infinity,
+        travelled = 0,
+        result: TailCoordinate = { u: 0, normal: 0, segment: 0, fraction: 0 };
+      for (let i = 0; i < points.length - 1; i++) {
+        const a = points[i]!,
+          b = points[i + 1]!,
+          dx = b[0] - a[0],
+          dy = b[1] - a[1],
+          length = lengths[i]!,
+          fraction = clamp(((x - a[0]) * dx + (y - a[1]) * dy) / (length * length)),
+          px = a[0] + fraction * dx,
+          py = a[1] + fraction * dy,
+          distance = (x - px) ** 2 + (y - py) ** 2;
+        if (distance < best) {
+          best = distance;
+          result = {
+            u: (travelled + fraction * length) / total,
+            normal: (-(x - px) * dy + (y - py) * dx) / length,
+            segment: i,
+            fraction,
+          };
+        }
+        travelled += length;
+      }
+      memo.set(key, result);
+      return result;
+    },
+    positive = new Float64Array(25).fill(0.5),
+    negative = new Float64Array(25).fill(0.5),
+    art = new Uint32Array(96 * 72),
+    palette = new Map<number, number>();
+  for (const name of ['tailBase', 'tailTip'] as const) {
+    const pixels = rig.parts[name].image.getContext('2d')!.getImageData(0, 0, 96, 72).data,
+      packed = new Uint32Array(pixels.buffer);
+    for (let i = 0; i < 96 * 72; i++)
+      if (pixels[i * 4 + 3]) {
+        const colour = packed[i] ?? 0;
+        art[i] = colour;
+        palette.set(colour, (palette.get(colour) ?? 0) + 1);
+        const p = project((i % 96) + 0.5, Math.floor(i / 96) + 0.5),
+          bin = Math.round(p.u * 24),
+          side = p.normal >= 0 ? positive : negative;
+        side[bin] = Math.max(side[bin] ?? 0.5, Math.abs(p.normal));
+      }
+  }
+  const extent = (u: number, sign: number) => {
+      const bin = Math.round(clamp(u) * 24),
+        side = sign >= 0 ? positive : negative;
+      let value = 0.5;
+      for (let k = Math.max(0, bin - 2); k <= Math.min(24, bin + 2); k++)
+        value = Math.max(value, side[k] ?? 0.5);
+      return value;
+    },
+    at = (u: number) => {
+      let distance = clamp(u) * total;
+      for (let i = 0; i < lengths.length; i++) {
+        const length = lengths[i]!;
+        if (distance <= length || i === lengths.length - 1) {
+          const a = points[i]!,
+            b = points[i + 1]!,
+            f = clamp(distance / length);
+          return {
+            point: [mix(a[0], b[0], f), mix(a[1], b[1], f)] as Point,
+            normal: [-(b[1] - a[1]) / length, (b[0] - a[0]) / length] as Point,
+          };
+        }
+        distance -= length;
+      }
+      return { point: points[0]!, normal: [0, -1] as Point };
+    },
+    colours = [...palette],
+    base = colours.reduce((a, b) => (b[1] > a[1] ? b : a), [0xff477643, 0])[0]!,
+    brightness = (colour: number) =>
+      (colour & 255) * 0.3 + ((colour >>> 8) & 255) * 0.59 + ((colour >>> 16) & 255) * 0.11,
+    ranked = colours.sort((a, b) => brightness(a[0]) - brightness(b[0])),
+    outline = ranked[Math.floor(ranked.length * 0.12)]?.[0] ?? base,
+    sample = (u: number, fraction: number) => {
+      const p = at(u),
+        n = fraction * extent(u, fraction),
+        x = p.point[0] + p.normal[0] * n,
+        y = p.point[1] + p.normal[1] * n;
+      for (let radius = 0; radius <= 3; radius++)
+        for (let dy = -radius; dy <= radius; dy++)
+          for (let dx = -radius; dx <= radius; dx++) {
+            const sx = Math.floor(x) + dx,
+              sy = Math.floor(y) + dy;
+            if (sx >= 0 && sy >= 0 && sx < 96 && sy < 72 && art[sy * 96 + sx])
+              return art[sy * 96 + sx]!;
+          }
+      return base;
+    };
+  const result = { project, positive, negative, at, extent, sample, outline };
+  tailAtlases.set(rig, result);
+  return result;
+}
+
+/** Plump leopard-gecko tail: a straight main axis and a softly tapered tip. */
+export function walkTailGeometry(u: number, phase: number, root: Point) {
+  u = clamp(u);
+  const wave = Math.sin(phase * TAU * 0.7 - u * 0.8),
+    displacement = 1.3 * u * u * wave,
+    derivative = 1.3 * (2 * u * wave - 0.8 * u * u * Math.cos(phase * TAU * 0.7 - u * 0.8)),
+    length = Math.min(35, Math.max(20, root[0] - 3)),
+    norm = Math.hypot(length, derivative),
+    widths = [4.5, 5.4, 5.8, 5.6, 4.6, 3.1, 1.7, 0.45],
+    at = u * (widths.length - 1),
+    index = Math.min(widths.length - 2, Math.floor(at));
+  return {
+    point: [root[0] - length * u, root[1] + displacement] as Point,
+    normal: [-derivative / norm, -length / norm] as Point,
+    halfWidth: mix(widths[index]!, widths[index + 1]!, smooth(at - index)),
+  };
+}
+
+function straightTail(rig: GeckoRig, phase: number, root: Point): PixelTransform {
+  const atlas = tailAtlas(rig);
+  return (x, y) => {
+    const p = atlas.project(x, y),
+      geometry = walkTailGeometry(p.u, phase, root),
+      side = p.normal >= 0 ? atlas.positive : atlas.negative,
+      bin = Math.round(p.u * 24);
+    let extent = 0.5;
+    for (let k = Math.max(0, bin - 2); k <= Math.min(24, bin + 2); k++)
+      extent = Math.max(extent, side[k] ?? 0.5);
+    const normal = clamp(p.normal / extent, -1.12, 1.12) * geometry.halfWidth;
+    return [
+      geometry.point[0] + geometry.normal[0] * normal,
+      geometry.point[1] + geometry.normal[1] * normal,
+    ];
+  };
+}
+
+/** Two links share a knee/elbow; the foot target stays fixed during stance. */
+function articulatedLimb(
+  b: Bone,
+  targetRoot: Point,
+  targetTip: Point,
+  side: number,
+): PixelTransform {
+  const dx = b.tip[0] - b.root[0],
+    dy = b.tip[1] - b.root[1],
+    rest = Math.hypot(dx, dy),
+    bend = Math.min(3, rest * 0.2) * side,
+    joint: Point = [
+      (b.root[0] + b.tip[0]) / 2 - (dy / rest) * bend,
+      (b.root[1] + b.tip[1]) / 2 + (dx / rest) * bend,
+    ];
+  let a = Math.hypot(joint[0] - b.root[0], joint[1] - b.root[1]),
+    c = Math.hypot(b.tip[0] - joint[0], b.tip[1] - joint[1]);
+  const tx = targetTip[0] - targetRoot[0],
+    ty = targetTip[1] - targetRoot[1],
+    distance = Math.max(0.01, Math.hypot(tx, ty)),
+    stretch = Math.max(1, distance / ((a + c) * 0.985));
+  a *= stretch;
+  c *= stretch;
+  const along = (a * a - c * c + distance * distance) / (2 * distance),
+    height = Math.sqrt(Math.max(0, a * a - along * along)) * side,
+    knee: Point = [
+      targetRoot[0] + (tx * along - ty * height) / distance,
+      targetRoot[1] + (ty * along + tx * height) / distance,
+    ];
+  const link = (p: Point, q: Point, toP: Point, toQ: Point): PixelTransform => {
+    const sx = q[0] - p[0],
+      sy = q[1] - p[1],
+      length = Math.hypot(sx, sy),
+      ux = toQ[0] - toP[0],
+      uy = toQ[1] - toP[1],
+      targetLength = Math.max(0.01, Math.hypot(ux, uy));
+    return (x, y) => {
+      const u = ((x - p[0]) * sx + (y - p[1]) * sy) / (length * length),
+        n = (-(x - p[0]) * sy + (y - p[1]) * sx) / length;
+      return [toP[0] + u * ux - (n * uy) / targetLength, toP[1] + u * uy + (n * ux) / targetLength];
+    };
+  };
+  const upper = link(b.root, joint, targetRoot, knee),
+    lower = link(joint, b.tip, knee, targetTip);
+  return (x, y) => {
+    const t = ((x - b.root[0]) * dx + (y - b.root[1]) * dy) / (rest * rest),
+      blend = smooth((t - 0.3) / 0.4),
+      p = upper(x, y),
+      q = lower(x, y);
+    return [mix(p[0], q[0], blend), mix(p[1], q[1], blend)];
+  };
+}
+
+function drawWalk(
+  ctx: CanvasRenderingContext2D,
+  rig: GeckoRig,
+  ms: number,
+  v: number,
+  options: GeckoDrawOptions,
+) {
   const period = v === 1 ? 1400 : v === 2 ? 1100 : 900,
-    phase = cycle(ms / period),
+    fullPhase = options.locomotionPhase ?? ms / period,
+    phase = cycle(fullPhase),
     t = ms / 1000;
   const slow = v === 1,
-    pause = v === 2 ? 1 - 0.45 * pulse(t % 5, 2, 3.5) : 1;
+    stance = slow ? 0.76 : 0.68;
   const head = slow
     ? -0.08 + 0.04 * Math.sin(t)
     : v === 2
       ? 0.13 * Math.sin(t * 1.2)
       : 0.035 * Math.sin(t * 3);
-  tails(ctx, rig, 0.06 * Math.sin(phase * TAU), 0.13 * Math.sin(phase * TAU - 1));
+  const pose = collecting.get(ctx),
+    wave = (x: number) => 0.7 * Math.sin(phase * TAU + (x - 48) * 0.065),
+    body: PixelTransform = (x, y) => [x, y + wave(x)],
+    tailRoot = rig.parts.tailBase.pivot,
+    tail = straightTail(rig, fullPhase, [tailRoot[0], tailRoot[1] + wave(tailRoot[0])]);
+  pose?.set(rig.parts.body, body);
+  pose?.set(rig.parts.tailBase, tail);
+  pose?.set(rig.parts.tailTip, tail);
   const phases: Record<LimbName, number> = {
     armFar: phase,
     legNear: phase,
@@ -993,15 +1332,17 @@ function drawWalk(ctx: CanvasRenderingContext2D, rig: GeckoRig, ms: number, v: n
     legFar: phase + 0.5,
   };
   const keys: LimbName[] = ['legFar', 'armFar', 'legNear', 'armNear'];
-  const bodyY = slow ? 0.3 * Math.sin(phase * TAU * 2) : 0.55 * Math.sin(phase * TAU * 2);
-  const lift = whole(0, bodyY, 1);
   for (const key of keys) {
     const b = rig.bones[key],
-      d = stepMotion(phases[key], slow ? 0.77 : 0.63, (slow ? 3.6 : 5.8) * pause, slow ? 1 : 2.2);
-    bone(ctx, rig, key, [b.tip[0] + d[0], b.tip[1] + d[1] - lift[1]]);
+      d = stepMotion(phases[key], stance, 10 * stance, slow ? 1.1 : 2),
+      targetRoot = body(b.root[0], b.root[1]),
+      targetTip: Point = [b.tip[0] + d[0], b.tip[1] + d[1] * (key.endsWith('Far') ? -1 : 1)];
+    pose?.set(
+      rig.parts[key],
+      articulatedLimb(b, targetRoot, targetTip, key.endsWith('Far') ? -1 : 1),
+    );
   }
-  put(ctx, rig.parts.body, lift);
-  part(ctx, rig.parts.head, head, 0, 0, lift);
+  put(ctx, rig.parts.head, whole(-head * 5, wave(rig.parts.head.pivot[0]), 1));
 }
 
 function drawSleep(ctx: CanvasRenderingContext2D, rig: GeckoRig, ms: number, v: number) {
@@ -1022,7 +1363,7 @@ function drawSleep(ctx: CanvasRenderingContext2D, rig: GeckoRig, ms: number, v: 
   part(ctx, rig.parts.armNear);
   part(ctx, rig.parts.body, 0, 0, -breath);
   part(ctx, rig.parts.legNear, v === 1 ? 0.24 * twitch : 0.015 * Math.sin(t), 0, -0.1 * breath);
-  part(ctx, rig.parts.head, v === 1 ? 0.06 * twitch : -0.015 * breath, 0, -0.25 * breath);
+  put(ctx, rig.parts.head, whole(v === 1 ? 0.3 * twitch : 0, -0.25 * breath, 1));
 }
 
 /**
@@ -1056,8 +1397,280 @@ function drawHang(
   part(ctx, rig.parts.armFar);
   put(ctx, rig.parts.body, pull);
   part(ctx, rig.parts.armNear, -2.1 * reach, 0, 0, pull);
-  part(ctx, rig.parts.head, -angle * 0.4 - 0.14 * lift, 0, 0, pull);
+  put(ctx, rig.parts.head, plus(pull, whole(angle * 2, -0.7 * lift, 1)));
   return { angle, pivot: [48, 12], to: [48, 12], mirror: other };
+}
+
+/** Maps the drawn tail's centreline into a curl around the contact point. */
+function tailCurl(rig: GeckoRig, root: Point): PixelTransform {
+  const atlas = tailAtlas(rig),
+    target: Point[] = [root, [42, 18], [41, 14], [43, 10], [47, 8], [51, 9], [52, 12], [48, 12]];
+  return (x, y) => {
+    const p = atlas.project(x, y),
+      { segment, fraction } = p,
+      normal = clamp(p.normal, -6, 6) * mix(0.8, 0.45, (segment + fraction) / 7);
+    const a = target[segment]!,
+      b = target[segment + 1]!,
+      dx = b[0] - a[0],
+      dy = b[1] - a[1],
+      length = Math.max(0.01, Math.hypot(dx, dy));
+    return [
+      mix(a[0], b[0], fraction) - (normal * dy) / length,
+      mix(a[1], b[1], fraction) + (normal * dx) / length,
+    ];
+  };
+}
+
+function drawTailHang(
+  ctx: CanvasRenderingContext2D,
+  rig: GeckoRig,
+  ms: number,
+  v: number,
+  options: GeckoDrawOptions,
+) {
+  drawWalk(ctx, rig, ms, v, options);
+  const pose = collecting.get(ctx);
+  if (!pose) return;
+  const walk = new Map(pose);
+  const progress = options.reducedMotion ? 1 : smooth(options.tailHangProgress ?? 1),
+    t = options.reducedMotion ? 0 : ms / 1000,
+    startAngle = options.motionAngle ?? Math.PI / 2,
+    endAngle = 1.82 + 0.045 * Math.sin(t * 1.55),
+    delta = Math.atan2(Math.sin(endAngle - startAngle), Math.cos(endAngle - startAngle)),
+    angle = startAngle + delta * progress,
+    fit = poseFit(rig, walk, { angle: startAngle, pivot: [48, 36], to: [48, 36] }),
+    scale = mix(fit, 1, progress),
+    pivot: Point = [mix(48, 43, progress), mix(36, 32, progress)],
+    to: Point = [48, mix(36, 23, progress)],
+    global: PixelTransform = (x, y) => {
+      const p = turnPoint([x, y], pivot, angle);
+      return [to[0] + (p[0] - pivot[0]) * scale, to[1] + (p[1] - pivot[1]) * scale];
+    };
+  for (const name of ANATOMY) {
+    const source = walk.get(rig.parts[name]) ?? identity;
+    pose.set(rig.parts[name], (x, y) => {
+      const p = source(x, y);
+      return global(mix(p[0], x, progress), mix(p[1], y, progress));
+    });
+  }
+  for (const key of ['armFar', 'armNear', 'legFar', 'legNear'] as LimbName[]) {
+    const b = rig.bones[key],
+      root = global(b.root[0], b.root[1]),
+      source = walk.get(rig.parts[key]) ?? identity,
+      foot = source(b.tip[0], b.tip[1]),
+      initial = global(foot[0], foot[1]),
+      far = key.endsWith('Far'),
+      tuck = v === 2 ? (3 * (1 - Math.cos(t * 1.5))) / 2 : 0,
+      target: Point = [
+        mix(initial[0], root[0] + (far ? 1 : -1) * (8 - tuck), progress),
+        mix(initial[1], root[1] + 8 + Math.sin(t * 1.8 + (far ? 0 : 0.7)), progress),
+      ];
+    pose.set(rig.parts[key], articulatedLimb(b, root, target, far ? -1 : 1));
+  }
+  const tailRoot = rig.parts.tailBase.pivot,
+    curl = tailCurl(rig, global(tailRoot[0], tailRoot[1]));
+  for (const key of ['tailBase', 'tailTip'] as const) {
+    const initial = walk.get(rig.parts[key]) ?? identity;
+    pose.set(rig.parts[key], (x, y) => {
+      const source = initial(x, y),
+        a = global(source[0], source[1]),
+        b = curl(x, y);
+      return [mix(a[0], b[0], progress), mix(a[1], b[1], progress)];
+    });
+  }
+}
+
+/** Fill the intended tail volume with samples of the approved spotted skin. */
+function fillTailProfile(
+  pixels: Uint32Array,
+  rig: GeckoRig,
+  pose: ReadonlyMap<Part, PixelTransform>,
+  progress: number,
+) {
+  const atlas = tailAtlas(rig),
+    mapper = pose.get(rig.parts.tailBase) ?? identity,
+    head = pose.get(rig.parts.head) ?? identity,
+    h0 = head(75, 25),
+    h1 = head(76, 25),
+    scale = Math.hypot(h1[0] - h0[0], h1[1] - h0[1]),
+    samples = Array.from({ length: 49 }, (_, index) => {
+      const u = index / 48,
+        source = atlas.at(u),
+        point = mapper(source.point[0], source.point[1]),
+        walking = walkTailGeometry(u, 0, [0, 0]).halfWidth,
+        hanging = Math.min(
+          3.8,
+          Math.max(atlas.extent(u, 1), atlas.extent(u, -1)) * mix(0.8, 0.45, u),
+        );
+      return { u, point, width: mix(walking, hanging, progress) * scale };
+    });
+  let left = 95,
+    right = 0,
+    top = 71,
+    bottom = 0;
+  for (const sample of samples) {
+    left = Math.min(left, Math.floor(sample.point[0] - sample.width));
+    right = Math.max(right, Math.ceil(sample.point[0] + sample.width));
+    top = Math.min(top, Math.floor(sample.point[1] - sample.width));
+    bottom = Math.max(bottom, Math.ceil(sample.point[1] + sample.width));
+  }
+  for (let y = Math.max(0, top); y <= Math.min(71, bottom); y++)
+    for (let x = Math.max(0, left); x <= Math.min(95, right); x++) {
+      const index = y * 96 + x;
+      if (pixels[index]) continue;
+      let best = Infinity,
+        at = 0,
+        normal = 0,
+        width = 1;
+      for (let i = 0; i < samples.length - 1; i++) {
+        const a = samples[i]!,
+          b = samples[i + 1]!,
+          dx = b.point[0] - a.point[0],
+          dy = b.point[1] - a.point[1],
+          length = Math.hypot(dx, dy);
+        if (length < 0.001) continue;
+        const f = clamp(
+            ((x + 0.5 - a.point[0]) * dx + (y + 0.5 - a.point[1]) * dy) / (length * length),
+          ),
+          px = mix(a.point[0], b.point[0], f),
+          py = mix(a.point[1], b.point[1], f),
+          distance = Math.hypot(x + 0.5 - px, y + 0.5 - py),
+          radius = mix(a.width, b.width, f),
+          ratio = distance / radius;
+        if (ratio < best) {
+          best = ratio;
+          at = mix(a.u, b.u, f);
+          normal = (-(x + 0.5 - px) * dy + (y + 0.5 - py) * dx) / (length * radius);
+          width = radius;
+        }
+      }
+      if (best <= 1)
+        pixels[index] =
+          best > 1 - 0.8 / Math.max(width, 1) ? atlas.outline : atlas.sample(at, normal);
+    }
+}
+
+function paintConnected(
+  ctx: CanvasRenderingContext2D,
+  rig: GeckoRig,
+  pose: ReadonlyMap<Part, PixelTransform>,
+  state: GeckoAnimation,
+  options: GeckoDrawOptions,
+) {
+  const pixels = deformConnectedMesh(
+      rig.bodyMesh,
+      ANATOMY.map((name) => pose.get(rig.parts[name]) ?? identity),
+    ),
+    image = ctx.createImageData(96, 72);
+  const head = pose.get(rig.parts.head) ?? identity;
+  const face = deformConnectedMesh(rig.faceMesh, [head]);
+  if (state === 'walk' || state === 'tail-hang') {
+    const progress =
+      state === 'walk' ? 0 : options.reducedMotion ? 1 : smooth(options.tailHangProgress ?? 1);
+    fillTailProfile(pixels, rig, pose, progress);
+  }
+  if (rig.kind === 'walk') {
+    // A one-pixel slit can lose its colour when the whole mesh is fitted to
+    // the canvas. Preserve these face landmarks through the final head map.
+    const pupil = rig.mesh.pixels[29 * 96 + 76] ?? 0;
+    for (const [x, top, bottom] of [
+      [76, 28, 31],
+      [80, 19, 21],
+    ] as const) {
+      const from = head(x + 0.5, top + 0.5);
+      const to = head(x + 0.5, bottom + 0.5);
+      const steps = Math.max(1, Math.ceil(Math.hypot(to[0] - from[0], to[1] - from[1]) * 2));
+      for (let step = 0; step <= steps; step++) {
+        const px = Math.floor(mix(from[0], to[0], step / steps));
+        const py = Math.floor(mix(from[1], to[1], step / steps));
+        const index = py * 96 + px;
+        if (px >= 0 && px < 96 && py >= 0 && py < 72 && face[index]) face[index] = pupil;
+      }
+    }
+  }
+  // The complete face is one rigid stamp. The torso and paw skin cannot pull
+  // the brow, eye rim or mouth independently of the pupils (owner, 2026-10-25).
+  for (let index = 0; index < face.length; index++) if (face[index]) pixels[index] = face[index]!;
+  if (options.inspectAnatomy) {
+    const origin = head(0, 0),
+      x = head(1, 0),
+      y = head(0, 1);
+    options.inspectAnatomy({
+      face: {
+        matrix: [
+          x[0] - origin[0],
+          x[1] - origin[1],
+          y[0] - origin[0],
+          y[1] - origin[1],
+          origin[0],
+          origin[1],
+        ],
+        source: rig.faceMesh.pixels,
+        stamp: face,
+        width: 96,
+        height: 72,
+      },
+      paws: [],
+    });
+  }
+  new Uint32Array(image.data.buffer).set(pixels);
+  ctx.putImageData(image, 0, 0);
+  const prop = pose.get(rig.parts.prop);
+  if (prop) {
+    const centre = rig.parts.prop.pivot,
+      a = prop(centre[0], centre[1]),
+      b = prop(centre[0] + 1, centre[1]);
+    part(
+      ctx,
+      rig.parts.prop,
+      Math.atan2(b[1] - a[1], b[0] - a[0]),
+      a[0] - centre[0],
+      a[1] - centre[1],
+    );
+  }
+}
+
+function poseFit(rig: GeckoRig, pose: ReadonlyMap<Part, PixelTransform>, turn: FrameTurn) {
+  const initial = ANATOMY.map((name) => pose.get(rig.parts[name]) ?? identity),
+    cos = Math.cos(turn.angle),
+    sin = Math.sin(turn.angle);
+  let fit = 1;
+  for (const vertex of rig.mesh.vertices) {
+    const x = vertex.index % 97,
+      y = Math.floor(vertex.index / 97);
+    let px = 0,
+      py = 0;
+    for (const [owner, weight] of vertex.weights) {
+      const p = initial[owner]?.(x, y) ?? [x, y];
+      px += p[0] * weight;
+      py += p[1] * weight;
+    }
+    const dx = (turn.mirror ? 96 - px : px) - turn.pivot[0],
+      dy = py - turn.pivot[1],
+      tx = dx * cos - dy * sin,
+      ty = dx * sin + dy * cos;
+    if (tx < 0) fit = Math.min(fit, (turn.to[0] - 2) / -tx);
+    if (tx > 0) fit = Math.min(fit, (94 - turn.to[0]) / tx);
+    if (ty < 0) fit = Math.min(fit, (turn.to[1] - 2) / -ty);
+    if (ty > 0) fit = Math.min(fit, (70 - turn.to[1]) / ty);
+  }
+  return fit;
+}
+
+/** Apply the final turn to the source mesh, before pixels are sampled. */
+function turnConnected(rig: GeckoRig, pose: Map<Part, PixelTransform>, turn: FrameTurn) {
+  const fit = poseFit(rig, pose, turn),
+    cos = Math.cos(turn.angle),
+    sin = Math.sin(turn.angle);
+  for (const name of ANATOMY) {
+    const mapper = pose.get(rig.parts[name]) ?? identity;
+    pose.set(rig.parts[name], (x, y) => {
+      const p = mapper(x, y),
+        dx = (turn.mirror ? 96 - p[0] : p[0]) - turn.pivot[0],
+        dy = p[1] - turn.pivot[1];
+      return [turn.to[0] + (dx * cos - dy * sin) * fit, turn.to[1] + (dx * sin + dy * cos) * fit];
+    });
+  }
 }
 
 /**
@@ -1071,8 +1684,12 @@ export function drawGeckoRig(
   ms: number,
   options: GeckoDrawOptions,
 ): FrameTurn | null {
-  const v = options.variant === 1 || options.variant === 2 ? options.variant : 0;
-  if (options.reducedMotion) {
+  const v = options.variant === 1 || options.variant === 2 ? options.variant : 0,
+    pose = new Map<Part, PixelTransform>();
+  let turn: FrameTurn | null = null;
+  collecting.set(ctx, pose);
+  if (state === 'tail-hang') drawTailHang(ctx, rig, ms, v, options);
+  else if (options.reducedMotion) {
     for (const name of [
       'tailBase',
       'tailTip',
@@ -1085,12 +1702,20 @@ export function drawGeckoRig(
       'prop',
     ] as PartName[])
       part(ctx, rig.parts[name]);
-    return null;
-  }
-  if (state === 'climb') return drawHang(ctx, rig, ms, v, options);
-  if (state === 'drag') return drawDrag(ctx, rig, ms, v);
-  if (state === 'walk') drawWalk(ctx, rig, ms, v);
+    if (state === 'walk') {
+      const tail = straightTail(rig, 0, rig.parts.tailBase.pivot);
+      pose.set(rig.parts.tailBase, tail);
+      pose.set(rig.parts.tailTip, tail);
+    }
+  } else if (state === 'climb') turn = drawHang(ctx, rig, ms, v, options);
+  else if (state === 'drag') turn = drawDrag(ctx, rig, ms, v);
+  else if (state === 'walk') drawWalk(ctx, rig, ms, v, options);
   else if (state === 'sleep') drawSleep(ctx, rig, ms, v);
   else drawSeated(ctx, rig, state, ms, v);
+  collecting.delete(ctx);
+  if (state === 'walk' && options.motionAngle !== undefined)
+    turn = { angle: options.motionAngle, pivot: [48, 36], to: [48, 36] };
+  if (turn) turnConnected(rig, pose, turn);
+  paintConnected(ctx, rig, pose, state, options);
   return null;
 }

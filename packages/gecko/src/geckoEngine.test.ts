@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'vitest';
-import type { GeckoEvent, GeckoRope } from './geckoEngine';
+import type { GeckoEvent, GeckoNodePhase, GeckoRope } from './geckoEngine';
 import {
+  GECKO_NODE_BLEND_DURATION,
+  GECKO_NODE_HANG_DURATION,
   GECKO_REACTION_DURATIONS,
   GECKO_ROPE_DURATION,
   GECKO_ROPE_ENTRY_DURATION,
@@ -657,4 +659,117 @@ test('forced variant previews change the climb rhythm without moving its grip po
   engine.climbRope();
   engine.tick(GECKO_ROPE_ENTRY_DURATION);
   assert.notEqual(engine.snapshot.animationVariant, 1);
+});
+
+const roundNode = { id: 'task-node', x: 280, y: 210, radius: 42 };
+const reachNodePhase = (engine: GeckoEngine, phase: GeckoNodePhase) => {
+  for (let frame = 0; frame < 1500 && engine.snapshot.nodePhase !== phase; frame++) engine.tick(16);
+  assert.equal(engine.snapshot.nodePhase, phase);
+};
+
+test('a node excursion approaches continuously, crawls down the rim, catches with its tail and recovers', () => {
+  const engine = makeEngine();
+  const home = engine.snapshot;
+  engine.setNodes([roundNode]);
+  assert.equal(engine.climbNode('task-node'), true);
+  assert.equal(engine.snapshot.nodePhase, 'approach');
+  assert.equal(engine.snapshot.renderX, home.renderX);
+  assert.equal(engine.snapshot.renderY, home.renderY);
+  reachNodePhase(engine, 'crawl');
+  const atTop = engine.snapshot;
+  assert.ok(Math.abs(atTop.renderX + 48 - roundNode.x) < 2);
+  assert.ok(Math.abs(atTop.renderY + 36 - (roundNode.y - roundNode.radius)) < 2);
+  engine.tick(300);
+  const crawling = engine.snapshot;
+  assert.ok(crawling.renderX > atTop.renderX);
+  assert.ok(crawling.locomotionPhase > atTop.locomotionPhase);
+  assert.ok(crawling.motionAngle > 0 && crawling.motionAngle < Math.PI);
+  let before = engine.snapshot;
+  while ((engine.snapshot.nodePhase as GeckoNodePhase | null) === 'crawl') {
+    before = engine.snapshot;
+    engine.tick(1);
+  }
+  const caught = engine.snapshot;
+  assert.equal(caught.animation, 'tail-hang');
+  assert.ok(Math.hypot(caught.renderX - before.renderX, caught.renderY - before.renderY) < 0.1);
+  assert.ok(caught.tailHangProgress < 0.001);
+  engine.tick(GECKO_NODE_BLEND_DURATION);
+  assert.equal(engine.snapshot.tailHangProgress, 1);
+  assert.ok(Math.abs(engine.snapshot.renderX + 48 - roundNode.x) < 1e-8);
+  assert.ok(Math.abs(engine.snapshot.renderY + 36 - roundNode.y - roundNode.radius) < 1e-8);
+  engine.tick(GECKO_NODE_HANG_DURATION - GECKO_NODE_BLEND_DURATION / 2);
+  assert.equal(engine.snapshot.nodePhase, 'recover');
+  assert.ok(engine.snapshot.tailHangProgress < 1);
+  engine.tick(100000);
+  assert.equal(engine.snapshot.mode, 'home');
+  assert.equal(engine.snapshot.nodeId, null);
+  assert.equal(engine.snapshot.x, home.x);
+  assert.equal(engine.snapshot.y, home.y);
+});
+
+test('node movement preserves contact and deleting an occupied node preserves the visible body position', () => {
+  const engine = makeEngine();
+  engine.setNodes([roundNode]);
+  engine.climbNode();
+  reachNodePhase(engine, 'hang');
+  engine.tick(GECKO_NODE_BLEND_DURATION);
+  const before = engine.snapshot;
+  engine.setNodes([{ ...roundNode, x: roundNode.x + 20, y: roundNode.y + 10 }]);
+  const moved = engine.snapshot;
+  assert.equal(moved.renderX, before.renderX + 20);
+  assert.equal(moved.renderY, before.renderY + 10);
+  engine.trigger('file-created');
+  engine.tick(200);
+  assert.equal(engine.snapshot.nodeElapsedMs, moved.nodeElapsedMs);
+  assert.equal(engine.snapshot.tailHangProgress, 1);
+  engine.setNodes([]);
+  assert.equal(engine.snapshot.nodeId, null);
+  assert.equal(engine.snapshot.renderX, moved.renderX);
+  assert.equal(engine.snapshot.renderY, moved.renderY + 24);
+  engine.tick(100000);
+  assert.equal(engine.snapshot.mode, 'home');
+});
+
+test('node walks are reachable through wander and interruption, resizing and reduced motion release the attachment', () => {
+  const engine = makeEngine();
+  engine.setNodes([
+    { ...roundNode, id: 'invalid', radius: NaN },
+    { ...roundNode, id: 'offscreen', x: 10 },
+    roundNode,
+  ]);
+  assert.equal(engine.climbNode('invalid'), false);
+  assert.equal(engine.climbNode('offscreen'), false);
+  assert.equal(engine.wander(), true);
+  assert.equal(engine.snapshot.nodeId, 'task-node');
+  reachNodePhase(engine, 'hang');
+  engine.tick(1000);
+  assert.equal(engine.startDrag(engine.snapshot.x + 48, engine.snapshot.y + 12), true);
+  assert.equal(engine.snapshot.nodeId, null);
+  assert.equal(engine.snapshot.animation, 'drag');
+  engine.endDrag();
+  engine.climbNode();
+  engine.setBounds(120, 100);
+  assert.equal(engine.snapshot.nodeId, null);
+  assert.equal(engine.climbNode(), false);
+  engine.setBounds(640, 480);
+  engine.climbNode();
+  engine.setReducedMotion(true);
+  assert.equal(engine.snapshot.nodeId, null);
+  assert.equal(engine.snapshot.mode, 'home');
+  assert.equal(engine.climbNode(), false);
+  assert.equal(engine.snapshot.locomotionPhase, 0);
+});
+
+test('gait advances by traveled distance and stays frozen during event reactions', () => {
+  const slow = makeEngine({ speed: 40 });
+  const fast = makeEngine({ speed: 80 });
+  slow.wander();
+  fast.wander();
+  slow.tick(1000);
+  fast.tick(500);
+  assert.equal(slow.snapshot.locomotionPhase, fast.snapshot.locomotionPhase);
+  const phase = fast.snapshot.locomotionPhase;
+  fast.trigger('task-completed');
+  fast.tick(1000);
+  assert.equal(fast.snapshot.locomotionPhase, phase);
 });

@@ -16,7 +16,18 @@ export type GeckoMode =
   | 'dragging'
   | 'reacting'
   | 'sleeping'
-  | 'rope';
+  | 'rope'
+  | 'node';
+
+/** Visible circular node, in the companion container's local CSS pixels. */
+export interface GeckoNode {
+  readonly id: string;
+  readonly x: number;
+  readonly y: number;
+  readonly radius: number;
+}
+
+export type GeckoNodePhase = 'approach' | 'crawl' | 'hang' | 'recover';
 
 export interface GeckoRope {
   readonly id: string;
@@ -43,6 +54,15 @@ export interface GeckoSnapshot {
   readonly ropeWeight: number;
   readonly ropeAngle: number | null;
   readonly gripPhase: number | null;
+  readonly nodeId: string | null;
+  readonly nodePhase: GeckoNodePhase | null;
+  readonly nodeElapsedMs: number | null;
+  /** Unbounded gait cycles driven by distance, so planted paws match travel. */
+  readonly locomotionPhase: number;
+  /** Overhead crawling direction; the native drawing faces right. */
+  readonly motionAngle: number;
+  /** Entry/recovery blend; the host lowers the body while the tail grip stays fixed. */
+  readonly tailHangProgress: number;
 }
 
 export interface GeckoEngineOptions {
@@ -64,6 +84,8 @@ export interface GeckoEngineOptions {
 export const GECKO_ROPE_SAG = 12;
 export const GECKO_ROPE_DURATION = 8000;
 export const GECKO_ROPE_ENTRY_DURATION = 450;
+export const GECKO_NODE_HANG_DURATION = 3200;
+export const GECKO_NODE_BLEND_DURATION = 600;
 
 export const GECKO_REACTION_DURATIONS: Readonly<Record<GeckoEvent | 'pet', number>> = Object.freeze(
   {
@@ -87,7 +109,7 @@ const EVENT_PRIORITY: Record<GeckoEvent, number> = {
 };
 
 type Point = { x: number; y: number };
-type TravelMode = 'home' | 'walking' | 'returning' | 'rope';
+type TravelMode = 'home' | 'walking' | 'returning' | 'rope' | 'node';
 type Variant = 0 | 1 | 2;
 type Visual = { animation: GeckoAnimation; variant: Variant; elapsedMs: number };
 type Reaction = { animation: GeckoEvent | 'pet'; elapsedMs: number; variant: Variant };
@@ -102,8 +124,19 @@ type RopeVisit = {
   entryElapsedMs: number;
   variant: Variant;
 };
+type NodeVisit = {
+  id: string;
+  phase: GeckoNodePhase;
+  elapsedMs: number;
+  crawlProgress: number;
+  visualElapsedMs: number;
+};
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+const smooth = (value: number) => {
+  const t = clamp(value, 0, 1);
+  return t * t * (3 - 2 * t);
+};
 const nonnegative = (value: number | undefined, fallback: number) =>
   value !== undefined && Number.isFinite(value) ? Math.max(0, value) : fallback;
 
@@ -147,6 +180,10 @@ export class GeckoEngine {
   private sleepRequested = false;
   private ropes = new Map<string, GeckoRope>();
   private rope: RopeVisit | undefined;
+  private nodes = new Map<string, GeckoNode>();
+  private node: NodeVisit | undefined;
+  private locomotionPhase = 0;
+  private motionAngle = Math.PI;
 
   constructor(options: GeckoEngineOptions = {}) {
     this.width = nonnegative(options.width, 800);
@@ -200,6 +237,12 @@ export class GeckoEngine {
       ropeWeight: weight,
       ropeAngle: rope ? Math.atan2(tangentY, tangentX) : null,
       gripPhase: this.rope ? this.climbPhase(this.rope) : null,
+      nodeId: this.node?.id ?? null,
+      nodePhase: this.node?.phase ?? null,
+      nodeElapsedMs: this.node?.visualElapsedMs ?? null,
+      locomotionPhase: this.reducedMotion ? 0 : this.locomotionPhase,
+      motionAngle: this.motionAngle,
+      tailHangProgress: this.tailHangProgress,
     });
   }
 
@@ -231,6 +274,7 @@ export class GeckoEngine {
     }
     if (this.drag) this.drag.origin = this.clampPoint(this.drag.origin);
     this.refreshRope();
+    this.refreshNode();
   }
 
   setPaused(paused: boolean): void {
@@ -274,6 +318,7 @@ export class GeckoEngine {
     if (!reducedMotion || this.mode === 'dragging') return;
     this.waypoints = [];
     this.rope = undefined;
+    this.node = undefined;
     this.resumeMode = 'home';
     this.position = { ...this.home };
     if (this.mode === 'reacting') this.resumeVisual = this.makeVisual('idle');
@@ -305,6 +350,63 @@ export class GeckoEngine {
     this.refreshRope();
   }
 
+  /** Copy visible nodes so host graph updates cannot mutate an active visit. */
+  setNodes(nodes: readonly GeckoNode[]): void {
+    const next = new Map<string, GeckoNode>();
+    for (const node of nodes) {
+      if (
+        !node ||
+        typeof node.id !== 'string' ||
+        !node.id.trim() ||
+        next.has(node.id) ||
+        ![node.x, node.y, node.radius].every(Number.isFinite) ||
+        node.radius < 4
+      )
+        continue;
+      next.set(node.id, { ...node });
+    }
+    this.nodes = next;
+    this.refreshNode();
+  }
+
+  /** Crawl onto a node, slip down its rim, catch it with the tail, then recover. */
+  climbNode(id?: string): boolean {
+    if (this.paused || this.mode === 'dragging' || this.reducedMotion) return false;
+    let chosen: GeckoNode | undefined;
+    let nearest = Infinity;
+    for (const node of this.nodes.values()) {
+      if ((id !== undefined && node.id !== id) || !this.usableNode(node)) continue;
+      const distance = Math.hypot(
+        node.x - this.position.x - this.spriteWidth / 2,
+        node.y - this.position.y - this.spriteHeight / 2,
+      );
+      if (distance < nearest) {
+        chosen = node;
+        nearest = distance;
+      }
+    }
+    if (!chosen) return false;
+    this.wake();
+    this.rope = undefined;
+    this.detachNode();
+    this.waypoints = [];
+    this.node = {
+      id: chosen.id,
+      phase: 'approach',
+      elapsedMs: 0,
+      crawlProgress: 0,
+      visualElapsedMs: 0,
+    };
+    if (this.mode === 'reacting') {
+      this.resumeMode = 'node';
+      this.resumeVisual = this.makeVisual('walk');
+    } else {
+      this.mode = 'node';
+      this.activate('walk');
+    }
+    return true;
+  }
+
   /** Climb along the nearest usable connection, or the requested connection. */
   climbRope(id?: string): boolean {
     if (this.paused || this.mode === 'dragging' || this.reducedMotion) return false;
@@ -329,6 +431,7 @@ export class GeckoEngine {
     }
     if (!choice) return false;
     this.wake();
+    this.detachNode();
     this.waypoints = [];
     const dx = choice.rope.end.x - choice.rope.start.x;
     const dy = choice.rope.end.y - choice.rope.start.y;
@@ -393,7 +496,9 @@ export class GeckoEngine {
   wander(): boolean {
     this.wake();
     if (this.mode === 'dragging' || this.reducedMotion) return false;
+    if (this.climbNode()) return true;
     this.rope = undefined;
+    this.node = undefined;
     const minX = Math.min(this.margin, this.maxX);
     const maxX = Math.max(minX, this.maxX - this.margin);
     const randomValue = this.random();
@@ -421,6 +526,7 @@ export class GeckoEngine {
     if (this.mode === 'dragging') return;
     this.wake();
     this.rope = undefined;
+    this.detachNode();
     if (this.position.x === this.home.x && this.position.y === this.home.y) {
       this.waypoints = [];
       this.resumeMode = 'home';
@@ -458,6 +564,7 @@ export class GeckoEngine {
     if (this.mode === 'dragging' || !Number.isFinite(x) || !Number.isFinite(y)) return false;
     this.wake();
     this.rope = undefined;
+    this.detachNode();
     this.drag = {
       offset: { x: x - this.position.x, y: y - this.position.y },
       origin: { ...this.position },
@@ -552,6 +659,71 @@ export class GeckoEngine {
         this.advanceResting(remaining, 'sleep');
         break;
       }
+      if (this.mode === 'node' && this.node) {
+        const node = this.nodes.get(this.node.id);
+        if (!node || !this.usableNode(node)) {
+          this.returnHome();
+          continue;
+        }
+        if (this.node.phase === 'approach') {
+          const target = this.nodePoint(node, 0);
+          const distance = Math.hypot(target.x - this.position.x, target.y - this.position.y);
+          const duration = (distance / this.speed) * 1000;
+          const step = Math.min(remaining, duration);
+          if (distance > 0.001) {
+            const dx = target.x - this.position.x;
+            const dy = target.y - this.position.y;
+            const fraction = step / duration;
+            this.advanceGait(distance * fraction, Math.atan2(dy, dx));
+            this.position = {
+              x: this.position.x + dx * fraction,
+              y: this.position.y + dy * fraction,
+            };
+          }
+          remaining -= step;
+          this.animationElapsedMs += step;
+          this.node.visualElapsedMs += step;
+          if (step >= duration || distance <= 0.001) {
+            this.position = target;
+            this.node.phase = 'crawl';
+            this.node.elapsedMs = 0;
+            this.motionAngle = 0;
+          }
+          continue;
+        }
+        if (this.node.phase === 'crawl') {
+          const duration = (Math.PI * node.radius * 1000) / this.speed;
+          const step = Math.min(remaining, duration - this.node.elapsedMs);
+          this.node.elapsedMs += step;
+          this.node.crawlProgress = clamp(this.node.elapsedMs / duration, 0, 1);
+          this.position = this.nodePoint(node, this.node.crawlProgress);
+          this.advanceGait((step * this.speed) / 1000, Math.PI * this.node.crawlProgress);
+          this.animationElapsedMs += step;
+          this.node.visualElapsedMs += step;
+          remaining -= step;
+          if (this.node.crawlProgress >= 1) {
+            this.node.phase = 'hang';
+            this.node.elapsedMs = 0;
+            this.node.visualElapsedMs = 0;
+            this.activate('tail-hang');
+          }
+          continue;
+        }
+        const duration =
+          this.node.phase === 'hang' ? GECKO_NODE_HANG_DURATION : GECKO_NODE_BLEND_DURATION;
+        const step = Math.min(remaining, duration - this.node.elapsedMs);
+        this.node.elapsedMs += step;
+        this.animationElapsedMs += step;
+        this.node.visualElapsedMs += step;
+        remaining -= step;
+        if (this.node.elapsedMs >= duration) {
+          if (this.node.phase === 'hang') {
+            this.node.phase = 'recover';
+            this.node.elapsedMs = 0;
+          } else this.returnHome();
+        }
+        continue;
+      }
       if (this.mode === 'rope' && this.rope) {
         const rope = this.ropes.get(this.rope.id);
         if (this.rope.entryElapsedMs < GECKO_ROPE_ENTRY_DURATION) {
@@ -610,6 +782,7 @@ export class GeckoEngine {
       const duration = (distance / this.speed) * 1000;
       const step = Math.min(remaining, duration);
       const fraction = step / duration;
+      this.advanceGait(distance * fraction, Math.atan2(dy, dx));
       this.position = this.clampPoint({
         x: this.position.x + dx * fraction,
         y: this.position.y + dy * fraction,
@@ -629,6 +802,61 @@ export class GeckoEngine {
   }
   private get maxY(): number {
     return Math.max(0, Math.floor(this.height - this.spriteHeight));
+  }
+
+  private get tailHangProgress(): number {
+    if (!this.node) return 0;
+    if (this.node.phase === 'hang') return smooth(this.node.elapsedMs / GECKO_NODE_BLEND_DURATION);
+    if (this.node.phase === 'recover')
+      return 1 - smooth(this.node.elapsedMs / GECKO_NODE_BLEND_DURATION);
+    return 0;
+  }
+
+  private advanceGait(distance: number, angle: number): void {
+    this.locomotionPhase += distance / Math.max(1, (10 * this.spriteWidth) / 96);
+    this.motionAngle = angle;
+    const dx = Math.cos(angle);
+    if (Math.abs(dx) > 0.001) this.facing = dx >= 0 ? 1 : -1;
+  }
+
+  private usableNode(node: GeckoNode): boolean {
+    return (
+      node.x - node.radius >= this.spriteWidth / 2 &&
+      node.x + node.radius <= this.width - this.spriteWidth / 2 &&
+      node.y - node.radius >= this.spriteHeight / 2 &&
+      node.y + node.radius + this.spriteHeight / 2 + this.spriteHeight / 3 <= this.height
+    );
+  }
+
+  private nodePoint(node: GeckoNode, progress: number): Point {
+    const angle = -Math.PI / 2 + progress * Math.PI;
+    return {
+      x: node.x + Math.cos(angle) * node.radius - this.spriteWidth / 2,
+      y: node.y + Math.sin(angle) * node.radius - this.spriteHeight / 2,
+    };
+  }
+
+  private refreshNode(): void {
+    if (!this.node) return;
+    const node = this.nodes.get(this.node.id);
+    if (!node || !this.usableNode(node)) {
+      this.returnHome();
+      return;
+    }
+    if (this.node.phase === 'crawl')
+      this.node.elapsedMs = (this.node.crawlProgress * Math.PI * node.radius * 1000) / this.speed;
+    if (this.node.phase !== 'approach')
+      this.position = this.nodePoint(node, this.node.crawlProgress);
+  }
+
+  /** Preserve the presented body position when its fixed tail attachment disappears. */
+  private detachNode(): void {
+    if (!this.node) return;
+    this.position = this.clampPoint({
+      x: this.position.x,
+      y: this.position.y + (this.spriteHeight / 3) * this.tailHangProgress,
+    });
+    this.node = undefined;
   }
 
   private randomUnit(): number {
@@ -838,7 +1066,10 @@ export class GeckoEngine {
   private beginReaction(animation: GeckoEvent | 'pet', suspended?: Reaction): void {
     if (this.mode !== 'reacting') {
       this.resumeMode =
-        this.mode === 'walking' || this.mode === 'returning' || this.mode === 'rope'
+        this.mode === 'walking' ||
+        this.mode === 'returning' ||
+        this.mode === 'rope' ||
+        this.mode === 'node'
           ? this.mode
           : 'home';
       this.resumeVisual = this.captureVisual();

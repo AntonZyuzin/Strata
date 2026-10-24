@@ -5,6 +5,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
 } from 'react';
 import {
@@ -14,8 +15,20 @@ import {
   EFFECT_OFFSET_Y,
   EFFECT_WIDTH,
 } from './geckoEffects';
-import { GeckoEngine, type GeckoEvent, type GeckoRope, type GeckoSnapshot } from './geckoEngine';
-import { drawGecko, loadGeckoAssets, SPRITE_HEIGHT, SPRITE_WIDTH } from './geckoSprite';
+import {
+  GeckoEngine,
+  type GeckoEvent,
+  type GeckoNode,
+  type GeckoRope,
+  type GeckoSnapshot,
+} from './geckoEngine';
+import {
+  drawGecko,
+  type GeckoAnatomyFrame,
+  loadGeckoAssets,
+  SPRITE_HEIGHT,
+  SPRITE_WIDTH,
+} from './geckoSprite';
 
 /**
  * Canvas pixels per native pixel: what the screen shows of one, rounded, so
@@ -37,6 +50,8 @@ export type GeckoHandle = {
   sleep(): void;
   wake(): void;
   climbRope(id?: string): void;
+  climbNode(id?: string): void;
+  setNodes(nodes: readonly GeckoNode[]): void;
 };
 
 export type GeckoCompanionProps = {
@@ -45,6 +60,7 @@ export type GeckoCompanionProps = {
   /** Demo/review override; undefined lets the companion choose naturally. */
   variant?: 0 | 1 | 2;
   ropes?: readonly GeckoRope[];
+  nodes?: readonly GeckoNode[];
   /** Undefined respects the operating system's motion preference. */
   reducedMotion?: boolean;
   paused?: boolean;
@@ -64,6 +80,7 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
     scale = 1.5,
     variant,
     ropes,
+    nodes,
     reducedMotion,
     paused = false,
     hidden = false,
@@ -86,6 +103,7 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
   const engineRef = useRef<GeckoEngine | null>(null);
   if (!engineRef.current) engineRef.current = new GeckoEngine();
   const engine = engineRef.current;
+  const nodesRef = useRef<readonly GeckoNode[]>(nodes ?? []);
   const callback = useRef(onStateChange);
   callback.current = onStateChange;
   const ropeCallback = useRef(onRopeFrame);
@@ -109,8 +127,7 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
     void loadGeckoAssets().catch((error) => console.error('The gecko picture did not load', error));
   }, []);
 
-  useImperativeHandle(
-    ref,
+  const controls = useMemo<GeckoHandle>(
     () => ({
       react: (event) => {
         if (!hiddenRef.current && !pausedRef.current && !document.hidden) engine.trigger(event);
@@ -133,9 +150,43 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
       climbRope: (id) => {
         if (!hiddenRef.current && !pausedRef.current && !document.hidden) engine.climbRope(id);
       },
+      climbNode: (id) => {
+        if (!hiddenRef.current && !pausedRef.current && !document.hidden) engine.climbNode(id);
+      },
+      setNodes: (surfaces) => {
+        nodesRef.current = surfaces;
+        engine.setNodes(surfaces);
+      },
     }),
     [engine],
   );
+  useImperativeHandle(ref, () => controls, [controls]);
+
+  useEffect(() => {
+    // An explicit review URL exposes the production renderer for frame regression tests.
+    if (!new URLSearchParams(window.location.search).has('geckoReview')) return;
+    const target = window as unknown as { __strataGeckoReview?: unknown };
+    let anatomy: GeckoAnatomyFrame | null = null;
+    const review = {
+      draw: ((ctx, animation, elapsedMs, facing, options) =>
+        drawGecko(ctx, animation, elapsedMs, facing, {
+          ...options,
+          inspectAnatomy: (frame) => {
+            anatomy = frame;
+            options?.inspectAnatomy?.(frame);
+          },
+        })) as typeof drawGecko,
+      anatomy: () => anatomy,
+      load: loadGeckoAssets,
+      handle: controls,
+      snapshot: () => engine.snapshot,
+      nodes: () => nodesRef.current,
+    };
+    target.__strataGeckoReview = review;
+    return () => {
+      if (target.__strataGeckoReview === review) delete target.__strataGeckoReview;
+    };
+  }, [engine, controls]);
 
   useEffect(() => {
     const media = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -171,6 +222,9 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
     engine.setRopes(ropes ?? []);
   }, [engine, ropes]);
   useEffect(() => {
+    if (nodes !== undefined) controls.setNodes(nodes);
+  }, [controls, nodes]);
+  useEffect(() => {
     engine.setVariantOverride(variant);
   }, [engine, variant]);
 
@@ -186,15 +240,9 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
     live.width = SPRITE_WIDTH * RENDER_SCALE;
     live.height = SPRITE_HEIGHT * RENDER_SCALE;
     const liveContext = live.getContext('2d')!;
-    const old = document.createElement('canvas');
-    old.width = live.width;
-    old.height = live.height;
-    const oldContext = old.getContext('2d')!;
     let lastPoseKey = '';
-    let previousAnimation = '';
     let transitionStart = -Infinity;
-    let transitionDuration = 0;
-    let sleepTransition = false;
+    let presentedAngle = engine.snapshot.motionAngle;
     let lastRopePaint = -Infinity;
     const ease = (value: number) => {
       const t = Math.max(0, Math.min(1, value));
@@ -205,65 +253,64 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
       previous = now;
       engine.tick(delta);
       const state = engine.snapshot;
+      const angleDifference = Math.atan2(
+        Math.sin(state.motionAngle - presentedAngle),
+        Math.cos(state.motionAngle - presentedAngle),
+      );
+      presentedAngle += angleDifference * (motion.current ? 1 : 1 - Math.exp(-delta / 90));
       const renderVariant = variantRef.current ?? state.animationVariant;
-      const bodyAnimation = state.ropeId && state.mode === 'reacting' ? 'climb' : state.animation;
+      const bodyAnimation =
+        state.mode === 'reacting' && state.nodeId
+          ? state.nodePhase === 'hang' || state.nodePhase === 'recover'
+            ? 'tail-hang'
+            : 'walk'
+          : state.ropeId && state.mode === 'reacting'
+            ? 'climb'
+            : state.animation;
       if (actor.current) {
         // On a rope the gecko hangs from it by the raised paw at (48, 12):
         // the engine's grip point is the sprite's centre, so the paw goes there.
-        const hang = bodyAnimation === 'climb' ? (SPRITE_HEIGHT / 2 - 12) * pixelScale : 0;
+        const attachment =
+          bodyAnimation === 'climb'
+            ? 1
+            : bodyAnimation === 'tail-hang'
+              ? state.tailHangProgress
+              : 0;
+        const hang = (SPRITE_HEIGHT / 2 - 12) * pixelScale * attachment;
         actor.current.style.transform = `translate(${state.renderX ?? state.x}px, ${(state.renderY ?? state.y) + hang}px)`;
         actor.current.dataset.animation = state.animation;
         actor.current.dataset.mode = state.mode;
+        actor.current.dataset.nodeId = state.nodeId ?? '';
+        actor.current.dataset.nodePhase = state.nodePhase ?? '';
         actor.current.style.cursor = state.mode === 'dragging' ? 'grabbing' : 'grab';
       }
       const status = `${state.animation}:${state.mode}:${state.queueLength}:${state.animationVariant}:${state.sequenceId}`;
       if (context) {
         const poseKey = `${bodyAnimation}:${renderVariant}:${state.sequenceId}`;
-        if (lastPoseKey && lastPoseKey !== poseKey && !motion.current) {
-          oldContext.clearRect(0, 0, old.width, old.height);
-          oldContext.drawImage(canvas.current!, 0, 0);
-          sleepTransition = bodyAnimation === 'sleep' || previousAnimation === 'sleep';
-          transitionStart = now;
-          transitionDuration = bodyAnimation === 'drag' ? 120 : sleepTransition ? 520 : 230;
-        }
+        if (lastPoseKey !== poseKey) transitionStart = now;
         lastPoseKey = poseKey;
-        previousAnimation = bodyAnimation;
-        drawGecko(liveContext, bodyAnimation, motion.current ? 0 : state.elapsedMs, state.facing, {
-          variant: renderVariant,
-          ropeAngle: state.ropeAngle,
-          gripPhase: state.gripPhase,
-          reducedMotion: motion.current,
-          renderScale: RENDER_SCALE,
-        });
+        drawGecko(
+          liveContext,
+          bodyAnimation,
+          motion.current ? 0 : (state.nodeElapsedMs ?? state.elapsedMs),
+          state.facing,
+          {
+            variant: renderVariant,
+            ropeAngle: state.ropeAngle,
+            gripPhase: state.gripPhase,
+            locomotionPhase: state.locomotionPhase,
+            motionAngle: presentedAngle,
+            tailHangProgress: state.tailHangProgress,
+            reducedMotion: motion.current,
+            renderScale: RENDER_SCALE,
+          },
+        );
         context.setTransform(1, 0, 0, 1, 0, 0);
         context.clearRect(0, 0, live.width, live.height);
         context.imageSmoothingEnabled = false;
-        const t = motion.current
-          ? 1
-          : Math.min(1, (now - transitionStart) / Math.max(1, transitionDuration));
-        if (t < 1) {
-          const oldAlpha = 1 - ease(t / (sleepTransition ? 0.65 : 0.85));
-          const newAlpha = ease(
-            (t - (sleepTransition ? 0.22 : 0.08)) / (sleepTransition ? 0.78 : 0.92),
-          );
-          const anchorX = (SPRITE_WIDTH * RENDER_SCALE) / 2;
-          const anchorY = (bodyAnimation === 'climb' ? 12 : 58) * RENDER_SCALE;
-          context.save();
-          context.globalAlpha = oldAlpha;
-          context.translate(anchorX, anchorY);
-          if (sleepTransition) context.scale(1 + ease(t) * 0.035, 1 - ease(t) * 0.13);
-          context.translate(-anchorX, -anchorY);
-          context.drawImage(old, 0, 0);
-          context.restore();
-          context.save();
-          context.globalAlpha = newAlpha;
-          context.translate(anchorX, anchorY);
-          const settle = 1 - ease(t);
-          context.scale(1 - settle * 0.035, 1 + settle * 0.035);
-          context.translate(-anchorX, -anchorY);
-          context.drawImage(live, 0, 0);
-          context.restore();
-        } else context.drawImage(live, 0, 0);
+        const t = motion.current ? 1 : Math.min(1, (now - transitionStart) / 180);
+        // One opaque connected pose: cross-fading unrelated poses duplicated limbs.
+        context.drawImage(live, 0, 0);
         if (effectsContext)
           drawGeckoEffects(effectsContext, state.animation, state.elapsedMs, {
             variant: renderVariant,
@@ -345,7 +392,10 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
       clearClick();
       // The approved held pose hangs from the cursor by its raised paw.
       const state = engine.snapshot;
-      engine.startDrag(state.x + (SPRITE_WIDTH * pixelScale) / 2, state.y + 12 * pixelScale);
+      engine.startDrag(
+        state.renderX + (SPRITE_WIDTH * pixelScale) / 2,
+        state.renderY + (12 + 24 * state.tailHangProgress) * pixelScale,
+      );
       press.moved = true;
     }
     if (press.moved) engine.dragTo(point.x, point.y);
@@ -378,7 +428,15 @@ export const GeckoCompanion = forwardRef<GeckoHandle, GeckoCompanionProps>(funct
         if (distance <= 18 && (!nearest || distance < nearest.distance))
           nearest = { id: rope.id, distance };
       }
-      if (nearest) engine.climbRope(nearest.id);
+      const node = nodesRef.current
+        .map((surface) => ({
+          surface,
+          distance: Math.hypot(point.x - surface.x, point.y - surface.y),
+        }))
+        .filter(({ surface, distance }) => distance <= surface.radius + 24)
+        .sort((a, b) => a.distance - b.distance)[0]?.surface;
+      if (node) engine.climbNode(node.id);
+      else if (nearest) engine.climbRope(nearest.id);
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId))
       event.currentTarget.releasePointerCapture(event.pointerId);

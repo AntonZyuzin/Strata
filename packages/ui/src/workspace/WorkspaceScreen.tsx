@@ -33,7 +33,7 @@ import {
   processBackdrop,
 } from '@strata/canvas';
 import { noteText } from '@strata/editor';
-import { GeckoCompanion, type GeckoHandle } from '@strata/gecko';
+import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
@@ -215,6 +215,38 @@ export function WorkspaceScreen(props: {
   localeRef.current = locale;
   /** The companion on the canvas (07 §10.4): it reacts to the user's steps. */
   const gecko = useRef<GeckoHandle>(null);
+  const geckoHost = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // Screen-space node surfaces follow the camera and in-progress node drags (07 §10.4).
+    const update = () => {
+      if (covered || document.hidden || view3d !== '2d') return;
+      const view = viewRef.current;
+      const host = geckoHost.current;
+      if (!view || !host || !view.width || !view.height) return;
+      const bounds = host.getBoundingClientRect();
+      const canvas = view.canvas.getBoundingClientRect();
+      const surfaces: GeckoNode[] = [];
+      for (const [id, node] of view.eachNode()) {
+        const point = view.camera.toScreen(node.x, node.y);
+        const x = canvas.left - bounds.left + point.x * (canvas.width / view.width);
+        const y = canvas.top - bounds.top + point.y * (canvas.height / view.height);
+        const radius = node.r * view.camera.zoom * (canvas.width / view.width);
+        if (
+          x + radius < 0 ||
+          y + radius < 0 ||
+          x - radius > bounds.width ||
+          y - radius > bounds.height
+        )
+          continue;
+        surfaces.push({ id, x, y, radius });
+      }
+      gecko.current?.setNodes(surfaces);
+    };
+    update();
+    const timer = window.setInterval(update, 100);
+    return () => window.clearInterval(timer);
+  }, [covered, view3d]);
 
   const label = (l: ChangeLabel | null) =>
     l ? t(locale, l.key as MessageKey, l.params ?? {}) : t(locale, 'proto.noSteps');
@@ -1182,7 +1214,7 @@ export function WorkspaceScreen(props: {
           onRestore={(item) => void restore(item)}
         />
       ) : null}
-      <div className="ws-gecko" data-panel={details ? 'open' : 'closed'}>
+      <div ref={geckoHost} className="ws-gecko" data-panel={details ? 'open' : 'closed'}>
         <GeckoCompanion
           ref={gecko}
           scale={1.5}

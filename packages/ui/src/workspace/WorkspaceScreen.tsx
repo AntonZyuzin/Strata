@@ -962,6 +962,7 @@ export function WorkspaceScreen(props: {
           people={people}
           actions={actions}
           focusList={listFocus === details.id}
+          noteOpen={note?.id === details.id}
           onListFocused={() => setListFocus(null)}
         />
       ) : null}

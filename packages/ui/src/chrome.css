@@ -822,6 +822,37 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
+/* The marks at a field's right (owner, 2026-10-24: they stood at different
+   places): a select's triangle and a date's calendar are Strata's own 16u
+   glyphs, 6u from the frame, so they stand one under another. The browser's
+   own calendar button stays, unseen, over the glyph and still opens. */
+select.field,
+input[type="date"].field {
+  appearance: none;
+  padding-right: calc(6 * var(--u));
+  background-repeat: no-repeat;
+  background-position: right calc(6 * var(--u)) center;
+  background-size: calc(16 * var(--u)) calc(16 * var(--u));
+}
+
+select.field {
+  padding-right: calc(26 * var(--u));
+  background-image: var(--st-chevron);
+}
+
+input[type="date"].field {
+  background-image: var(--st-calendar);
+}
+
+input[type="date"].field::-webkit-calendar-picker-indicator {
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 /* Checkbox and radio: a 16u square or a pixel circle; 24 px target with the label. */
 .check {
   display: inline-flex;

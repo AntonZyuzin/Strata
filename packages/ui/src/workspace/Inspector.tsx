@@ -247,6 +247,8 @@ export function Inspector(props: {
   actions: InspectorActions;
   /** A list was opened: the keyboard goes to its new item, once. */
   focusList: boolean;
+  /** The note is open in its window: its text is there, not here a second time. */
+  noteOpen: boolean;
   onListFocused: () => void;
 }) {
   const { locale, node: n, people, actions: a } = props;
@@ -266,7 +268,10 @@ export function Inspector(props: {
     (c) => c.id !== n.id && !n.outputs.some((o) => o.id === c.id),
   );
   const openable = ['network', 'project', 'note', 'board'].includes(n.kind);
-  const described = n.kind !== 'board' && n.kind !== 'checklist';
+  // One fact once on a screen (owner, 2026-10-24): a note open in its window
+  // shows its text there only; two editors of one text also raced (WebKit).
+  const described =
+    n.kind !== 'board' && n.kind !== 'checklist' && !(n.kind === 'note' && props.noteOpen);
   const type = n.kind === 'asset' ? assetType(n) : null;
   const shown = a.fileUrl;
 

@@ -108,15 +108,15 @@ flowchart TB
 
 ```ts
 // index/{gen}/{k} — LoroDoc. Ключ NodeId — UUIDv7 в текстовой форме: 26 символов Crockford base32 (05 §4.1, §2.5)
-kind:       LoroMap<NodeId, NodeKind>         // пишется один раз: вид неизменяем (05 §4.2)
-class:      LoroMap<NodeId, ClassId>
+kind:       LoroMap<NodeId, NodeKind>         // пишется при создании; меняется только в парах задача ↔ проект, папка ↔ проект (05 §4.2)
+                                              // карты class нет: классов нет (ADR-0010); class и media старых пространств читаются как без класса и asset
 name:       LoroMap<NodeId, string>
 icon:       LoroMap<NodeId, IconRef>          // 07 §6.6
 color:      LoroMap<NodeId, Color>
 shape:      LoroMap<NodeId, Shape>
 summary:    LoroMap<NodeId, string>           // ручная справка ≤ 280 символов
-status:     LoroMap<NodeId, StatusId>         // и так же deadline, start, priority, recurrence, remindAt (05 §6.1)
-attr:       LoroMap<`${NodeId}|${Key}`, Value>          // одиночные пользовательские атрибуты (05 §6.2)
+status:     LoroMap<NodeId, StatusId>         // и так же deadline, start, priority, recurrence, remindAt (05 §6.1); только у задачи и проекта (ADR-0010)
+attr:       LoroMap<`${NodeId}|${Key}`, Value>          // одиночные пользовательские атрибуты (05 §6.2) и поля ассета asset, mime, url, icon (05 §4.4)
 set:        LoroMap<`${NodeId}|${Key}|${Value}`, 1>     // теги, ответственные, алиасы (aliases, 05 §6.1), множественный выбор
 flag:       LoroMap<`${NodeId}|${Flag}`, 1>             // key | pause | template | hideAi | lock (05 §7)
 primaryNet: LoroMap<NodeId, NodeId>           // сеть основного размещения — поле primaryNetworkId (05 §4.1, §5)
@@ -155,8 +155,9 @@ settings:  LoroMap<string, unknown>                   // фон (07 §7), нап
 | Заметка | `text: LoroText` — Markdown-исходник; `meta: { schema }` | [ADR-0007](adr/0007-text-editor.md); CM6 + `loro-codemirror` ([R3](research/R3-crdt-sync.md) §8) |
 | Доска | `meta`, `elements: LoroMap<elementId, JSON>`, `files: LoroMap<fileId, {sha256, mime, w, h}>`, `widgets` с `LoroText` и `LoroMovableList` | [ADR-0006](adr/0006-board-engine.md), [R5](research/R5-board-engine.md) |
 | Список | `items: LoroTree` пунктов (вложенность, 05 §4.2), узел — `{ text: LoroText, done }`; `text` создаётся как мерджимый контейнер (§2.6) | [R3](research/R3-crdt-sync.md) рек. §9; `packages/checklist` |
-| Медиа | `meta: { sha256, mime, size, w?, h?, durationMs?, originalName }` | Байты — ассет (§11) |
-| Сеть | Нет: её содержимое — `net/{nodeId}` | — |
+| Задача | `text: LoroText` — описание на Markdown, как у заметки | [ADR-0010](adr/0010-kinds-not-classes.md) |
+| Папка, проект | `text: LoroText` — описание на Markdown; холст — `net/{nodeId}` | [ADR-0010](adr/0010-kinds-not-classes.md) |
+| Ассет | `text: LoroText` — описание на Markdown; файл и ссылка — в индексе: `asset` (SHA-256), `mime`, `url`, `icon` (05 §4.4) | Байты — ассет (§11) |
 
 ### 2.5. Идентификаторы и ключи
 

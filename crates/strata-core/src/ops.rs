@@ -51,6 +51,13 @@ pub enum Op {
     Restore {
         ids: Vec<String>,
     },
+    /// «Сделать проектом», «Сделать задачей», «Сделать папкой» (05 §4.2):
+    /// a kind changes only between task and project and between folder and
+    /// project; a project becomes a task only when nothing is inside it.
+    SetKind {
+        id: String,
+        kind: NodeKind,
+    },
     /// A built-in attribute (05 §6.1, ADR-0010): `status`, `start`,
     /// `deadline`, `priority` — of tasks and projects; `color` — of any node;
     /// `asset` (the file's SHA-256, 10 §11), `mime`, `url`, `icon` — of

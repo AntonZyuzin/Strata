@@ -129,6 +129,8 @@ export type CoreOp =
   | { op: 'disconnect'; from: string; to: string }
   | { op: 'trash'; ids: string[] }
   | { op: 'restore'; ids: string[] }
+  /** «Сделать проектом / задачей / папкой» (05 §4.2). */
+  | { op: 'setKind'; id: string; kind: NodeKind }
   | { op: 'setAttr'; id: string; key: AttrKey; value: string | number | null }
   | { op: 'assign'; id: string; person: string; on: boolean }
   | { op: 'addPerson'; id?: string; name: string; color?: number }

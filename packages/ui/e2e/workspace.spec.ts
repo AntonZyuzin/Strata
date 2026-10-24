@@ -931,6 +931,38 @@ test.describe('a workspace on the core', () => {
     await expect(tick).toBeChecked();
   });
 
+  test('a task becomes a project, a project a folder or a task (05 §4.2)', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Виды');
+    await createTask(page, 'Сюжет');
+    const kind = () =>
+      page.evaluate(() => {
+        const g = window.__strataWs?.graph();
+        return [...(g?.nodes.values() ?? [])].find((n) => n.name === 'Сюжет')?.kind;
+      });
+    const menu = async (item: string) => {
+      const p = await at(page, 'Сюжет');
+      await page.mouse.click(p.x, p.y, { button: 'right' });
+      await page.getByRole('menuitem', { name: item }).click();
+    };
+    // No «Открыть» for a task: it becomes a project to be dived into.
+    await menu('Сделать проектом');
+    await expect.poll(kind).toBe('project');
+    await select(page, 'Сюжет');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
+    await page.keyboard.press('KeyU');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    await menu('Сделать папкой');
+    await expect.poll(kind).toBe('network');
+    await menu('Сделать проектом');
+    await expect.poll(kind).toBe('project');
+    // Empty inside: a project can be a task again.
+    await menu('Сделать задачей');
+    await expect.poll(kind).toBe('task');
+  });
+
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {
     await page.goto('/?plain');
     await createWorkspace(page, 'Сроки');

@@ -1106,3 +1106,47 @@ fn the_star_map_reads_every_live_wire() {
         "a wire of a node in the trash stays hidden"
     );
 }
+
+#[test]
+fn a_kind_changes_between_task_project_and_folder_only() {
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let task = create(&mut w, &root, NodeKind::Task, "Боёвка");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let set_kind = |id: &str, kind: NodeKind| Op::SetKind {
+        id: id.to_owned(),
+        kind,
+    };
+    // A task becomes a project: one dives into it now (05 §4.2).
+    w.apply(&[set_kind(&task, NodeKind::Project)], Label::new("t.kind"))
+        .expect("task → project");
+    create(&mut w, &task, NodeKind::Task, "Внутри");
+    assert!(w.network_view(&task).is_ok());
+    // A project with something inside stays a project.
+    assert!(
+        w.apply(&[set_kind(&task, NodeKind::Task)], Label::new("t"))
+            .is_err()
+    );
+    // A project becomes a folder: its task fields go in the same step.
+    set(&mut w, &task, "status", Some(Val::str("doing"))).expect("status");
+    w.apply(&[set_kind(&task, NodeKind::Network)], Label::new("t.kind"))
+        .expect("project → folder");
+    let d = w.node_details(&task).expect("details");
+    assert_eq!(d.kind, NodeKind::Network);
+    assert_eq!(d.attrs.status, None);
+    // Undo brings the project and its status back.
+    w.undo().expect("undo");
+    let d = w.node_details(&task).expect("details");
+    assert_eq!(d.kind, NodeKind::Project);
+    assert_eq!(d.attrs.status.as_deref(), Some("doing"));
+    // Other kinds and the root keep theirs.
+    assert!(
+        w.apply(&[set_kind(&note, NodeKind::Task)], Label::new("t"))
+            .is_err()
+    );
+    assert!(
+        w.apply(&[set_kind(&root, NodeKind::Project)], Label::new("t"))
+            .is_err()
+    );
+}

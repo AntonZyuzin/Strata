@@ -974,6 +974,23 @@ export function WorkspaceScreen(props: {
         },
       );
     }
+    // «Сделать проектом / задачей / папкой» (05 §4.2): a step of the core's,
+    // the network read again so the canvas shows the new kind.
+    const makeInto = (kind: 'project' | 'task' | 'network', key: MessageKey): MenuEntry => ({
+      label: t(locale, key),
+      onSelect: () =>
+        void coreStep([{ op: 'setKind', id: n.id, kind }], 'change.kind', {
+          name: n.name,
+          kind: t(locale, `kind.${kind}` as MessageKey),
+        })
+          .then(() => loadRef.current())
+          .catch(failed),
+    });
+    if (n.kind === 'task' || n.kind === 'network')
+      items.push(makeInto('project', 'ctx.makeProject'));
+    if (n.kind === 'project') {
+      items.push(makeInto('task', 'ctx.makeTask'), makeInto('network', 'ctx.makeFolder'));
+    }
     items.push({
       label: t(locale, 'ctx.delete'),
       hint: 'Del',

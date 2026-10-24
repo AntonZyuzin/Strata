@@ -789,6 +789,57 @@ impl<S: Store> Workspace<S> {
                         Some(Val::List(vec![Val::Float(*x), Val::Float(*y)])),
                     );
                 }
+                Op::SetKind { id, kind } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    let from = made.get(&n).copied().or_else(|| self.kind(n));
+                    let pair = matches!(
+                        (from, *kind),
+                        (Some(NodeKind::Task), NodeKind::Project)
+                            | (Some(NodeKind::Project), NodeKind::Task)
+                            | (Some(NodeKind::Network), NodeKind::Project)
+                            | (Some(NodeKind::Project), NodeKind::Network)
+                    );
+                    if !pair || n == self.root {
+                        return Err(invalid(
+                            "a kind changes between task and project, folder and project only (05 §4.2)",
+                        ));
+                    }
+                    if *kind == NodeKind::Task {
+                        let inside = self.children();
+                        let full = inside
+                            .get(&n)
+                            .is_some_and(|c| c.iter().any(|c| self.alive(*c)));
+                        if full {
+                            return Err(invalid(
+                                "a project becomes a task only when nothing is inside it (05 §4.2)",
+                            ));
+                        }
+                    }
+                    let key = n.to_text();
+                    let index = self.index_doc(n);
+                    // A folder has no task fields (ADR-0010): they go with the step.
+                    if *kind == NodeKind::Network {
+                        for field in ["status", "priority", "start", "deadline"] {
+                            if self.field(n, field).is_some() {
+                                put(&index, field, &key, None);
+                            }
+                        }
+                        for person in self.attrs(n).assignees {
+                            put(&index, "set", &format!("{key}|assignees|{person}"), None);
+                        }
+                    }
+                    let kind_text = serde_json::to_value(kind)
+                        .ok()
+                        .and_then(|v| v.as_str().map(str::to_owned))
+                        .unwrap_or_default();
+                    // Written at once: the ops after this one read the new kind.
+                    put(&index, "kind", &key, Some(Val::str(kind_text)));
+                }
                 Op::Rename { id, name } => {
                     let n = self.parse(id)?;
                     if !exists(n, &made) {

@@ -1010,10 +1010,19 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   place-items: center;
   width: calc(16 * var(--u));
   height: calc(16 * var(--u));
+  position: relative;
   margin: 0;
   background: var(--st-color-surface-sunken);
   border: var(--u) solid var(--st-color-frame);
   box-shadow: var(--st-bevel-sunken);
+}
+
+/* A 24 px target around the 16u square (WCAG 2.5.8, review 2026-10-24):
+   clear, so the tick looks as it did. */
+.ins-tick::after {
+  content: "";
+  position: absolute;
+  inset: calc(-5 * var(--u));
 }
 
 .check input[type="radio"] {

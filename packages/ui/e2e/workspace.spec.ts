@@ -885,6 +885,52 @@ test.describe('a workspace on the core', () => {
       .not.toBe(known.art);
   });
 
+  test('Tab from outside the canvas puts the node beside, not on top (review 2026-10-24)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Рядом');
+    const mid = await page.evaluate(() => {
+      const ws = window.__strataWs;
+      const r = ws?.view.canvas.getBoundingClientRect();
+      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: 0, y: 0 };
+    });
+    await createNode(page, mid.x, mid.y, 'Первая');
+    // Nothing selected, the cursor over «Ноды», the keys still the canvas's.
+    await page.keyboard.press('Escape');
+    await page.locator('.layers-title').hover();
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.tab-menu')).toBeVisible();
+    await page.keyboard.type('Вторая');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
+    const gap = await page.evaluate(() => {
+      const nodes = [...(window.__strataWs?.graph()?.nodes.values() ?? [])] as unknown as {
+        x: number;
+        y: number;
+      }[];
+      const [a, b] = nodes;
+      return a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 0;
+    });
+    expect(gap).toBeGreaterThan(60);
+  });
+
+  test('a subtask tick takes a click 4 px outside its square (WCAG 2.5.8)', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Цели');
+    await createTask(page, 'Главная');
+    const panel = page.locator('.ws-inspector');
+    const sub = panel.getByLabel('Новая подзадача');
+    await sub.fill('Шаг');
+    await sub.press('Enter');
+    const tick = panel.locator('.ins-tree .ins-tick').first();
+    const b = await tick.boundingBox();
+    expect(b).not.toBeNull();
+    await page.mouse.click((b?.x ?? 0) - 4, (b?.y ?? 0) + (b?.height ?? 0) / 2);
+    await expect(tick).toBeChecked();
+  });
+
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {
     await page.goto('/?plain');
     await createWorkspace(page, 'Сроки');

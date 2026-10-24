@@ -1000,7 +1000,9 @@ export class Editor {
       ay: w.y,
       sources: [...this.selection],
       sibling: null,
-      atAnchor: this.selection.size === 0,
+      // At the cursor only when it is over the canvas; from the panel or the
+      // bar a new node finds a free place beside (review 2026-10-24).
+      atAnchor: this.selection.size === 0 && this.pointer.inside,
     });
   }
 
@@ -1144,7 +1146,9 @@ export class Editor {
       const cy = Math.max(...parents.map((n) => n.y));
       return this.freeSpot(cx, cy + PLACE_DOWN, r);
     }
-    return { x: m.ax, y: m.ay };
+    // No cursor on the canvas and nothing selected: the middle of the canvas
+    // one sees, but never on top of a node there.
+    return this.freeSpot(m.ax, m.ay, r);
   }
 
   /** Spiral search with a step of r(M) until nothing is closer than the gap (06 §5.4). */

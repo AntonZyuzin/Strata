@@ -887,11 +887,13 @@ impl<S: Store> Workspace<S> {
                     let kind = made.get(&n).copied().or_else(|| self.kind(n));
                     let task = kind.is_some_and(NodeKind::is_task);
                     let asset = kind == Some(NodeKind::Asset);
-                    // Each kind its own fields (05 §4.2–4.4, ADR-0010).
+                    // Each kind its own fields (05 §4.2–4.4, ADR-0010); one left
+                    // on a node of another kind from before can still be cleared.
+                    let clear = value.is_none();
                     let fits = match key.as_str() {
-                        "status" | "priority" | "start" | "deadline" => task,
+                        "status" | "priority" | "start" | "deadline" => task || clear,
                         "color" => true,
-                        "asset" | "mime" | "url" | "icon" => asset,
+                        "asset" | "mime" | "url" | "icon" => asset || clear,
                         _ => false,
                     };
                     if !fits {
@@ -940,7 +942,8 @@ impl<S: Store> Workspace<S> {
                         )));
                     }
                     let kind = made.get(&n).copied().or_else(|| self.kind(n));
-                    if !kind.is_some_and(NodeKind::is_task) {
+                    // Taking a person off stays open to any kind, as clearing a field.
+                    if *on && !kind.is_some_and(NodeKind::is_task) {
                         return Err(invalid(
                             "assignees are a field of tasks and projects (05 §4.3)",
                         ));
@@ -1377,6 +1380,7 @@ impl<S: Store> Workspace<S> {
         }
         let kind = self.kind(node);
         let mut ids: Vec<NodeId> = Vec::new();
+        let mut looped: BTreeSet<NodeId> = BTreeSet::new();
         if kind.is_some_and(NodeKind::is_task) {
             let subtasks = wires.get(&node).map(Vec::as_slice).unwrap_or(&[]);
             ids.extend(subtasks.iter().copied().filter(|&n| self.is_task(n)));
@@ -1391,42 +1395,65 @@ impl<S: Store> Workspace<S> {
                 .filter(|&n| self.alive(n))
                 .collect();
             let here: BTreeSet<NodeId> = inside.iter().copied().collect();
+            // Only a task is a subtask: a folder a task wires to is a material
+            // and stays a row of its own.
             let wired: BTreeSet<NodeId> = inside
                 .iter()
                 .filter(|&&n| self.is_task(n))
                 .flat_map(|n| wires.get(n).map(Vec::as_slice).unwrap_or(&[]))
                 .copied()
-                .filter(|t| here.contains(t))
+                .filter(|&t| here.contains(&t) && self.is_task(t))
                 .collect();
             ids.extend(inside.into_iter().filter(|n| {
                 let k = self.kind(*n);
                 (k.is_some_and(NodeKind::is_task) || k == Some(NodeKind::Network))
                     && !wired.contains(n)
             }));
+            looped = wired;
         }
         ids.sort();
         ids.dedup();
-        let mut out = Vec::new();
-        for n in ids {
-            if !seen.insert(n) {
-                continue;
-            }
-            let rows = self.task_rows(n, children, wires, seen, depth + 1);
-            let kind = self.kind(n).unwrap_or(NodeKind::Task);
-            // A folder shows only when it holds tasks.
-            if kind == NodeKind::Network && rows.is_empty() {
-                continue;
-            }
-            out.push(TaskRow {
-                id: n.to_text(),
-                kind,
-                name: self.name(n),
-                status: self.text_field(n, "status"),
-                deadline: self.text_field(n, "deadline"),
-                rows,
-            });
-        }
+        let mut out: Vec<TaskRow> = ids
+            .into_iter()
+            .filter_map(|n| self.task_row(n, children, wires, seen, depth))
+            .collect();
+        // Subtasks no row above reached are wired in a cycle with no root
+        // here: each cycle shows from its first task, in creation order.
+        out.extend(
+            looped
+                .into_iter()
+                .filter_map(|n| self.task_row(n, children, wires, seen, depth)),
+        );
         out
+    }
+
+    /// A row of the preview with the rows under it; none for a node shown
+    /// already or a folder with no tasks.
+    fn task_row(
+        &self,
+        n: NodeId,
+        children: &HashMap<NodeId, Vec<NodeId>>,
+        wires: &HashMap<NodeId, Vec<NodeId>>,
+        seen: &mut BTreeSet<NodeId>,
+        depth: u32,
+    ) -> Option<TaskRow> {
+        if !seen.insert(n) {
+            return None;
+        }
+        let rows = self.task_rows(n, children, wires, seen, depth + 1);
+        let kind = self.kind(n).unwrap_or(NodeKind::Task);
+        // A folder shows only when it holds tasks.
+        if kind == NodeKind::Network && rows.is_empty() {
+            return None;
+        }
+        Some(TaskRow {
+            id: n.to_text(),
+            kind,
+            name: self.name(n),
+            status: self.text_field(n, "status"),
+            deadline: self.text_field(n, "deadline"),
+            rows,
+        })
     }
 
     fn linked(&self, n: NodeId) -> Linked {

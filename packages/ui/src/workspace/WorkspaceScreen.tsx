@@ -1,8 +1,10 @@
 import {
   type AttrKey,
+  assetType,
   type ChangeLabel,
   type CoreOp,
   CoreSync,
+  followFolds,
   followWires,
   type Graph,
   graphOf,
@@ -15,6 +17,7 @@ import {
   newNode,
   type Opened,
   type Person,
+  sniffMime,
   type TrashItem,
   type TreeItem,
 } from '@strata/backend';
@@ -408,9 +411,8 @@ export function WorkspaceScreen(props: {
       const g = graph.current;
       if (!v || !g) return;
       for (const n of g.nodes.values()) {
-        // A file of another type shows its icon; one with no type may be a picture.
-        const photo = !n.attrs.mime || n.attrs.mime.startsWith('image/');
-        const sha = photo && !n.attrs.url ? n.attrs.asset : undefined;
+        // A picture by its type, as the panel and «Ноды» read it; a file shows its icon.
+        const sha = assetType(n.attrs) === 'image' ? n.attrs.asset : undefined;
         if (shown.current.get(n.id) === sha) continue;
         if (!sha) {
           shown.current.delete(n.id);
@@ -435,6 +437,16 @@ export function WorkspaceScreen(props: {
         .then(() => core.tree())
         .then((items) => {
           if (!cancelled) setTree(items);
+        })
+        .catch(() => undefined);
+      // Progress arcs that a tick, a subtask or a wire changed (05 §6.4).
+      const g = graph.current;
+      void (sync.current?.settled() ?? Promise.resolve())
+        .then(() => core.view(netRef.current))
+        .then((nv) => {
+          if (!cancelled && graph.current === g && g && nv.net === netRef.current) {
+            followFolds(g, nv);
+          }
         })
         .catch(() => undefined);
       const ed = editor.current;
@@ -682,12 +694,17 @@ export function WorkspaceScreen(props: {
       setFileUrl(known);
       return;
     }
+    // Not the last asset's file while this one loads.
+    setFileUrl(null);
     let live = true;
-    void core.asset(sha).then((bytes) => {
-      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
-      urls.current.set(key, url);
-      if (live) setFileUrl(url);
-    });
+    core
+      .asset(sha)
+      .then((bytes) => {
+        const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
+        urls.current.set(key, url);
+        if (live) setFileUrl(url);
+      })
+      .catch(() => undefined);
     return () => {
       live = false;
     };
@@ -714,9 +731,11 @@ export function WorkspaceScreen(props: {
       i++;
     };
     for (const f of files) {
-      const sha = await core.putAsset(new Uint8Array(await f.arrayBuffer()));
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const sha = await core.putAsset(bytes);
       const name = f.name.replace(/\.[^.]+$/, '') || t(locale, 'kind.asset');
-      add(name, [['asset', sha], ...(f.type ? ([['mime', f.type]] as [AttrKey, string][]) : [])]);
+      const mime = f.type || sniffMime(bytes);
+      add(name, [['asset', sha], ...(mime ? ([['mime', mime]] as [AttrKey, string][]) : [])]);
     }
     for (const url of links) {
       let name = url;
@@ -781,14 +800,16 @@ export function WorkspaceScreen(props: {
           file: (file) =>
             void file
               .arrayBuffer()
-              .then((b) => core.putAsset(new Uint8Array(b)))
-              .then((sha) =>
-                g.transaction({ key: 'change.picture', params: { name: details.name } }, (tx) => {
+              .then(async (b) => {
+                const bytes = new Uint8Array(b);
+                const sha = await core.putAsset(bytes);
+                const mime = file.type || sniffMime(bytes);
+                g.transaction({ key: 'change.file', params: { name: details.name } }, (tx) => {
                   tx.attr(details.id, 'asset', sha);
-                  tx.attr(details.id, 'mime', file.type || null);
+                  tx.attr(details.id, 'mime', mime);
                   tx.attr(details.id, 'url', null);
-                }),
-              )
+                });
+              })
               .catch(failed),
           fileUrl,
           open: () => eventsRef.current?.open?.(details.id),
@@ -821,9 +842,9 @@ export function WorkspaceScreen(props: {
           },
           candidates: [...g.nodes.values()].map((n) => ({ id: n.id, kind: n.kind, name: n.name })),
           subtask: (name) => addSubtask(details, name),
-          done: (id, done) => {
+          done: (id, name, done) => {
             const status = done ? 'done' : 'todo';
-            const params = { name: details.name, field: t(locale, 'ins.status') };
+            const params = { name, field: t(locale, 'ins.status') };
             if (g.nodes.has(id)) {
               g.transaction({ key: 'change.attr', params }, (tx) => tx.attr(id, 'status', status));
               return;

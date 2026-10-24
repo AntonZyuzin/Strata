@@ -385,15 +385,19 @@ export class Graph {
   }
 
   /**
-   * A node's roll-up as its content shows it now (05 §6.4): a list's ticks
-   * while its window is open. Derived state: no step, nothing for the core.
+   * A node's roll-up as it is now (05 §6.4): a list's ticks in its panel, or
+   * the core's count after a step. Derived state: no step, nothing for the core.
    */
   setFold(id: string, fold: Fold | null): void {
     const n = this.nodes.get(id);
     if (!n) return;
     const same =
       n.fold === fold ||
-      (n.fold && fold && n.fold.done === fold.done && n.fold.total === fold.total);
+      (n.fold &&
+        fold &&
+        n.fold.done === fold.done &&
+        n.fold.total === fold.total &&
+        n.fold.burning === fold.burning);
     if (same) return;
     n.fold = fold;
     this.emit({ type: 'look', id });

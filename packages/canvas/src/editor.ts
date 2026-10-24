@@ -209,7 +209,10 @@ export class Editor {
     };
     this.detach.push(
       view.setGraph(graph),
-      graph.subscribe(() => {
+      graph.subscribe((e) => {
+        // A look (a roll-up read back) moves nothing and is no step: the view
+        // redraws it; asking the Chrome to read the core again would loop.
+        if (e.type === 'look') return;
         this.indexDirty = true;
         for (const id of this.selection) if (!graph.nodes.has(id)) this.selection.delete(id);
         if (this.current && !graph.nodes.has(this.current)) this.current = null;

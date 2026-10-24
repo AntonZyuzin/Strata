@@ -198,6 +198,20 @@ export class CoreSync {
 }
 
 /**
+ * Brings the graph's roll-ups to what the core says (05 §6.4): a tick, a new
+ * subtask or a wire changes the progress arc of a task, project or folder
+ * beside it, which only the core counts. Derived state, outside undo. A
+ * list's count is its panel's while one ticks (the core gets its document
+ * in batches): it is left alone.
+ */
+export function followFolds(graph: Graph, view: NetworkView, day: string = graph.day()): void {
+  for (const n of view.nodes) {
+    if (n.kind === 'checklist' || !graph.nodes.has(n.id)) continue;
+    graph.setFold(n.id, n.fold ? foldOf(n.fold, day) : null);
+  }
+}
+
+/**
  * Brings the graph's wires to what the core says, outside undo: text wires
  * that the core made or took away after a note changed (05 §8.2 rule 4).
  */

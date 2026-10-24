@@ -13,6 +13,7 @@ interface Node {
   kind: string;
   attrs: Record<string, unknown>;
   color: number | null;
+  fold: { done: number; total: number } | null;
 }
 
 interface WsHook {
@@ -525,13 +526,40 @@ test.describe('a workspace on the core', () => {
       .toEqual(['Боёвка→Анимации', 'Боёвка→Хитбоксы']);
     await panel.locator('.ins-tree .ins-row input').first().check();
     await expect(panel.locator('.ins-progress')).toHaveText('1 из 2');
-    // One does not dive into a task: a double click in «Слои» keeps the level.
+    // The bubble's arc follows the tick (05 §6.4); undo takes back both.
+    const fold = () =>
+      page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.fold ?? null, id);
+    await expect.poll(fold).toMatchObject({ done: 1, total: 2 });
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect(panel.locator('.ins-tree .ins-row input').first()).not.toBeChecked();
+    await expect.poll(fold).toMatchObject({ done: 0, total: 2 });
+    await page.keyboard.press('Control+Shift+z');
+    await expect(panel.locator('.ins-tree .ins-row input').first()).toBeChecked();
+    await expect.poll(fold).toMatchObject({ done: 1, total: 2 });
+    // Esc takes the typing back: no subtask.
+    await sub.fill('Лишнее');
+    await sub.press('Escape');
+    await expect(sub).toHaveValue('');
+    await expect(panel.locator('.ins-tree .ins-row')).toHaveCount(2);
+    // One does not dive into a task (ADR-0010): nothing offers it, and a double
+    // click in «Слои» or Enter on the canvas asks the core for no network of it
+    // (the core refuses one: that would surface as a page error).
+    await expect(panel.locator('.ins-open')).toHaveCount(0);
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
     await page.locator('.layer-name', { hasText: 'Боёвка' }).dblclick();
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await settled(page);
     await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    await expect(panel.locator('.ins-title-name')).toHaveText('Боёвка');
     await expect(page.locator('.layer-name', { hasText: 'Проекты' })).toHaveCount(0);
-    // The right button: «Выполнено».
+    expect(errors).toEqual([]);
+    // The right button: «Выполнено», and no «Открыть».
     const p = await at(page, 'Боёвка');
     await page.mouse.click(p.x, p.y, { button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'Открыть' })).toHaveCount(0);
     await page.getByRole('menuitem', { name: 'Выполнено' }).click();
     await expect.poll(async () => (await attrs()).status).toBe('done');
     // A project is a task one dives into; its new task goes inside.
@@ -690,6 +718,43 @@ test.describe('a workspace on the core', () => {
     ).toBe('image/png');
     await select(page, 'Скетч');
     await expect(page.locator('.ins-asset img')).toBeVisible();
+  });
+
+  test('a link dropped on the canvas is a link asset; a link typed with no scheme is kept', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Ссылки');
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.setData('text/uri-list', '# a comment\r\nhttps://example.org/a');
+      document.querySelector('.proto-canvas')?.dispatchEvent(
+        new DragEvent('drop', {
+          dataTransfer: dt,
+          clientX: 600,
+          clientY: 400,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    });
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['example.org']);
+    const id = await idOf(page, 'example.org');
+    const url = () =>
+      page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.attrs.url, id);
+    expect(await url()).toBe('https://example.org/a');
+    await settled(page);
+    await select(page, 'example.org');
+    const field = page.locator('.ws-inspector').getByLabel('Ссылка', { exact: true });
+    await expect(field).toHaveValue('https://example.org/a');
+    // Esc takes the typing back; «example.com/page» gets its scheme.
+    await field.fill('что-то не то');
+    await field.press('Escape');
+    await expect(field).toHaveValue('https://example.org/a');
+    await field.fill('example.com/page');
+    await field.press('Enter');
+    await expect.poll(url).toBe('https://example.com/page');
+    await expect(page.locator('.toast', { hasText: 'Ядро не приняло' })).toHaveCount(0);
   });
 
   test('nodes carry the Chrome icons, in their circles and in «Слои» (07 §6.1)', async ({

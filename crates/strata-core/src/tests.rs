@@ -728,7 +728,11 @@ fn task_fields_belong_to_tasks_and_projects() {
         assert!(set(&mut w, id, "deadline", Some(Val::str("2026-11-01"))).is_err());
         // Colour is everyone's.
         set(&mut w, id, "color", Some(Val::Int(2))).expect("colour");
+        // A field left from before ADR-0010 can still be cleared.
+        set(&mut w, id, "status", None).expect("clearing is open to any kind");
+        set(&mut w, id, "deadline", None).expect("clearing is open to any kind");
     }
+    assert!(set(&mut w, &task, "url", None).is_ok());
     w.apply(
         &[Op::AddPerson {
             id: Some("p1".to_owned()),
@@ -746,6 +750,12 @@ fn task_fields_belong_to_tasks_and_projects() {
     w.apply(&[assign(&task)], Label::new("t"))
         .expect("a task's assignee");
     assert!(w.apply(&[assign(&note)], Label::new("t")).is_err());
+    let unassign = Op::Assign {
+        id: note.clone(),
+        person: "p1".to_owned(),
+        on: false,
+    };
+    assert!(w.apply(&[unassign], Label::new("t")).is_ok());
     // An asset's fields are an asset's.
     assert!(set(&mut w, &task, "url", Some(Val::str("https://example.org"))).is_err());
     // The description is the node's own content document (05 §4.2).
@@ -917,6 +927,58 @@ fn a_project_rolls_up_the_tasks_inside_and_their_subtasks() {
         .find(|n| n.id == folder)
         .expect("folder");
     assert_eq!(art.fold.as_ref().map(|f| (f.done, f.total)), Some((1, 1)));
+}
+
+#[test]
+fn a_project_preview_shows_what_its_roll_up_counts() {
+    let mut w = ws();
+    let root = w.root();
+    let project = create(&mut w, &root, NodeKind::Project, "Срез");
+    // A cycle of wires with no root inside the project.
+    let a = create(&mut w, &project, NodeKind::Task, "Сценарий");
+    let b = create(&mut w, &project, NodeKind::Task, "Раскадровка");
+    // A folder with a task, wired from a task: a material, still a row.
+    let lead = create(&mut w, &project, NodeKind::Task, "Арт-дирекция");
+    let folder = create(&mut w, &project, NodeKind::Network, "Арт");
+    create(&mut w, &folder, NodeKind::Task, "Свет");
+    let wire = |from: &str, to: &str| Op::Connect {
+        from: from.to_owned(),
+        to: to.to_owned(),
+    };
+    w.apply(
+        &[wire(&a, &b), wire(&b, &a), wire(&lead, &folder)],
+        Label::new("t.wires"),
+    )
+    .expect("wires");
+
+    let d = w.node_details(&project).expect("details");
+    let fold = d.fold.clone().expect("a project has a fold");
+    assert_eq!(fold.total, 4, "the roll-up counts every task");
+    let rows: Vec<(&str, Vec<&str>)> = d
+        .subtasks
+        .iter()
+        .map(|r| {
+            (
+                r.name.as_str(),
+                r.rows.iter().map(|c| c.name.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("Арт-дирекция", vec![]),
+            ("Арт", vec!["Свет"]),
+            ("Сценарий", vec!["Раскадровка"]),
+        ],
+        "a folder a task wires to stays; a cycle shows from its first task"
+    );
+    fn tasks(rows: &[crate::workspace::TaskRow]) -> u32 {
+        rows.iter()
+            .map(|r| u32::from(r.kind.is_task()) + tasks(&r.rows))
+            .sum()
+    }
+    assert_eq!(tasks(&d.subtasks), fold.total, "each counted task once");
 }
 
 #[test]

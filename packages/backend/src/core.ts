@@ -68,6 +68,41 @@ export function assetType(a: Pick<NodeAttrs, 'asset' | 'mime' | 'url'>): AssetTy
 }
 
 /**
+ * A file's type by its first bytes (05 §4.4), for a file the system gave no
+ * type: an asset is a picture, video or sound by its type alone, on the
+ * canvas and in the panel alike.
+ */
+export function sniffMime(bytes: Uint8Array): string | null {
+  const at = (i: number, ...b: number[]) => b.every((x, k) => bytes[i + k] === x);
+  const text = (i: number, s: string) => at(i, ...[...s].map((c) => c.charCodeAt(0)));
+  if (at(0, 0x89, 0x50, 0x4e, 0x47)) return 'image/png';
+  if (at(0, 0xff, 0xd8, 0xff)) return 'image/jpeg';
+  if (text(0, 'GIF8')) return 'image/gif';
+  if (text(0, 'RIFF') && text(8, 'WEBP')) return 'image/webp';
+  if (text(0, 'RIFF') && text(8, 'WAVE')) return 'audio/wav';
+  if (text(0, '%PDF-')) return 'application/pdf';
+  if (text(4, 'ftyp')) {
+    if (text(8, 'heic') || text(8, 'heix') || text(8, 'mif1')) return 'image/heic';
+    return text(8, 'M4A ') ? 'audio/mp4' : 'video/mp4';
+  }
+  if (at(0, 0x1a, 0x45, 0xdf, 0xa3)) return 'video/webm';
+  if (text(0, 'OggS')) return 'audio/ogg';
+  if (text(0, 'ID3') || at(0, 0xff, 0xfb)) return 'audio/mpeg';
+  return null;
+}
+
+/**
+ * A link as typed (05 §4.4): «example.com/page» gets `https://`, as a
+ * browser's address bar does; one with its scheme stays as it is. A port
+ * is not a scheme: «localhost:8080» is a host.
+ */
+export function linkOf(text: string): string {
+  const s = text.trim();
+  if (!s || /^[a-z][a-z0-9+.-]*:(?!\d)/i.test(s)) return s;
+  return `https://${s}`;
+}
+
+/**
  * A roll-up (05 §6.4, ADR-0010): a folder's or project's tasks inside and
  * their subtasks by wires, or a task's subtasks by wires — finished of all,
  * the nearest open deadline.

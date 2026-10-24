@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { assetType, linkOf, sniffMime } from './core';
 import {
   canInsert,
   downstream,
@@ -219,5 +220,33 @@ describe('looks (05 §6.4)', () => {
     expect(g.nodes.get('l')?.fold).toEqual({ done: 1, total: 2, burning: null });
     expect(seen).toEqual(['look']);
     expect(g.undoLabel).toEqual({ key: 't' });
+  });
+});
+
+describe('an asset (05 §4.4)', () => {
+  const bytes = (...b: (number | string)[]) =>
+    new Uint8Array(
+      b.flatMap((x) => (typeof x === 'string' ? [...x].map((c) => c.charCodeAt(0)) : [x])),
+    );
+
+  it('knows a file the system gave no type by its first bytes', () => {
+    expect(sniffMime(bytes(0x89, 'PNG', 0x0d, 0x0a))).toBe('image/png');
+    expect(sniffMime(bytes(0xff, 0xd8, 0xff, 0xe0))).toBe('image/jpeg');
+    expect(sniffMime(bytes('RIFF', 0, 0, 0, 0, 'WEBP'))).toBe('image/webp');
+    expect(sniffMime(bytes('%PDF-1.7'))).toBe('application/pdf');
+    expect(sniffMime(bytes(0, 0, 0, 0x20, 'ftypisom'))).toBe('video/mp4');
+    expect(sniffMime(bytes(0, 0, 0, 0x20, 'ftypM4A '))).toBe('audio/mp4');
+    expect(sniffMime(bytes('# Заметка'))).toBeNull();
+    expect(sniffMime(new Uint8Array())).toBeNull();
+    // The canvas and the panel read one type: no type is a file, not a picture.
+    expect(assetType({ asset: 'a'.repeat(64) })).toBe('file');
+  });
+
+  it('takes a link typed with no scheme as the address bar does', () => {
+    expect(linkOf('example.com/page')).toBe('https://example.com/page');
+    expect(linkOf('  https://example.com ')).toBe('https://example.com');
+    expect(linkOf('mailto:a@b.c')).toBe('mailto:a@b.c');
+    expect(linkOf('localhost:8080/x')).toBe('https://localhost:8080/x');
+    expect(linkOf('')).toBe('');
   });
 });

@@ -4,6 +4,7 @@ import {
   isFinal,
   isTask,
   type Linked,
+  linkOf,
   type NodeDetails,
   type Person,
   PRIORITIES,
@@ -52,22 +53,29 @@ export interface InspectorActions {
   candidates: Linked[];
   /** A new subtask (a task) or, in a project, a new task inside. */
   subtask(name: string): void;
-  done(id: string, done: boolean): void;
+  /** A subtask ticked or not in the preview; `name` is its own, for the step. */
+  done(id: string, name: string, done: boolean): void;
 }
 
 function field(locale: Locale, key: AttrKey): string {
   return t(locale, `ins.${key}` as MessageKey);
 }
 
-/** A text field that writes on Enter or when it loses focus; a field for a new one empties. */
+/**
+ * A text field that writes on Enter or when it loses focus, and takes the
+ * typing back on Esc; a field for a new one empties.
+ */
 function Commit(props: {
   value: string;
   label: string;
   placeholder?: string;
   fresh?: boolean;
   onCommit: (v: string) => void;
+  onCancel?: () => void;
 }) {
   const [v, setV] = useState(props.value);
+  /** Esc was pressed: the blur that follows writes nothing. */
+  const cancelled = useRef(false);
   useEffect(() => setV(props.value), [props.value]);
   return (
     <input
@@ -78,13 +86,19 @@ function Commit(props: {
       value={v}
       onChange={(e) => setV(e.currentTarget.value)}
       onBlur={() => {
+        if (cancelled.current) {
+          cancelled.current = false;
+          setV(props.fresh ? '' : props.value);
+          props.onCancel?.();
+          return;
+        }
         if (v.trim() !== props.value) props.onCommit(v.trim());
         if (props.fresh) setV('');
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') e.currentTarget.blur();
         if (e.key === 'Escape') {
-          setV(props.value);
+          cancelled.current = true;
           e.currentTarget.blur();
         }
         e.stopPropagation();
@@ -257,8 +271,12 @@ export function Inspector(props: {
 }) {
   const { locale, node: n, people, actions: a } = props;
   const [adding, setAdding] = useState(false);
-  /** Ticks just made: shown at once, before the core's answer comes back. */
-  const [ticks, setTicks] = useState<Record<string, boolean>>({});
+  /**
+   * Ticks just made, shown at once on the preview they were made on: every
+   * answer of the core is a new preview whose ticks are the truth, also after undo.
+   */
+  const [made, setMade] = useState({ on: n.subtasks, ticks: {} as Record<string, boolean> });
+  const ticks = made.on === n.subtasks ? made.ticks : {};
   const fileInput = useRef<HTMLInputElement>(null);
   const kindName = t(locale, `kind.${n.kind}` as MessageKey);
   const task = isTask(n.kind);
@@ -341,7 +359,7 @@ export function Inspector(props: {
                   value={n.url ?? ''}
                   label={t(locale, 'ins.url')}
                   placeholder="https://"
-                  onCommit={(v) => a.attr('url', v || null)}
+                  onCommit={(v) => a.attr('url', linkOf(v) || null)}
                 />
                 {n.url ? (
                   <a
@@ -439,6 +457,7 @@ export function Inspector(props: {
                       setAdding(false);
                       if (v) void a.addPerson(v).then((id) => a.assign(id, true));
                     }}
+                    onCancel={() => setAdding(false)}
                   />
                 ) : (
                   <select
@@ -483,8 +502,8 @@ export function Inspector(props: {
                     key={file}
                     type="button"
                     className={n.icon === file ? 'ins-icon is-active' : 'ins-icon'}
-                    aria-label={file}
-                    title={file}
+                    aria-label={t(locale, `icon.${file}` as MessageKey)}
+                    title={t(locale, `icon.${file}` as MessageKey)}
                     aria-pressed={n.icon === file}
                     onClick={() => a.attr('icon', file)}
                   >
@@ -556,8 +575,8 @@ export function Inspector(props: {
               rows={n.subtasks}
               ticked={ticked}
               onTick={(r, on) => {
-                setTicks((x) => ({ ...x, [r.id]: on }));
-                a.done(r.id, on);
+                setMade({ on: n.subtasks, ticks: { ...ticks, [r.id]: on } });
+                a.done(r.id, r.name, on);
               }}
               onFocus={a.focus}
             />

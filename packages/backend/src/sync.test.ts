@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
 import type { HomeBackend, NetworkView } from './core';
 import { dueOf, type Graph, newNode } from './graph';
-import { CoreSync, followWires, graphOf } from './sync';
+import { CoreSync, followFolds, followWires, graphOf } from './sync';
 
 beforeAll(async () => {
   await loadCore(readFileSync(new URL('../pkg/strata_core_bg.wasm', import.meta.url)));
@@ -191,12 +191,41 @@ describe('fields of a node (05 §6.1)', () => {
     const d = await home.core.node(A);
     expect(d.subtasks.map((r) => [r.name, r.status])).toEqual([['Анимации', 'done']]);
     expect([d.fold?.done, d.fold?.total]).toEqual([1, 1]);
-    // A note takes no task fields (ADR-0010): the core refuses, nothing is written.
+    // A task takes no asset fields (ADR-0010): the core refuses, nothing is written.
     await expect(
       home.core.apply([{ op: 'setAttr', id: A, key: 'url', value: 'https://example.org' }], {
         key: 't',
       }),
     ).rejects.toThrow();
+  });
+
+  it("a tick follows into the parent's progress arc on the canvas, outside undo", async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'Боёвка', kind: 'task', icon: 0, x: 0, y: 0 }));
+      tx.add(newNode({ id: B, name: 'Анимации', kind: 'task', icon: 0, x: 200, y: 0 }));
+      tx.connect(A, B);
+    });
+    await sync.settled();
+    followFolds(g, await home.core.view(root));
+    expect(g.nodes.get(A)?.fold).toMatchObject({ done: 0, total: 1 });
+    const looks: string[] = [];
+    g.subscribe((e) => {
+      if (e.type === 'look') looks.push(e.id);
+    });
+    g.transaction({ key: 't.done' }, (tx) => tx.attr(B, 'status', 'done'));
+    await sync.settled();
+    followFolds(g, await home.core.view(root));
+    expect(g.nodes.get(A)?.fold).toMatchObject({ done: 1, total: 1 });
+    expect(looks).toEqual([A]);
+    // The arc is the core's count, not a step: undo takes back the tick only.
+    g.undo();
+    await sync.settled();
+    followFolds(g, await home.core.view(root));
+    expect(g.nodes.get(A)?.fold).toMatchObject({ done: 0, total: 1 });
+    expect(g.canUndo).toBe(true);
+    g.undo();
+    expect(g.canUndo).toBe(false);
   });
 
   it('look: deadlines for the viewer day, status and the kind colour', async () => {

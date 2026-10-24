@@ -701,7 +701,7 @@ test.describe('a workspace on the core', () => {
     // One does not dive into a task (ADR-0010): nothing offers it, and a double
     // click in «Слои» or Enter on the canvas asks the core for no network of it
     // (the core refuses one: that would surface as a page error).
-    await expect(panel.locator('.ins-open')).toHaveCount(0);
+    await expect(panel.locator('.ins-show')).toHaveCount(0);
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.locator('.layer-name', { hasText: 'Боёвка' }).dblclick();
@@ -755,7 +755,7 @@ test.describe('a workspace on the core', () => {
     await openList(page, 'Список', 'Покупки');
     const panel = page.locator('.ws-inspector');
     // A list has no window: its panel is the list.
-    await expect(panel.locator('.ins-open')).toHaveCount(0);
+    await expect(panel.locator('.ins-show')).toHaveCount(0);
     // The new item's field: Enter adds an item and stays for the next.
     await page.keyboard.type('Хлеб');
     await page.keyboard.press('Enter');
@@ -959,6 +959,44 @@ test.describe('a workspace on the core', () => {
     expect(Math.abs(w.width - board.width * 0.8)).toBeLessThanOrEqual(2);
     // The desktop's CSP, served by the preview too, let the media and the frame in.
     expect(blocked).toEqual([]);
+  });
+
+  test('the panel closes by its ×; its eye shows; a late answer does not bring it back', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Панель');
+    await createNode(page, 500, 300, 'Черновик');
+    await settled(page);
+    await select(page, 'Черновик');
+    const panel = page.locator('.ws-inspector');
+    // The eye in the title plate shows what opens: a note in its window.
+    await panel.getByRole('button', { name: 'Показать' }).click();
+    await expect(page.locator('.note-window')).toBeVisible();
+    await page.locator('.note-window .window-close').click();
+    // ×: nothing selected, no panel, the keys back on the canvas.
+    await panel.getByRole('button', { name: 'Закрыть панель' }).click();
+    await expect(panel).toHaveCount(0);
+    await expect(page.locator('.proto-canvas canvas').first()).toBeFocused();
+    // The core holds the node's answer back, as a large file over IPC did:
+    // a click elsewhere comes first, and the late answer is dropped.
+    await page.evaluate(() => {
+      const ws = window.__strataWs as unknown as {
+        core: { node(id: string): Promise<unknown> };
+      };
+      const node = ws.core.node.bind(ws.core);
+      ws.core.node = async (id: string) => {
+        await new Promise((done) => setTimeout(done, 800));
+        return node(id);
+      };
+    });
+    const p = await at(page, 'Черновик');
+    await page.mouse.click(p.x, p.y);
+    // Past the panel's debounce (120 ms): the request is out.
+    await page.waitForTimeout(250);
+    await page.mouse.click(300, 650);
+    await page.waitForTimeout(1200);
+    await expect(panel).toHaveCount(0);
   });
 
   test('a link dropped on the canvas is a link asset; a link typed with no scheme is kept', async ({

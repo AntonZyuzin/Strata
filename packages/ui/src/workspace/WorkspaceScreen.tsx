@@ -491,6 +491,13 @@ export function WorkspaceScreen(props: {
       }
     };
 
+    /**
+     * The last panel request: an answer to an older one, or one for a node no
+     * longer the only one selected, is dropped. In the desktop a large file
+     * read over IPC could hold an answer back until after a click elsewhere,
+     * and the panel came back with nothing selected (owner, 2026-10-24).
+     */
+    let asked = 0;
     /** The selected node from the core, for the panel; the pictures follow too. */
     refreshRef.current = () => {
       void pictures();
@@ -512,16 +519,23 @@ export function WorkspaceScreen(props: {
         .catch(() => undefined);
       const ed = editor.current;
       const id = ed && ed.selection.size === 1 ? ed.current : null;
+      const ticket = ++asked;
       if (!id) {
         setDetails(null);
         return;
       }
+      const still = () => {
+        const now = editor.current;
+        return ticket === asked && now?.selection.size === 1 && now.selection.has(id);
+      };
       void (sync.current?.settled() ?? Promise.resolve())
         .then(() => core.node(id))
         .then((d) => {
-          if (editor.current?.current === id) setDetails(d);
+          if (still()) setDetails(d);
         })
-        .catch(() => setDetails(null));
+        .catch(() => {
+          if (still()) setDetails(null);
+        });
     };
     const load = (id?: string) => queue(() => show(id ?? netRef.current));
     loadRef.current = load;
@@ -570,6 +584,7 @@ export function WorkspaceScreen(props: {
       (window as unknown as { __strataWs: unknown }).__strataWs = {
         view: v,
         graph: () => graph.current,
+        core,
         net: () => netRef.current,
         map: () => map3d.current,
         settled: async () => {
@@ -975,6 +990,11 @@ export function WorkspaceScreen(props: {
               .catch(failed),
           fileUrl,
           open: () => eventsRef.current?.open?.(details.id),
+          close: () => {
+            ed?.deselect();
+            setDetails(null);
+            focusCanvas();
+          },
           focus: (id) => {
             if (g.nodes.has(id)) {
               ed?.focusNode(id);

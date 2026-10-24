@@ -11,11 +11,11 @@ import {
   STATUSES,
   type TaskRow,
 } from '@strata/backend';
-import { people as palette } from '@strata/design-tokens';
+import { glyphUrl, people as palette } from '@strata/design-tokens';
 import { createNoteEditor } from '@strata/editor';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
-import { useEffect, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { ASSET_ICONS, Icon, nodeIcon } from '../icons/Icon';
 import type { Clock, DateFormat } from '../prefs';
 import { IconButton } from '../TabBar';
@@ -47,6 +47,8 @@ export interface InspectorActions {
   /** The asset's file as a URL the panel can show, by its type. */
   fileUrl: string | null;
   open(): void;
+  /** The panel's ×: nothing selected, the panel closed. */
+  close(): void;
   focus(id: string): void;
   link(from: string, to: string): void;
   unlink(from: string, to: string): void;
@@ -310,11 +312,31 @@ export function Inspector(props: {
           <Icon name={nodeIcon(n.kind, n)} />
         </span>
         <Title locale={locale} name={n.name} onRename={a.rename} />
+        {/* Icons, not words (owner, 2026-10-24): an eye shows what opens. */}
         {openable ? (
-          <button type="button" className="ins-open" onClick={a.open} title={t(locale, 'ins.open')}>
-            {t(locale, 'ins.open')}
+          <button
+            type="button"
+            className="ins-show"
+            aria-label={t(locale, 'ins.show')}
+            title={t(locale, 'ins.show')}
+            onClick={a.open}
+          >
+            <span
+              className="kind-icon"
+              style={{ '--glyph': glyphUrl('eye') } as CSSProperties}
+              aria-hidden="true"
+            />
           </button>
         ) : null}
+        <button
+          type="button"
+          className="window-close"
+          aria-label={t(locale, 'ins.close')}
+          title={t(locale, 'ins.close')}
+          onClick={a.close}
+        >
+          ×
+        </button>
       </header>
       <div className="ins-body">
         <section className="ins-section">

@@ -280,6 +280,14 @@ export class Editor {
     this.deleteSelection();
   }
 
+  /** Nothing selected: the panel's × closes it so (06, «P»). */
+  deselect(): void {
+    this.selection.clear();
+    this.selectedWire = null;
+    this.events.change();
+    this.view.invalidate();
+  }
+
   /** Selects one node and keeps it in view (the «Структура» tree, the panel's links). */
   focusNode(id: string): void {
     if (!this.graph.nodes.has(id)) return;

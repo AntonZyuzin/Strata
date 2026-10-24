@@ -2208,9 +2208,28 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   box-shadow: none;
 }
 
-.ins-open {
+/* «Показать» in the title plate: an eye in the title's colours, like the ×. */
+.ins-show {
+  display: inline-grid;
   flex: none;
-  min-height: calc(var(--st-size-control) - 4 * var(--u));
+  place-items: center;
+  width: var(--st-size-control);
+  height: var(--st-size-control);
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: inherit;
+}
+
+.ins-show:hover:not(:disabled) {
+  background: var(--st-color-title-fg);
+  color: var(--st-color-title-bg);
+}
+
+.ins-show:active:not(:disabled) {
+  box-shadow: none;
+  padding-top: 0;
 }
 
 /* The title plate names the node (owner, 2026-10-24): its kind's icon, its

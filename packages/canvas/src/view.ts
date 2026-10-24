@@ -183,6 +183,12 @@ export class CanvasView {
     this.invalidate();
   }
 
+  /** A near or past deadline in words under the label (Q-07-22); see `Decor.dueWord`. */
+  set dueWord(word: (n: GraphNode) => string | null) {
+    this.decor.dueWord = word;
+    this.invalidate();
+  }
+
   get reducedMotion(): boolean {
     return this.motionReduced;
   }

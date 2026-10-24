@@ -209,6 +209,8 @@ export interface TreeItem {
   name: string;
   kind: NodeKind;
   status?: string;
+  /** A task's or project's deadline (Q-07-22: its state's dot in «Ноды»). */
+  deadline?: string;
   parent?: string;
   /** An asset's file, type, link and icon: its icon in the tree. */
   asset?: string;

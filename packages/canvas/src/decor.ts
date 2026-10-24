@@ -95,6 +95,8 @@ export class Decor {
   private readonly badgePool: Sprite[] = [];
   private readonly textPool: BitmapText[] = [];
   private readonly labels = new Map<string, BitmapText>();
+  /** A deadline in a word under the label (07 §4.6, Q-07-22). */
+  private readonly dues = new Map<string, BitmapText>();
   private readonly glyphs: GlyphTextures;
   private readonly pulseStart = new Map<string, number>();
   private plateUsed = 0;
@@ -106,6 +108,11 @@ export class Decor {
   ends: WireEndStyle = 'sockets';
   /** The kind glyph at six o'clock; off when the icon inside shows the kind. */
   kindBadge = true;
+  /**
+   * A near or past deadline in words, in the viewer's language («через 2 дн.»,
+   * «сегодня», «−3 дн.»; 07 §4.6, Q-07-22); none for the rest.
+   */
+  dueWord: (n: GraphNode) => string | null = () => null;
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -156,6 +163,7 @@ export class Decor {
     this.textUsed = 0;
     const U = this.u / this.dpr;
     const shown = new Set<string>();
+    const dated = new Set<string>();
     let animating = false;
     let corners = false;
     let hatched = false;
@@ -265,6 +273,9 @@ export class Decor {
         // Red against the fog is 1.6:1, so a paper contour carries the contrast (07 §2.2).
         rings.add(s.x, s.y, R + 5 * U, 2 * U, { color: RED });
         rings.add(s.x, s.y, R + 6.5 * U, U, { color: PAPER });
+      } else if (due === 'soon') {
+        // A thin yellow ring (Q-07-22): the glow did not show at 100 %.
+        rings.add(s.x, s.y, R + 5 * U, U, { color: YELLOW });
       } else if (n.fold && n.fold.total > 0 && lv !== 'glyph') {
         const burning = n.fold.burning;
         if (burning) {
@@ -371,7 +382,16 @@ export class Decor {
       const labelled = lv !== 'glyph' || n.key || selected || hovered;
       if (labelled && n.name) {
         shown.add(v.id);
-        this.label(v.id, n.name, s.x, s.y + R + 13 * U, 2 * R > 160);
+        const large = 2 * R > 160;
+        this.label(v.id, n.name, s.x, s.y + R + 13 * U, large);
+        // The deadline in words under the label, in its state's colour (Q-07-22).
+        const word =
+          due === 'soon' || due === 'today' || due === 'overdue' ? this.dueWord(n) : null;
+        if (word) {
+          const line = (large ? 2 : 1) * this.uiCss + 3 * U;
+          this.due(v.id, word, s.x, s.y + R + 13 * U + line, due === 'overdue' ? RED : YELLOW);
+          dated.add(v.id);
+        }
       }
     }
     if (corners) g.stroke({ width: U, color: ACCENT });
@@ -379,6 +399,7 @@ export class Decor {
     rings.upload();
     this.arrows.upload();
     for (const [id, l] of this.labels) l.visible = shown.has(id);
+    for (const [id, l] of this.dues) l.visible = dated.has(id);
     hideFrom(this.platePool, this.plateUsed);
     hideFrom(this.badgePool, this.badgeUsed);
     hideFrom(this.textPool, this.textUsed);
@@ -450,6 +471,23 @@ export class Decor {
       text: '',
       style: { fontFamily: labelFont(px, this.dpr), fontSize: px / this.dpr },
     });
+  }
+
+  private due(id: string, word: string, x: number, y: number, color: number): void {
+    let t = this.dues.get(id);
+    if (!t) {
+      t = this.makeText(false);
+      this.dues.set(id, t);
+      this.texts.addChild(t);
+    }
+    if (t.text !== word) t.text = word;
+    t.tint = color;
+    const U = this.u / this.dpr;
+    const left = this.snap(x - t.width / 2);
+    const top = this.snap(y);
+    t.position.set(left, top);
+    t.visible = true;
+    this.plate(left - 2 * U, top - U, t.width + 4 * U, this.uiCss + 2 * U);
   }
 
   private label(id: string, name: string, x: number, y: number, large: boolean): void {

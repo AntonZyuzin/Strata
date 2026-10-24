@@ -270,6 +270,9 @@ pub struct TreeItem {
     pub kind: NodeKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// A task's or project's deadline: its state's dot in «Ноды» (07 §4.6, Q-07-22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
     /// An asset's file, type, link and icon: its icon in the tree (07 §6.1).
@@ -1606,6 +1609,7 @@ impl<S: Store> Workspace<S> {
                     name: self.name(n),
                     kind,
                     status: self.text_field(n, "status"),
+                    deadline: self.text_field(n, "deadline"),
                     parent: if n == self.root {
                         None
                     } else {

@@ -2006,6 +2006,24 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   text-overflow: ellipsis;
 }
 
+/* A near or past deadline (Q-07-22): a dot at the row's end, the word in its tooltip. */
+.layer-due {
+  flex: none;
+  width: calc(6 * var(--u));
+  height: calc(6 * var(--u));
+  margin-left: auto;
+  border: var(--u) solid var(--st-color-attention-on);
+}
+
+.layer-due[data-due="soon"],
+.layer-due[data-due="today"] {
+  background: var(--st-color-attention);
+}
+
+.layer-due[data-due="overdue"] {
+  background: var(--st-color-overdue);
+}
+
 .layer-name.is-done .layer-label {
   text-decoration: line-through;
   opacity: 0.6;

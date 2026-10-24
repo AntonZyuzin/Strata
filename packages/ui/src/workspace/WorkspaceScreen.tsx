@@ -46,6 +46,7 @@ import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
 import { CoreDocs } from './docs';
+import { dueWord } from './due';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
@@ -529,6 +530,8 @@ export function WorkspaceScreen(props: {
       viewRef.current = v;
       // The Chrome's icons on the nodes too (owner, 2026-10-24); an asset's by its content.
       v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
+      // A near or past deadline in a word under the label (Q-07-22).
+      v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
       v.setKindIcons(icons);
       // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
       v.wireEnds = 'sockets';
@@ -572,6 +575,11 @@ export function WorkspaceScreen(props: {
       view?.destroy();
     };
   }, []);
+
+  // The canvas's words follow the language: deadlines under labels (Q-07-22).
+  useEffect(() => {
+    if (locale) viewRef.current?.invalidate();
+  }, [locale]);
 
   useEffect(() => {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).

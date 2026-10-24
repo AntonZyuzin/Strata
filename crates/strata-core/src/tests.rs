@@ -758,6 +758,13 @@ fn task_fields_belong_to_tasks_and_projects() {
     assert!(w.apply(&[unassign], Label::new("t")).is_ok());
     // An asset's fields are an asset's.
     assert!(set(&mut w, &task, "url", Some(Val::str("https://example.org"))).is_err());
+    // «Ноды» show the deadline's state (Q-07-22): the tree carries it.
+    let row = w
+        .tree()
+        .into_iter()
+        .find(|i| i.id == task)
+        .expect("in the tree");
+    assert_eq!(row.deadline.as_deref(), Some("2026-11-01"));
     // The description is the node's own content document (05 §4.2).
     assert!(w.doc_snapshot(&format!("content/{task}")).is_ok());
     assert!(w.doc_snapshot(&format!("content/{folder}")).is_ok());

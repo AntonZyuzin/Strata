@@ -3,6 +3,7 @@ import { type Locale, t } from '@strata/i18n';
 import { useEffect, useMemo, useState } from 'react';
 import { Icon, nodeIcon } from '../icons/Icon';
 import { Glyph } from '../TabBar';
+import { dueWord, nearDue } from './due';
 
 /**
  * «Слои» (owner, 2026-10-24: like Figma's layers): the whole workspace as a
@@ -58,6 +59,7 @@ export function Layers(props: {
     (children.get(parent) ?? []).map((it) => {
       const kids = children.has(it.id);
       const unfolded = open.has(it.id);
+      const due = isFinal(it.status) ? null : nearDue(it.deadline);
       const cls = ['layer-row'];
       if (selected.has(it.id)) cls.push('is-selected');
       if (it.id === current) cls.push('is-here');
@@ -94,6 +96,16 @@ export function Layers(props: {
               <span className="layer-label" title={it.name || t(locale, 'note.untitled')}>
                 {it.name || t(locale, 'note.untitled')}
               </span>
+              {/* A near or past deadline's state (Q-07-22), its word in the tooltip. */}
+              {due ? (
+                <span
+                  className="layer-due"
+                  data-due={due}
+                  role="img"
+                  aria-label={dueWord(it.deadline, locale) ?? ''}
+                  title={dueWord(it.deadline, locale) ?? ''}
+                />
+              ) : null}
             </button>
           </div>
           {kids && unfolded ? <ul>{branch(it.id, depth + 1)}</ul> : null}

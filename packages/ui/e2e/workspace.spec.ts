@@ -885,6 +885,24 @@ test.describe('a workspace on the core', () => {
       .not.toBe(known.art);
   });
 
+  test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Сроки');
+    await createTask(page, 'Завтрашняя');
+    const tomorrow = new Date(Date.now() + 86_400_000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    const typed = `${p(tomorrow.getDate())}/${p(tomorrow.getMonth() + 1)}/${tomorrow.getFullYear()}`;
+    const deadline = page.locator('.ws-inspector').getByLabel('Дедлайн', { exact: true });
+    await deadline.fill(typed);
+    await deadline.press('Enter');
+    const dot = page.locator('.layer-name', { hasText: 'Завтрашняя' }).locator('.layer-due');
+    await expect(dot).toHaveAttribute('data-due', 'soon');
+    await expect(dot).toHaveAttribute('title', 'завтра');
+    // Done: no dot.
+    await page.locator('.ws-inspector').getByLabel('Статус').selectOption('done');
+    await expect(dot).toHaveCount(0);
+  });
+
   test('the gecko lives on the canvas and notices a new task (07 §10.4)', async ({ page }) => {
     await page.goto('/?plain');
     await createWorkspace(page, 'Гекон');

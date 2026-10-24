@@ -4,8 +4,8 @@ import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { norm, rank, score } from './search';
 
 /**
- * Items of the Tab menu (06 §5.2): with an empty query — recent choices and
- * the kinds; with a query — «Создать» (a note named by the query first, then
+ * Items of the Tab menu (06 §5.2): with an empty query — the kinds, and
+ * recent choices that are not among them; with a query — «Создать» (a note named by the query first, then
  * matching kinds) and «Вставить здесь» (existing nodes). ADR-0010: no classes.
  */
 
@@ -74,7 +74,11 @@ export function menuItems(
 ): MenuItem[] {
   const q = query.trim();
   if (q === '') {
+    // Recent choices the kinds below do not show already: none while every
+    // template is a kind (review 2026-10-24: «Недавние» repeated them all).
+    // The kinds keep their order, so a key finds the same row every time.
     const recentItems = recent
+      .filter((key) => !KINDS.some((k) => k.key === key))
       .map((key) => TEMPLATES.find((tpl) => tpl.key === key))
       .filter((tpl): tpl is Template => !!tpl)
       .map((tpl) => createItem(locale, tpl, null, 'recent'));

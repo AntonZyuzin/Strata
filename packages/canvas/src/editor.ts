@@ -177,6 +177,11 @@ export class Editor {
   wheelMode: WheelMode = /Mac/.test(navigator.platform) ? 'trackpad' : 'mouse';
   /** Swing of the shake in screen px; 0 turns the gesture off (05 §8.4). */
   shakePx = SHAKE_SWING_PX;
+  /**
+   * Screen px along the right edge that the Chrome covers now (the
+   * properties panel): framing and zoom keep to the canvas one can see.
+   */
+  coveredRight: () => number = () => 0;
   private mode: Mode = { t: 'idle' };
   private hover: Hit = { t: 'empty' };
   private selectedWire: [string, string] | null = null;
@@ -225,8 +230,13 @@ export class Editor {
 
   fitAll(): void {
     const box = this.boxOf([...this.graph.nodes.keys()]);
-    if (box) this.view.camera.fit(box, this.view.width, this.view.height);
+    if (box) this.view.camera.fit(box, this.seen(), this.view.height);
     this.view.invalidate();
+  }
+
+  /** Width of the canvas one can see: the Chrome on the right taken off. */
+  private seen(): number {
+    return Math.max(1, this.view.width - this.coveredRight());
   }
 
   undo(): void {
@@ -926,14 +936,14 @@ export class Editor {
         return;
       case 'Equal':
       case 'NumpadAdd':
-        cam.zoomAt(this.view.width / 2, this.view.height / 2, 1.25);
+        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1.25);
         break;
       case 'Minus':
       case 'NumpadSubtract':
-        cam.zoomAt(this.view.width / 2, this.view.height / 2, 1 / 1.25);
+        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / 1.25);
         break;
       case 'Digit0':
-        cam.zoomAt(this.view.width / 2, this.view.height / 2, 1 / cam.zoom);
+        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / cam.zoom);
         break;
       case 'ArrowLeft':
       case 'ArrowRight':
@@ -998,7 +1008,7 @@ export class Editor {
       const s = this.view.camera.toScreen(p.x, p.y);
       return { sx: s.x, sy: s.y };
     }
-    return { sx: this.view.width / 2, sy: this.view.height / 2 };
+    return { sx: this.seen() / 2, sy: this.view.height / 2 };
   }
 
   private openMenu(sx: number, sy: number, m: Omit<Extract<Mode, { t: 'menu' }>, 't'>, query = '') {
@@ -1165,10 +1175,10 @@ export class Editor {
     if (
       s.x < margin ||
       s.y < margin ||
-      s.x > this.view.width - margin ||
+      s.x > this.seen() - margin ||
       s.y > this.view.height - margin
     ) {
-      this.view.camera.panBy(this.view.width / 2 - s.x, this.view.height / 2 - s.y);
+      this.view.camera.panBy(this.seen() / 2 - s.x, this.view.height / 2 - s.y);
       this.view.invalidate();
     }
   }
@@ -1179,7 +1189,7 @@ export class Editor {
     const pad = 120;
     this.view.camera.fit(
       { minX: box.minX - pad, minY: box.minY - pad, maxX: box.maxX + pad, maxY: box.maxY + pad },
-      this.view.width,
+      this.seen(),
       this.view.height,
     );
     this.view.invalidate();

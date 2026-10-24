@@ -5,7 +5,8 @@ import { type Group, type MenuItem, type MenuNode, menuItems } from './menu';
 
 /**
  * Tab menu (06 §5, 07 §8.2): a window without a title bar, 52 ch of the UI font
- * wide (360 px at DPR 1) whatever the language, prompt «>», up to 12 rows, group headers, key hints below.
+ * wide (360 px at DPR 1) whatever the language, prompt «>», up to 12 rows, group headers;
+ * the keys are in the tooltip of the prompt, not on a line of their own.
  * It opens at the anchor and stays inside the canvas, clear of the status bar.
  */
 
@@ -87,6 +88,7 @@ export function TabMenu(props: {
   };
 
   let lastGroup: Group | null = null;
+  const grouped = new Set(items.map((i) => i.group)).size > 1;
   return (
     <>
       <div className="menu-backdrop" onPointerDown={props.onCancel} />
@@ -103,6 +105,7 @@ export function TabMenu(props: {
             ref={input}
             value={query}
             aria-label={t(locale, 'menu.query')}
+            title={t(locale, 'menu.footer')}
             spellCheck={false}
             autoComplete="off"
             onChange={(e) => {
@@ -117,7 +120,8 @@ export function TabMenu(props: {
             <div className="tab-menu-empty">{t(locale, 'menu.nothing', { q: query })}</div>
           ) : null}
           {items.map((item, i) => {
-            const header = item.group !== lastGroup ? item.group : null;
+            // One group needs no name: it would repeat what every row says.
+            const header = item.group !== lastGroup && grouped ? item.group : null;
             lastGroup = item.group;
             return [
               header ? (
@@ -149,9 +153,6 @@ export function TabMenu(props: {
               </div>,
             ];
           })}
-        </div>
-        <div className="tab-menu-footer" title={t(locale, 'menu.footer')}>
-          {t(locale, 'menu.footer')}
         </div>
       </div>
     </>

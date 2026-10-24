@@ -170,7 +170,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
 }
 
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
-  test(`a list's panel keeps its size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+  test(`a list's panel and «Слои» keep their size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
     browser,
   }) => {
     test.setTimeout(60_000);
@@ -197,17 +197,30 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       await panel.locator('.ins-tick').first().check();
       await expect(panel.locator('.ins-progress')).toBeVisible();
       expect(await overflowing(page, '.ws-inspector'), `${locale} text must fit`).toEqual([]);
+      expect(await overflowing(page, '.ws-layers'), `${locale} layers must fit`).toEqual([]);
       boxes.push({
         panel: await box(page, '.ws-inspector'),
         heading: await box(page, '.ws-inspector .ins-heading'),
-        item: await box(page, '.ws-inspector .ins-body > .ins-tree > li > .list-row .list-text'),
+        item: await box(page, '.ws-inspector .ins-section > .ins-tree > li > .list-row .list-text'),
         nested: await box(page, '.ws-inspector .ins-tree .ins-tree .list-text'),
         fresh: await box(page, '.ws-inspector .list-new'),
+        layers: await box(page, '.ws-layers'),
+        layersTitle: await box(page, '.layers-title'),
+        layer: await box(page, '.layer-row'),
       });
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['panel', 'heading', 'item', 'nested', 'fresh'] as const) {
+    for (const part of [
+      'panel',
+      'heading',
+      'item',
+      'nested',
+      'fresh',
+      'layers',
+      'layersTitle',
+      'layer',
+    ] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }

@@ -369,6 +369,12 @@ export function WorkspaceScreen(props: {
       graph.current = g;
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
+      // The properties panel covers the canvas's right edge while one node is
+      // chosen: framing keeps clear of it (review 2026-10-24).
+      ed.coveredRight = () =>
+        ed.selection.size === 1
+          ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
+          : 0;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d);
@@ -911,6 +917,7 @@ export function WorkspaceScreen(props: {
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
     >
+      <div className="ws-panel-probe" aria-hidden="true" />
       <div
         ref={host}
         className="proto-canvas"

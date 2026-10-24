@@ -688,23 +688,12 @@ button:focus-visible {
   color: inherit;
 }
 
-.tab-menu-empty,
-.tab-menu-footer {
+.tab-menu-empty {
   padding: calc(2 * var(--u)) calc(4 * var(--u));
   color: var(--st-color-text-muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.tab-menu-footer {
-  background:
-    repeating-linear-gradient(
-      90deg,
-      var(--st-color-divider) 0 calc(2 * var(--u)),
-      transparent 0 calc(4 * var(--u))
-    )
-    top / 100% var(--u) no-repeat;
 }
 
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
@@ -1349,7 +1338,17 @@ button:focus-visible {
    2026-10-24: like Figma). */
 .proto.workspace {
   --layers-w: 32ch;
+  --panel-w: 46ch;
   position: absolute;
+}
+
+/* The panel's width as the canvas reads it, before the panel is drawn. */
+.ws-panel-probe {
+  position: absolute;
+  width: var(--panel-w);
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .workspace .proto-canvas {
@@ -1657,14 +1656,32 @@ button:focus-visible {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: calc(3 * var(--u)) 0;
+  padding: 0 0 calc(6 * var(--u));
 }
 
+/* Rows with room (owner, 2026-10-24: larger names and icons, more space
+   between them, then 1.5 times smaller than 32 px — neater): icons of
+   24u, three times their pixels at DPR 2; 32u a row. */
 .layer-row {
   display: flex;
   align-items: center;
-  min-height: var(--st-size-row);
-  padding-right: calc(4 * var(--u));
+  min-height: calc(32 * var(--u));
+  padding-right: calc(8 * var(--u));
+}
+
+.ws-layers .layer-row .icon {
+  width: calc(24 * var(--u));
+  height: calc(24 * var(--u));
+}
+
+/* The panel's name, as Figma's «Layers», over the icons' column; twice the
+   UI face (owner, 2026-10-24), so its pixels stay whole. */
+.layers-title {
+  flex: none;
+  margin: 0;
+  padding: calc(14 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)) calc(18 * var(--u));
+  font: calc(2 * var(--st-font-ui-size)) / calc(2 * var(--st-font-ui-line)) var(--st-font-ui);
+  color: var(--st-color-text);
 }
 
 .layer-row:hover {
@@ -1699,7 +1716,7 @@ button:focus-visible {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
-  gap: calc(4 * var(--u));
+  gap: calc(8 * var(--u));
   min-width: 0;
   min-height: 0;
   padding: 0;
@@ -1766,7 +1783,7 @@ button:focus-visible {
   right: 0;
   bottom: 0;
   z-index: 5;
-  width: 46ch;
+  width: var(--panel-w);
   display: flex;
   flex-direction: column;
   border: 0;
@@ -1779,16 +1796,91 @@ button:focus-visible {
   min-height: calc(var(--st-size-control) - 4 * var(--u));
 }
 
+/* The title plate names the node (owner, 2026-10-24): its kind's icon, its
+   name in the display face; a click on the name renames it in place. */
+.ins-title {
+  justify-content: flex-start;
+  gap: calc(6 * var(--u));
+}
+
+.ins-kind {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+}
+
+.ins-title h2 {
+  flex: 1 1 auto;
+}
+
+.ins-title-name {
+  display: block;
+  max-width: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: inherit;
+  text-transform: inherit;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  cursor: text;
+}
+
+.ins-title-name:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline dotted;
+}
+
+.ins-title-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 calc(2 * var(--u));
+  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  color: inherit;
+  background: transparent;
+  border: var(--u) solid currentColor;
+  outline: none;
+}
+
+/* Sections like Figma's (owner, 2026-10-24: more air): each its own block
+   with room around it, a hairline between them. */
 .ins-body {
   display: flex;
   flex-direction: column;
-  gap: calc(4 * var(--u));
   min-height: 0;
   overflow: auto;
 }
 
-.ins-body > .field,
-.ins-body > select {
+.ins-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(12 * var(--u));
+  padding: calc(14 * var(--u)) calc(16 * var(--u));
+}
+
+/* Fields of the panel a little taller than the Chrome's 24 px: room to read. */
+.ins-section .field {
+  min-height: calc(28 * var(--u));
+}
+
+/* A picker (colour, icon): its label above, its choices the panel's width. */
+.ins-block {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--u));
+}
+
+.ins-section + .ins-section {
+  border-top: var(--u) solid var(--st-color-divider);
+}
+
+.ins-section > .field,
+.ins-section > select {
   width: 100%;
 }
 
@@ -1796,7 +1888,7 @@ button:focus-visible {
   display: grid;
   grid-template-columns: 12ch minmax(0, 1fr);
   align-items: center;
-  gap: calc(3 * var(--u)) calc(6 * var(--u));
+  gap: calc(8 * var(--u)) calc(10 * var(--u));
   margin: 0;
 }
 
@@ -1836,17 +1928,18 @@ button:focus-visible {
   outline: var(--u) solid var(--st-color-frame);
 }
 
+/* Swatches of 20u six apart: a 24 px target with its spacing (WCAG 2.5.8). */
 .ins-colors {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(3 * var(--u));
+  gap: calc(6 * var(--u));
 }
 
 .ins-swatch {
-  width: calc(16 * var(--u));
-  min-width: calc(16 * var(--u));
-  min-height: calc(16 * var(--u));
-  height: calc(16 * var(--u));
+  width: calc(20 * var(--u));
+  min-width: calc(20 * var(--u));
+  min-height: calc(20 * var(--u));
+  height: calc(20 * var(--u));
   padding: 0;
   border: var(--u) solid var(--st-color-frame);
   box-shadow: none;
@@ -1865,13 +1958,14 @@ button:focus-visible {
   outline-offset: var(--u);
 }
 
+/* A section's name: the text's colour over the muted labels, as it is
+   written (07 §8: no capitals for labels); its count on the right. */
 .ins-heading {
   display: flex;
   justify-content: space-between;
-  margin: calc(4 * var(--u)) 0 0;
+  margin: 0;
   font: inherit;
-  color: var(--st-color-text-muted);
-  text-transform: uppercase;
+  color: var(--st-color-text);
 }
 
 .ins-progress {
@@ -1907,7 +2001,31 @@ button:focus-visible {
 
 .ins-asset {
   display: grid;
-  gap: calc(3 * var(--u));
+  gap: calc(8 * var(--u));
+}
+
+.ins-asset-row {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+}
+
+.ins-asset-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ins-asset .field {
+  width: 100%;
+}
+
+/* A link that opens the file or the address: an icon button of its own. */
+.ins-out {
+  flex: none;
+  height: var(--st-size-control);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
+  background: var(--st-color-surface-raised);
 }
 
 .ins-asset img,
@@ -1925,7 +2043,7 @@ button:focus-visible {
 .ins-icons {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(2 * var(--u));
+  gap: calc(6 * var(--u));
 }
 
 .ins-icon {
@@ -1953,8 +2071,9 @@ button:focus-visible {
 .ins-row {
   display: flex;
   align-items: center;
-  gap: calc(2 * var(--u));
+  gap: calc(6 * var(--u));
   min-width: 0;
+  min-height: calc(28 * var(--u));
 }
 
 /* A list's item (05 §4.2): its text edited in place, a frame only while typed in. */

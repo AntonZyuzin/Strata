@@ -91,6 +91,55 @@ function Commit(props: {
   );
 }
 
+/**
+ * The node's name as the panel's title (owner, 2026-10-24: the name must
+ * read as a heading), as a window's title names what it shows; a click
+ * turns it into a field: Enter or leaving it renames, Esc keeps the name.
+ */
+function Title(props: { locale: Locale; name: string; onRename: (name: string) => void }) {
+  const { locale } = props;
+  const [editing, setEditing] = useState(false);
+  const shown = props.name || t(locale, 'note.untitled');
+  if (editing) {
+    return (
+      <input
+        className="ins-title-field"
+        aria-label={t(locale, 'ins.name')}
+        defaultValue={props.name}
+        // biome-ignore lint/a11y/noAutofocus: the field replaces the title the user just clicked
+        autoFocus
+        onFocus={(e) => e.currentTarget.select()}
+        onBlur={(e) => {
+          const v = e.currentTarget.value.trim();
+          setEditing(false);
+          if (v && v !== props.name) props.onRename(v);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            e.currentTarget.value = props.name;
+            e.currentTarget.blur();
+          }
+          e.stopPropagation();
+        }}
+      />
+    );
+  }
+  return (
+    <h2>
+      <button
+        type="button"
+        className="ins-title-name"
+        // A cut name shows whole in its tooltip; the text cursor says it edits.
+        title={shown}
+        onClick={() => setEditing(true)}
+      >
+        {shown}
+      </button>
+    </h2>
+  );
+}
+
 /** The Markdown editor of ADR-0007 on the node's content document. */
 function Description(props: { load: () => Promise<LoroDoc | null> }) {
   const host = useRef<HTMLDivElement>(null);
@@ -223,68 +272,85 @@ export function Inspector(props: {
 
   return (
     <aside className="window ws-inspector" aria-label={t(locale, 'ins.label', { name: n.name })}>
-      <header className="window-title">
-        <h2 title={kindName}>{kindName}</h2>
+      <header className="window-title ins-title">
+        <span className="ins-kind" title={kindName} role="img" aria-label={kindName}>
+          <Icon name={nodeIcon(n.kind, n)} />
+        </span>
+        <Title locale={locale} name={n.name} onRename={a.rename} />
         {openable ? (
           <button type="button" className="ins-open" onClick={a.open} title={t(locale, 'ins.open')}>
             {t(locale, 'ins.open')}
           </button>
         ) : null}
       </header>
-      <div className="window-body ins-body">
-        <Commit
-          value={n.name}
-          label={t(locale, 'ins.name')}
-          placeholder={t(locale, 'note.untitled')}
-          onCommit={(v) => v && a.rename(v)}
-        />
-        {n.kind === 'asset' ? (
-          <div className="ins-asset" data-type={type ?? ''}>
-            {shown && type === 'image' ? <img src={shown} alt={n.name} /> : null}
-            {shown && type === 'video' ? (
-              // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
-              <video src={shown} controls />
-            ) : null}
-            {shown && type === 'audio' ? (
-              // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
-              <audio src={shown} controls />
-            ) : null}
-            {shown && (type === 'pdf' || type === 'file') ? (
-              <a href={shown} target="_blank" rel="noreferrer" className="ins-link">
-                {n.name}
-              </a>
-            ) : null}
-            {n.url ? (
-              <a href={n.url} target="_blank" rel="noreferrer" className="ins-link" title={n.url}>
-                {n.url}
-              </a>
-            ) : null}
-            <button type="button" onClick={() => fileInput.current?.click()}>
-              {t(locale, 'ins.pickFile')}
-            </button>
-            <input
-              ref={fileInput}
-              className="sr-only"
-              type="file"
-              tabIndex={-1}
-              aria-label={t(locale, 'ins.pickFile')}
-              onChange={(e) => {
-                const f = e.currentTarget.files?.[0];
-                e.currentTarget.value = '';
-                if (f) a.file(f);
-              }}
-            />
-            <Commit
-              value={n.url ?? ''}
-              label={t(locale, 'ins.url')}
-              placeholder="https://"
-              onCommit={(v) => a.attr('url', v || null)}
-            />
-          </div>
-        ) : null}
-        <dl className="ins-fields">
+      <div className="ins-body">
+        <section className="ins-section">
+          {n.kind === 'asset' ? (
+            <div className="ins-asset" data-type={type ?? ''}>
+              {shown && type === 'image' ? <img src={shown} alt={n.name} /> : null}
+              {shown && type === 'video' ? (
+                // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
+                <video src={shown} controls />
+              ) : null}
+              {shown && type === 'audio' ? (
+                // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
+                <audio src={shown} controls />
+              ) : null}
+              {/* Each fact once on the screen (owner, 2026-10-24): the file and the link
+                  open by an icon beside their own control, not as a second copy of them. */}
+              <div className="ins-asset-row">
+                <button type="button" onClick={() => fileInput.current?.click()}>
+                  {t(locale, 'ins.pickFile')}
+                </button>
+                {shown && (type === 'pdf' || type === 'file') ? (
+                  <a
+                    href={shown}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="icon-button ins-out"
+                    aria-label={t(locale, 'ins.openFile')}
+                    title={t(locale, 'ins.openFile')}
+                  >
+                    <Icon name="open" />
+                  </a>
+                ) : null}
+              </div>
+              <input
+                ref={fileInput}
+                className="sr-only"
+                type="file"
+                tabIndex={-1}
+                aria-label={t(locale, 'ins.pickFile')}
+                onChange={(e) => {
+                  const f = e.currentTarget.files?.[0];
+                  e.currentTarget.value = '';
+                  if (f) a.file(f);
+                }}
+              />
+              <div className="ins-asset-row">
+                <Commit
+                  value={n.url ?? ''}
+                  label={t(locale, 'ins.url')}
+                  placeholder="https://"
+                  onCommit={(v) => a.attr('url', v || null)}
+                />
+                {n.url ? (
+                  <a
+                    href={n.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="icon-button ins-out"
+                    aria-label={t(locale, 'ins.openUrl')}
+                    title={t(locale, 'ins.openUrl')}
+                  >
+                    <Icon name="internet" />
+                  </a>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
           {task ? (
-            <>
+            <dl className="ins-fields">
               <dt className="ins-label">{field(locale, 'status')}</dt>
               <dd className="ins-value">
                 <select
@@ -386,12 +452,13 @@ export function Inspector(props: {
                   </select>
                 )}
               </dd>
-            </>
+            </dl>
           ) : null}
           {n.kind === 'asset' ? (
-            <>
-              <dt className="ins-label">{t(locale, 'ins.icon')}</dt>
-              <dd className="ins-value ins-icons">
+            // A picker of its own: the label above, the choices the panel's width (like Figma).
+            <div className="ins-block">
+              <span className="ins-label">{t(locale, 'ins.icon')}</span>
+              <div className="ins-icons">
                 <button
                   type="button"
                   className={n.icon ? 'ins-icon' : 'ins-icon is-active'}
@@ -415,54 +482,58 @@ export function Inspector(props: {
                     <Icon name={file} />
                   </button>
                 ))}
-              </dd>
-            </>
+              </div>
+            </div>
           ) : null}
-          <dt className="ins-label">{field(locale, 'color')}</dt>
-          <dd className="ins-value ins-colors">
-            <button
-              type="button"
-              className={
-                n.color === undefined ? 'ins-swatch is-none is-active' : 'ins-swatch is-none'
-              }
-              aria-label={t(locale, 'ins.noColor')}
-              title={t(locale, 'ins.noColor')}
-              aria-pressed={n.color === undefined}
-              onClick={() => a.attr('color', null)}
-            />
-            {palette.map((c, i) => (
+          <div className="ins-block">
+            <span className="ins-label">{field(locale, 'color')}</span>
+            <div className="ins-colors">
               <button
-                key={c}
                 type="button"
-                className={n.color === i ? 'ins-swatch is-active' : 'ins-swatch'}
-                style={{ background: c }}
-                aria-label={`${field(locale, 'color')} ${i + 1}`}
-                title={`${field(locale, 'color')} ${i + 1}`}
-                aria-pressed={n.color === i}
-                onClick={() => a.attr('color', i)}
+                className={
+                  n.color === undefined ? 'ins-swatch is-none is-active' : 'ins-swatch is-none'
+                }
+                aria-label={t(locale, 'ins.noColor')}
+                title={t(locale, 'ins.noColor')}
+                aria-pressed={n.color === undefined}
+                onClick={() => a.attr('color', null)}
               />
-            ))}
-          </dd>
-        </dl>
+              {palette.map((c, i) => (
+                <button
+                  key={c}
+                  type="button"
+                  className={n.color === i ? 'ins-swatch is-active' : 'ins-swatch'}
+                  style={{ background: c }}
+                  aria-label={`${field(locale, 'color')} ${i + 1}`}
+                  title={`${field(locale, 'color')} ${i + 1}`}
+                  aria-pressed={n.color === i}
+                  onClick={() => a.attr('color', i)}
+                />
+              ))}
+            </div>
+          </div>
+        </section>
         {described ? (
-          <>
+          <section className="ins-section">
             <h3 className="ins-heading">
-              {t(locale, n.kind === 'note' ? 'kind.note' : 'ins.description')}
+              {t(locale, n.kind === 'note' ? 'ins.text' : 'ins.description')}
             </h3>
             <Description load={a.content} />
-          </>
+          </section>
         ) : null}
         {n.kind === 'checklist' ? (
-          <ListItems
-            locale={locale}
-            load={a.content}
-            focus={props.focusList}
-            onFocused={props.onListFocused}
-            onCount={a.count}
-          />
+          <section className="ins-section">
+            <ListItems
+              locale={locale}
+              load={a.content}
+              focus={props.focusList}
+              onFocused={props.onListFocused}
+              onCount={a.count}
+            />
+          </section>
         ) : null}
         {task ? (
-          <>
+          <section className="ins-section">
             <h3 className="ins-heading">
               {t(locale, project ? 'ins.tasks' : 'ins.subtasks')}
               {n.fold && n.fold.total > 0 ? (
@@ -488,6 +559,10 @@ export function Inspector(props: {
               fresh
               onCommit={(v) => v && a.subtask(v)}
             />
+          </section>
+        ) : null}
+        {task ? (
+          <section className="ins-section">
             <h3 className="ins-heading">{t(locale, 'ins.materials')}</h3>
             <Links
               locale={locale}
@@ -510,13 +585,13 @@ export function Inspector(props: {
                 ))}
               </select>
             ) : null}
-          </>
+          </section>
         ) : null}
         {parents.length > 0 ? (
-          <>
+          <section className="ins-section">
             <h3 className="ins-heading">{t(locale, 'ins.partOf')}</h3>
             <Links locale={locale} links={parents} onFocus={a.focus} />
-          </>
+          </section>
         ) : null}
       </div>
     </aside>

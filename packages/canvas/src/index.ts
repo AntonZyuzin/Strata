@@ -20,7 +20,13 @@ export {
   type MenuTarget,
   type WheelMode,
 } from './editor';
-export { createIconAtlas, type IconAuthor, type IconCredits, iconCredits } from './icons';
+export {
+  createIconAtlas,
+  type IconAuthor,
+  type IconCredits,
+  type IconImage,
+  iconCredits,
+} from './icons';
 export {
   DEFAULT_ICONS,
   defaultIcon,

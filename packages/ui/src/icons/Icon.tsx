@@ -57,6 +57,30 @@ export function nodeIcon(kind: string, cls?: string, open = false): IconName {
   return kind in ICONS ? (kind as IconName) : 'note';
 }
 
+const NODE_ICONS = [
+  'network',
+  'note',
+  'board',
+  'media',
+  'checklist',
+  'task',
+  'project',
+  'references',
+] as const satisfies readonly IconName[];
+
+/** The kind and class icons as decoded pictures for the canvas (view.setKindIcons). */
+export async function nodeIconImages(): Promise<Record<string, HTMLImageElement>> {
+  const pairs = await Promise.all(
+    NODE_ICONS.map(async (name) => {
+      const img = new Image();
+      img.src = ICONS[name];
+      await img.decode();
+      return [name, img] as const;
+    }),
+  );
+  return Object.fromEntries(pairs);
+}
+
 export function Icon(props: { name: IconName }) {
   const src = ICONS[props.name];
   if (MONO.has(props.name)) {

@@ -104,6 +104,8 @@ export class Decor {
   private antsStart = 0;
   reducedMotion = false;
   ends: WireEndStyle = 'sockets';
+  /** The kind glyph at six o'clock; off when the icon inside shows the kind. */
+  kindBadge = true;
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -362,7 +364,7 @@ export class Decor {
           this.badge('external', 'ink', ex, ey);
           this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
         }
-        if (!n.ghost) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
+        if (!n.ghost && this.kindBadge) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
       }
 
       // Label under the rings on a plate (07 §4.1, §2.2 scene-label-plate).

@@ -93,3 +93,57 @@ export async function createIconAtlas(): Promise<IconAtlas> {
 export function iconScale(d: number): number {
   return (0.55 * d) / MASK;
 }
+
+/** A picture the canvas can draw from. */
+export type IconImage = CanvasImageSource & { width: number; height: number };
+
+const PIXEL = 8;
+
+/**
+ * Kind and class icons in the Windows 98 spirit (owner, 2026-10-24: SerenityOS,
+ * the same as the Chrome's): each 16 px picture enlarged ×8 by whole pixels into
+ * one atlas cell of the presets' size, with mips, so a bubble of any size
+ * samples even squares instead of uneven nearest-neighbour columns. The
+ * colours are kept: the sprite is drawn untinted on the paper body.
+ */
+export function createPixelIcons(images: Record<string, IconImage>): Map<string, Texture> {
+  const keys = Object.keys(images);
+  const out = new Map<string, Texture>();
+  if (keys.length === 0) return out;
+  const rows = Math.ceil(keys.length / COLS);
+  const canvas = document.createElement('canvas');
+  canvas.width = COLS * CELL;
+  canvas.height = rows * CELL;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas is not available');
+  ctx.imageSmoothingEnabled = false;
+  keys.forEach((key, k) => {
+    const img = images[key];
+    if (!img) return;
+    const w = img.width * PIXEL;
+    const h = img.height * PIXEL;
+    const x = (k % COLS) * CELL + (CELL - w) / 2;
+    const y = Math.floor(k / COLS) * CELL + (CELL - h) / 2;
+    ctx.drawImage(img, x, y, w, h);
+  });
+  const source = new CanvasSource({
+    resource: canvas,
+    autoGenerateMipmaps: true,
+    scaleMode: 'linear',
+  });
+  keys.forEach((key, k) => {
+    out.set(
+      key,
+      new Texture({
+        source,
+        frame: new Rectangle((k % COLS) * CELL, Math.floor(k / COLS) * CELL, CELL, CELL),
+      }),
+    );
+  });
+  return out;
+}
+
+/** Scale of a pixel icon for a bubble of diameter `d`: the 16 px picture fills 0.6 · d. */
+export function pixelIconScale(d: number): number {
+  return (0.6 * d) / (16 * PIXEL);
+}

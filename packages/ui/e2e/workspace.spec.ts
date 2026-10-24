@@ -18,6 +18,7 @@ interface Node {
 interface WsHook {
   view: {
     hasPicture(id: string): boolean;
+    iconOf(id: string): 'picture' | 'kind' | 'preset' | null;
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
     canvas: HTMLCanvasElement;
@@ -450,6 +451,23 @@ test.describe('a workspace on the core', () => {
       .toBe(true);
     await select(page, 'Скетч');
     await expect(page.locator('.ins-picture img')).toBeVisible();
+  });
+
+  test('nodes carry the Chrome icons, in their circles and in «Слои» (07 §6.1)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Значки');
+    await createNode(page, 640, 400, 'Идея');
+    const id = await idOf(page, 'Идея');
+    await expect
+      .poll(() => page.evaluate((id) => window.__strataWs?.view.iconOf(id), id))
+      .toBe('kind');
+    const row = page.locator('.layer-name', { hasText: 'Идея' });
+    await expect(row.locator('img.icon')).toHaveAttribute('src', /^data:image\/png|\.png$/);
+    expect(
+      await row.locator('img.icon').evaluate((img: HTMLImageElement) => img.naturalWidth),
+    ).toBe(16);
   });
 
   test('the profile is kept on this device', async ({ page }) => {

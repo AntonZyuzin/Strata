@@ -7,7 +7,14 @@ import type { Pixels } from './backdrop';
 import { BackgroundLayer } from './background';
 import { Camera } from './camera';
 import { Decor, type DecorNode, type Interaction } from './decor';
-import { createIconAtlas, type IconAtlas, iconScale } from './icons';
+import {
+  createIconAtlas,
+  createPixelIcons,
+  type IconAtlas,
+  type IconImage,
+  iconScale,
+  pixelIconScale,
+} from './icons';
 import { defaultIcon, dotColor, isClosed, levelOf, nodeAlpha, type WireEndStyle } from './looks';
 import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
@@ -194,6 +201,29 @@ export class CanvasView {
   }
 
   private readonly pictures = new Map<string, Texture>();
+  private kindIcons = new Map<string, Texture>();
+
+  /**
+   * Icons by class and kind name (owner, 2026-10-24: the Chrome's SerenityOS
+   * set on the nodes too). A node with one shows it instead of its preset, and
+   * the kind glyph at six o'clock goes: the icon already says the kind.
+   */
+  setKindIcons(images: Record<string, IconImage>): void {
+    const old = this.kindIcons;
+    this.kindIcons = createPixelIcons(images);
+    this.decor.kindBadge = this.kindIcons.size === 0;
+    for (const v of this.views.values()) {
+      this.applyPicture(v);
+      this.applyLevel(v);
+    }
+    old.values().next().value?.source.destroy();
+    for (const t of old.values()) t.destroy();
+    this.invalidate();
+  }
+
+  private kindIcon(n: GraphNode): Texture | undefined {
+    return (n.cls ? this.kindIcons.get(n.cls) : undefined) ?? this.kindIcons.get(n.kind);
+  }
 
   /**
    * A media node's picture inside its circle (owner, 2026-10-24): cut round
@@ -241,12 +271,26 @@ export class CanvasView {
     return this.pictures.has(id);
   }
 
+  /** What a node's circle shows: its picture, its kind's icon or a preset. */
+  iconOf(id: string): 'picture' | 'kind' | 'preset' | null {
+    const v = this.views.get(id);
+    if (!v) return null;
+    if (this.pictures.has(id)) return 'picture';
+    return this.kindIcon(v.node) ? 'kind' : 'preset';
+  }
+
   private applyPicture(v: NodeView) {
     const pic = this.pictures.get(v.id);
     if (pic) {
       v.icon.texture = pic;
       v.icon.scale.set((2 * v.r) / pic.width);
     } else {
+      const own = this.kindIcon(v.node);
+      if (own) {
+        v.icon.texture = own;
+        v.icon.scale.set(pixelIconScale(2 * v.r));
+        return;
+      }
       v.icon.texture =
         this.icons.textures[v.node.icon % this.icons.textures.length] ?? this.textures.body;
       v.icon.scale.set(iconScale(2 * v.r));
@@ -322,6 +366,8 @@ export class CanvasView {
     this.background.destroy();
     this.textures.destroy();
     this.icons.destroy();
+    this.kindIcons.values().next().value?.source.destroy();
+    for (const t of this.kindIcons.values()) t.destroy();
     this.app.destroy({ removeView: true }, { children: true, texture: true, textureSource: true });
   }
 
@@ -406,7 +452,7 @@ export class CanvasView {
     v.body.alpha = lv === 'dot' ? Math.max(a, 0.6) : a;
     const pic = this.pictures.has(v.id);
     v.icon.visible = !n.ghost && (pic ? lv !== 'dot' : lv !== 'dot' && lv !== 'glyph');
-    v.icon.tint = pic ? 0xffffff : closed ? hex(fog.scene.doneInk) : INK;
+    v.icon.tint = pic || this.kindIcon(n) ? 0xffffff : closed ? hex(fog.scene.doneInk) : INK;
     v.icon.alpha = a;
     if (v.halo) v.halo.visible = lv !== 'dot';
   }

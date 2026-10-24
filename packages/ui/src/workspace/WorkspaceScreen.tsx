@@ -31,6 +31,7 @@ import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
+import { nodeIconImages } from '../icons/Icon';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapState } from '../proto/map3d';
@@ -442,13 +443,15 @@ export function WorkspaceScreen(props: {
       );
     docs.current = makeDocs.current();
 
-    CanvasView.create(el).then((v) => {
+    Promise.all([CanvasView.create(el), nodeIconImages()]).then(([v, icons]) => {
       if (cancelled) {
         v.destroy();
         return;
       }
       view = v;
       viewRef.current = v;
+      // The Chrome's icons on the nodes too (owner, 2026-10-24).
+      v.setKindIcons(icons);
       // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
       v.wireEnds = 'sockets';
       v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;

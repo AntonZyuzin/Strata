@@ -27,7 +27,15 @@ export function WhenField(props: {
   const [bad, setBad] = useState(false);
   const native = useRef<HTMLInputElement>(null);
   const field = useRef<HTMLInputElement>(null);
-  useEffect(() => setText(shown), [shown]);
+  /** Esc was pressed: the blur that follows writes nothing. */
+  const cancelled = useRef(false);
+  /** The value as last written or read: what Esc gives back before the core answers. */
+  const last = useRef(shown);
+  // A value from the core does not overwrite what is being typed.
+  useEffect(() => {
+    last.current = shown;
+    if (document.activeElement !== field.current) setText(shown);
+  }, [shown]);
   const { day, time } = splitWhen(value);
 
   const commit = (typed: string) => {
@@ -37,7 +45,8 @@ export function WhenField(props: {
       return;
     }
     setBad(false);
-    setText(showWhen(v ?? undefined, date, clock));
+    last.current = showWhen(v ?? undefined, date, clock);
+    setText(last.current);
     if ((v ?? undefined) !== value) onChange(v);
   };
 
@@ -54,12 +63,19 @@ export function WhenField(props: {
         value={text}
         spellCheck={false}
         onChange={(e) => setText(e.currentTarget.value)}
-        onBlur={(e) => commit(e.currentTarget.value)}
+        onBlur={(e) => {
+          if (cancelled.current) {
+            cancelled.current = false;
+            setText(last.current);
+            setBad(false);
+            return;
+          }
+          commit(e.currentTarget.value);
+        }}
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur();
           if (e.key === 'Escape') {
-            setText(shown);
-            setBad(false);
+            cancelled.current = true;
             e.currentTarget.blur();
           }
           e.stopPropagation();

@@ -66,7 +66,8 @@ const PULSES = 3;
 const ANTS_MS = 3000;
 const LABEL_MAX = 160;
 /** Wire ends (07 §5): sockets of radius 4u with a ring 1u, arrowheads in u. */
-const SOCKET = 4;
+/** A wire end's socket radius, u (owner, 2026-10-24: bigger, on both ends). */
+const SOCKET = 6;
 const ARROW = { length: 10, half: 5 };
 /** The midway arrow of `both`: at 60 % of the wire, as the chevron of 06 §6.3. */
 const MID = { t: 0.6, length: 8, half: 4 };
@@ -102,7 +103,7 @@ export class Decor {
   private antsFor: string | null = null;
   private antsStart = 0;
   reducedMotion = false;
-  ends: WireEndStyle = 'arrow';
+  ends: WireEndStyle = 'sockets';
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -173,12 +174,12 @@ export class Decor {
       const hovered = ia.hover === v.id;
       const closed = isClosed(n);
 
-      // Colour band 3u inside the rim, then the rim 1u (07 §4.3).
-      if (n.color !== null && !n.ghost) {
-        rings.add(s.x, s.y, R - 1.5 * U, 3 * U, {
-          color: hex(people[n.color] ?? palette.paper),
-          alpha: a,
-        });
+      // A colour is the rim itself, 6u across it (owner, 2026-10-24: thicker
+      // than the 3u band of 07 §4.3, readable from afar).
+      const coloured = n.color !== null && !n.ghost;
+      const tint = hex(people[n.color ?? 0] ?? palette.paper);
+      if (coloured) {
+        rings.add(s.x, s.y, R - U, 6 * U, { color: tint, alpha: a });
       }
       if (n.ghost) {
         rings.add(s.x, s.y, R - 0.5 * U, U, { color: PAPER, alpha: a, dash: 3 * U, gap: 3 * U });
@@ -191,7 +192,7 @@ export class Decor {
         });
         hatch(this.hatching, s.x, s.y, R - U, 4 * U);
         hatched = true;
-      } else {
+      } else if (!coloured) {
         rings.add(s.x, s.y, R - 0.5 * U, U, { color: INK, alpha: RIM * a });
       }
       // Networks: the second ring of the «stack» (07 §4.4).
@@ -208,15 +209,20 @@ export class Decor {
       // Opaque even on a dimmed node: paper already blended over the Scene,
       // so the wire under a mark never shows through (✅ S9 2026-10-23).
       const paper = over(INK, PAPER, a);
+      // A socket, the same on both ends (owner, 2026-10-24): a dark disc,
+      // a ring and a dot in the node's colour, or paper.
+      const mark = coloured ? tint : paper;
+      const socket = (x: number, y: number) => {
+        rings.dot(x, y, SOCKET * U, INK);
+        rings.add(x, y, (SOCKET - 2) * U, 1.5 * U, { color: mark });
+        rings.dot(x, y, 2 * U, mark);
+      };
       if (lv !== 'glyph') {
         for (const dst of v.outputs) {
           const p = socketAt(v, dst);
           if (!p) continue;
           taken.push({ angle: Math.atan2(p.dy, p.dx), reach: SOCKET * U });
-          const x = s.x + p.dx * R;
-          const y = s.y + p.dy * R;
-          rings.dot(x, y, SOCKET * U, paper);
-          rings.add(x, y, (SOCKET - 0.5) * U, U, { color: INK });
+          socket(s.x + p.dx * R, s.y + p.dy * R);
         }
         for (const src of v.inputs) {
           const p = socketAt(v, src);
@@ -224,12 +230,7 @@ export class Decor {
           // An arrowhead touches the rim with its tip only.
           const reach = this.ends === 'arrow' ? (ARROW.half / 2) * U : SOCKET * U;
           taken.push({ angle: Math.atan2(p.dy, p.dx), reach });
-          if (this.ends !== 'arrow') {
-            const x = s.x + p.dx * R;
-            const y = s.y + p.dy * R;
-            rings.dot(x, y, SOCKET * U, INK);
-            rings.add(x, y, (SOCKET - 0.5) * U, U, { color: paper });
-          }
+          if (this.ends !== 'arrow') socket(s.x + p.dx * R, s.y + p.dy * R);
           if (this.ends === 'sockets') continue;
           const c = screenCurve(cam, src, v);
           const head = this.ends === 'arrow' ? ARROW : MID;

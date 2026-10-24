@@ -140,9 +140,9 @@ function saveLayout(kind: NetLayout): void {
 function loadEnds(): WireEndStyle {
   try {
     const v = localStorage.getItem(ENDS_KEY);
-    return WIRE_END_STYLES.find((s) => s === v) ?? 'arrow';
+    return WIRE_END_STYLES.find((s) => s === v) ?? 'sockets';
   } catch {
-    return 'arrow';
+    return 'sockets';
   }
 }
 

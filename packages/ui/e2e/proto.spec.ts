@@ -472,10 +472,11 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
           }
         }
         return {
-          // 2 px out of the source's rim, inside its socket.
-          source: lum(a.x + ua.x * (a.r + 2), a.y + ua.y * (a.r + 2)),
-          // 1.5 px inside the target's rim, inside a hollow socket if there is one.
-          target: lum(b.x + ub.x * (b.r - 1.5), b.y + ub.y * (b.r - 1.5)),
+          // The centres of the sockets, on the rims.
+          source: lum(a.x + ua.x * a.r, a.y + ua.y * a.r),
+          target: lum(b.x + ub.x * b.r, b.y + ub.y * b.r),
+          // Across the wire, 5.5 px from the source socket's centre: its dark disc.
+          disc: lum(a.x + ua.x * a.r - ua.y * 5.5, a.y + ua.y * a.r + ua.x * 5.5),
           bright,
         };
       },
@@ -483,18 +484,17 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
     );
   };
 
-  // Default: a solid socket at the source, an arrowhead at the target.
-  const arrow = await measure();
-  expect(arrow.source).toBeGreaterThan(0.8);
-  expect(arrow.target).toBeGreaterThan(0.6);
-  expect(arrow.bright).toBeGreaterThan(120);
-  // Circles: a hollow ink socket at the target and no arrowhead.
-  await page.locator('.proto-ends label', { has: page.locator('input[value="sockets"]') }).click();
+  // Default (✅ Q-07-20): circles on both ends — a bright dot in a dark disc.
+  const circles = await measure();
+  expect(circles.source).toBeGreaterThan(0.8);
+  expect(circles.target).toBeGreaterThan(0.8);
+  expect(circles.disc).toBeLessThan(0.3);
+  // Arrows: an arrowhead at the target, more bright pixels where the wire enters.
+  await page.locator('.proto-ends label', { has: page.locator('input[value="arrow"]') }).click();
   await page.mouse.move(2, 790);
-  const sockets = await measure();
-  expect(sockets.source).toBeGreaterThan(0.8);
-  expect(sockets.target).toBeLessThan(0.3);
-  expect(sockets.bright).toBeLessThan(100);
+  const arrows = await measure();
+  expect(arrows.source).toBeGreaterThan(0.8);
+  expect(arrows.bright).toBeGreaterThan(circles.bright + 40);
   await context.close();
 });
 

@@ -26,8 +26,6 @@ import {
   type MenuTarget,
   type Pixels,
   processBackdrop,
-  WIRE_END_STYLES,
-  type WireEndStyle,
 } from '@strata/canvas';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
@@ -66,7 +64,6 @@ interface Camera {
 }
 
 const RECENT_KEY = 'strata.tabmenu.recent';
-const ENDS_KEY = 'strata.proto.ends';
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
@@ -76,15 +73,6 @@ function loadRecent(): string[] {
     return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   } catch {
     return [];
-  }
-}
-
-function loadEnds(): WireEndStyle {
-  try {
-    const v = localStorage.getItem(ENDS_KEY);
-    return WIRE_END_STYLES.find((s) => s === v) ?? 'arrow';
-  } catch {
-    return 'arrow';
   }
 }
 
@@ -461,7 +449,8 @@ export function WorkspaceScreen(props: {
       }
       view = v;
       viewRef.current = v;
-      v.wireEnds = loadEnds();
+      // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
+      v.wireEnds = 'sockets';
       v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       // `&plain`: no background, for e2e on software WebGL (see Prototype).
       if (new URLSearchParams(window.location.search).has('plain')) {

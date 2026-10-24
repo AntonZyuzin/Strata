@@ -56,12 +56,13 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
     expect(statusGlyph(node({ kind: 'network', fold }))).toEqual(['clock', 'attention']);
   });
 
-  it('puts the input socket on the line of centres, facing the source (07 §5)', () => {
+  it('puts a socket where the wire meets the rim, along its axis (owner, 2026-10-24)', () => {
     const target = { x: 0, y: 0, r: 16 };
     expect(socketAt(target, { x: 0, y: -100, r: 16 })).toEqual({ dx: 0, dy: -1 });
-    const p = socketAt(target, { x: 30, y: 40, r: 8 });
-    expect(p?.dx).toBeCloseTo(0.6);
-    expect(p?.dy).toBeCloseTo(0.8);
+    // More below than aside: the bottom of the rim.
+    expect(socketAt(target, { x: 30, y: 40, r: 8 })).toEqual({ dx: 0, dy: 1 });
+    // More aside than below: the side.
+    expect(socketAt(target, { x: -50, y: 40, r: 8 })).toEqual({ dx: -1, dy: 0 });
     // Overlapping bubbles: no wire to show, no socket.
     expect(socketAt(target, { x: 20, y: 0, r: 8 })).toBeNull();
   });
@@ -74,12 +75,16 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
     expect(a?.y).toBeCloseTo(184);
     expect(a?.dx).toBeCloseTo(0);
     expect(a?.dy).toBeCloseTo(1);
-    // Sideways the S-curve still arrives from above: the arrow follows it,
-    // not the line of centres.
+    // Sideways the wire runs along x and arrives square to the rim.
     const side = controls({ ax: 0, ay: 0, bx: 200, by: 0, ra: 16, rb: 16 });
     const b = arrowOn(side, 1, 10);
     expect(b?.x).toBeCloseTo(184);
-    expect(b?.dy ?? 0).toBeGreaterThan(0.5);
+    expect(b?.dx).toBeCloseTo(1);
+    // Askew, an S: it leaves the source's side and enters the target's side.
+    const s = controls({ ax: 0, ay: 0, bx: 300, by: 120, ra: 16, rb: 16 });
+    expect([s[0], s[1], s[6], s[7]]).toEqual([16, 0, 284, 120]);
+    expect(s[3]).toBe(0);
+    expect(s[5]).toBe(120);
     // The midway arrow sits on the curve at 60 %.
     expect(arrowOn(down, 0.6, 8)?.y).toBeGreaterThan(100);
     // A wire shorter than the arrow carries none.

@@ -6,10 +6,22 @@
 
 /** Cap of the control point distance; a stand-in until spike 9 tunes the curve (S1). */
 export const MAX_BEND = 240;
-/** Control points at 0.3–0.5 of the length along the flow; the prototype uses the middle. */
-export const BEND = 0.4;
-/** Segments of the polyline, the same as the triangle strip of the shader. */
-export const SEGMENTS = 16;
+/** The least control point distance: a wire leaves a bubble square to its rim. */
+export const MIN_BEND = 16;
+/** Control points at half the gap along the flow: an even S (owner, 2026-10-24). */
+export const BEND = 0.5;
+/** Segments of the polyline, the same as the triangle strip of the shader: no visible kinks. */
+export const SEGMENTS = 48;
+
+/**
+ * The axis a wire runs along between two bubbles (owner, 2026-10-24): side
+ * by side it leaves the side, one above the other — the bottom or the top.
+ * A unit vector from the first centre towards the second along that axis.
+ */
+export function axisOf(dx: number, dy: number): { x: number; y: number } {
+  if (Math.abs(dx) >= Math.abs(dy)) return { x: dx >= 0 ? 1 : -1, y: 0 };
+  return { x: 0, y: dy >= 0 ? 1 : -1 };
+}
 
 export interface WireEnds {
   ax: number;
@@ -22,21 +34,23 @@ export interface WireEnds {
   bend?: number;
 }
 
-/** Control points: ends on the circles along the line of centres, tangents down the flow. */
+/**
+ * Control points: the ends where the axis meets the rims, the tangents along
+ * the axis — square to the rim at both ends, an S between them.
+ */
 export function controls(
   w: WireEnds,
 ): [number, number, number, number, number, number, number, number] {
   const dx = w.bx - w.ax;
   const dy = w.by - w.ay;
-  const len = Math.max(Math.hypot(dx, dy), 1e-4);
-  const ux = dx / len;
-  const uy = dy / len;
-  const a0 = w.ax + ux * w.ra;
-  const a1 = w.ay + uy * w.ra;
-  const b0 = w.bx - ux * w.rb;
-  const b1 = w.by - uy * w.rb;
-  const h = (w.bend ?? BEND) * Math.min(Math.max(len - w.ra - w.rb, 0), MAX_BEND);
-  return [a0, a1, a0, a1 + h, b0, b1 - h, b0, b1];
+  const u = axisOf(dx, dy);
+  const a0 = w.ax + u.x * w.ra;
+  const a1 = w.ay + u.y * w.ra;
+  const b0 = w.bx - u.x * w.rb;
+  const b1 = w.by - u.y * w.rb;
+  const along = Math.abs(dx * u.x + dy * u.y) - w.ra - w.rb;
+  const h = Math.min(Math.max((w.bend ?? BEND) * Math.max(along, 0), MIN_BEND), MAX_BEND);
+  return [a0, a1, a0 + u.x * h, a1 + u.y * h, b0 - u.x * h, b1 - u.y * h, b0, b1];
 }
 
 /** Point of the cubic at t, written into `out`. */

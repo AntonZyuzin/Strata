@@ -33,6 +33,7 @@ out float vHead;
 out vec4 vColor;
 
 const float MAX_BEND = 240.0;
+const float MIN_BEND = 16.0;
 
 vec2 bezier(vec2 p0, vec2 p1, vec2 p2, vec2 p3, float t) {
   float u = 1.0 - t;
@@ -45,14 +46,17 @@ vec2 tangent(vec2 p0, vec2 p1, vec2 p2, vec2 p3, float t) {
 }
 
 void main() {
+  // The axis of curve.ts axisOf: side by side along x, else along y.
   vec2 d = aEnds.zw - aEnds.xy;
-  float centres = max(length(d), 1e-4);
-  vec2 dir = d / centres;
-  vec2 a = aEnds.xy + dir * aRadii.x;
-  vec2 b = aEnds.zw - dir * aRadii.y;
-  float h = aBend * min(max(centres - aRadii.x - aRadii.y, 0.0), MAX_BEND);
-  vec2 c1 = a + vec2(0.0, h);
-  vec2 c2 = b - vec2(0.0, h);
+  vec2 axis = abs(d.x) >= abs(d.y)
+    ? vec2(d.x >= 0.0 ? 1.0 : -1.0, 0.0)
+    : vec2(0.0, d.y >= 0.0 ? 1.0 : -1.0);
+  vec2 a = aEnds.xy + axis * aRadii.x;
+  vec2 b = aEnds.zw - axis * aRadii.y;
+  float along = abs(dot(d, axis)) - aRadii.x - aRadii.y;
+  float h = clamp(aBend * max(along, 0.0), MIN_BEND, MAX_BEND);
+  vec2 c1 = a + axis * h;
+  vec2 c2 = b - axis * h;
   float t = aPosition.x;
   vec2 p = bezier(a, c1, c2, b, t);
   vec2 tg = tangent(a, c1, c2, b, t);

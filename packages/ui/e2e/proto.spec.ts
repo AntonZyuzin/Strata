@@ -455,12 +455,13 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
         const a = e.node(pick.from);
         const b = e.node(pick.to);
         if (!e.free(a.x, a.y) || !e.free(b.x, b.y)) throw new Error('ends under the Chrome');
-        const unit = (p: Pt, q: Pt) => {
-          const d = Math.hypot(q.x - p.x, q.y - p.y);
-          return { x: (q.x - p.x) / d, y: (q.y - p.y) / d };
-        };
-        const ua = unit(a, b);
-        const ub = unit(b, a);
+        // A wire meets the rims along its axis (curve.ts axisOf).
+        const axis = (p: Pt, q: Pt) =>
+          Math.abs(q.x - p.x) >= Math.abs(q.y - p.y)
+            ? { x: q.x >= p.x ? 1 : -1, y: 0 }
+            : { x: 0, y: q.y >= p.y ? 1 : -1 };
+        const ua = axis(a, b);
+        const ub = axis(b, a);
         // Bright pixels outside the target's rim within 12 px of where the wire enters.
         const jx = b.x + ub.x * b.r;
         const jy = b.y + ub.y * b.r;
@@ -471,10 +472,18 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
             if (lum(x, y) > 0.8) bright++;
           }
         }
+        // The brightest point within 1.5 px: the dot is 2u, the centre may be off by a pixel.
+        const peak = (x: number, y: number) => {
+          let m = 0;
+          for (let oy = -1.5; oy <= 1.5; oy += 0.5) {
+            for (let ox = -1.5; ox <= 1.5; ox += 0.5) m = Math.max(m, lum(x + ox, y + oy));
+          }
+          return m;
+        };
         return {
           // The centres of the sockets, on the rims.
-          source: lum(a.x + ua.x * a.r, a.y + ua.y * a.r),
-          target: lum(b.x + ub.x * b.r, b.y + ub.y * b.r),
+          source: peak(a.x + ua.x * a.r, a.y + ua.y * a.r),
+          target: peak(b.x + ub.x * b.r, b.y + ub.y * b.r),
           // Across the wire, 5.5 px from the source socket's centre: its dark disc.
           disc: lum(a.x + ua.x * a.r - ua.y * 5.5, a.y + ua.y * a.r + ua.x * 5.5),
           bright,

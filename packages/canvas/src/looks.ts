@@ -1,6 +1,6 @@
 import type { GraphNode, NodeClass, NodeKind } from '@strata/backend';
 import { fog, type GlyphName, hex, palette } from '@strata/design-tokens';
-import { pointAt } from './curve';
+import { axisOf, pointAt } from './curve';
 import type { Plate } from './textures';
 
 /**
@@ -73,9 +73,10 @@ export const WIRE_END_STYLES: WireEndStyle[] = ['sockets', 'arrow', 'both'];
 export function socketAt(node: Circle, src: Circle): { dx: number; dy: number } | null {
   const dx = src.x - node.x;
   const dy = src.y - node.y;
-  const d = Math.hypot(dx, dy);
-  if (d <= node.r + src.r) return null;
-  return { dx: dx / d, dy: dy / d };
+  if (Math.hypot(dx, dy) <= node.r + src.r) return null;
+  // Where the wire meets the rim: along its axis (curve.ts axisOf).
+  const u = axisOf(dx, dy);
+  return { dx: u.x, dy: u.y };
 }
 
 /**

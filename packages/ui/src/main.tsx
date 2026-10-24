@@ -1,4 +1,4 @@
-import { applyTheme, glyphUrl } from '@strata/design-tokens';
+import { applyTheme, fog, glyphUrl } from '@strata/design-tokens';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
@@ -8,6 +8,9 @@ import { loadPixelPrefs, setPixelPrefs } from './pixel';
 
 applyTheme(document.documentElement);
 document.documentElement.style.setProperty('--st-check', glyphUrl('check'));
+// The marks at the right of selects and date fields, in the text's colour (07 §8.2).
+document.documentElement.style.setProperty('--st-chevron', glyphUrl('unfolded', fog.color.text));
+document.documentElement.style.setProperty('--st-calendar', glyphUrl('calendar', fog.color.text));
 // The pixel unit and pixel font sizes follow the DPR (07 §2.3), also when it changes.
 setPixelPrefs(loadPixelPrefs());
 

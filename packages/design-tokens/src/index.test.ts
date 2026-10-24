@@ -89,6 +89,17 @@ describe('glyphs (07 §6.2)', () => {
     }
   });
 
+  it('put the marks of selects and date fields on one axis (review 2026-10-24)', () => {
+    const middle = (name: 'calendar' | 'unfolded') => {
+      const cols = GLYPHS[name].flatMap((row) =>
+        [...row].flatMap((c, x) => (c === '#' ? [x] : [])),
+      );
+      return (Math.min(...cols) + Math.max(...cols)) / 2;
+    };
+    expect(middle('calendar')).toBe(middle('unfolded'));
+    expect(glyphSvg('calendar', '#e6e6e6')).toContain('fill="#e6e6e6"');
+  });
+
   it('become an SVG of whole squares', () => {
     const svg = glyphSvg('bang');
     expect(svg).toContain('viewBox="0 0 8 8"');

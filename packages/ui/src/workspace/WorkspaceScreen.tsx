@@ -33,6 +33,7 @@ import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { nodeIconFile, nodeIconImages } from '../icons/Icon';
+import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapState } from '../proto/map3d';
@@ -103,24 +104,32 @@ export interface WorkspaceBridge {
   /** Undo and redo from the app's bar (owner, 2026-10-24). */
   undo(): void;
   redo(): void;
+  /** The star map and back (08 §7), as `M` does. */
+  map(): void;
 }
 
-/** What the bar's undo and redo show: whether they can, and the step. */
+/** What the bar shows of the open workspace: undo and redo, the star map. */
 export interface UndoState {
   canUndo: boolean;
   canRedo: boolean;
   /** The step undo would take back, for its tooltip. */
   step: string;
+  /** The star map is shown, or on its way. */
+  map: boolean;
 }
 
 export function WorkspaceScreen(props: {
   locale: Locale;
   home: HomeBackend;
   opened: Opened;
+  /** How dates and times read (✅ Q-06-23). */
+  prefs: Prefs;
+  /** «Настройки» are in front: the canvas leaves the keys alone. */
+  covered: boolean;
   bridge: MutableRefObject<WorkspaceBridge | null>;
   onUndoState: (s: UndoState) => void;
 }) {
-  const { locale, home, opened } = props;
+  const { locale, home, opened, covered } = props;
   const core = home.core;
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<CanvasView | null>(null);
@@ -161,6 +170,8 @@ export function WorkspaceScreen(props: {
     at: { x: number; y: number; side: 'left' | 'right' };
   } | null>(null);
   const [board, setBoard] = useState<{ id: string; doc: LoroDoc } | null>(null);
+  /** A list opened: its items are in the panel, the keyboard goes there once. */
+  const [listFocus, setListFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
@@ -222,8 +233,14 @@ export function WorkspaceScreen(props: {
     };
 
     const events: EditorEvents = {
-      tabMenu: (e) => setMenu(e),
-      nameInput: (e) => setName(e),
+      // The editor speaks in points of the canvas, which sits right of «Слои»:
+      // the Tab menu is fixed to the page, the name field lies in this screen.
+      tabMenu: (e) => {
+        const r = el.getBoundingClientRect();
+        setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top });
+      },
+      nameInput: (e) =>
+        setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
       toast: (e) => toast(e.key, e.params, e.key !== 'proto.toast.exists'),
       // No explanatory lines on screen: hints live in tooltips and menus.
       hint: () => undefined,
@@ -285,19 +302,22 @@ export function WorkspaceScreen(props: {
         }
         // A task and an asset are their panel (ADR-0010): it is already open.
         if (n.kind === 'task' || n.kind === 'asset') return;
-        if (n.kind !== 'note') {
-          toast('ws.notOpenable');
+        // So is a list (owner, 2026-10-24): the keyboard goes to its new item.
+        if (n.kind === 'checklist') {
+          setListFocus(id);
           return;
         }
-        // Beside the bubble, on the side with more room (06 §13.1).
+        // Beside the bubble, on the side with more room (06 §13.1): the canvas
+        // runs under the properties panel, which takes its right edge.
         const s = v.camera.toScreen(p.x, p.y);
         const r = p.r * v.camera.zoom;
-        const side = s.x < v.width / 2 ? 'right' : 'left';
-        const at = {
-          side,
-          x: side === 'right' ? s.x + r + 24 : s.x - r - 24,
-          y: Math.max(8, Math.min(s.y - 120, v.height - 320)),
-        } as const;
+        const panel = el.parentElement?.querySelector<HTMLElement>('.ws-inspector');
+        const room = v.width - (panel?.offsetWidth ?? 0);
+        const side = s.x < room / 2 ? 'right' : 'left';
+        // In this screen's points: the canvas starts right of «Слои».
+        const x = el.offsetLeft + (side === 'right' ? s.x + r + 24 : s.x - r - 24);
+        const y = el.offsetTop + Math.max(8, Math.min(s.y - 120, v.height - 320));
+        const at = { side, x, y } as const;
         d.doc(id).then((doc) => setNote({ id, doc, at }), refused);
       },
     };
@@ -354,6 +374,12 @@ export function WorkspaceScreen(props: {
       graph.current = g;
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
+      // The properties panel covers the canvas's right edge while one node is
+      // chosen: framing keeps clear of it (review 2026-10-24).
+      ed.coveredRight = () =>
+        ed.selection.size === 1
+          ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
+          : 0;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d);
@@ -499,8 +525,11 @@ export function WorkspaceScreen(props: {
   }, []);
 
   useEffect(() => {
-    editor.current?.setOverlayOpen(menu !== null || name !== null || view3d !== '2d' || boardFocus);
-  }, [menu, name, view3d, boardFocus]);
+    // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
+    editor.current?.setOverlayOpen(
+      menu !== null || name !== null || view3d !== '2d' || boardFocus || covered,
+    );
+  }, [menu, name, view3d, boardFocus, covered]);
 
   useEffect(() => {
     if (view3d !== '3d') return;
@@ -542,6 +571,7 @@ export function WorkspaceScreen(props: {
       save,
       undo: () => editor.current?.undo(),
       redo: () => editor.current?.redo(),
+      map: () => map3d.current?.toggle(),
       leave: async () => {
         if (leaving.current) return { picture: Promise.resolve() };
         leaving.current = true;
@@ -634,6 +664,9 @@ export function WorkspaceScreen(props: {
     if (!inside) ops.push({ op: 'connect', from: parent.id, to: id });
     void coreStep(ops, 'proto.change.create', { name }).catch(failed);
   };
+
+  // Another node in the panel: a list's open request no longer stands.
+  useEffect(() => setListFocus((f) => (f === details?.id ? f : null)), [details?.id]);
 
   // The selected asset's file for the panel, typed so the browser can show it.
   useEffect(() => {
@@ -743,7 +776,8 @@ export function WorkspaceScreen(props: {
             setPeople(ppl);
             return id;
           },
-          description: async () => docs.current?.doc(details.id) ?? null,
+          content: async () => docs.current?.doc(details.id) ?? null,
+          count: ({ done, total }) => g.setFold(details.id, { done, total, burning: null }),
           file: (file) =>
             void file
               .arrayBuffer()
@@ -878,8 +912,8 @@ export function WorkspaceScreen(props: {
   const path = net?.path ?? [];
   const { onUndoState } = props;
   useEffect(
-    () => onUndoState({ canUndo, canRedo, step: lastStep }),
-    [onUndoState, canUndo, canRedo, lastStep],
+    () => onUndoState({ canUndo, canRedo, step: lastStep, map: view3d !== '2d' }),
+    [onUndoState, canUndo, canRedo, lastStep, view3d],
   );
 
   return (
@@ -891,6 +925,7 @@ export function WorkspaceScreen(props: {
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
     >
+      <div className="ws-panel-probe" aria-hidden="true" />
       <div
         ref={host}
         className="proto-canvas"
@@ -934,6 +969,10 @@ export function WorkspaceScreen(props: {
           node={details}
           people={people}
           actions={actions}
+          focusList={listFocus === details.id}
+          noteOpen={note?.id === details.id}
+          when={reading(props.prefs)}
+          onListFocused={() => setListFocus(null)}
         />
       ) : null}
       {ctx ? (

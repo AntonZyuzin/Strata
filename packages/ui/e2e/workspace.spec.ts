@@ -114,6 +114,52 @@ async function cardAction(page: Page, card: string, action: string, right = fals
 /** Every step so far is written by the core. */
 const settled = (page: Page) => page.evaluate(() => window.__strataWs?.settled());
 
+/** A list from the Tab menu, named at once, opened: its items are in the panel. */
+async function openList(page: Page, kind: string, name: string) {
+  const c = await box(page, '.proto-canvas');
+  await page.mouse.move(c.x + c.width * 0.3, c.y + c.height * 0.4);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type(kind);
+  await page.locator('.tab-menu-row', { hasText: kind }).first().click();
+  await expect(page.locator('.name-input')).toBeVisible();
+  await page.keyboard.type(name);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await graphNow(page)).names).toContain(name);
+  await select(page, name);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ws-inspector .list-new')).toBeFocused();
+}
+
+/** A task from the Tab menu, named at once and chosen: its panel is open. */
+async function createTask(page: Page, name: string) {
+  const c = await box(page, '.proto-canvas');
+  await page.mouse.move(c.x + c.width * 0.3, c.y + c.height * 0.4);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('Задача');
+  await page.locator('.tab-menu-row', { hasText: 'Задача' }).first().click();
+  await expect(page.locator('.name-input')).toBeVisible();
+  await page.keyboard.type(name);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await graphNow(page)).names).toContain(name);
+  await select(page, name);
+  await expect(page.locator('.ws-inspector')).toBeVisible();
+}
+
+/** The items of the list in the panel: two spaces a level, `x` when ticked. */
+const outline = (page: Page) =>
+  page.locator('.ws-inspector .list-row').evaluateAll((rows) =>
+    rows.map((row) => {
+      let depth = 0;
+      for (let ul = row.closest('ul')?.parentElement?.closest('ul'); ul; ) {
+        depth++;
+        ul = ul.parentElement?.closest('ul') ?? null;
+      }
+      const tick = row.querySelector<HTMLInputElement>('.ins-tick')?.checked ? 'x' : ' ';
+      const text = row.querySelector<HTMLInputElement>('.list-text')?.value ?? '';
+      return `${'  '.repeat(depth)}[${tick}] ${text}`;
+    }),
+  );
+
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
   test.describe(`home ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, () => {
     test.use({ viewport, deviceScaleFactor, locale: 'ru-RU' });
@@ -125,7 +171,10 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       await expect(page.locator('.home-card')).toHaveCount(1);
       const ru = await box(page, '.home-top');
       expect(await overflowing(page, '.home'), 'RU text must fit').toEqual([]);
-      await page.locator('.segmented label', { hasText: 'EN' }).click();
+      // The language is in «Настройки» (✅ Q-06-23); the logo brings the home back.
+      await page.locator('.tabbar-settings').click();
+      await page.locator('.settings .segmented label', { hasText: 'EN' }).click();
+      await page.locator('.tabbar-logo').click();
       await expect(page.locator('.home-new')).toHaveText('New workspace');
       const en = await box(page, '.home-top');
       expect(await overflowing(page, '.home'), 'EN text must fit').toEqual([]);
@@ -135,6 +184,95 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
         );
       }
     });
+  });
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
+  test(`a list's panel and «Слои» keep their size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const [locale, kind] of [
+      ['ru-RU', 'Список'],
+      ['en-US', 'List'],
+    ] as const) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Списки');
+      await openList(page, kind, 'Очень длинное название списка для проверки обрезки');
+      await page.keyboard.type(
+        'Пункт с длинным текстом, который не помещается в одну строку панели',
+      );
+      await page.keyboard.press('Enter');
+      const panel = page.locator('.ws-inspector');
+      await panel.locator('.list-text').first().click();
+      await page.keyboard.press('End');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Вложенный пункт');
+      await page.keyboard.press('Tab');
+      await panel.locator('.ins-tick').first().check();
+      await expect(panel.locator('.ins-progress')).toBeVisible();
+      expect(await overflowing(page, '.ws-inspector'), `${locale} text must fit`).toEqual([]);
+      expect(await overflowing(page, '.ws-layers'), `${locale} layers must fit`).toEqual([]);
+      boxes.push({
+        panel: await box(page, '.ws-inspector'),
+        heading: await box(page, '.ws-inspector .ins-heading'),
+        item: await box(page, '.ws-inspector .ins-section > .ins-tree > li > .list-row .list-text'),
+        nested: await box(page, '.ws-inspector .ins-tree .ins-tree .list-text'),
+        fresh: await box(page, '.ws-inspector .list-new'),
+        layers: await box(page, '.ws-layers'),
+        layersTitle: await box(page, '.layers-title'),
+        layer: await box(page, '.layer-row'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of [
+      'panel',
+      'heading',
+      'item',
+      'nested',
+      'fresh',
+      'layers',
+      'layersTitle',
+      'layer',
+    ] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
+  test(`«Настройки» keep their size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }) => {
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await expect(page.locator('.home-empty')).toBeVisible();
+      await page.locator('.tabbar-settings').click();
+      await expect(page.locator('.settings')).toBeVisible();
+      expect(await overflowing(page, '.settings, .tabbar'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        page: await box(page, '.settings-page'),
+        fields: await box(page, '.settings section:nth-of-type(2) .ins-fields'),
+        tab: await box(page, '.tab.is-active'),
+        gear: await box(page, '.tabbar-settings'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['page', 'fields', 'tab', 'gear'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
   });
 }
 
@@ -352,7 +490,10 @@ test.describe('a workspace on the core', () => {
     const panel = page.locator('.ws-inspector');
     await expect(panel).toBeVisible();
     await panel.getByLabel('Статус').selectOption('doing');
-    await panel.getByLabel('Дедлайн').fill('2026-12-01');
+    // The day as RU reads it (✅ Q-06-23): day first.
+    const deadline = panel.getByLabel('Дедлайн', { exact: true });
+    await deadline.fill('01/12/2026');
+    await deadline.press('Enter');
     const attrs = () =>
       page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.attrs ?? {}, id);
     await expect.poll(attrs).toMatchObject({ status: 'doing', deadline: '2026-12-01' });
@@ -423,6 +564,94 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ins-description .cm-content')).toContainText('Удар');
   });
 
+  test('a list: items with ticks, nested, in its panel (05 §4.2, 06 §13.1)', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Дом');
+    await openList(page, 'Список', 'Покупки');
+    const panel = page.locator('.ws-inspector');
+    // A list has no window: its panel is the list.
+    await expect(panel.locator('.ins-open')).toHaveCount(0);
+    // The new item's field: Enter adds an item and stays for the next.
+    await page.keyboard.type('Хлеб');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Молоко');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '[ ] Молоко']);
+    await expect(panel.locator('.list-new')).toBeFocused();
+    // Enter at the end of an item: a new one below; Tab nests it.
+    await panel.locator('.list-text').first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Белый');
+    await page.keyboard.press('Tab');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '  [ ] Белый', '[ ] Молоко']);
+    // Keys typed into the list stay there: the canvas has made no node.
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    // Ticks: a click and Ctrl+Enter; the heading and the bubble count them.
+    await panel.locator('.ins-tick').nth(1).check();
+    await expect(panel.locator('.ins-progress')).toHaveText('1 из 3');
+    // Typing merges into one step for a second (10 §9): the next tick is a step of its own.
+    await page.waitForTimeout(1_100);
+    await panel.locator('.list-text').nth(2).click();
+    await page.keyboard.press('Control+Enter');
+    await expect(panel.locator('.ins-progress')).toHaveText('2 из 3');
+    const id = await idOf(page, 'Покупки');
+    const fold = () =>
+      page.evaluate((id) => {
+        const f = window.__strataWs?.graph()?.nodes.get(id) as { fold?: unknown } | undefined;
+        return f?.fold;
+      }, id);
+    await expect.poll(fold).toMatchObject({ done: 2, total: 3 });
+    // The list's own undo, not the canvas's.
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '  [x] Белый', '[ ] Молоко']);
+    await page.keyboard.press('Control+Shift+z');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '  [x] Белый', '[x] Молоко']);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    // Alt+↑ moves an item among its siblings.
+    await page.keyboard.press('Alt+ArrowUp');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    // Enter on an empty nested item steps it out; Backspace at the start joins it up.
+    await panel.locator('.list-text').nth(2).click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(() => outline(page))
+      .toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый', '  [ ] ']);
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(() => outline(page))
+      .toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый', '[ ] ']);
+    await page.keyboard.press('Backspace');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    await expect(panel.locator('.list-text').nth(2)).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '[x] Белый']);
+    // The right button: the same, as words.
+    await panel.locator('.list-text').nth(2).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Вложить' }).click();
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    // Esc: the canvas gets the keyboard back; a click selects, Enter opens again.
+    await page.keyboard.press('Escape');
+    await expect(panel.locator('.list-text').nth(2)).not.toBeFocused();
+    await select(page, 'Покупки');
+    await settled(page);
+    await expect(panel.locator('.list-new')).not.toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(panel.locator('.list-new')).toBeFocused();
+    await page.keyboard.press('Escape');
+    // A restart: the items from the core, the ticks on the bubble.
+    await settled(page);
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await expect.poll(fold).toMatchObject({ done: 2, total: 3 });
+    await select(page, 'Покупки');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    await expect(panel.locator('.ins-progress')).toHaveText('2 из 3');
+  });
+
   test('a picture dropped on the canvas is an asset with the picture in its circle', async ({
     page,
   }) => {
@@ -480,15 +709,79 @@ test.describe('a workspace on the core', () => {
     ).toBe(16);
   });
 
-  test('the profile is kept on this device', async ({ page }) => {
+  test('the star map opens from the bar, not only by M (08 §7)', async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    await createNode(page, 640, 400, 'Звезда');
+    const map = page.getByRole('button', { name: 'Холст или звёздная карта (M)' });
+    await expect(map).toHaveAttribute('aria-pressed', 'false');
+    await map.click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-view', '3d', {
+      timeout: 30_000,
+    });
+    await expect(map).toHaveAttribute('aria-pressed', 'true');
+    await map.click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-view', '2d', {
+      timeout: 10_000,
+    });
+    await expect(map).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('the profile and the language are kept on this device, in «Настройки»', async ({ page }) => {
     await page.goto('/?plain');
     await expect(page.locator('.home-empty')).toBeVisible();
-    const field = page.locator('.home-profile .field');
+    await page.locator('.tabbar-settings').click();
+    const field = page.locator('.settings').getByLabel('Имя', { exact: true });
     await field.fill('Антон');
     await field.press('Enter');
     // Written to this device before the reload.
-    await expect(page.locator('.home')).toHaveAttribute('data-profile', 'Антон');
+    await expect(page.locator('.settings')).toHaveAttribute('data-profile', 'Антон');
+    await page.locator('.settings .segmented label', { hasText: 'EN' }).click();
     await page.reload();
-    await expect(page.locator('.home-profile .field')).toHaveValue('Антон');
+    await expect(page.locator('.home-new')).toHaveText('New workspace');
+    await page.locator('.tabbar-settings').click();
+    await expect(page.locator('.settings').getByLabel('Name', { exact: true })).toHaveValue(
+      'Антон',
+    );
+  });
+
+  test('dates read as «Настройки» say: the language, or the form chosen (✅ Q-06-23)', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Сроки');
+    await createTask(page, 'Релиз');
+    const panel = page.locator('.ws-inspector');
+    const deadline = panel.getByLabel('Дедлайн', { exact: true });
+    // RU: day first, a time on a 24-hour clock; stored as the model has it.
+    await deadline.fill('26/10/2026 18:30');
+    await deadline.press('Enter');
+    const id = await idOf(page, 'Релиз');
+    await expect
+      .poll(() => page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.attrs, id))
+      .toMatchObject({ deadline: '2026-10-26T18:30' });
+    await expect(deadline).toHaveValue('26/10/2026 18:30');
+    // Not a day: a dashed frame, nothing written.
+    await deadline.fill('31/02/2026');
+    await deadline.press('Enter');
+    await expect(deadline).toHaveAttribute('aria-invalid', 'true');
+    await deadline.press('Escape');
+    await expect(deadline).toHaveValue('26/10/2026 18:30');
+    // Another form and a 12-hour clock: the same deadline reads anew.
+    await page.locator('.tabbar-settings').click();
+    await page.locator('.settings').getByLabel('Формат даты').selectOption('ymd-');
+    await page.locator('.settings').getByLabel('Время', { exact: true }).selectOption('12');
+    await page.locator('.tab-name', { hasText: 'Сроки' }).click();
+    await expect(page.locator('.settings')).toHaveCount(0);
+    await expect(deadline).toHaveValue('2026-10-26 6:30 PM');
+    // EN as the language, its own forms: month first.
+    await page.locator('.tabbar-settings').click();
+    await page.locator('.settings').getByLabel('Формат даты').selectOption('auto');
+    await page.locator('.settings').getByLabel('Время', { exact: true }).selectOption('auto');
+    await page.locator('.settings .segmented label', { hasText: 'EN' }).click();
+    await page.locator('.tab-name', { hasText: 'Сроки' }).click();
+    await expect(panel.getByLabel('Deadline', { exact: true })).toHaveValue('10/26/2026 6:30 PM');
   });
 });

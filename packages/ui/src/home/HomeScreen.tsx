@@ -3,14 +3,14 @@ import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickFolder, pickSavePath } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
-import { LocaleSwitch } from '../LocaleSwitch';
 import { IconButton } from '../TabBar';
 
 /**
  * The home screen (✅ Q-16-12): the workspaces of this device as cards, last
- * opened first, like the files of Figma; a new one, a folder from disk, the
- * local profile (✅ Q-16-14). A card opens its workspace in a tab; its
- * actions are icons on the card and its right-button menu.
+ * opened first, like the files of Figma; a new one, a folder from disk. The
+ * profile, the language and «О программе» live in «Настройки» (✅ Q-06-23).
+ * A card opens its workspace in a tab; its actions are icons on the card and
+ * its right-button menu.
  */
 
 type Dialog =
@@ -34,10 +34,8 @@ export function download(name: string, bytes: Uint8Array): void {
 
 export function HomeScreen(props: {
   locale: Locale;
-  onLocale: (l: Locale) => void;
   home: HomeBackend;
   onOpen: (opened: Opened) => void;
-  onAbout: () => void;
   onRenamed: (id: string, name: string) => void;
   onRemoved: (id: string) => void;
 }) {
@@ -46,7 +44,6 @@ export function HomeScreen(props: {
   const [previews, setPreviews] = useState<Map<string, string>>(new Map());
   const [dialog, setDialog] = useState<Dialog | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [profile, setProfile] = useState('');
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: WorkspaceEntry } | null>(null);
@@ -59,7 +56,6 @@ export function HomeScreen(props: {
       .then((s) => {
         if (!live) return;
         setState(s);
-        setProfile(s.profile.name);
       })
       .catch((e: unknown) => setError(message(e)));
     return () => {
@@ -112,12 +108,6 @@ export function HomeScreen(props: {
     },
     [onOpen],
   );
-
-  const saveProfile = () => {
-    if (state && profile.trim() !== state.profile.name) {
-      void run(() => home.setProfile({ name: profile }));
-    }
-  };
 
   const exportArchive = (w: WorkspaceEntry) =>
     run(async () => {
@@ -203,33 +193,6 @@ export function HomeScreen(props: {
             {t(locale, 'home.open')}
           </button>
         ) : null}
-        <label className="home-profile" title={t(locale, 'home.profileHint')}>
-          <span className="sr-only">{t(locale, 'home.profileHint')}</span>
-          <input
-            className="field"
-            value={profile}
-            placeholder={t(locale, 'home.profilePlaceholder')}
-            maxLength={80}
-            onChange={(e) => setProfile(e.currentTarget.value)}
-            onBlur={saveProfile}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur();
-            }}
-          />
-        </label>
-        <LocaleSwitch
-          locale={locale}
-          onChange={props.onLocale}
-          label={t(locale, 'about.language')}
-        />
-        <button
-          type="button"
-          className="home-action"
-          title={t(locale, 'home.about')}
-          onClick={props.onAbout}
-        >
-          {t(locale, 'home.about')}
-        </button>
       </div>
       <div className="home-content">
         <h1 className="home-group">{t(locale, where)}</h1>

@@ -204,6 +204,10 @@ describe('fields of a node (05 §6.1)', () => {
     expect(dueOf('2026-10-27', '2026-10-24')).toBe('soon');
     expect(dueOf('2026-10-28', '2026-10-24')).toBe('far');
     expect(dueOf('2026-10-23', '2026-10-24')).toBe('overdue');
+    // A time of day (05 §6.1): today until it has passed.
+    expect(dueOf('2026-10-24T18:30', '2026-10-24', '18:30')).toBe('today');
+    expect(dueOf('2026-10-24T18:30', '2026-10-24', '18:31')).toBe('overdue');
+    expect(dueOf('2026-10-25T09:00', '2026-10-24', '23:59')).toBe('soon');
     const { home, root, g, sync } = await start();
     g.day = () => '2026-10-24';
     g.transaction({ key: 't' }, (tx) => {

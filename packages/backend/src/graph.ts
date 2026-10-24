@@ -62,7 +62,7 @@ export interface GraphNode {
   assignees: number[];
   /** Node colour, an index into the people palette (05 §4.1, ☑ Q-05-8). */
   color: number | null;
-  /** Roll-up for folders, projects and tasks; null for other kinds. */
+  /** Roll-up for folders, projects, tasks and lists; null for other kinds. */
   fold: Fold | null;
   /** Placement in this network, world units (05 §9.2). */
   x: number;
@@ -108,16 +108,27 @@ export function today(now = new Date()): string {
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
+/** The viewer's clock as `HH:MM` (05 §6.1: a deadline's time is the viewer's). */
+export function clockNow(now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(now.getHours())}:${p(now.getMinutes())}`;
+}
+
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 }
 
-/** A deadline's state for the viewer's day (07 §4.6). */
-export function dueOf(deadline: string | undefined, day: string): Due {
+/**
+ * A deadline's state for the viewer's day (07 §4.6). A deadline is a day,
+ * `YYYY-MM-DD`, or a day and a time, `YYYY-MM-DDTHH:MM` (05 §6.1): on its
+ * day it is «today» until its time has passed, then «overdue».
+ */
+export function dueOf(deadline: string | undefined, day: string, time = clockNow()): Due {
   if (!deadline) return 'none';
-  const d = daysBetween(day, deadline);
+  const [date = deadline, at] = deadline.split('T');
+  const d = daysBetween(day, date);
   if (d < 0) return 'overdue';
-  if (d === 0) return 'today';
+  if (d === 0) return at && time > at ? 'overdue' : 'today';
   return d <= SOON_DAYS ? 'soon' : 'far';
 }
 
@@ -177,7 +188,9 @@ export interface Changeset {
  */
 export type GraphEvent =
   | { type: 'apply'; changeset: Changeset; amend: boolean }
-  | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset };
+  | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset }
+  /** A node's look changed with no step: a list's ticks in its window. */
+  | { type: 'look'; id: string };
 
 /** 06 §1.2, NFR-79: 200 steps per session. */
 export const UNDO_DEPTH = 200;
@@ -369,6 +382,21 @@ export class Graph {
     this.undoStack.push(cs);
     this.emit({ type: 'redo', changeset: cs });
     return cs;
+  }
+
+  /**
+   * A node's roll-up as its content shows it now (05 §6.4): a list's ticks
+   * while its window is open. Derived state: no step, nothing for the core.
+   */
+  setFold(id: string, fold: Fold | null): void {
+    const n = this.nodes.get(id);
+    if (!n) return;
+    const same =
+      n.fold === fold ||
+      (n.fold && fold && n.fold.done === fold.done && n.fold.total === fold.total);
+    if (same) return;
+    n.fold = fold;
+    this.emit({ type: 'look', id });
   }
 
   /** Forgets undo and redo, for example after loading the demo network. */

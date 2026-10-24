@@ -531,6 +531,26 @@ const U16 = {
     '................',
     '................',
   ],
+  // A date field's button (review 2026-10-24): a calendar on the axis of a
+  // select's triangle, so the fields' right-hand marks stand one under another.
+  calendar: [
+    '................',
+    '................',
+    '....#......#....',
+    '..############..',
+    '..############..',
+    '..#..........#..',
+    '..#.##.##.##.#..',
+    '..#..........#..',
+    '..#.##.##.##.#..',
+    '..#..........#..',
+    '..#.##.##.##.#..',
+    '..#..........#..',
+    '..############..',
+    '................',
+    '................',
+    '................',
+  ],
   // Close a tab.
   cross: [
     '................',
@@ -566,7 +586,8 @@ export function glyphSize(name: GlyphName): number {
 }
 
 /** The glyph as an SVG of squares, one rect per run of set pixels. */
-export function glyphSvg(name: GlyphName): string {
+/** A glyph as SVG: black for a mask, or in `fill` for a background. */
+export function glyphSvg(name: GlyphName, fill?: string): string {
   const rows = GLYPHS[name];
   const n = rows.length;
   let rects = '';
@@ -582,10 +603,11 @@ export function glyphSvg(name: GlyphName): string {
       x = end;
     }
   });
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges">${rects}</svg>`;
+  const paint = fill ? ` fill="${fill}"` : '';
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${n} ${n}" shape-rendering="crispEdges"${paint}>${rects}</svg>`;
 }
 
-/** `url("data:…")` for CSS masks. */
-export function glyphUrl(name: GlyphName): string {
-  return `url("data:image/svg+xml,${encodeURIComponent(glyphSvg(name))}")`;
+/** `url("data:…")` for CSS masks, or a coloured background with `fill`. */
+export function glyphUrl(name: GlyphName, fill?: string): string {
+  return `url("data:image/svg+xml,${encodeURIComponent(glyphSvg(name, fill))}")`;
 }

@@ -688,23 +688,12 @@ button:focus-visible {
   color: inherit;
 }
 
-.tab-menu-empty,
-.tab-menu-footer {
+.tab-menu-empty {
   padding: calc(2 * var(--u)) calc(4 * var(--u));
   color: var(--st-color-text-muted);
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-.tab-menu-footer {
-  background:
-    repeating-linear-gradient(
-      90deg,
-      var(--st-color-divider) 0 calc(2 * var(--u)),
-      transparent 0 calc(4 * var(--u))
-    )
-    top / 100% var(--u) no-repeat;
 }
 
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
@@ -833,6 +822,92 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
+/* The marks at a field's right (owner, 2026-10-24: they stood at different
+   places): a select's triangle and a date's calendar are Strata's own 16u
+   glyphs, 6u from the frame, so they stand one under another. The browser's
+   own calendar button stays, unseen, over the glyph and still opens. */
+select.field,
+input[type="date"].field,
+.field.is-date {
+  appearance: none;
+  padding-right: calc(6 * var(--u));
+  background-repeat: no-repeat;
+  background-position: right calc(6 * var(--u)) center;
+  background-size: calc(16 * var(--u)) calc(16 * var(--u));
+}
+
+select.field {
+  padding-right: calc(26 * var(--u));
+  background-image: var(--st-chevron);
+}
+
+input[type="date"].field,
+.field.is-date {
+  background-image: var(--st-calendar);
+}
+
+.field.is-date {
+  padding-right: calc(26 * var(--u));
+}
+
+/* A text that is no date or time: a dashed frame until it is fixed (07 §8.2). */
+.field[aria-invalid="true"] {
+  border-style: dashed;
+}
+
+/* A start or a deadline: the day and the time in one field, its calendar on
+   the axis of the selects' triangles (✅ Q-06-23, 07 §8.2). */
+.when {
+  position: relative;
+  min-width: 0;
+}
+
+.when .field {
+  width: 100%;
+}
+
+/* Over the calendar glyph: it opens the browser's own calendar. */
+.when-pick {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: calc(28 * var(--u));
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.when-pick:hover:not(:disabled),
+.when-pick:active:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+}
+
+.when-native {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+input[type="date"].field::-webkit-calendar-picker-indicator {
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  margin: 0;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
 /* Checkbox and radio: a 16u square or a pixel circle; 24 px target with the label. */
 .check {
   display: inline-flex;
@@ -842,7 +917,8 @@ button:focus-visible {
   cursor: pointer;
 }
 
-.check input {
+.check input,
+.ins-tick {
   appearance: none;
   display: grid;
   place-items: center;
@@ -858,14 +934,16 @@ button:focus-visible {
   clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
 }
 
-.check input:checked::before {
+.check input:checked::before,
+.ins-tick:checked::before {
   content: "";
   width: calc(8 * var(--u));
   height: calc(8 * var(--u));
   background: var(--st-color-text);
 }
 
-.check input[type="checkbox"]:checked::before {
+.check input[type="checkbox"]:checked::before,
+.ins-tick:checked::before {
   -webkit-mask: var(--st-check) center / 100% 100% no-repeat;
   mask: var(--st-check) center / 100% 100% no-repeat;
 }
@@ -1196,16 +1274,6 @@ button:focus-visible {
   border-bottom: var(--u) solid var(--st-color-frame);
 }
 
-.home-profile {
-  display: inline-flex;
-  align-items: center;
-  margin-left: auto;
-}
-
-.home-profile .field {
-  width: 18ch;
-}
-
 .home-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -1346,7 +1414,17 @@ button:focus-visible {
    2026-10-24: like Figma). */
 .proto.workspace {
   --layers-w: 32ch;
+  --panel-w: 46ch;
   position: absolute;
+}
+
+/* The panel's width as the canvas reads it, before the panel is drawn. */
+.ws-panel-probe {
+  position: absolute;
+  width: var(--panel-w);
+  height: 0;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .workspace .proto-canvas {
@@ -1478,9 +1556,14 @@ button:focus-visible {
   border-bottom: var(--u) solid var(--st-color-frame);
 }
 
+/* On the tabs' line (owner, 2026-10-24: the tab stood lower than the tools):
+   the logo and the tools take a tab's height and stand on the bar's bottom
+   line, so their tops, bottoms and middles are a tab's. */
 .tabbar-logo,
 .tabbar-tools {
-  align-self: center;
+  align-self: flex-end;
+  height: calc(var(--st-size-control) + 6 * var(--u));
+  margin-bottom: calc(-1 * var(--u));
 }
 
 /* «+» stands with the tabs, flat, on the same line. */
@@ -1516,6 +1599,7 @@ button:focus-visible {
 
 .tabbar-tools {
   display: flex;
+  align-items: center;
   gap: calc(2 * var(--u));
   padding: calc(2 * var(--u));
   background: var(--st-color-surface);
@@ -1532,6 +1616,54 @@ button:focus-visible {
 .tabbar-tools .icon-button:hover:not(:disabled) {
   background: var(--st-color-surface-raised);
   border-color: var(--st-color-frame);
+}
+
+/* «Настройки» at the bar's right end, on the tabs' middle line (✅ Q-06-23). */
+.tabbar-settings {
+  flex: none;
+  align-self: flex-end;
+  margin-bottom: calc(2 * var(--u));
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.tabbar-settings:hover:not(:disabled) {
+  background: var(--st-color-surface-raised);
+  border-color: var(--st-color-frame);
+}
+
+.tabbar-settings[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  border-color: var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+/* «Настройки» over the home or the workspace, which stay as they were: the
+   panel's grid in one column (✅ Q-06-23). */
+.settings {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  overflow: auto;
+  background: var(--st-color-bg);
+}
+
+.settings-page {
+  width: min(64ch, 100%);
+  margin: 0 auto;
+  padding: calc(16 * var(--u)) 0 calc(24 * var(--u));
+}
+
+.settings-about {
+  align-self: flex-start;
+}
+
+/* A toggle that is on stays pressed in, as in Windows 98 (07 §8.2). */
+.tabbar-tools .icon-button[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  border-color: var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
 }
 
 .tabbar-tabs {
@@ -1641,14 +1773,32 @@ button:focus-visible {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: calc(3 * var(--u)) 0;
+  padding: 0 0 calc(6 * var(--u));
 }
 
+/* Rows with room (owner, 2026-10-24: larger names and icons, more space
+   between them, then 1.5 times smaller than 32 px — neater): icons of
+   24u, three times their pixels at DPR 2; 32u a row. */
 .layer-row {
   display: flex;
   align-items: center;
-  min-height: var(--st-size-row);
-  padding-right: calc(4 * var(--u));
+  min-height: calc(32 * var(--u));
+  padding-right: calc(8 * var(--u));
+}
+
+.ws-layers .layer-row .icon {
+  width: calc(24 * var(--u));
+  height: calc(24 * var(--u));
+}
+
+/* The panel's name, as Figma's «Layers», over the icons' column; twice the
+   UI face (owner, 2026-10-24), so its pixels stay whole. */
+.layers-title {
+  flex: none;
+  margin: 0;
+  padding: calc(14 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)) calc(18 * var(--u));
+  font: calc(2 * var(--st-font-ui-size)) / calc(2 * var(--st-font-ui-line)) var(--st-font-ui);
+  color: var(--st-color-text);
 }
 
 .layer-row:hover {
@@ -1683,7 +1833,7 @@ button:focus-visible {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
-  gap: calc(4 * var(--u));
+  gap: calc(8 * var(--u));
   min-width: 0;
   min-height: 0;
   padding: 0;
@@ -1750,7 +1900,7 @@ button:focus-visible {
   right: 0;
   bottom: 0;
   z-index: 5;
-  width: 46ch;
+  width: var(--panel-w);
   display: flex;
   flex-direction: column;
   border: 0;
@@ -1763,16 +1913,91 @@ button:focus-visible {
   min-height: calc(var(--st-size-control) - 4 * var(--u));
 }
 
+/* The title plate names the node (owner, 2026-10-24): its kind's icon, its
+   name in the display face; a click on the name renames it in place. */
+.ins-title {
+  justify-content: flex-start;
+  gap: calc(6 * var(--u));
+}
+
+.ins-kind {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+}
+
+.ins-title h2 {
+  flex: 1 1 auto;
+}
+
+.ins-title-name {
+  display: block;
+  max-width: 100%;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: inherit;
+  text-transform: inherit;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  cursor: text;
+}
+
+.ins-title-name:hover:not(:disabled) {
+  background: transparent;
+  text-decoration: underline dotted;
+}
+
+.ins-title-field {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 calc(2 * var(--u));
+  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  color: inherit;
+  background: transparent;
+  border: var(--u) solid currentColor;
+  outline: none;
+}
+
+/* Sections like Figma's (owner, 2026-10-24: more air): each its own block
+   with room around it, a hairline between them. */
 .ins-body {
   display: flex;
   flex-direction: column;
-  gap: calc(4 * var(--u));
   min-height: 0;
   overflow: auto;
 }
 
-.ins-body > .field,
-.ins-body > select {
+.ins-section {
+  display: flex;
+  flex-direction: column;
+  gap: calc(12 * var(--u));
+  padding: calc(14 * var(--u)) calc(16 * var(--u));
+}
+
+/* Fields of the panel a little taller than the Chrome's 24 px: room to read. */
+.ins-section .field {
+  min-height: calc(28 * var(--u));
+}
+
+/* A picker (colour, icon): its label above, its choices the panel's width. */
+.ins-block {
+  display: flex;
+  flex-direction: column;
+  gap: calc(6 * var(--u));
+}
+
+.ins-section + .ins-section {
+  border-top: var(--u) solid var(--st-color-divider);
+}
+
+.ins-section > .field,
+.ins-section > select {
   width: 100%;
 }
 
@@ -1780,7 +2005,7 @@ button:focus-visible {
   display: grid;
   grid-template-columns: 12ch minmax(0, 1fr);
   align-items: center;
-  gap: calc(3 * var(--u)) calc(6 * var(--u));
+  gap: calc(8 * var(--u)) calc(10 * var(--u));
   margin: 0;
 }
 
@@ -1820,17 +2045,18 @@ button:focus-visible {
   outline: var(--u) solid var(--st-color-frame);
 }
 
+/* Swatches of 20u six apart: a 24 px target with its spacing (WCAG 2.5.8). */
 .ins-colors {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(3 * var(--u));
+  gap: calc(6 * var(--u));
 }
 
 .ins-swatch {
-  width: calc(16 * var(--u));
-  min-width: calc(16 * var(--u));
-  min-height: calc(16 * var(--u));
-  height: calc(16 * var(--u));
+  width: calc(20 * var(--u));
+  min-width: calc(20 * var(--u));
+  min-height: calc(20 * var(--u));
+  height: calc(20 * var(--u));
   padding: 0;
   border: var(--u) solid var(--st-color-frame);
   box-shadow: none;
@@ -1849,13 +2075,14 @@ button:focus-visible {
   outline-offset: var(--u);
 }
 
+/* A section's name: the text's colour over the muted labels, as it is
+   written (07 §8: no capitals for labels); its count on the right. */
 .ins-heading {
   display: flex;
   justify-content: space-between;
-  margin: calc(4 * var(--u)) 0 0;
+  margin: 0;
   font: inherit;
-  color: var(--st-color-text-muted);
-  text-transform: uppercase;
+  color: var(--st-color-text);
 }
 
 .ins-progress {
@@ -1891,7 +2118,31 @@ button:focus-visible {
 
 .ins-asset {
   display: grid;
-  gap: calc(3 * var(--u));
+  gap: calc(8 * var(--u));
+}
+
+.ins-asset-row {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+}
+
+.ins-asset-row > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ins-asset .field {
+  width: 100%;
+}
+
+/* A link that opens the file or the address: an icon button of its own. */
+.ins-out {
+  flex: none;
+  height: var(--st-size-control);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
+  background: var(--st-color-surface-raised);
 }
 
 .ins-asset img,
@@ -1909,7 +2160,7 @@ button:focus-visible {
 .ins-icons {
   display: flex;
   flex-wrap: wrap;
-  gap: calc(2 * var(--u));
+  gap: calc(6 * var(--u));
 }
 
 .ins-icon {
@@ -1937,8 +2188,43 @@ button:focus-visible {
 .ins-row {
   display: flex;
   align-items: center;
-  gap: calc(2 * var(--u));
+  gap: calc(6 * var(--u));
   min-width: 0;
+  min-height: calc(28 * var(--u));
+}
+
+/* A list's item (05 §4.2): its text edited in place, a frame only while typed in. */
+.ins-tick {
+  flex: none;
+}
+
+.list-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--st-size-control);
+  padding: 0 calc(3 * var(--u));
+  font: inherit;
+  color: var(--st-color-text);
+  background: transparent;
+  border: var(--u) solid transparent;
+}
+
+.list-text:hover {
+  border-color: var(--st-color-divider);
+}
+
+/* The item one types in: a frame, not the 2u ring of controls (07 §11.3). */
+.list-text:focus,
+.list-text:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--st-color-focus);
+  background: var(--st-color-surface-sunken);
+}
+
+.list-row.is-done .list-text {
+  color: var(--st-color-text-muted);
+  text-decoration: line-through;
 }
 
 .ins-links {
@@ -1981,9 +2267,16 @@ button:focus-visible {
   width: 100%;
 }
 
-/* Between export and undo: two groups of tools on one strip. */
+/* Between groups of tools on one strip: files, steps, views. */
 .tabbar-gap {
+  align-self: stretch;
   width: var(--u);
   margin: calc(2 * var(--u));
   background: var(--st-color-divider);
+}
+
+/* «Настройки» use the panel's sections and a wider label column. */
+
+.settings .ins-fields {
+  grid-template-columns: 20ch minmax(0, 1fr);
 }

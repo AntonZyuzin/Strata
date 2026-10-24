@@ -32,6 +32,8 @@ export function IconButton(props: {
   label: string;
   disabled?: boolean | undefined;
   className?: string | undefined;
+  /** A toggle: shown pressed, said pressed. */
+  pressed?: boolean | undefined;
   onClick: () => void;
   children?: ReactNode;
 }) {
@@ -40,6 +42,7 @@ export function IconButton(props: {
       type="button"
       className={['icon-button', props.className].filter(Boolean).join(' ')}
       aria-label={props.label}
+      aria-pressed={props.pressed}
       title={props.label}
       disabled={props.disabled}
       onClick={props.onClick}
@@ -62,11 +65,17 @@ export function TabBar(props: {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
-  /** Undo and redo of the open workspace; absent on the home screen. */
-  undo: { canUndo: boolean; canRedo: boolean; step: string } | undefined;
+  /** Undo and redo of the open workspace, its star map; absent on the home screen. */
+  undo: { canUndo: boolean; canRedo: boolean; step: string; map: boolean } | undefined;
   onUndo: () => void;
   onRedo: () => void;
+  onMap: () => void;
+  /** «Настройки» (✅ Q-06-23): a tab of its own while open, in front or behind. */
+  settings: { open: boolean; front: boolean };
+  onSettings: () => void;
+  onSettingsClose: () => void;
 }) {
+  const { settings } = props;
   const { locale, active } = props;
   return (
     <nav className="tabbar" aria-label={t(locale, 'tabs.label')}>
@@ -75,7 +84,7 @@ export function TabBar(props: {
         className="tabbar-logo"
         aria-label={t(locale, 'ws.home')}
         title={t(locale, 'ws.homeHint')}
-        aria-current={active === null ? 'page' : undefined}
+        aria-current={active === null && !settings.front ? 'page' : undefined}
         onClick={props.onHome}
       >
         <Glyph name="logo" />
@@ -102,6 +111,15 @@ export function TabBar(props: {
           disabled={!props.undo?.canRedo}
           onClick={props.onRedo}
         />
+        <span className="tabbar-gap" aria-hidden="true" />
+        <IconButton
+          icon="map"
+          className={props.undo?.map ? 'is-pressed' : undefined}
+          label={t(locale, 'proto.view.hint')}
+          pressed={props.undo?.map ?? false}
+          disabled={!props.undo}
+          onClick={props.onMap}
+        />
       </div>
       <div className="tabbar-tabs" role="tablist" aria-label={t(locale, 'tabs.label')}>
         {props.tabs.map((tab) => (
@@ -125,6 +143,27 @@ export function TabBar(props: {
             />
           </div>
         ))}
+        {settings.open ? (
+          <div className={settings.front ? 'tab is-active' : 'tab'}>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={settings.front}
+              className="tab-name"
+              title={t(locale, 'settings.title')}
+              onClick={props.onSettings}
+            >
+              <Icon name="settings" />
+              <span className="tab-label">{t(locale, 'settings.title')}</span>
+            </button>
+            <IconButton
+              icon="close"
+              className="tab-close"
+              label={t(locale, 'settings.close')}
+              onClick={props.onSettingsClose}
+            />
+          </div>
+        ) : null}
         <IconButton
           icon="plus"
           className="tab-new"
@@ -132,6 +171,13 @@ export function TabBar(props: {
           onClick={props.onNew}
         />
       </div>
+      <IconButton
+        icon="settings"
+        className="tabbar-settings"
+        label={t(locale, 'settings.title')}
+        pressed={settings.front}
+        onClick={props.onSettings}
+      />
     </nav>
   );
 }

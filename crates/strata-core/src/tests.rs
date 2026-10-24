@@ -499,6 +499,66 @@ fn links_in_a_note_become_its_text_wires() {
 }
 
 #[test]
+fn a_list_rolls_up_its_ticked_items_at_any_depth() {
+    // A list's items are a tree in its content document (05 §4.2, 10 §2.4);
+    // the bubble and the panel show the ticked of all (05 §6.4).
+    let mut w = ws();
+    let root = w.root();
+    let list = create(&mut w, &root, NodeKind::Checklist, "Покупки");
+    let fold = |w: &mut Workspace<MemoryStore>| {
+        let v = w.network_view(&root).expect("view");
+        let n = v.nodes.iter().find(|n| n.id == list).expect("the list");
+        n.fold.clone().map(|f| (f.done, f.total, f.nearest))
+    };
+    assert_eq!(fold(&mut w), Some((0, 0, None)), "an empty list");
+
+    let ed = Editor::open(&mut w, &list);
+    let tree = ed.doc.get_tree(crate::workspace::LIST_ITEMS);
+    let item = |parent: Option<loro::TreeID>, text: &str, done: bool| {
+        let id = tree.create(parent).expect("item");
+        let meta = tree.get_meta(id).expect("meta");
+        meta.insert("done", done).expect("done");
+        meta.insert("text", text).expect("text");
+        id
+    };
+    let bread = item(None, "Хлеб", true);
+    item(Some(bread), "Белый", true);
+    let milk = item(Some(bread), "Ржаной", false);
+    item(None, "Молоко", false);
+    tree.delete(milk).expect("delete");
+    ed.doc.commit();
+    let steps = w.history();
+    let update = ed
+        .doc
+        .export(loro::ExportMode::all_updates())
+        .expect("export");
+    assert!(
+        !w.doc_push(&format!("content/{list}"), &update)
+            .expect("push")
+    );
+    assert_eq!(
+        w.history(),
+        steps,
+        "ticking is no step of the canvas's undo"
+    );
+    // A deleted item does not count; a nested one does.
+    assert_eq!(fold(&mut w), Some((2, 3, None)));
+    let d = w.node_details(&list).expect("details");
+    assert_eq!(d.fold.map(|f| (f.done, f.total)), Some((2, 3)));
+
+    // From the store too, after the workspace opens again.
+    let mut again = Workspace::open(w.into_store()).expect("open");
+    let d = again.node_details(&list).expect("details");
+    assert_eq!(d.fold.map(|f| (f.done, f.total)), Some((2, 3)));
+    let v = again.network_view(&root).expect("view");
+    assert_eq!(v.nodes[0].fold.as_ref().map(|f| f.total), Some(3));
+
+    // A note shows no roll-up.
+    let note = create(&mut again, &root, NodeKind::Note, "Заметка");
+    assert_eq!(again.node_details(&note).expect("details").fold, None);
+}
+
+#[test]
 fn every_node_has_a_content_document() {
     // A folder's description is its content document (05 §4.2, ADR-0010).
     let mut w = ws();
@@ -552,12 +612,19 @@ fn attributes_take_only_the_values_of_05_6() {
     set(&mut w, &a, "status", Some(Val::str("doing"))).expect("status");
     set(&mut w, &a, "deadline", Some(Val::str("2026-02-28"))).expect("deadline");
     set(&mut w, &a, "start", Some(Val::str("2024-02-29"))).expect("leap day");
+    // A time of day too, as Obsidian's datetime (05 §6.1).
+    set(&mut w, &a, "start", Some(Val::str("2024-02-29T09:05"))).expect("a day and a time");
+    set(&mut w, &a, "start", Some(Val::str("2024-02-29"))).expect("the day alone again");
     set(&mut w, &a, "priority", Some(Val::str("urgent"))).expect("priority");
     set(&mut w, &a, "color", Some(Val::Int(7))).expect("colour");
     for (key, bad) in [
         ("status", Val::str("someday")),
         ("deadline", Val::str("2026-02-30")),
         ("deadline", Val::str("30.10.2026")),
+        ("deadline", Val::str("2026-02-28T24:00")),
+        ("deadline", Val::str("2026-02-28T9:05")),
+        ("deadline", Val::str("2026-02-30T10:00")),
+        ("start", Val::str("2026-02-28T10:00:00")),
         ("priority", Val::Int(3)),
         ("color", Val::Int(8)),
         ("weather", Val::str("sunny")),

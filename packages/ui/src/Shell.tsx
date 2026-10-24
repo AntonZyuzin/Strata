@@ -1,8 +1,10 @@
 import type { HomeBackend, Opened } from '@strata/backend';
-import { type Locale, t } from '@strata/i18n';
+import { t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickArchive, pickSavePath } from './backend';
 import { download, HomeScreen } from './home/HomeScreen';
+import type { Prefs } from './prefs';
+import { SettingsScreen } from './settings/SettingsScreen';
 import { type Tab, TabBar } from './TabBar';
 import { type UndoState, type WorkspaceBridge, WorkspaceScreen } from './workspace/WorkspaceScreen';
 
@@ -37,12 +39,23 @@ function message(e: unknown): string {
 }
 
 export function Shell(props: {
-  locale: Locale;
-  onLocale: (l: Locale) => void;
+  /** The device's settings: the language, how dates and times read (✅ Q-06-23). */
+  prefs: Prefs;
+  onPrefs: (p: Prefs) => void;
   home: HomeBackend;
   onAbout: () => void;
 }) {
-  const { locale, home } = props;
+  const { prefs, home } = props;
+  const locale = prefs.locale;
+  /**
+   * «Настройки» as a tab of the bar (✅ Q-06-23): open or not, and in front or
+   * not. In front it covers the home or the workspace, which stay as they are.
+   */
+  const [settings, setSettings] = useState<{ open: boolean; front: boolean }>({
+    open: false,
+    front: false,
+  });
+  const behind = () => setSettings((s) => (s.front ? { ...s, front: false } : s));
   const [tabs, setTabs] = useState<Tab[]>(loadTabs);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -123,12 +136,17 @@ export function Shell(props: {
       <TabBar
         locale={locale}
         tabs={tabs}
-        active={pending ?? active}
+        active={settings.front ? null : (pending ?? active)}
+        settings={settings}
+        onSettings={() => setSettings({ open: true, front: true })}
+        onSettingsClose={() => setSettings({ open: false, front: false })}
         undo={opened ? (undo ?? undefined) : undefined}
         onUndo={() => bridge.current?.undo()}
         onRedo={() => bridge.current?.redo()}
+        onMap={() => bridge.current?.map()}
         onHome={() =>
           void act(async () => {
+            behind();
             if (!opened) return;
             await away();
             await toHome();
@@ -163,7 +181,12 @@ export function Shell(props: {
             : undefined
         }
         onSelect={(id) => {
-          if (id === active || busyRef.current) return;
+          if (id === active) {
+            behind();
+            return;
+          }
+          if (busyRef.current) return;
+          behind();
           setPending(id);
           void act(async () => {
             await away();
@@ -184,6 +207,7 @@ export function Shell(props: {
         }
         onNew={() =>
           void act(async () => {
+            behind();
             await away();
             show(await home.create(t(locale, 'home.untitled')));
           })
@@ -219,6 +243,8 @@ export function Shell(props: {
             locale={locale}
             home={home}
             opened={opened}
+            prefs={prefs}
+            covered={settings.front}
             bridge={bridge}
             onUndoState={setUndo}
           />
@@ -226,16 +252,26 @@ export function Shell(props: {
           <HomeScreen
             key={homeKey}
             locale={locale}
-            onLocale={props.onLocale}
             home={home}
-            onOpen={show}
-            onAbout={props.onAbout}
+            onOpen={(o) => {
+              behind();
+              show(o);
+            }}
             onRenamed={(id, name) =>
               setTabs((ts) => ts.map((x) => (x.id === id ? { id, name } : x)))
             }
             onRemoved={(id) => setTabs((ts) => ts.filter((x) => x.id !== id))}
           />
         )}
+        {settings.front ? (
+          <SettingsScreen
+            locale={locale}
+            home={home}
+            prefs={prefs}
+            onPrefs={props.onPrefs}
+            onAbout={props.onAbout}
+          />
+        ) : null}
       </div>
     </div>
   );

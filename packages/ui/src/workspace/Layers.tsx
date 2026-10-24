@@ -65,7 +65,7 @@ export function Layers(props: {
         <li key={it.id}>
           <div
             className={cls.join(' ')}
-            style={{ paddingLeft: `calc(${2 + depth * 8} * var(--u))` }}
+            style={{ paddingLeft: `calc(${4 + depth * 16} * var(--u))` }}
           >
             {kids ? (
               <button
@@ -84,13 +84,15 @@ export function Layers(props: {
             <button
               type="button"
               className={isFinal(it.status) ? 'layer-name is-done' : 'layer-name'}
-              title={it.name}
               aria-current={it.id === current ? 'location' : undefined}
               onClick={() => props.onSelect(it.id)}
               onDoubleClick={() => props.onOpen(it.id)}
             >
               <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
-              <span className="layer-label">{it.name || t(locale, 'note.untitled')}</span>
+              {/* A cut name shows whole in its tooltip. */}
+              <span className="layer-label" title={it.name || t(locale, 'note.untitled')}>
+                {it.name || t(locale, 'note.untitled')}
+              </span>
             </button>
           </div>
           {kids && unfolded ? <ul>{branch(it.id, depth + 1)}</ul> : null}
@@ -99,7 +101,10 @@ export function Layers(props: {
     });
 
   return (
-    <nav className="ws-layers" aria-label={t(locale, 'tree.label')}>
+    <nav className="ws-layers" aria-labelledby="layers-title">
+      <h2 className="layers-title" id="layers-title">
+        {t(locale, 'tree.label')}
+      </h2>
       <ul className="layers-list">{root ? branch(root.id, 0) : null}</ul>
       {props.trash.length > 0 ? (
         <details className="layers-trash">

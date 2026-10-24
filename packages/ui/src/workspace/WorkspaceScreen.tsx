@@ -31,6 +31,7 @@ import {
   type Pixels,
   processBackdrop,
 } from '@strata/canvas';
+import { GeckoCompanion, type GeckoHandle } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
@@ -45,6 +46,7 @@ import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
 import { CoreDocs } from './docs';
+import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
 
@@ -196,6 +198,8 @@ export function WorkspaceScreen(props: {
   const eventsRef = useRef<EditorEvents | null>(null);
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  /** The companion on the canvas (07 §10.4): it reacts to the user's steps. */
+  const gecko = useRef<GeckoHandle>(null);
 
   const label = (l: ChangeLabel | null) =>
     l ? t(locale, l.key as MessageKey, l.params ?? {}) : t(locale, 'proto.noSteps');
@@ -375,6 +379,9 @@ export function WorkspaceScreen(props: {
         (pid) => peopleRef.current.find((p) => p.id === pid)?.color ?? 0,
       );
       graph.current = g;
+      g.subscribe((e) => {
+        for (const event of geckoEvents(e)) gecko.current?.react(event);
+      });
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
       // The properties panel covers the canvas's right edge while one node is
@@ -983,6 +990,15 @@ export function WorkspaceScreen(props: {
           onRestore={(item) => void restore(item)}
         />
       ) : null}
+      <div className="ws-gecko" data-panel={details ? 'open' : 'closed'}>
+        <GeckoCompanion
+          ref={gecko}
+          scale={1.5}
+          paused={covered}
+          label={t(locale, 'gecko.label')}
+          hint={t(locale, 'gecko.hint')}
+        />
+      </div>
       {details && actions ? (
         <Inspector
           key={details.id}

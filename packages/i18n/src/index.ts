@@ -147,6 +147,9 @@ const ru = {
   'ws.restore': 'Вернуть',
   'ws.change.restore': 'Вернуть «{name}» из корзины',
   'ws.refused': 'Ядро не приняло шаг: {message}',
+  'gecko.label':
+    'Гекон. Щелчок — погладить, двойной — погулять, стрелки — передвинуть, Esc — домой',
+  'gecko.hint': 'Погладить · дважды — погулять · можно перетащить',
   'ws.loading': 'Открываю пространство…',
   'engraving.open': 'Гравюра',
   'engraving.title': 'Гравюра',
@@ -513,6 +516,8 @@ const en: Catalog = {
   'ws.restore': 'Restore',
   'ws.change.restore': 'Restore “{name}” from the trash',
   'ws.refused': 'The core refused a step: {message}',
+  'gecko.label': 'Gecko. Click to pet, double-click to walk, arrows to move, Esc to send it home',
+  'gecko.hint': 'Pet · double-click to walk · drag to move',
   'ws.loading': 'Opening the workspace…',
   'engraving.open': 'Engraving',
   'engraving.title': 'Engraving',

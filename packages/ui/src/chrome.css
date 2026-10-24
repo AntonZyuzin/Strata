@@ -1773,6 +1773,33 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   color: var(--st-color-text);
 }
 
+/* The companion lives over the canvas one can see: right of «Ноды», left of
+   the properties panel when it is open (07 §10.4). Only the gecko itself takes
+   the pointer. */
+.ws-gecko {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: var(--layers-w);
+  right: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.ws-gecko[data-panel="open"] {
+  right: var(--panel-w);
+}
+
+/* The gecko is a button only for the keyboard and screen readers: no bevel,
+   no hover plate, no press; the focus ring stays for the keyboard. */
+.ws-gecko [data-gecko-actor],
+.ws-gecko [data-gecko-actor]:hover,
+.ws-gecko [data-gecko-actor]:active {
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 /* «Слои»: the workspace's nodes as a tree, the whole height. */
 .ws-layers {
   position: absolute;

@@ -757,6 +757,26 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.toast', { hasText: 'Ядро не приняло' })).toHaveCount(0);
   });
 
+  test('the gecko lives on the canvas and notices a new task (07 §10.4)', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Гекон');
+    const gecko = page.locator('[data-gecko-actor]');
+    await expect(gecko).toBeVisible();
+    await expect(gecko).toHaveAttribute('aria-label', /^Гекон\./);
+    // At home in the canvas one can see: right of «Ноды».
+    const layers = await page.locator('.ws-layers').boundingBox();
+    const at = await gecko.boundingBox();
+    expect(at && layers && at.x >= layers.x + layers.width).toBe(true);
+    await expect(gecko).toHaveAttribute('data-animation', 'idle');
+    await page.mouse.move(640, 300);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('задача');
+    await page.locator('.tab-menu-row', { hasText: 'Задача' }).first().click();
+    await page.keyboard.type('Покормить');
+    await page.keyboard.press('Enter');
+    await expect(gecko).toHaveAttribute('data-animation', 'task-created');
+  });
+
   test('nodes carry the Chrome icons, in their circles and in «Слои» (07 §6.1)', async ({
     page,
   }) => {

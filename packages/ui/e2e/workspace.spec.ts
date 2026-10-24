@@ -114,6 +114,37 @@ async function cardAction(page: Page, card: string, action: string, right = fals
 /** Every step so far is written by the core. */
 const settled = (page: Page) => page.evaluate(() => window.__strataWs?.settled());
 
+/** A list from the Tab menu, named at once, opened: its items are in the panel. */
+async function openList(page: Page, kind: string, name: string) {
+  const c = await box(page, '.proto-canvas');
+  await page.mouse.move(c.x + c.width * 0.3, c.y + c.height * 0.4);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type(kind);
+  await page.locator('.tab-menu-row', { hasText: kind }).first().click();
+  await expect(page.locator('.name-input')).toBeVisible();
+  await page.keyboard.type(name);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await graphNow(page)).names).toContain(name);
+  await select(page, name);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ws-inspector .list-new')).toBeFocused();
+}
+
+/** The items of the list in the panel: two spaces a level, `x` when ticked. */
+const outline = (page: Page) =>
+  page.locator('.ws-inspector .list-row').evaluateAll((rows) =>
+    rows.map((row) => {
+      let depth = 0;
+      for (let ul = row.closest('ul')?.parentElement?.closest('ul'); ul; ) {
+        depth++;
+        ul = ul.parentElement?.closest('ul') ?? null;
+      }
+      const tick = row.querySelector<HTMLInputElement>('.ins-tick')?.checked ? 'x' : ' ';
+      const text = row.querySelector<HTMLInputElement>('.list-text')?.value ?? '';
+      return `${'  '.repeat(depth)}[${tick}] ${text}`;
+    }),
+  );
+
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
   test.describe(`home ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, () => {
     test.use({ viewport, deviceScaleFactor, locale: 'ru-RU' });
@@ -135,6 +166,52 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
         );
       }
     });
+  });
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
+  test(`a list's panel keeps its size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const [locale, kind] of [
+      ['ru-RU', 'Список'],
+      ['en-US', 'List'],
+    ] as const) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Списки');
+      await openList(page, kind, 'Очень длинное название списка для проверки обрезки');
+      await page.keyboard.type(
+        'Пункт с длинным текстом, который не помещается в одну строку панели',
+      );
+      await page.keyboard.press('Enter');
+      const panel = page.locator('.ws-inspector');
+      await panel.locator('.list-text').first().click();
+      await page.keyboard.press('End');
+      await page.keyboard.press('Enter');
+      await page.keyboard.type('Вложенный пункт');
+      await page.keyboard.press('Tab');
+      await panel.locator('.ins-tick').first().check();
+      await expect(panel.locator('.ins-progress')).toBeVisible();
+      expect(await overflowing(page, '.ws-inspector'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        panel: await box(page, '.ws-inspector'),
+        heading: await box(page, '.ws-inspector .ins-heading'),
+        item: await box(page, '.ws-inspector .ins-body > .ins-tree > li > .list-row .list-text'),
+        nested: await box(page, '.ws-inspector .ins-tree .ins-tree .list-text'),
+        fresh: await box(page, '.ws-inspector .list-new'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['panel', 'heading', 'item', 'nested', 'fresh'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
   });
 }
 
@@ -421,6 +498,94 @@ test.describe('a workspace on the core', () => {
     await page.waitForFunction(() => window.__strataWs?.graph() != null);
     await select(page, 'Боёвка');
     await expect(page.locator('.ins-description .cm-content')).toContainText('Удар');
+  });
+
+  test('a list: items with ticks, nested, in its panel (05 §4.2, 06 §13.1)', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Дом');
+    await openList(page, 'Список', 'Покупки');
+    const panel = page.locator('.ws-inspector');
+    // A list has no window: its panel is the list.
+    await expect(panel.locator('.ins-open')).toHaveCount(0);
+    // The new item's field: Enter adds an item and stays for the next.
+    await page.keyboard.type('Хлеб');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Молоко');
+    await page.keyboard.press('Enter');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '[ ] Молоко']);
+    await expect(panel.locator('.list-new')).toBeFocused();
+    // Enter at the end of an item: a new one below; Tab nests it.
+    await panel.locator('.list-text').first().click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('Белый');
+    await page.keyboard.press('Tab');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '  [ ] Белый', '[ ] Молоко']);
+    // Keys typed into the list stay there: the canvas has made no node.
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    // Ticks: a click and Ctrl+Enter; the heading and the bubble count them.
+    await panel.locator('.ins-tick').nth(1).check();
+    await expect(panel.locator('.ins-progress')).toHaveText('1 из 3');
+    // Typing merges into one step for a second (10 §9): the next tick is a step of its own.
+    await page.waitForTimeout(1_100);
+    await panel.locator('.list-text').nth(2).click();
+    await page.keyboard.press('Control+Enter');
+    await expect(panel.locator('.ins-progress')).toHaveText('2 из 3');
+    const id = await idOf(page, 'Покупки');
+    const fold = () =>
+      page.evaluate((id) => {
+        const f = window.__strataWs?.graph()?.nodes.get(id) as { fold?: unknown } | undefined;
+        return f?.fold;
+      }, id);
+    await expect.poll(fold).toMatchObject({ done: 2, total: 3 });
+    // The list's own undo, not the canvas's.
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '  [x] Белый', '[ ] Молоко']);
+    await page.keyboard.press('Control+Shift+z');
+    await expect.poll(() => outline(page)).toEqual(['[ ] Хлеб', '  [x] Белый', '[x] Молоко']);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    // Alt+↑ moves an item among its siblings.
+    await page.keyboard.press('Alt+ArrowUp');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    // Enter on an empty nested item steps it out; Backspace at the start joins it up.
+    await panel.locator('.list-text').nth(2).click();
+    await page.keyboard.press('End');
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(() => outline(page))
+      .toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый', '  [ ] ']);
+    await page.keyboard.press('Enter');
+    await expect
+      .poll(() => outline(page))
+      .toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый', '[ ] ']);
+    await page.keyboard.press('Backspace');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    await expect(panel.locator('.list-text').nth(2)).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '[x] Белый']);
+    // The right button: the same, as words.
+    await panel.locator('.list-text').nth(2).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Вложить' }).click();
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    // Esc: the canvas gets the keyboard back; a click selects, Enter opens again.
+    await page.keyboard.press('Escape');
+    await expect(panel.locator('.list-text').nth(2)).not.toBeFocused();
+    await select(page, 'Покупки');
+    await settled(page);
+    await expect(panel.locator('.list-new')).not.toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(panel.locator('.list-new')).toBeFocused();
+    await page.keyboard.press('Escape');
+    // A restart: the items from the core, the ticks on the bubble.
+    await settled(page);
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await expect.poll(fold).toMatchObject({ done: 2, total: 3 });
+    await select(page, 'Покупки');
+    await expect.poll(() => outline(page)).toEqual(['[x] Молоко', '[ ] Хлеб', '  [x] Белый']);
+    await expect(panel.locator('.ins-progress')).toHaveText('2 из 3');
   });
 
   test('a picture dropped on the canvas is an asset with the picture in its circle', async ({

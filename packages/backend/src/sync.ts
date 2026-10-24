@@ -172,6 +172,8 @@ export class CoreSync {
   }
 
   private follow(e: GraphEvent): void {
+    // A look is the core's own derived state, read back from it.
+    if (e.type === 'look') return;
     const cs = e.changeset;
     // System changes (the core's own text wires, a reload) come from the core.
     if (cs.source !== 'user') return;

@@ -161,6 +161,8 @@ export function WorkspaceScreen(props: {
     at: { x: number; y: number; side: 'left' | 'right' };
   } | null>(null);
   const [board, setBoard] = useState<{ id: string; doc: LoroDoc } | null>(null);
+  /** A list opened: its items are in the panel, the keyboard goes there once. */
+  const [listFocus, setListFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
@@ -291,8 +293,9 @@ export function WorkspaceScreen(props: {
         }
         // A task and an asset are their panel (ADR-0010): it is already open.
         if (n.kind === 'task' || n.kind === 'asset') return;
-        if (n.kind !== 'note') {
-          toast('ws.notOpenable');
+        // So is a list (owner, 2026-10-24): the keyboard goes to its new item.
+        if (n.kind === 'checklist') {
+          setListFocus(id);
           return;
         }
         // Beside the bubble, on the side with more room (06 §13.1): the canvas
@@ -643,6 +646,9 @@ export function WorkspaceScreen(props: {
     void coreStep(ops, 'proto.change.create', { name }).catch(failed);
   };
 
+  // Another node in the panel: a list's open request no longer stands.
+  useEffect(() => setListFocus((f) => (f === details?.id ? f : null)), [details?.id]);
+
   // The selected asset's file for the panel, typed so the browser can show it.
   useEffect(() => {
     const sha = details?.kind === 'asset' ? details.asset : undefined;
@@ -751,7 +757,8 @@ export function WorkspaceScreen(props: {
             setPeople(ppl);
             return id;
           },
-          description: async () => docs.current?.doc(details.id) ?? null,
+          content: async () => docs.current?.doc(details.id) ?? null,
+          count: ({ done, total }) => g.setFold(details.id, { done, total, burning: null }),
           file: (file) =>
             void file
               .arrayBuffer()
@@ -942,6 +949,8 @@ export function WorkspaceScreen(props: {
           node={details}
           people={people}
           actions={actions}
+          focusList={listFocus === details.id}
+          onListFocused={() => setListFocus(null)}
         />
       ) : null}
       {ctx ? (

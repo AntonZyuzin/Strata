@@ -205,3 +205,19 @@ describe('derived changes (05 §11, source system)', () => {
     expect(g.nodes.size).toBe(0);
   });
 });
+
+describe('looks (05 §6.4)', () => {
+  it('shows a list’s ticks with no step and tells the canvas once', () => {
+    const g = new Graph();
+    g.transaction({ key: 't' }, (tx) =>
+      tx.add(newNode({ id: 'l', name: 'l', kind: 'checklist', icon: 0, x: 0, y: 0 })),
+    );
+    const seen: string[] = [];
+    g.subscribe((e) => seen.push(e.type));
+    g.setFold('l', { done: 1, total: 2, burning: null });
+    g.setFold('l', { done: 1, total: 2, burning: null });
+    expect(g.nodes.get('l')?.fold).toEqual({ done: 1, total: 2, burning: null });
+    expect(seen).toEqual(['look']);
+    expect(g.undoLabel).toEqual({ key: 't' });
+  });
+});

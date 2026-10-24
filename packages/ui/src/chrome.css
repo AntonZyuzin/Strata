@@ -842,7 +842,8 @@ button:focus-visible {
   cursor: pointer;
 }
 
-.check input {
+.check input,
+.ins-tick {
   appearance: none;
   display: grid;
   place-items: center;
@@ -858,14 +859,16 @@ button:focus-visible {
   clip-path: polygon(30% 0, 70% 0, 100% 30%, 100% 70%, 70% 100%, 30% 100%, 0 70%, 0 30%);
 }
 
-.check input:checked::before {
+.check input:checked::before,
+.ins-tick:checked::before {
   content: "";
   width: calc(8 * var(--u));
   height: calc(8 * var(--u));
   background: var(--st-color-text);
 }
 
-.check input[type="checkbox"]:checked::before {
+.check input[type="checkbox"]:checked::before,
+.ins-tick:checked::before {
   -webkit-mask: var(--st-check) center / 100% 100% no-repeat;
   mask: var(--st-check) center / 100% 100% no-repeat;
 }
@@ -1939,6 +1942,40 @@ button:focus-visible {
   align-items: center;
   gap: calc(2 * var(--u));
   min-width: 0;
+}
+
+/* A list's item (05 §4.2): its text edited in place, a frame only while typed in. */
+.ins-tick {
+  flex: none;
+}
+
+.list-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: var(--st-size-control);
+  padding: 0 calc(3 * var(--u));
+  font: inherit;
+  color: var(--st-color-text);
+  background: transparent;
+  border: var(--u) solid transparent;
+}
+
+.list-text:hover {
+  border-color: var(--st-color-divider);
+}
+
+/* The item one types in: a frame, not the 2u ring of controls (07 §11.3). */
+.list-text:focus,
+.list-text:focus-visible {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--st-color-focus);
+  background: var(--st-color-surface-sunken);
+}
+
+.list-row.is-done .list-text {
+  color: var(--st-color-text-muted);
+  text-decoration: line-through;
 }
 
 .ins-links {

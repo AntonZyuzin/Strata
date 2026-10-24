@@ -62,7 +62,7 @@ export interface GraphNode {
   assignees: number[];
   /** Node colour, an index into the people palette (05 §4.1, ☑ Q-05-8). */
   color: number | null;
-  /** Roll-up for folders, projects and tasks; null for other kinds. */
+  /** Roll-up for folders, projects, tasks and lists; null for other kinds. */
   fold: Fold | null;
   /** Placement in this network, world units (05 §9.2). */
   x: number;
@@ -177,7 +177,9 @@ export interface Changeset {
  */
 export type GraphEvent =
   | { type: 'apply'; changeset: Changeset; amend: boolean }
-  | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset };
+  | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset }
+  /** A node's look changed with no step: a list's ticks in its window. */
+  | { type: 'look'; id: string };
 
 /** 06 §1.2, NFR-79: 200 steps per session. */
 export const UNDO_DEPTH = 200;
@@ -369,6 +371,21 @@ export class Graph {
     this.undoStack.push(cs);
     this.emit({ type: 'redo', changeset: cs });
     return cs;
+  }
+
+  /**
+   * A node's roll-up as its content shows it now (05 §6.4): a list's ticks
+   * while its window is open. Derived state: no step, nothing for the core.
+   */
+  setFold(id: string, fold: Fold | null): void {
+    const n = this.nodes.get(id);
+    if (!n) return;
+    const same =
+      n.fold === fold ||
+      (n.fold && fold && n.fold.done === fold.done && n.fold.total === fold.total);
+    if (same) return;
+    n.fold = fold;
+    this.emit({ type: 'look', id });
   }
 
   /** Forgets undo and redo, for example after loading the demo network. */

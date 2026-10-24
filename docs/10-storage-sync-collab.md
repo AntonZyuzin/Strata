@@ -154,7 +154,7 @@ settings:  LoroMap<string, unknown>                   // фон (07 §7), нап
 |---|---|---|
 | Заметка | `text: LoroText` — Markdown-исходник; `meta: { schema }` | [ADR-0007](adr/0007-text-editor.md); CM6 + `loro-codemirror` ([R3](research/R3-crdt-sync.md) §8) |
 | Доска | `meta`, `elements: LoroMap<elementId, JSON>`, `files: LoroMap<fileId, {sha256, mime, w, h}>`, `widgets` с `LoroText` и `LoroMovableList` | [ADR-0006](adr/0006-board-engine.md), [R5](research/R5-board-engine.md) |
-| Список | `LoroTree` пунктов (вложенность, 05 §4.2), узел — `{ text: LoroText, done }` | [R3](research/R3-crdt-sync.md) рек. §9 |
+| Список | `items: LoroTree` пунктов (вложенность, 05 §4.2), узел — `{ text: LoroText, done }`; `text` создаётся как мерджимый контейнер (§2.6) | [R3](research/R3-crdt-sync.md) рек. §9; `packages/checklist` |
 | Медиа | `meta: { sha256, mime, size, w?, h?, durationMs?, originalName }` | Байты — ассет (§11) |
 | Сеть | Нет: её содержимое — `net/{nodeId}` | — |
 

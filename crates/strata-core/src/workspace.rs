@@ -26,6 +26,8 @@ use strata_model::{
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
+/// The tree of a list's items in its content document (10 §2.4).
+pub const LIST_ITEMS: &str = "items";
 
 /// Statuses of a workspace (05 §6.1), in their order; the last two are final.
 pub const STATUSES: [&str; 6] = ["inbox", "todo", "doing", "review", "done", "cancelled"];
@@ -154,6 +156,7 @@ pub struct Attrs {
 /// A roll-up (05 §6.4, ☑ Q-05-2, ADR-0010): over the tasks inside a folder
 /// or project at any depth and their subtasks by wires, or a task's subtasks
 /// by wires — each once; the finished of all, and the nearest open deadline.
+/// A list's is over its items: the ticked of all, no deadline.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fold {
     pub done: u32,
@@ -172,7 +175,8 @@ pub struct ViewNode {
     pub y: f64,
     #[serde(flatten)]
     pub attrs: Attrs,
-    /// For folders, projects and tasks: the roll-up of their tasks.
+    /// For folders, projects and tasks: the roll-up of their tasks; for a
+    /// list, of its items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
 }
@@ -1298,6 +1302,48 @@ impl<S: Store> Workspace<S> {
         fold
     }
 
+    /// A list's roll-up (05 §6.4): its ticked items of all, at any depth,
+    /// from the tree of its content document (10 §2.4), in memory or stored.
+    fn list_fold(&self, node: NodeId) -> Fold {
+        let doc = format!("content/{}", node.to_text());
+        let stored;
+        let d = match self.docs.get(&doc) {
+            Some(d) => d,
+            None => match load(&self.store, &doc) {
+                Ok(Some(d)) => {
+                    stored = d;
+                    &stored
+                }
+                _ => return Fold::default(),
+            },
+        };
+        let tree = d.get_tree(LIST_ITEMS);
+        let mut fold = Fold::default();
+        for item in tree.get_nodes(false) {
+            fold.total += 1;
+            let done = tree.get_meta(item.id).ok().and_then(|m| m.get("done"));
+            if matches!(done, Some(ValueOrContainer::Value(LoroValue::Bool(true)))) {
+                fold.done += 1;
+            }
+        }
+        fold
+    }
+
+    /// The roll-up a node shows, by its kind: tasks for folders, projects
+    /// and tasks; ticked items for a list; none for the rest.
+    fn fold_of(
+        &self,
+        node: NodeId,
+        kind: NodeKind,
+        children: &HashMap<NodeId, Vec<NodeId>>,
+        wires: &HashMap<NodeId, Vec<NodeId>>,
+    ) -> Option<Fold> {
+        if kind == NodeKind::Checklist {
+            return Some(self.list_fold(node));
+        }
+        (kind.has_canvas() || kind.is_task()).then(|| self.fold(node, children, wires))
+    }
+
     /// The checklist preview of a task's or project's hierarchy (05 §4.3):
     /// a task's subtasks by wires; inside a project, its tasks, projects and
     /// folders that are not a subtask of a task beside them. Each node once.
@@ -1444,7 +1490,7 @@ impl<S: Store> Workspace<S> {
             outputs,
             children,
             subtasks,
-            fold: (kind.has_canvas() || kind.is_task()).then(|| self.fold(n, &all, &wires)),
+            fold: self.fold_of(n, kind, &all, &wires),
         })
     }
 
@@ -1541,6 +1587,14 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
+        // Lists show their ticks (05 §6.4): their documents stay in memory.
+        for id in &ids {
+            if let Ok(node) = NodeId::parse(id) {
+                if self.alive(node) && self.kind(node) == Some(NodeKind::Checklist) {
+                    self.ensure_doc(&format!("content/{id}"))?;
+                }
+            }
+        }
         let children = self.children();
         let wires = self.wires_out();
         let pos = &self.docs[&doc];
@@ -1567,8 +1621,7 @@ impl<S: Store> Workspace<S> {
                 x,
                 y,
                 attrs: self.attrs(node),
-                fold: (kind.has_canvas() || kind.is_task())
-                    .then(|| self.fold(node, &children, &wires)),
+                fold: self.fold_of(node, kind, &children, &wires),
             });
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();

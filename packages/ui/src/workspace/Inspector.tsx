@@ -17,13 +17,15 @@ import type { LoroDoc } from 'loro-crdt';
 import { useEffect, useRef, useState } from 'react';
 import { ASSET_ICONS, Icon, nodeIcon } from '../icons/Icon';
 import { IconButton } from '../TabBar';
+import { ListItems } from './ListItems';
 
 /**
  * The properties panel (06, «P»; 04 S3 step 5), each kind its own fields
  * (05 §4.2–4.4, ADR-0010): a task's and a project's status, dates, priority
  * and people; an asset's file or link and icon; a colour for all; the
  * description in Markdown (bold, italic, lists); for tasks and projects the
- * checklist preview of the hierarchy and the materials wired to them. Every
+ * checklist preview of the hierarchy and the materials wired to them; a
+ * list's items themselves (owner, 2026-10-24: no window of their own). Every
  * change is a step of undo; nothing here explains itself in words.
  */
 
@@ -32,8 +34,10 @@ export interface InspectorActions {
   attr(key: AttrKey, value: string | number | null): void;
   assign(person: string, on: boolean): void;
   addPerson(name: string): Promise<string>;
-  /** The node's own content document: its description, or a note's text. */
-  description(): Promise<LoroDoc | null>;
+  /** The node's own content document: its description, a note's text, a list's items. */
+  content(): Promise<LoroDoc | null>;
+  /** A list's ticked items of all, as its panel shows them now: the bubble follows. */
+  count(c: { done: number; total: number }): void;
   /** An asset's file: stored, its type kept. */
   file(file: File): void;
   /** The asset's file as a URL the panel can show, by its type. */
@@ -90,11 +94,13 @@ function Commit(props: {
 /** The Markdown editor of ADR-0007 on the node's content document. */
 function Description(props: { load: () => Promise<LoroDoc | null> }) {
   const host = useRef<HTMLDivElement>(null);
-  const { load } = props;
+  const load = useRef(props.load);
+  load.current = props.load;
+  // The panel is keyed by its node: the editor is made once, not on every new `load`.
   useEffect(() => {
     let live = true;
     let destroy: (() => void) | null = null;
-    void load().then((doc) => {
+    void load.current().then((doc) => {
       const el = host.current;
       if (!live || !doc || !el) return;
       const ed = createNoteEditor({ parent: el, doc });
@@ -104,7 +110,7 @@ function Description(props: { load: () => Promise<LoroDoc | null> }) {
       live = false;
       destroy?.();
     };
-  }, [load]);
+  }, []);
   return (
     // The canvas leaves keys typed into an editable field alone.
     <div className="ins-description" ref={host} />
@@ -127,6 +133,7 @@ function Rows(props: {
             {isTask(r.kind) ? (
               <input
                 type="checkbox"
+                className="ins-tick"
                 aria-label={r.name}
                 checked={props.ticked(r)}
                 onChange={(e) => props.onTick(r, e.currentTarget.checked)}
@@ -189,6 +196,9 @@ export function Inspector(props: {
   node: NodeDetails;
   people: Person[];
   actions: InspectorActions;
+  /** A list was opened: the keyboard goes to its new item, once. */
+  focusList: boolean;
+  onListFocused: () => void;
 }) {
   const { locale, node: n, people, actions: a } = props;
   const [adding, setAdding] = useState(false);
@@ -439,8 +449,17 @@ export function Inspector(props: {
             <h3 className="ins-heading">
               {t(locale, n.kind === 'note' ? 'kind.note' : 'ins.description')}
             </h3>
-            <Description load={a.description} />
+            <Description load={a.content} />
           </>
+        ) : null}
+        {n.kind === 'checklist' ? (
+          <ListItems
+            locale={locale}
+            load={a.content}
+            focus={props.focusList}
+            onFocused={props.onListFocused}
+            onCount={a.count}
+          />
         ) : null}
         {task ? (
           <>

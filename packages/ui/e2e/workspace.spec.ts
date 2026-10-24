@@ -106,6 +106,9 @@ async function createNode(page: Page, x: number, y: number, name: string) {
 async function select(page: Page, name: string) {
   const p = await at(page, name);
   await page.mouse.click(p.x, p.y);
+  // The panel follows the selection from the core: until it names the node,
+  // its fields may still be the previous one's (CI, slow WebKit).
+  await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText(name);
 }
 
 /** A card's action: its icon, or its right-button menu. */

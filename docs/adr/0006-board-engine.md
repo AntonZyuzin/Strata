@@ -3,6 +3,7 @@
 - Статус: Принято (2026-10-19, по делегированию владельца); подтверждается спайком 5 ([15 §7](../15-architecture.md), [16 §3.2](../16-roadmap.md)). Часть 1 спайка ([S5](../spikes/S5-board.md), 2026-10-23): п. 1, 3 и биндинг п. 7 работают, B-2k открывается за 129 мс и панорамируется с p95 16,7 мс на M1; виджеты (п. 4) и `.excalidraw.md` — часть 2
 - Дата: 2026-10-14
 - Связано: [05-domain-model.md](../05-domain-model.md) (§4.2, §12, §13), [06-canvas-ux.md](../06-canvas-ux.md) §13.2, [07-design-system.md](../07-design-system.md) (§3.2, §8.4), [10-storage-sync-collab.md](../10-storage-sync-collab.md) (§2.4, §8.4, §9.2, §11, §13), [12-mcp-ai.md](../12-mcp-ai.md) §7, [13-interop.md](../13-interop.md) §2.8, [14-nfr.md](../14-nfr.md), [15-architecture.md](../15-architecture.md) (§2.3, §7, §8.4, §8.5), [16-roadmap.md](../16-roadmap.md) (§5.2, §8.2), [ADR-0003](0003-sync-engine.md), [ADR-0004](0004-app-shell.md), [ADR-0005](0005-rendering.md), [ADR-0007](0007-text-editor.md); исследования [R5](../research/R5-board-engine.md) (главное), [R3](../research/R3-crdt-sync.md), [R2](../research/R2-obsidian-format.md), [R4](../research/R4-app-shell-rendering.md)
+- Уточнено: [ADR-0010](0010-kinds-not-classes.md) — классов нет: «Референсы» — обычная доска
 
 ## Контекст
 

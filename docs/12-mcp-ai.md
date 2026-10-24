@@ -336,17 +336,17 @@ bearer_token_env_var = "STRATA_TOKEN"
 | # | Инструмент | Назначение | Вход (главное) | Выход | RO | D | I | OW | Этап |
 |---|---|---|---|---|---|---|---|---|---|
 | 1 | `get_workspace` | Схема пространства: статусы, атрибуты, люди, корневые сети, возможности (полнотекст, семантика, генерация), профиль прав | — | Справка ≤ 2 000 токенов | да | нет | да | нет | MVP+ 1.1 |
-| 2 | `search_nodes` | Нечёткий поиск по именам, алиасам и путям — движок Tab-меню (✅ G1, [09](09-search-navigation.md) §2) | `query`, `kind?`, `class?`, `within?`, `limit=20`, `cursor?` | Строки «имя — вид · путь · статус · срок · id» | да | нет | да | нет | MVP+ 1.1 |
+| 2 | `search_nodes` | Нечёткий поиск по именам, алиасам и путям — движок Tab-меню (✅ G1, [09](09-search-navigation.md) §2) | `query`, `kind?`, `within?`, `limit=20`, `cursor?` | Строки «имя — вид · путь · статус · срок · id» | да | нет | да | нет | MVP+ 1.1 |
 | 3 | `query_nodes` | Фильтр по атрибутам и флагам: строка синтаксиса или AST [09](09-search-navigation.md) §3.6; `@me` — владелец токена | `filter`, `sort?`, `within?`, `limit=20`, `cursor?` | То же + свёртки у сетей | да | нет | да | нет | MVP+ 1.1 |
 | 4 | `search_content` | Поиск по содержимому: BM25; с этапа 2 — гибрид с векторами (§9) | `query`, `mode=auto\|keyword\|semantic`, `within?`, `kinds?`, `limit=10`, `cursor?` | Чанки: нода, путь, раздел, сниппет 200 символов, скор | да | нет | да | нет¹ | MVP+ 1.1: keyword; этап 2: semantic |
 | 5 | `get_node` | Нода целиком (§4.3) | `node`, `include=[attributes,edges,placements,content]`, `max_chars=8000`, `offset=0` | Атрибуты, нити, пути, содержимое по виду | да | нет | да | нет | MVP+ 1.1 |
 | 6 | `list_network` | Состав сети; при `depth>1` — оглавление | `network`, `depth=1..3`, `with_layout=false`, `limit=50`, `cursor?` | Ноды, рамки с участниками, стикеры | да | нет | да | нет | MVP+ 1.1 |
 | 7 | `get_neighbors` | Нити ноды, обход выше и ниже по течению | `node`, `direction=in\|out\|both`, `depth=1..3`, `scope=global\|network`, `network?`, `limit=50` | Ноды с направлением, расстоянием, происхождением нити | да | нет | да | нет | MVP+ 1.1 |
 | 8 | `get_paths` | Все размещения ноды, основное первым | `node`, `limit=20` | Пути с пометкой основного | да | нет | да | нет | MVP+ 1.1 |
-| 9 | `get_image` | Картинка ассета или медиа-ноды для «зрения» агента | `asset` или `node`, `max_px=1568` | `ImageContent` (миниатюра) + `resource_link` на оригинал | да | нет | да | нет | MVP+ 1.1 |
+| 9 | `get_image` | Картинка ассета для «зрения» агента | `asset` или `node`, `max_px=1568` | `ImageContent` (миниатюра) + `resource_link` на оригинал | да | нет | да | нет | MVP+ 1.1 |
 | 10 | `get_ui_context` | Что открыто у человека (§4.3) | — | Режим, сеть, выделение, окно | да | нет | да | нет | MVP+ 1.1, только локально |
 | 11 | `get_job` | Статус фоновой операции | `job_id` | Состояние, прогресс, результат или ошибка | да | нет | да | нет | MVP+ 1.1 |
-| 12 | `create_node` | Новая нода с основным размещением; без `position` — автоместо [06](06-canvas-ux.md) §5.4 | `kind`, `name`, `network`, `class?`, `attributes?`, `icon?`, `content_md?`, `items?`, `position?`, `client_request_id?` | id, путь, позиция | нет | нет | нет² | нет | MVP+ 1.1 |
+| 12 | `create_node` | Новая нода с основным размещением; без `position` — автоместо [06](06-canvas-ux.md) §5.4 | `kind`, `name`, `network`, `attributes?`, `icon?`, `content_md?`, `items?`, `position?`, `client_request_id?` | id, путь, позиция | нет | нет | нет² | нет | MVP+ 1.1 |
 | 13 | `update_node` | Частичный патч: имя, иконка, цвет, сводка, атрибуты, флаги «Ключевая», «Пауза», «Шаблон» | `node`, `set`, `unset?` | Изменённые поля | нет | нет | да | нет | MVP+ 1.1 |
 | 14 | `edit_note` | Правка текста заметки операциями по CRDT-тексту (§4.4) | `node`, `op`, `text`, `heading?`, `old?`, `expected_hash?` | Новый hash, диапазон, нити +/− | нет | нет | нет | нет | MVP+ 1.1 |
 | 15 | `edit_checklist` | Пункты списка: добавить, отметить, снять, переименовать, переставить, убрать | `node`, `ops[]` | Пункты после правки | нет | нет | нет | нет | MVP+ 1.1 |
@@ -381,7 +381,7 @@ bearer_token_env_var = "STRATA_TOKEN"
 | Список | Пункты: `id`, текст, `done`, уровень вложенности |
 | Доска | Сводка: число элементов по типам, фреймы, тексты элементов (по 200 символов), виджеты (заметки — текст, to-do — пункты), картинки — размеры и `resource_link` на `strata://<workspace>/asset/<sha256>`. Поле `thumbnail_stale` (§7.5) |
 | Сеть | Краткий состав, как `list_network` с `depth=1`, `limit=50` |
-| Медиа | Тип, размер, число страниц PDF, `resource_link`; саму картинку — через `get_image` |
+| Ассет | Тип, размер, число страниц PDF или ссылка, `resource_link`; саму картинку — через `get_image` |
 
 Прочие `include`: `attributes` — встроенные и свои атрибуты, флаги; `edges` — до 20 входов и 20 выходов с происхождением (`manual`, `text`, `import`) и счётчиком остальных; `placements` — пути, основной первым.
 
@@ -468,8 +468,9 @@ type UiContext = {
 
 ```text
 Strata is a node graph for notes, boards and projects.
-- Node: one item. Kinds: network (a canvas holding other nodes, like a folder), note (Markdown),
-  board (Excalidraw scene with note and to-do widgets), checklist, media.
+- Node: one item. Kinds: folder (`network`, a canvas holding other nodes), project (a task with a
+  canvas), task (status, dates, assignees; subtasks are tasks it links to), note (Markdown),
+  board (Excalidraw scene with note and to-do widgets), checklist, asset (a file or a link).
 - A node can be placed in several networks. The primary placement gives the canonical path
   (/Projects/Game/Task); other placements are instances of the same node, not copies.
 - Edge: directed link from -> to between nodes, global across networks. [[Links]] in note text
@@ -793,7 +794,7 @@ sequenceDiagram
 }
 ```
 
-Поля ноды плана: `tmp`, `kind`, `name`, `parent` (`@target`, `tmp` сети из плана или существующая сеть), `class?`, `attributes?`, `icon?`, `content_md?` (заметка), `items?` (список). `reuse[].place_in` — создать появление существующей ноды ([R6](research/R6-mcp-ai.md) §5.6, ✅ C3).
+Поля ноды плана: `tmp`, `kind`, `name`, `parent` (`@target`, `tmp` сети из плана или существующая сеть), `attributes?`, `icon?`, `content_md?` (заметка), `items?` (список). `reuse[].place_in` — создать появление существующей ноды ([R6](research/R6-mcp-ai.md) §5.6, ✅ C3).
 
 Проверки (`INVALID_PLAN` со списком по `tmp`):
 - `tmp` уникальны; `parent` и концы нитей ссылаются на `tmp`, `reuse` или видимые существующие ноды;
@@ -988,7 +989,7 @@ struct ImageRequest { prompt: String, size: (u32, u32), transparent: bool,
 |---|---|
 | Доска | На доске сразу появляется элемент-заглушка «⧗ генерируется: <начало промпта>» (виден соавторам); по готовности — `image` с ассетом, заглушка удаляется; при ошибке — удаляется с тостом. Один набор изменений на результат |
 | Иконка ноды | Пикер иконки → «Сгенерировать» → 4 варианта → конвейер [07](07-design-system.md) §6.4: удаление фона → стилизация «Гравюра» → маски 32/64/128. Провайдер, модель и промпт `{ provider, model, prompt }` хранятся рядом с параметрами стиля для перегенерации (05 §4.1, [07](07-design-system.md) §6.8). «Гравюра» по умолчанию, «Как есть» — одним кликом (☑ Q-12-7, ☑ Q-05-7) |
-| Медиа-нода | `generate_image(target: {media_in: network})` создаёт ноду вида «медиа» |
+| Ассет | `generate_image(target: {media_in: network})` создаёт ассет с картинкой |
 | SVG от Recraft | Санитизация DOMPurify и растеризация; в DOM не вставляется ([07](07-design-system.md) §6.4) |
 
 `generate_image` в MCP: `target` — плоский объект `{board?, x?, y?, icon_of?, media_in?}`, ровно одно из трёх полей цели. Возвращает `job_id`; результат — через `get_job`. Подтверждение — по политике трат (§8.6). Для Claude Desktop без shell это единственный путь положить новую картинку на доску ([R6](research/R6-mcp-ai.md) §5.8).

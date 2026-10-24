@@ -645,6 +645,25 @@ test.describe('a workspace on the core', () => {
     ).toBe(16);
   });
 
+  test('the star map opens from the bar, not only by M (08 §7)', async ({ page }) => {
+    test.setTimeout(60_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    await createNode(page, 640, 400, 'Звезда');
+    const map = page.getByRole('button', { name: 'Холст или звёздная карта (M)' });
+    await expect(map).toHaveAttribute('aria-pressed', 'false');
+    await map.click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-view', '3d', {
+      timeout: 30_000,
+    });
+    await expect(map).toHaveAttribute('aria-pressed', 'true');
+    await map.click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-view', '2d', {
+      timeout: 10_000,
+    });
+    await expect(map).toHaveAttribute('aria-pressed', 'false');
+  });
+
   test('the profile is kept on this device', async ({ page }) => {
     await page.goto('/?plain');
     await expect(page.locator('.home-empty')).toBeVisible();

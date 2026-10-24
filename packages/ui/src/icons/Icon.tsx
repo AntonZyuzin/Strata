@@ -4,6 +4,7 @@ import hourglass from './hourglass.png';
 import calendar from './serenity/app-calendar.png';
 import paint from './serenity/app-pixel-paint.png';
 import sound from './serenity/app-sound-player.png';
+import starfield from './serenity/app-starfield.png';
 import video from './serenity/app-video-player.png';
 import book from './serenity/book.png';
 import folder from './serenity/filetype-folder.png';
@@ -40,6 +41,7 @@ const FILES = {
   'app-calendar': calendar,
   'app-pixel-paint': paint,
   'app-sound-player': sound,
+  'app-starfield': starfield,
   'app-video-player': video,
   book,
   'filetype-folder': folder,
@@ -83,6 +85,7 @@ const NAMED = {
   redo: 'redo',
   plus: 'plus',
   close: 'window-close',
+  map: 'app-starfield',
 } as const satisfies Record<string, IconFile>;
 
 export type IconName = keyof typeof NAMED | IconFile;

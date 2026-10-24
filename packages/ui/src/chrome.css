@@ -1481,9 +1481,14 @@ button:focus-visible {
   border-bottom: var(--u) solid var(--st-color-frame);
 }
 
+/* On the tabs' line (owner, 2026-10-24: the tab stood lower than the tools):
+   the logo and the tools take a tab's height and stand on the bar's bottom
+   line, so their tops, bottoms and middles are a tab's. */
 .tabbar-logo,
 .tabbar-tools {
-  align-self: center;
+  align-self: flex-end;
+  height: calc(var(--st-size-control) + 6 * var(--u));
+  margin-bottom: calc(-1 * var(--u));
 }
 
 /* «+» stands with the tabs, flat, on the same line. */
@@ -1519,6 +1524,7 @@ button:focus-visible {
 
 .tabbar-tools {
   display: flex;
+  align-items: center;
   gap: calc(2 * var(--u));
   padding: calc(2 * var(--u));
   background: var(--st-color-surface);
@@ -1535,6 +1541,13 @@ button:focus-visible {
 .tabbar-tools .icon-button:hover:not(:disabled) {
   background: var(--st-color-surface-raised);
   border-color: var(--st-color-frame);
+}
+
+/* A toggle that is on stays pressed in, as in Windows 98 (07 §8.2). */
+.tabbar-tools .icon-button[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  border-color: var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
 }
 
 .tabbar-tabs {
@@ -2018,8 +2031,9 @@ button:focus-visible {
   width: 100%;
 }
 
-/* Between export and undo: two groups of tools on one strip. */
+/* Between groups of tools on one strip: files, steps, views. */
 .tabbar-gap {
+  align-self: stretch;
   width: var(--u);
   margin: calc(2 * var(--u));
   background: var(--st-color-divider);

@@ -32,6 +32,8 @@ export function IconButton(props: {
   label: string;
   disabled?: boolean | undefined;
   className?: string | undefined;
+  /** A toggle: shown pressed, said pressed. */
+  pressed?: boolean | undefined;
   onClick: () => void;
   children?: ReactNode;
 }) {
@@ -40,6 +42,7 @@ export function IconButton(props: {
       type="button"
       className={['icon-button', props.className].filter(Boolean).join(' ')}
       aria-label={props.label}
+      aria-pressed={props.pressed}
       title={props.label}
       disabled={props.disabled}
       onClick={props.onClick}
@@ -62,10 +65,11 @@ export function TabBar(props: {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
-  /** Undo and redo of the open workspace; absent on the home screen. */
-  undo: { canUndo: boolean; canRedo: boolean; step: string } | undefined;
+  /** Undo and redo of the open workspace, its star map; absent on the home screen. */
+  undo: { canUndo: boolean; canRedo: boolean; step: string; map: boolean } | undefined;
   onUndo: () => void;
   onRedo: () => void;
+  onMap: () => void;
 }) {
   const { locale, active } = props;
   return (
@@ -101,6 +105,15 @@ export function TabBar(props: {
           label={t(locale, 'proto.redo')}
           disabled={!props.undo?.canRedo}
           onClick={props.onRedo}
+        />
+        <span className="tabbar-gap" aria-hidden="true" />
+        <IconButton
+          icon="map"
+          className={props.undo?.map ? 'is-pressed' : undefined}
+          label={t(locale, 'proto.view.hint')}
+          pressed={props.undo?.map ?? false}
+          disabled={!props.undo}
+          onClick={props.onMap}
         />
       </div>
       <div className="tabbar-tabs" role="tablist" aria-label={t(locale, 'tabs.label')}>

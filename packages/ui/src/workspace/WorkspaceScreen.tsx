@@ -103,14 +103,18 @@ export interface WorkspaceBridge {
   /** Undo and redo from the app's bar (owner, 2026-10-24). */
   undo(): void;
   redo(): void;
+  /** The star map and back (08 §7), as `M` does. */
+  map(): void;
 }
 
-/** What the bar's undo and redo show: whether they can, and the step. */
+/** What the bar shows of the open workspace: undo and redo, the star map. */
 export interface UndoState {
   canUndo: boolean;
   canRedo: boolean;
   /** The step undo would take back, for its tooltip. */
   step: string;
+  /** The star map is shown, or on its way. */
+  map: boolean;
 }
 
 export function WorkspaceScreen(props: {
@@ -553,6 +557,7 @@ export function WorkspaceScreen(props: {
       save,
       undo: () => editor.current?.undo(),
       redo: () => editor.current?.redo(),
+      map: () => map3d.current?.toggle(),
       leave: async () => {
         if (leaving.current) return { picture: Promise.resolve() };
         leaving.current = true;
@@ -893,8 +898,8 @@ export function WorkspaceScreen(props: {
   const path = net?.path ?? [];
   const { onUndoState } = props;
   useEffect(
-    () => onUndoState({ canUndo, canRedo, step: lastStep }),
-    [onUndoState, canUndo, canRedo, lastStep],
+    () => onUndoState({ canUndo, canRedo, step: lastStep, map: view3d !== '2d' }),
+    [onUndoState, canUndo, canRedo, lastStep, view3d],
   );
 
   return (

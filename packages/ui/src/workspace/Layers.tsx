@@ -1,0 +1,121 @@
+import { isFinal, type TrashItem, type TreeItem } from '@strata/backend';
+import type { GlyphName } from '@strata/design-tokens';
+import { type Locale, t } from '@strata/i18n';
+import { useEffect, useMemo, useState } from 'react';
+import { Glyph } from '../TabBar';
+
+/**
+ * «Слои» (owner, 2026-10-24: like Figma's layers): the whole workspace as a
+ * tree along the left edge, every node under its network. A click selects
+ * the node on the canvas (going into its network when needed), a double
+ * click opens it, the triangle folds a branch. The trash is the panel's foot.
+ */
+export function Layers(props: {
+  locale: Locale;
+  items: TreeItem[];
+  /** The network on the canvas. */
+  current: string;
+  selected: ReadonlySet<string>;
+  trash: TrashItem[];
+  onSelect: (id: string) => void;
+  onOpen: (id: string) => void;
+  onRestore: (item: TrashItem) => void;
+}) {
+  const { locale, items, current, selected } = props;
+  const children = useMemo(() => {
+    const m = new Map<string, TreeItem[]>();
+    for (const it of items) {
+      const key = it.parent ?? '';
+      const list = m.get(key) ?? [];
+      list.push(it);
+      m.set(key, list);
+    }
+    return m;
+  }, [items]);
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+
+  // The way to the network on the canvas stays open.
+  useEffect(() => {
+    const parentOf = new Map(items.map((i) => [i.id, i.parent ?? null]));
+    setOpen((o) => {
+      const next = new Set(o);
+      for (let at: string | null = current; at; at = parentOf.get(at) ?? null) next.add(at);
+      return next;
+    });
+  }, [current, items]);
+
+  const toggle = (id: string) =>
+    setOpen((o) => {
+      const next = new Set(o);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+
+  const branch = (parent: string, depth: number) =>
+    (children.get(parent) ?? []).map((it) => {
+      const kids = children.has(it.id);
+      const unfolded = open.has(it.id);
+      const cls = ['layer-row'];
+      if (selected.has(it.id)) cls.push('is-selected');
+      if (it.id === current) cls.push('is-here');
+      return (
+        <li key={it.id}>
+          <div
+            className={cls.join(' ')}
+            style={{ paddingLeft: `calc(${2 + depth * 8} * var(--u))` }}
+          >
+            {kids ? (
+              <button
+                type="button"
+                className="layer-fold"
+                aria-label={it.name}
+                aria-expanded={unfolded}
+                tabIndex={-1}
+                onClick={() => toggle(it.id)}
+              >
+                <Glyph name={unfolded ? 'unfolded' : 'folded'} />
+              </button>
+            ) : (
+              <span className="layer-fold" aria-hidden="true" />
+            )}
+            <button
+              type="button"
+              className={isFinal(it.status) ? 'layer-name is-done' : 'layer-name'}
+              title={it.name}
+              aria-current={it.id === current ? 'location' : undefined}
+              onClick={() => props.onSelect(it.id)}
+              onDoubleClick={() => props.onOpen(it.id)}
+            >
+              <Glyph name={it.kind as GlyphName} />
+              <span className="layer-label">{it.name || t(locale, 'note.untitled')}</span>
+            </button>
+          </div>
+          {kids && unfolded ? <ul>{branch(it.id, depth + 1)}</ul> : null}
+        </li>
+      );
+    });
+
+  return (
+    <nav className="ws-layers" aria-label={t(locale, 'tree.label')}>
+      <ul className="layers-list">{branch('', 0)}</ul>
+      {props.trash.length > 0 ? (
+        <details className="layers-trash">
+          <summary>{t(locale, 'ws.trash', { n: props.trash.length })}</summary>
+          <ul>
+            {props.trash.map((item) => (
+              <li key={item.id}>
+                <span className="trash-name" title={item.name}>
+                  {item.name || t(locale, 'note.untitled')}
+                </span>
+                <button type="button" onClick={() => props.onRestore(item)}>
+                  {t(locale, 'ws.restore')}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : null}
+    </nav>
+  );
+}

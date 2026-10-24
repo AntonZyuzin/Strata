@@ -40,10 +40,9 @@ import { type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
-import { IconButton } from '../TabBar';
 import { CoreDocs } from './docs';
 import { Inspector, type InspectorActions } from './Inspector';
-import { Structure } from './Structure';
+import { Layers } from './Layers';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -111,6 +110,17 @@ export interface WorkspaceBridge {
    * which goes on in the background.
    */
   leave(): Promise<{ picture: Promise<void> }>;
+  /** Undo and redo from the app's bar (owner, 2026-10-24). */
+  undo(): void;
+  redo(): void;
+}
+
+/** What the bar's undo and redo show: whether they can, and the step. */
+export interface UndoState {
+  canUndo: boolean;
+  canRedo: boolean;
+  /** The step undo would take back, for its tooltip. */
+  step: string;
 }
 
 export function WorkspaceScreen(props: {
@@ -118,6 +128,7 @@ export function WorkspaceScreen(props: {
   home: HomeBackend;
   opened: Opened;
   bridge: MutableRefObject<WorkspaceBridge | null>;
+  onUndoState: (s: UndoState) => void;
 }) {
   const { locale, home, opened } = props;
   const core = home.core;
@@ -163,7 +174,6 @@ export function WorkspaceScreen(props: {
   const [boardFocus, setBoardFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
-  const [trashOpen, setTrashOpen] = useState(false);
   /** The core's undo and redo: the session's, across networks (05 §11). */
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
   const [recent, setRecent] = useState<string[]>(loadRecent);
@@ -493,10 +503,8 @@ export function WorkspaceScreen(props: {
   }, []);
 
   useEffect(() => {
-    editor.current?.setOverlayOpen(
-      menu !== null || name !== null || view3d !== '2d' || boardFocus || trashOpen,
-    );
-  }, [menu, name, view3d, boardFocus, trashOpen]);
+    editor.current?.setOverlayOpen(menu !== null || name !== null || view3d !== '2d' || boardFocus);
+  }, [menu, name, view3d, boardFocus]);
 
   useEffect(() => {
     if (view3d !== '3d') return;
@@ -536,6 +544,8 @@ export function WorkspaceScreen(props: {
     };
     props.bridge.current = {
       save,
+      undo: () => editor.current?.undo(),
+      redo: () => editor.current?.redo(),
       leave: async () => {
         if (leaving.current) return { picture: Promise.resolve() };
         leaving.current = true;
@@ -563,7 +573,6 @@ export function WorkspaceScreen(props: {
     setNote(null);
     setBoard(null);
     setTrash(null);
-    setTrashOpen(false);
     netRef.current = opened.root;
     void loadRef.current(opened.root);
   }, [opened]);
@@ -677,6 +686,22 @@ export function WorkspaceScreen(props: {
       });
       i++;
     }
+  };
+
+  /**
+   * A layer chosen (owner, 2026-10-24: like Figma): the node selected on
+   * the canvas — in its own network, gone into first; `open` opens it too.
+   */
+  const selectLayer = async (id: string, open: boolean) => {
+    const item = tree.find((x) => x.id === id);
+    if (!item) return;
+    if (!item.parent) {
+      await loadRef.current(id);
+      return;
+    }
+    if (item.parent !== netRef.current) await loadRef.current(item.parent);
+    editor.current?.focusNode(id);
+    if (open) eventsRef.current?.open?.(id);
   };
 
   const g = graph.current;
@@ -864,7 +889,11 @@ export function WorkspaceScreen(props: {
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
     : label(null);
   const path = net?.path ?? [];
-  const trashCount = trash?.length ?? 0;
+  const { onUndoState } = props;
+  useEffect(
+    () => onUndoState({ canUndo, canRedo, step: lastStep }),
+    [onUndoState, canUndo, canRedo, lastStep],
+  );
 
   return (
     <div
@@ -890,12 +919,16 @@ export function WorkspaceScreen(props: {
           void dropFiles(files, e.clientX, e.clientY).catch(failed);
         }}
       />
-      {tree.length > 0 && net ? (
-        <Structure
+      {net ? (
+        <Layers
           locale={locale}
           items={tree}
           current={net.net}
-          onGo={(id) => void loadRef.current(id)}
+          selected={new Set(ed?.selection ?? [])}
+          trash={trash ?? []}
+          onSelect={(id) => void selectLayer(id, false)}
+          onOpen={(id) => void selectLayer(id, true)}
+          onRestore={(item) => void restore(item)}
         />
       ) : null}
       {details && actions ? (
@@ -919,68 +952,6 @@ export function WorkspaceScreen(props: {
           }}
         />
       ) : null}
-      {trashOpen ? (
-        <section className="window ws-trash" aria-labelledby="trash-title">
-          <header className="window-title">
-            <h2 id="trash-title">{t(locale, 'ws.trashTitle')}</h2>
-            <button
-              type="button"
-              className="window-close"
-              aria-label={t(locale, 'window.close')}
-              title={t(locale, 'window.close')}
-              onClick={() => {
-                setTrashOpen(false);
-                focusCanvas();
-              }}
-            >
-              ×
-            </button>
-          </header>
-          <div className="window-body">
-            {trashCount === 0 ? (
-              <p className="ws-trash-empty">{t(locale, 'ws.trashEmpty')}</p>
-            ) : (
-              <ul className="ws-trash-list">
-                {(trash ?? []).map((item) => (
-                  <li key={item.id}>
-                    <span className="ws-trash-name" title={item.name}>
-                      {item.name || t(locale, 'note.untitled')}
-                    </span>
-                    <button type="button" onClick={() => void restore(item)}>
-                      {t(locale, 'ws.restore')}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </section>
-      ) : null}
-      <div className="ws-tools">
-        <IconButton
-          glyph="undo"
-          label={canUndo ? lastStep : t(locale, 'proto.undo')}
-          disabled={!canUndo}
-          onClick={() => ed?.undo()}
-        />
-        <IconButton
-          glyph="redo"
-          label={t(locale, 'proto.redo')}
-          disabled={!canRedo}
-          onClick={() => ed?.redo()}
-        />
-        <IconButton
-          glyph="trash"
-          className={trashOpen ? 'is-default' : undefined}
-          label={t(locale, 'ws.trash', { n: trashCount })}
-          onClick={() => {
-            setTrashOpen((o) => !o);
-            refreshTrash();
-          }}
-        >
-          {trashCount > 0 ? <span className="ws-count">{trashCount}</span> : null}
-        </IconButton>
-      </div>
       <ul className="toasts" aria-live="polite">
         {toasts.map((x) => (
           <li key={x.id} className="toast">

@@ -225,14 +225,14 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Delete');
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '3');
     await settled(page);
-    await page.getByRole('button', { name: /Корзина/ }).click();
-    await expect(page.locator('.ws-trash-list li')).toHaveCount(1);
-    await page.locator('.ws-trash-list button').click();
+    // The trash is the foot of «Слои».
+    await page.locator('.layers-trash summary').click();
+    await expect(page.locator('.layers-trash li')).toHaveCount(1);
+    await page.locator('.layers-trash button').click();
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '4');
     await expect
       .poll(async () => (await graphNow(page)).edges)
       .toEqual(['Сценарий→Цель', 'Уровни→Цель']);
-    await page.locator('.ws-trash .window-close').click();
 
     // A restart: everything in place, the note's text too.
     await settled(page);
@@ -380,12 +380,23 @@ test.describe('a workspace on the core', () => {
     await panel.locator('.ins-links .check input').first().check();
     await expect(panel.locator('.ins-progress')).toHaveText('1 из 2');
     // The tree: the task is a network of the workspace; it goes inside.
-    await page.locator('.tree-row', { hasText: 'Боёвка' }).click();
+    // «Слои»: a click selects the node on the canvas, a double click goes in.
+    await page.locator('.layer-name', { hasText: 'Боёвка' }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.__strataWs?.view &&
+            document.querySelector('.layer-row.is-selected')?.textContent,
+        ),
+      )
+      .toBe('Боёвка');
+    await page.locator('.layer-name', { hasText: 'Боёвка' }).dblclick();
     await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
     await expect
       .poll(async () => (await graphNow(page)).names)
       .toEqual(['Анимации', 'Описание', 'Хитбоксы']);
-    await page.locator('.tree-row', { hasText: 'Проекты' }).click();
+    await page.locator('.layer-name', { hasText: 'Проекты' }).click();
     await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
     // The right button: «Выполнено».
     const p = await at(page, 'Боёвка');

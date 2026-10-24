@@ -723,7 +723,12 @@ fn a_task_with_subtasks_rolls_them_up() {
     assert_eq!(parent_of(&root), None);
     assert_eq!(parent_of(&task), Some(root.clone()));
     assert_eq!(parent_of(&deep), Some(sub2.clone()));
-    assert_eq!(tree.len(), 5);
+    assert_eq!(
+        parent_of(&about),
+        Some(task.clone()),
+        "every node, not only networks"
+    );
+    assert_eq!(tree.len(), 6);
 
     // A description must be a note.
     assert!(set(&mut w, &task, "description", Some(Val::str(sub1.clone()))).is_err());

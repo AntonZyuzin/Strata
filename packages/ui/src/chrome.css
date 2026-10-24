@@ -1325,86 +1325,16 @@ button:focus-visible {
   padding: 0;
 }
 
-/* The workspace (milestone 1A): the canvas fills the screen under the tabs;
-   undo, redo and the trash are icons in the bottom-right corner. */
+/* The workspace: «Слои» along the left edge, the canvas beside them, the
+   properties panel along the right edge when a node is selected (owner,
+   2026-10-24: like Figma). */
 .proto.workspace {
+  --layers-w: 32ch;
   position: absolute;
 }
 
 .workspace .proto-canvas {
-  inset: 0;
-}
-
-.ws-tools {
-  position: absolute;
-  right: calc(6 * var(--u));
-  bottom: calc(6 * var(--u));
-  z-index: 4;
-  display: flex;
-  gap: calc(2 * var(--u));
-  padding: calc(2 * var(--u));
-  background: var(--st-color-surface);
-  border: var(--u) solid var(--st-color-frame);
-  box-shadow: var(--st-shadow-menu);
-}
-
-.ws-tools .icon-button {
-  position: relative;
-}
-
-/* How many nodes are in the trash, over the icon's corner. */
-.ws-count {
-  position: absolute;
-  top: calc(-4 * var(--u));
-  right: calc(-4 * var(--u));
-  min-width: calc(12 * var(--u));
-  padding: 0 var(--u);
-  font-size: var(--st-font-ui-size);
-  line-height: calc(12 * var(--u));
-  text-align: center;
-  color: var(--st-color-accent-on);
-  background: var(--st-color-accent);
-}
-
-.ws-trash {
-  position: absolute;
-  bottom: calc(var(--st-size-control) + 16 * var(--u));
-  right: calc(6 * var(--u));
-  z-index: 6;
-  width: min(44ch, calc(100vw - 12 * var(--u)));
-  max-height: calc(100% - var(--st-size-control) - 24 * var(--u));
-  display: flex;
-  flex-direction: column;
-}
-
-.ws-trash .window-body {
-  overflow: auto;
-}
-
-.ws-trash-empty {
-  margin: 0;
-  color: var(--st-color-text-muted);
-}
-
-.ws-trash-list {
-  display: grid;
-  gap: calc(3 * var(--u));
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.ws-trash-list li {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 12ch;
-  align-items: center;
-  gap: calc(4 * var(--u));
-}
-
-.ws-trash-name {
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  inset: 0 0 0 var(--layers-w);
 }
 
 /* Context menu (07 §8.2): the Tab menu's rows, a key on the right. */
@@ -1669,65 +1599,147 @@ button:focus-visible {
   color: var(--st-color-text);
 }
 
-/* «Структура» (owner's sketch, 2026-10-24): networks as a tree on the left;
-   the one you are in — the accent. */
-.ws-tree {
+/* «Слои»: the workspace's nodes as a tree, the whole height. */
+.ws-layers {
   position: absolute;
-  top: calc(6 * var(--u));
-  left: calc(6 * var(--u));
+  top: 0;
+  left: 0;
+  bottom: 0;
   z-index: 4;
-  width: 28ch;
-  max-height: calc(100% - 12 * var(--u));
-  overflow: auto;
-  padding: calc(2 * var(--u)) 0;
+  width: var(--layers-w);
+  display: flex;
+  flex-direction: column;
+  background: var(--st-color-surface);
+  border-right: var(--u) solid var(--st-color-frame);
 }
 
-.ws-tree ul {
+.layers-list,
+.layers-list ul,
+.layers-trash ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.tree-row {
+.layers-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: calc(3 * var(--u)) 0;
+}
+
+.layer-row {
   display: flex;
   align-items: center;
-  gap: calc(4 * var(--u));
-  width: 100%;
   min-height: var(--st-size-row);
   padding-right: calc(4 * var(--u));
+}
+
+.layer-row:hover {
+  background: var(--st-color-surface-raised);
+}
+
+.layer-row.is-here {
+  box-shadow: inset calc(2 * var(--u)) 0 0 var(--st-color-accent);
+}
+
+.layer-row.is-selected,
+.layer-row.is-selected:hover {
+  color: var(--st-color-accent-on);
+  background: var(--st-color-accent);
+}
+
+.layer-fold {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: calc(14 * var(--u));
+  min-width: calc(14 * var(--u));
+  min-height: calc(14 * var(--u));
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.layer-name {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  color: inherit;
   text-align: left;
   background: transparent;
   border: 0;
   box-shadow: none;
 }
 
-.tree-row span {
+/* The row lights up, not the buttons inside it. */
+.layer-name:hover:not(:disabled),
+.layer-fold:hover:not(:disabled) {
+  background: transparent;
+}
+
+.layer-name:focus-visible {
+  box-shadow: none;
+}
+
+.layer-label {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
 
-.tree-row:hover:not(:disabled) {
-  background: var(--st-color-surface-raised);
+.layer-name.is-done .layer-label {
+  text-decoration: line-through;
+  opacity: 0.6;
 }
 
-.tree-row.is-current,
-.tree-row.is-current:hover {
-  color: var(--st-color-accent-on);
-  background: var(--st-color-accent);
+.layers-trash {
+  flex: none;
+  max-height: 40%;
+  overflow: auto;
+  padding: calc(3 * var(--u)) calc(4 * var(--u));
+  border-top: var(--u) solid var(--st-color-divider);
+}
+
+.layers-trash summary {
+  cursor: pointer;
+  color: var(--st-color-text-muted);
+}
+
+.layers-trash li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  margin-top: calc(3 * var(--u));
+}
+
+.trash-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 /* The properties panel (06 «P», 04 S3 step 5) on the right. */
 .ws-inspector {
   position: absolute;
-  top: calc(6 * var(--u));
-  right: calc(6 * var(--u));
-  bottom: calc(var(--st-size-control) + 16 * var(--u));
+  top: 0;
+  right: 0;
+  bottom: 0;
   z-index: 5;
   width: 46ch;
   display: flex;
   flex-direction: column;
+  border: 0;
+  border-left: var(--u) solid var(--st-color-frame);
+  box-shadow: none;
 }
 
 .ins-open {
@@ -1888,4 +1900,11 @@ button:focus-visible {
 
 .ins-add {
   width: 100%;
+}
+
+/* Between export and undo: two groups of tools on one strip. */
+.tabbar-gap {
+  width: var(--u);
+  margin: calc(2 * var(--u));
+  background: var(--st-color-divider);
 }

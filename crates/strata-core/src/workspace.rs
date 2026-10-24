@@ -175,13 +175,16 @@ pub struct NodeDetails {
     pub fold: Option<Fold>,
 }
 
-/// A network in the «Структура» tree.
+/// A node in the «Слои» panel: every live node under its primary network.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TreeItem {
     pub id: String,
     pub name: String,
+    pub kind: NodeKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub class: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
 }
@@ -1239,23 +1242,26 @@ impl<S: Store> Workspace<S> {
         Ok(self.store.asset(sha)?)
     }
 
-    /// Every live network of the workspace with its parent, for the
-    /// «Структура» tree; the root has none.
+    /// Every live node of the workspace under its primary network, for the
+    /// «Слои» panel (owner, 2026-10-24: like Figma's layers); the root has
+    /// no parent.
     pub fn tree(&self) -> Vec<TreeItem> {
         let mut out = Vec::new();
         for shard in self.index_shards() {
             let LoroValue::Map(kinds) = shard.get_map("kind").get_value() else {
                 continue;
             };
-            for (id, kind) in kinds.iter() {
+            for id in kinds.keys() {
                 let Ok(n) = NodeId::parse(id) else { continue };
-                if kind.as_string().map(|s| s.as_str()) != Some("network") || !self.alive(n) {
+                if !self.alive(n) {
                     continue;
                 }
                 out.push(TreeItem {
                     id: id.clone(),
                     name: self.name(n),
+                    kind: self.kind(n).unwrap_or(NodeKind::Note),
                     class: self.text_field(n, "class"),
+                    status: self.text_field(n, "status"),
                     parent: if n == self.root {
                         None
                     } else {

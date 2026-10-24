@@ -126,11 +126,13 @@ export interface NodeDetails extends NodeAttrs {
   fold?: CoreFold;
 }
 
-/** A network in the «Структура» tree; the root has no parent. */
+/** A node in the «Слои» panel, under its primary network; the root has no parent. */
 export interface TreeItem {
   id: string;
   name: string;
+  kind: NodeKind;
   class?: string;
+  status?: string;
   parent?: string;
 }
 

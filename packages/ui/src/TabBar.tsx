@@ -61,6 +61,10 @@ export function TabBar(props: {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  /** Undo and redo of the open workspace; absent on the home screen. */
+  undo: { canUndo: boolean; canRedo: boolean; step: string } | undefined;
+  onUndo: () => void;
+  onRedo: () => void;
 }) {
   const { locale, active } = props;
   return (
@@ -83,6 +87,19 @@ export function TabBar(props: {
           label={t(locale, 'home.exportHint')}
           disabled={!props.onExport}
           onClick={() => props.onExport?.()}
+        />
+        <span className="tabbar-gap" aria-hidden="true" />
+        <IconButton
+          glyph="undo"
+          label={props.undo?.canUndo ? props.undo.step : t(locale, 'proto.undo')}
+          disabled={!props.undo?.canUndo}
+          onClick={props.onUndo}
+        />
+        <IconButton
+          glyph="redo"
+          label={t(locale, 'proto.redo')}
+          disabled={!props.undo?.canRedo}
+          onClick={props.onRedo}
         />
       </div>
       <div className="tabbar-tabs" role="tablist" aria-label={t(locale, 'tabs.label')}>

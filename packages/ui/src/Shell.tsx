@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickArchive, pickSavePath } from './backend';
 import { download, HomeScreen } from './home/HomeScreen';
 import { type Tab, TabBar } from './TabBar';
-import { type WorkspaceBridge, WorkspaceScreen } from './workspace/WorkspaceScreen';
+import { type UndoState, type WorkspaceBridge, WorkspaceScreen } from './workspace/WorkspaceScreen';
 
 /**
  * The home screen and the open workspaces under one bar of tabs, like a
@@ -46,6 +46,7 @@ export function Shell(props: {
   const [tabs, setTabs] = useState<Tab[]>(loadTabs);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [undo, setUndo] = useState<UndoState | null>(null);
   /** The tab just clicked: lit at once, before its workspace is open. */
   const [pending, setPending] = useState<string | null>(null);
   /** The home screen reads its list again after a workspace was open. */
@@ -123,6 +124,9 @@ export function Shell(props: {
         locale={locale}
         tabs={tabs}
         active={pending ?? active}
+        undo={opened ? (undo ?? undefined) : undefined}
+        onUndo={() => bridge.current?.undo()}
+        onRedo={() => bridge.current?.redo()}
         onHome={() =>
           void act(async () => {
             if (!opened) return;
@@ -211,7 +215,13 @@ export function Shell(props: {
       <div className="app-body">
         {opened ? (
           // No key: one canvas for every tab, another tab only reloads it.
-          <WorkspaceScreen locale={locale} home={home} opened={opened} bridge={bridge} />
+          <WorkspaceScreen
+            locale={locale}
+            home={home}
+            opened={opened}
+            bridge={bridge}
+            onUndoState={setUndo}
+          />
         ) : (
           <HomeScreen
             key={homeKey}

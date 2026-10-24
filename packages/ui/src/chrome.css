@@ -183,6 +183,65 @@ dd {
   margin: 0;
 }
 
+/* Motion (owner, 2026-10-24: smoother hovers and windows, nothing slides).
+   A hover fades its colours; a press stays at once, as the bevel of a retro
+   button does; windows, menus, dialogs and toasts fade in. Nothing moves. */
+button,
+a,
+.field,
+.tab,
+.layer-row,
+.list-text,
+.home-card,
+.ins-swatch,
+.ins-icon {
+  transition:
+    background-color var(--st-motion-hover, 120ms) ease-out,
+    color var(--st-motion-hover, 120ms) ease-out,
+    border-color var(--st-motion-hover, 120ms) ease-out,
+    opacity var(--st-motion-hover, 120ms) ease-out;
+}
+
+@keyframes st-appear {
+  from {
+    opacity: 0;
+  }
+}
+
+.window,
+.dialog,
+.tab-menu,
+.context-menu,
+.toast,
+.name-input,
+.settings {
+  animation: st-appear var(--st-motion-appear, 140ms) ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button,
+  a,
+  .field,
+  .tab,
+  .layer-row,
+  .list-text,
+  .home-card,
+  .ins-swatch,
+  .ins-icon {
+    transition: none;
+  }
+
+  .window,
+  .dialog,
+  .tab-menu,
+  .context-menu,
+  .toast,
+  .name-input,
+  .settings {
+    animation: none;
+  }
+}
+
 /* Button (07 §8.2): 1u frame, raised bevel, sunken when pressed. */
 button {
   min-height: var(--st-size-control);

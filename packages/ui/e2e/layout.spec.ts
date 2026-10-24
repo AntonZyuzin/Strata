@@ -39,7 +39,8 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
       const close = page.locator('.window-close');
       for (const hover of [false, true]) {
         if (hover) await close.hover();
-        const m = await inkMargins(page, await close.screenshot());
+        // Fades of the Chrome (07 §10.5) run to their end before the shot.
+        const m = await inkMargins(page, await close.screenshot({ animations: 'disabled' }));
         expect(m.left + m.right, 'no × drawn').toBeLessThan(m.width);
         expect(
           Math.abs(m.left - m.right),

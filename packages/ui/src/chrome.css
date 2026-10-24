@@ -80,6 +80,11 @@ body {
 
 .window-title h1,
 .window-title h2 {
+  /* Press Start 2P's capitals fill the top seven of its eight rows: one unit
+     down puts their middle on the plate's, an icon's beside them (owner,
+     2026-10-24: the name stood higher than its icon). */
+  position: relative;
+  top: var(--u);
   min-width: 0;
   margin: 0;
   overflow: hidden;
@@ -1566,9 +1571,11 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin-bottom: calc(-1 * var(--u));
 }
 
-/* «+» stands with the tabs, flat, on the same line. */
+/* «+» stands with the tabs, flat, on the same line: a square of a tab's height. */
 .tab-new {
   align-self: flex-end;
+  width: calc(var(--st-size-control) + 5 * var(--u));
+  min-width: calc(var(--st-size-control) + 5 * var(--u));
   height: calc(var(--st-size-control) + 5 * var(--u));
   color: var(--st-color-text-muted);
   background: transparent;
@@ -1595,6 +1602,20 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   box-shadow: none;
   font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
   text-transform: uppercase;
+}
+
+/* The logo stands on the bar's bottom line like a tab, one unit into it: its
+   hover lights the bar above that line only, not the line or what is under it
+   (owner, 2026-10-24). */
+.tabbar-logo:hover:not(:disabled) {
+  background:
+    linear-gradient(var(--st-color-surface-raised), var(--st-color-surface-raised)) top / 100%
+    calc(100% - var(--u)) no-repeat;
+}
+
+.tabbar-logo:active:not(:disabled) {
+  padding-top: 0;
+  box-shadow: none;
 }
 
 .tabbar-tools {
@@ -1666,6 +1687,10 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   box-shadow: var(--st-bevel-sunken);
 }
 
+/* The dashed divider stands in the middle between the tools and the first
+   tab — 6u each side — and on a tab's middle line, not the bar's (owner,
+   2026-10-24): a tab shows control + 5u from 6u down, so four dashes of 3u
+   over 21u start at control / 2 − 2u. */
 .tabbar-tabs {
   display: flex;
   flex: 1 1 auto;
@@ -1673,14 +1698,15 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   gap: calc(2 * var(--u));
   min-width: 0;
   align-self: stretch;
-  padding-left: calc(8 * var(--u));
+  padding-left: calc(7 * var(--u));
   background:
     repeating-linear-gradient(
       180deg,
-      var(--st-color-divider) 0 calc(2 * var(--u)),
-      transparent 0 calc(4 * var(--u))
+      var(--st-color-divider) 0 calc(3 * var(--u)),
+      transparent 0 calc(6 * var(--u))
     )
-    left center / var(--u) 60% no-repeat;
+    left 0 top calc(var(--st-size-control) / 2 - 2 * var(--u)) / var(--u) calc(21 * var(--u))
+    no-repeat;
 }
 
 .tab {
@@ -1791,13 +1817,15 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   height: calc(24 * var(--u));
 }
 
-/* The panel's name, as Figma's «Layers», over the icons' column; twice the
-   UI face (owner, 2026-10-24), so its pixels stay whole. */
+/* The panel's name, as Figma's «Layers»: 16u from the edge, over the
+   triangles' column, the nodes' icons stand right of it; one and a half
+   times the UI face (owner, 2026-10-24: twice was too big): three device
+   pixels a font pixel on DPR 2, softer on DPR 1. */
 .layers-title {
   flex: none;
   margin: 0;
-  padding: calc(14 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)) calc(18 * var(--u));
-  font: calc(2 * var(--st-font-ui-size)) / calc(2 * var(--st-font-ui-line)) var(--st-font-ui);
+  padding: calc(14 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u)) calc(16 * var(--u));
+  font: calc(1.5 * var(--st-font-ui-size)) / calc(1.5 * var(--st-font-ui-line)) var(--st-font-ui);
   color: var(--st-color-text);
 }
 
@@ -1815,13 +1843,15 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   background: var(--st-color-accent);
 }
 
+/* The triangle under the title's first letter, 12u of room to the icon
+   (owner, 2026-10-24: as in Figma, not pressed against it). */
 .layer-fold {
   flex: none;
   display: inline-grid;
   place-items: center;
-  width: calc(14 * var(--u));
-  min-width: calc(14 * var(--u));
-  min-height: calc(14 * var(--u));
+  width: calc(16 * var(--u));
+  min-width: calc(16 * var(--u));
+  min-height: calc(16 * var(--u));
   padding: 0;
   color: inherit;
   background: transparent;
@@ -1836,6 +1866,7 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   gap: calc(8 * var(--u));
   min-width: 0;
   min-height: 0;
+  margin-left: calc(6 * var(--u));
   padding: 0;
   color: inherit;
   text-align: left;
@@ -1848,6 +1879,12 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 .layer-name:hover:not(:disabled),
 .layer-fold:hover:not(:disabled) {
   background: transparent;
+}
+
+.layer-name:active:not(:disabled),
+.layer-fold:active:not(:disabled) {
+  padding-top: 0;
+  box-shadow: none;
 }
 
 .layer-name:focus-visible {
@@ -1870,7 +1907,7 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   flex: none;
   max-height: 40%;
   overflow: auto;
-  padding: calc(3 * var(--u)) calc(4 * var(--u));
+  padding: calc(3 * var(--u)) calc(16 * var(--u));
   border-top: var(--u) solid var(--st-color-divider);
 }
 
@@ -1956,8 +1993,11 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 .ins-title-field {
   flex: 1 1 auto;
   min-width: 0;
-  padding: 0 calc(2 * var(--u));
-  font: var(--st-font-display-s-size) / var(--st-font-display-s-line) var(--st-font-display);
+  /* The name stays where the title had it (see .window-title h2). */
+  padding: var(--u) calc(2 * var(--u)) 0;
+  font:
+    var(--st-font-display-s-size) / calc(var(--st-font-display-s-line) - var(--u))
+    var(--st-font-display);
   color: inherit;
   background: transparent;
   border: var(--u) solid currentColor;

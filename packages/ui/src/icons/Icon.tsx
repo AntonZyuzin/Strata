@@ -1,8 +1,8 @@
 import { type AssetType, assetType, type NodeAttrs, type NodeKind } from '@strata/backend';
 import type { CSSProperties } from 'react';
+import board from './board.png';
 import hourglass from './hourglass.png';
 import calendar from './serenity/app-calendar.png';
-import paint from './serenity/app-pixel-paint.png';
 import sound from './serenity/app-sound-player.png';
 import starfield from './serenity/app-starfield.png';
 import video from './serenity/app-video-player.png';
@@ -37,10 +37,11 @@ import close from './serenity/window-close.png';
  * Chrome, so they are masks drawn in the text colour.
  */
 const FILES = {
-  // Strata's own, drawn to match (owner, 2026-10-24: a task is an hourglass).
+  // Strata's own, drawn to match (owner, 2026-10-24: a task is an hourglass;
+  // SerenityOS's crayons stood out of the set as a board).
   hourglass,
+  board,
   'app-calendar': calendar,
-  'app-pixel-paint': paint,
   'app-sound-player': sound,
   'app-starfield': starfield,
   'app-video-player': video,
@@ -77,7 +78,7 @@ const NAMED = {
   project: 'office',
   task: 'hourglass',
   note: 'filetype-text',
-  board: 'app-pixel-paint',
+  board: 'board',
   checklist: 'table-view',
   import: 'open',
   export: 'save',
@@ -118,8 +119,11 @@ export const ASSET_ICONS: readonly IconFile[] = [
   'filetype-unknown',
 ];
 
-/** SerenityOS's files that ship, for «Благодарности»: all but Strata's own hourglass. */
-export const ICON_FILES = Object.keys(FILES).length - 1;
+/** Strata's own icons among the files. */
+const OWN: readonly IconFile[] = ['hourglass', 'board'];
+
+/** SerenityOS's files that ship, for «Благодарности»: all but Strata's own. */
+export const ICON_FILES = Object.keys(FILES).length - OWN.length;
 
 const MONO: ReadonlySet<IconFile> = new Set(['undo', 'redo', 'plus', 'window-close']);
 

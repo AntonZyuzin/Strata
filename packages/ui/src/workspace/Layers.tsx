@@ -65,7 +65,8 @@ export function Layers(props: {
         <li key={it.id}>
           <div
             className={cls.join(' ')}
-            style={{ paddingLeft: `calc(${4 + depth * 16} * var(--u))` }}
+            // Like Figma's: a level is 16u, a child's triangle under its parent's icon.
+            style={{ paddingLeft: `calc(${10 + depth * 16} * var(--u))` }}
           >
             {kids ? (
               <button

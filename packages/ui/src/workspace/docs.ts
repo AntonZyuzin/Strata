@@ -13,6 +13,12 @@ const BATCH_MS = 200;
 interface Open {
   doc: LoroDoc;
   sent: ReturnType<LoroDoc['oplogVersion']>;
+  /**
+   * Local changes not yet sent. Not the update's length: Loro's update with
+   * nothing new still has a header (22 bytes), and pushing it for every open
+   * document on every flush reached the core for nodes it no longer has.
+   */
+  dirty: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   off: () => void;
 }
@@ -38,8 +44,12 @@ export class CoreDocs {
     const entry: Open = {
       doc,
       sent: doc.oplogVersion(),
+      dirty: false,
       timer: null,
-      off: doc.subscribeLocalUpdates(() => this.later(id)),
+      off: doc.subscribeLocalUpdates(() => {
+        entry.dirty = true;
+        this.later(id);
+      }),
     };
     this.open.set(id, entry);
     return doc;
@@ -56,10 +66,10 @@ export class CoreDocs {
 
   private push(id: string): void {
     const e = this.open.get(id);
-    if (!e) return;
+    if (!e?.dirty) return;
+    e.dirty = false;
     const update = e.doc.export({ mode: 'update', from: e.sent });
     e.sent = e.doc.oplogVersion();
-    if (update.length === 0) return;
     this.queue = this.queue
       .then(() => this.core.pushDoc(`content/${id}`, update))
       .then((wires) => {

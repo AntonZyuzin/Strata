@@ -222,8 +222,14 @@ export function WorkspaceScreen(props: {
     };
 
     const events: EditorEvents = {
-      tabMenu: (e) => setMenu(e),
-      nameInput: (e) => setName(e),
+      // The editor speaks in points of the canvas, which sits right of «Слои»:
+      // the Tab menu is fixed to the page, the name field lies in this screen.
+      tabMenu: (e) => {
+        const r = el.getBoundingClientRect();
+        setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top });
+      },
+      nameInput: (e) =>
+        setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
       toast: (e) => toast(e.key, e.params, e.key !== 'proto.toast.exists'),
       // No explanatory lines on screen: hints live in tooltips and menus.
       hint: () => undefined,
@@ -289,15 +295,17 @@ export function WorkspaceScreen(props: {
           toast('ws.notOpenable');
           return;
         }
-        // Beside the bubble, on the side with more room (06 §13.1).
+        // Beside the bubble, on the side with more room (06 §13.1): the canvas
+        // runs under the properties panel, which takes its right edge.
         const s = v.camera.toScreen(p.x, p.y);
         const r = p.r * v.camera.zoom;
-        const side = s.x < v.width / 2 ? 'right' : 'left';
-        const at = {
-          side,
-          x: side === 'right' ? s.x + r + 24 : s.x - r - 24,
-          y: Math.max(8, Math.min(s.y - 120, v.height - 320)),
-        } as const;
+        const panel = el.parentElement?.querySelector<HTMLElement>('.ws-inspector');
+        const room = v.width - (panel?.offsetWidth ?? 0);
+        const side = s.x < room / 2 ? 'right' : 'left';
+        // In this screen's points: the canvas starts right of «Слои».
+        const x = el.offsetLeft + (side === 'right' ? s.x + r + 24 : s.x - r - 24);
+        const y = el.offsetTop + Math.max(8, Math.min(s.y - 120, v.height - 320));
+        const at = { side, x, y } as const;
         d.doc(id).then((doc) => setNote({ id, doc, at }), refused);
       },
     };

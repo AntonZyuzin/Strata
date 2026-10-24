@@ -33,6 +33,7 @@ import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { nodeIconFile, nodeIconImages } from '../icons/Icon';
+import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapState } from '../proto/map3d';
@@ -121,10 +122,14 @@ export function WorkspaceScreen(props: {
   locale: Locale;
   home: HomeBackend;
   opened: Opened;
+  /** How dates and times read (✅ Q-06-23). */
+  prefs: Prefs;
+  /** «Настройки» are in front: the canvas leaves the keys alone. */
+  covered: boolean;
   bridge: MutableRefObject<WorkspaceBridge | null>;
   onUndoState: (s: UndoState) => void;
 }) {
-  const { locale, home, opened } = props;
+  const { locale, home, opened, covered } = props;
   const core = home.core;
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<CanvasView | null>(null);
@@ -520,8 +525,11 @@ export function WorkspaceScreen(props: {
   }, []);
 
   useEffect(() => {
-    editor.current?.setOverlayOpen(menu !== null || name !== null || view3d !== '2d' || boardFocus);
-  }, [menu, name, view3d, boardFocus]);
+    // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
+    editor.current?.setOverlayOpen(
+      menu !== null || name !== null || view3d !== '2d' || boardFocus || covered,
+    );
+  }, [menu, name, view3d, boardFocus, covered]);
 
   useEffect(() => {
     if (view3d !== '3d') return;
@@ -963,6 +971,7 @@ export function WorkspaceScreen(props: {
           actions={actions}
           focusList={listFocus === details.id}
           noteOpen={note?.id === details.id}
+          when={reading(props.prefs)}
           onListFocused={() => setListFocus(null)}
         />
       ) : null}

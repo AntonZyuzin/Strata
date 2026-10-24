@@ -827,7 +827,8 @@ button:focus-visible {
    glyphs, 6u from the frame, so they stand one under another. The browser's
    own calendar button stays, unseen, over the glyph and still opens. */
 select.field,
-input[type="date"].field {
+input[type="date"].field,
+.field.is-date {
   appearance: none;
   padding-right: calc(6 * var(--u));
   background-repeat: no-repeat;
@@ -840,8 +841,62 @@ select.field {
   background-image: var(--st-chevron);
 }
 
-input[type="date"].field {
+input[type="date"].field,
+.field.is-date {
   background-image: var(--st-calendar);
+}
+
+.field.is-date {
+  padding-right: calc(26 * var(--u));
+}
+
+/* A text that is no date or time: a dashed frame until it is fixed (07 §8.2). */
+.field[aria-invalid="true"] {
+  border-style: dashed;
+}
+
+/* A start or a deadline: the day and the time in one field, its calendar on
+   the axis of the selects' triangles (✅ Q-06-23, 07 §8.2). */
+.when {
+  position: relative;
+  min-width: 0;
+}
+
+.when .field {
+  width: 100%;
+}
+
+/* Over the calendar glyph: it opens the browser's own calendar. */
+.when-pick {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: calc(28 * var(--u));
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  cursor: pointer;
+}
+
+.when-pick:hover:not(:disabled),
+.when-pick:active:not(:disabled) {
+  background: transparent;
+  box-shadow: none;
+}
+
+.when-native {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 input[type="date"].field::-webkit-calendar-picker-indicator {
@@ -1219,16 +1274,6 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   border-bottom: var(--u) solid var(--st-color-frame);
 }
 
-.home-profile {
-  display: inline-flex;
-  align-items: center;
-  margin-left: auto;
-}
-
-.home-profile .field {
-  width: 18ch;
-}
-
 .home-content {
   flex: 1 1 auto;
   min-height: 0;
@@ -1571,6 +1616,47 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 .tabbar-tools .icon-button:hover:not(:disabled) {
   background: var(--st-color-surface-raised);
   border-color: var(--st-color-frame);
+}
+
+/* «Настройки» at the bar's right end, on the tabs' middle line (✅ Q-06-23). */
+.tabbar-settings {
+  flex: none;
+  align-self: flex-end;
+  margin-bottom: calc(2 * var(--u));
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.tabbar-settings:hover:not(:disabled) {
+  background: var(--st-color-surface-raised);
+  border-color: var(--st-color-frame);
+}
+
+.tabbar-settings[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  border-color: var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+/* «Настройки» over the home or the workspace, which stay as they were: the
+   panel's grid in one column (✅ Q-06-23). */
+.settings {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  overflow: auto;
+  background: var(--st-color-bg);
+}
+
+.settings-page {
+  width: min(64ch, 100%);
+  margin: 0 auto;
+  padding: calc(16 * var(--u)) 0 calc(24 * var(--u));
+}
+
+.settings-about {
+  align-self: flex-start;
 }
 
 /* A toggle that is on stays pressed in, as in Windows 98 (07 §8.2). */
@@ -2187,4 +2273,10 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   width: var(--u);
   margin: calc(2 * var(--u));
   background: var(--st-color-divider);
+}
+
+/* «Настройки» use the panel's sections and a wider label column. */
+
+.settings .ins-fields {
+  grid-template-columns: 20ch minmax(0, 1fr);
 }

@@ -16,8 +16,10 @@ import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { useEffect, useRef, useState } from 'react';
 import { ASSET_ICONS, Icon, nodeIcon } from '../icons/Icon';
+import type { Clock, DateFormat } from '../prefs';
 import { IconButton } from '../TabBar';
 import { ListItems } from './ListItems';
+import { WhenField } from './WhenField';
 
 /**
  * The properties panel (06, «P»; 04 S3 step 5), each kind its own fields
@@ -249,6 +251,8 @@ export function Inspector(props: {
   focusList: boolean;
   /** The note is open in its window: its text is there, not here a second time. */
   noteOpen: boolean;
+  /** How dates and times read (✅ Q-06-23). */
+  when: { date: DateFormat; clock: Clock };
   onListFocused: () => void;
 }) {
   const { locale, node: n, people, actions: a } = props;
@@ -374,22 +378,22 @@ export function Inspector(props: {
               </dd>
               <dt className="ins-label">{field(locale, 'start')}</dt>
               <dd className="ins-value">
-                <input
-                  className="field"
-                  type="date"
-                  aria-label={field(locale, 'start')}
-                  value={n.start ?? ''}
-                  onChange={(e) => a.attr('start', e.currentTarget.value || null)}
+                <WhenField
+                  locale={locale}
+                  label={field(locale, 'start')}
+                  value={n.start}
+                  {...props.when}
+                  onChange={(v) => a.attr('start', v)}
                 />
               </dd>
               <dt className="ins-label">{field(locale, 'deadline')}</dt>
               <dd className="ins-value">
-                <input
-                  className="field"
-                  type="date"
-                  aria-label={field(locale, 'deadline')}
-                  value={n.deadline ?? ''}
-                  onChange={(e) => a.attr('deadline', e.currentTarget.value || null)}
+                <WhenField
+                  locale={locale}
+                  label={field(locale, 'deadline')}
+                  value={n.deadline}
+                  {...props.when}
+                  onChange={(v) => a.attr('deadline', v)}
                 />
               </dd>
               <dt className="ins-label">{field(locale, 'priority')}</dt>

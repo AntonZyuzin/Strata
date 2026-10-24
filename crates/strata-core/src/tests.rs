@@ -612,12 +612,19 @@ fn attributes_take_only_the_values_of_05_6() {
     set(&mut w, &a, "status", Some(Val::str("doing"))).expect("status");
     set(&mut w, &a, "deadline", Some(Val::str("2026-02-28"))).expect("deadline");
     set(&mut w, &a, "start", Some(Val::str("2024-02-29"))).expect("leap day");
+    // A time of day too, as Obsidian's datetime (05 §6.1).
+    set(&mut w, &a, "start", Some(Val::str("2024-02-29T09:05"))).expect("a day and a time");
+    set(&mut w, &a, "start", Some(Val::str("2024-02-29"))).expect("the day alone again");
     set(&mut w, &a, "priority", Some(Val::str("urgent"))).expect("priority");
     set(&mut w, &a, "color", Some(Val::Int(7))).expect("colour");
     for (key, bad) in [
         ("status", Val::str("someday")),
         ("deadline", Val::str("2026-02-30")),
         ("deadline", Val::str("30.10.2026")),
+        ("deadline", Val::str("2026-02-28T24:00")),
+        ("deadline", Val::str("2026-02-28T9:05")),
+        ("deadline", Val::str("2026-02-30T10:00")),
+        ("start", Val::str("2026-02-28T10:00:00")),
         ("priority", Val::Int(3)),
         ("color", Val::Int(8)),
         ("weather", Val::str("sunny")),

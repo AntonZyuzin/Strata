@@ -16,6 +16,7 @@ import pdf from './serenity/filetype-pdf.png';
 import symlink from './serenity/filetype-symlink.png';
 import text from './serenity/filetype-text.png';
 import unknown from './serenity/filetype-unknown.png';
+import gear from './serenity/gear.png';
 import internet from './serenity/internet.png';
 import office from './serenity/office.png';
 import open from './serenity/open.png';
@@ -46,6 +47,7 @@ const FILES = {
   book,
   'filetype-folder': folder,
   'filetype-folder-open': folderOpen,
+  gear,
   'filetype-html': html,
   'filetype-image': image,
   'filetype-music': music,
@@ -86,6 +88,7 @@ const NAMED = {
   plus: 'plus',
   close: 'window-close',
   map: 'app-starfield',
+  settings: 'gear',
 } as const satisfies Record<string, IconFile>;
 
 export type IconName = keyof typeof NAMED | IconFile;

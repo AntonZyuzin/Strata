@@ -9,6 +9,7 @@ import { EngravingWindow } from './EngravingWindow';
 import { FontsWindow } from './FontsWindow';
 import { LocaleSwitch } from './LocaleSwitch';
 import { loadPixelPrefs, type PixelPrefs } from './pixel';
+import { loadPrefs, type Prefs, savePrefs } from './prefs';
 import { Prototype } from './proto/Prototype';
 import { Shell } from './Shell';
 
@@ -53,7 +54,16 @@ function screenFromUrl(): Screen {
 }
 
 export function App() {
-  const [locale, setLocale] = useState<Locale>(() => detectLocale(navigator.languages));
+  // The language and how dates read: the device's settings (✅ Q-06-23), kept between launches.
+  const [prefs, setPrefsState] = useState<Prefs>(() =>
+    loadPrefs(detectLocale(navigator.languages)),
+  );
+  const locale = prefs.locale;
+  const setPrefs = (p: Prefs) => {
+    savePrefs(p);
+    setPrefsState(p);
+  };
+  const setLocale = (l: Locale) => setPrefs({ ...prefs, locale: l });
   // `undefined` while loading; `null` in a browser without the core.
   const [info, setInfo] = useState<BuildInfo | null | undefined>(undefined);
   const core = info?.core ?? null;
@@ -106,7 +116,7 @@ export function App() {
       );
     }
     return (
-      <Shell locale={locale} onLocale={setLocale} home={home} onAbout={() => setScreen('about')} />
+      <Shell prefs={prefs} onPrefs={setPrefs} home={home} onAbout={() => setScreen('about')} />
     );
   }
 

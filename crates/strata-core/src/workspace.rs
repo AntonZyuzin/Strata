@@ -71,6 +71,23 @@ fn is_date(s: &str) -> bool {
     }
 }
 
+/// A start or a deadline (05 §6.1): a day, `YYYY-MM-DD`, or a day and a time
+/// of the viewer's clock, `YYYY-MM-DDTHH:MM` — as Obsidian writes a datetime.
+fn is_when(s: &str) -> bool {
+    match s.split_once('T') {
+        None => is_date(s),
+        Some((day, time)) => {
+            let b = time.as_bytes();
+            let num = |r: std::ops::Range<usize>| time.get(r).and_then(|x| x.parse::<u32>().ok());
+            is_date(day)
+                && b.len() == 5
+                && b[2] == b':'
+                && num(0..2).is_some_and(|h| h < 24)
+                && num(3..5).is_some_and(|m| m < 60)
+        }
+    }
+}
+
 /// A file type such as `image/png`: two parts, no spaces, not too long.
 fn is_mime(s: &str) -> bool {
     s.len() <= 127
@@ -887,7 +904,7 @@ impl<S: Store> Workspace<S> {
                         (_, None) => true,
                         ("status", Some(Val::Str(v))) => STATUSES.contains(&v.as_str()),
                         ("priority", Some(Val::Str(v))) => PRIORITIES.contains(&v.as_str()),
-                        ("start" | "deadline", Some(Val::Str(v))) => is_date(v),
+                        ("start" | "deadline", Some(Val::Str(v))) => is_when(v),
                         ("color", Some(Val::Int(v))) => (0..COLORS).contains(v),
                         ("asset", Some(Val::Str(v))) => {
                             v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit())

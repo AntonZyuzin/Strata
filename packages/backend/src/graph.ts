@@ -108,16 +108,27 @@ export function today(now = new Date()): string {
   return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
 }
 
+/** The viewer's clock as `HH:MM` (05 §6.1: a deadline's time is the viewer's). */
+export function clockNow(now = new Date()): string {
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${p(now.getHours())}:${p(now.getMinutes())}`;
+}
+
 function daysBetween(a: string, b: string): number {
   return Math.round((Date.parse(`${b}T00:00:00Z`) - Date.parse(`${a}T00:00:00Z`)) / 86_400_000);
 }
 
-/** A deadline's state for the viewer's day (07 §4.6). */
-export function dueOf(deadline: string | undefined, day: string): Due {
+/**
+ * A deadline's state for the viewer's day (07 §4.6). A deadline is a day,
+ * `YYYY-MM-DD`, or a day and a time, `YYYY-MM-DDTHH:MM` (05 §6.1): on its
+ * day it is «today» until its time has passed, then «overdue».
+ */
+export function dueOf(deadline: string | undefined, day: string, time = clockNow()): Due {
   if (!deadline) return 'none';
-  const d = daysBetween(day, deadline);
+  const [date = deadline, at] = deadline.split('T');
+  const d = daysBetween(day, date);
   if (d < 0) return 'overdue';
-  if (d === 0) return 'today';
+  if (d === 0) return at && time > at ? 'overdue' : 'today';
   return d <= SOON_DAYS ? 'soon' : 'far';
 }
 

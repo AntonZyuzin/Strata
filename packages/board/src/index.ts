@@ -5,7 +5,15 @@ import { lazy } from 'react';
 export type { BoardHandle } from './BoardCanvas';
 export * from './binding';
 export type { SynthBoard } from './synth';
-export { BOARD_TOOLS, type BoardTool } from './tools';
+export {
+  BOARD_COLORS,
+  BOARD_TOOL_GROUPS,
+  BOARD_TOOL_KEYS,
+  BOARD_TOOLS,
+  type BoardColorName,
+  type BoardPaint,
+  type BoardTool,
+} from './tools';
 
 /**
  * The board's canvas, loaded on the first open board: Excalidraw is the

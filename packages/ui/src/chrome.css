@@ -194,7 +194,8 @@ a,
 .list-text,
 .home-card,
 .ins-swatch,
-.ins-icon {
+.ins-icon,
+.board-tool {
   transition:
     background-color var(--st-motion-hover, 120ms) ease-out,
     color var(--st-motion-hover, 120ms) ease-out,
@@ -227,7 +228,8 @@ a,
   .list-text,
   .home-card,
   .ins-swatch,
-  .ins-icon {
+  .ins-icon,
+  .board-tool {
     transition: none;
   }
 
@@ -509,26 +511,40 @@ button:focus-visible {
   flex: none;
   display: flex;
   flex-direction: column;
-  width: 12ch;
   margin: 0;
   padding: calc(4 * var(--u));
   border: 0;
-  gap: var(--u);
+  gap: calc(6 * var(--u));
+  overflow-y: auto;
 }
 
+.board-tool-group {
+  display: flex;
+  flex-direction: column;
+  gap: calc(2 * var(--u));
+}
+
+/* A tool: an icon in a button's frame (07 §8.2); the active one inverted. */
 .board-tool {
-  display: block;
-  padding: var(--u) calc(4 * var(--u));
+  display: grid;
+  place-items: center;
+  width: var(--st-size-control);
+  height: var(--st-size-control);
+  color: var(--st-color-text);
+  background: var(--st-color-surface-raised);
   border: var(--u) solid var(--st-color-frame);
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  box-shadow: var(--st-bevel-raised);
   cursor: pointer;
+}
+
+.board-tool:hover {
+  background: #303035;
 }
 
 .board-tool.is-active {
   background: var(--st-color-selection-bg);
   color: var(--st-color-selection-fg);
+  box-shadow: var(--st-bevel-sunken);
 }
 
 .board-tool:has(input:focus-visible) {
@@ -540,6 +556,59 @@ button:focus-visible {
   position: absolute;
   opacity: 0;
   pointer-events: none;
+}
+
+/* The palette along the bottom, as Paint's (07 §8.4): the line's colour over
+   the fill's, then the swatches. */
+.board-colors {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+  min-width: 0;
+  margin: 0;
+  padding: calc(4 * var(--u));
+  border: 0;
+}
+
+.board-pair {
+  position: relative;
+  flex: none;
+  width: calc(28 * var(--u));
+  height: calc(28 * var(--u));
+  margin-right: calc(4 * var(--u));
+}
+
+.board-pair-stroke,
+.board-pair-fill {
+  position: absolute;
+  width: calc(18 * var(--u));
+  height: calc(18 * var(--u));
+  border: var(--u) solid var(--st-color-frame);
+}
+
+.board-pair-stroke {
+  left: 0;
+  top: 0;
+}
+
+.board-pair-fill {
+  right: 0;
+  bottom: 0;
+}
+
+.board-pair-stroke.is-none,
+.board-pair-fill.is-none {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--st-color-surface) 0 calc(3 * var(--u)),
+    var(--st-color-divider) 0 calc(4 * var(--u))
+  );
+}
+
+.board-pair-fill:not(.is-none),
+.board-pair-stroke:not(.is-none) {
+  box-shadow: inset 0 0 0 var(--u) var(--st-color-shadow);
 }
 
 .board-stage {

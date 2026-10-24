@@ -48,7 +48,11 @@ interface Hook {
   /** Time of the last `L` in the worker, ms. */
   layoutMs(): number | null;
   /** The open board's scene (BoardHandle). */
-  board?: { elements(): { type: string }[]; activeTool(): string; files(): string[] };
+  board?: {
+    elements(): { type: string; strokeColor?: string; backgroundColor?: string }[];
+    activeTool(): string;
+    files(): string[];
+  };
 }
 
 interface Probe {
@@ -308,12 +312,15 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
       await expect(side.page.locator('.board-window .excalidraw')).toBeVisible(BOARD_LOAD);
       // Strata's Chrome only: Excalidraw's own DOM is not ours to measure.
       expect(
-        await overflowing(side.page, '.board-window .window-title, .board-window .board-tools'),
+        await overflowing(
+          side.page,
+          '.board-window .window-title, .board-window .board-tools, .board-window .board-colors',
+        ),
       ).toEqual([]);
       sides.push(side);
     }
     const [ru, en] = sides as [(typeof sides)[number], (typeof sides)[number]];
-    for (const sel of ['.board-window', '.board-tools', '.board-stage']) {
+    for (const sel of ['.board-window', '.board-tools', '.board-stage', '.board-colors']) {
       const a = await box(ru.page, sel);
       const b = await box(en.page, sel);
       for (const k of ['x', 'y', 'width', 'height'] as const) {
@@ -603,6 +610,92 @@ test('a board opens in its window; what is drawn stays in its document (ADR-0006
   await openBoard();
   await expect.poll(scene).toEqual(drawn);
   await expect.poll(files).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("a board's palette colours the selection and what comes next; its letters pick tools (07 §8.4)", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  await open(page, false);
+  await page.evaluate(() => localStorage.clear());
+  const win = page.locator('.board-window');
+  const openBoard = async () => {
+    const at = await galleryBoard(page);
+    await page.mouse.dblclick(at.x, at.y);
+    await expect(win.locator('.excalidraw')).toBeVisible(BOARD_LOAD);
+  };
+  const paints = () =>
+    page.evaluate(
+      () =>
+        (window.__strataProto as Hook).board
+          ?.elements()
+          .map((e) => [e.type, e.strokeColor, e.backgroundColor]) ?? null,
+    );
+  const tool = () => page.evaluate(() => (window.__strataProto as Hook).board?.activeTool());
+  const swatch = (name: string) => win.locator(`.board-swatch[data-color="${name}"]`);
+  const drag = async (x0: number, y0: number, x1: number, y1: number) => {
+    const s = await box(page, '.board-stage');
+    await page.mouse.move(s.x + s.width * x0, s.y + s.height * y0);
+    await page.mouse.down();
+    await page.mouse.move(s.x + s.width * x1, s.y + s.height * y1, { steps: 8 });
+    await page.mouse.up();
+  };
+  const sky = '#5ec8e5';
+  const paper = '#f2efe6';
+  const yellow = '#e8c547';
+  const pink = '#f28dc6';
+
+  await openBoard();
+  // Before anything is drawn: the line from a click, the fill from the right button.
+  await swatch('sky').click();
+  await swatch('paper').click({ button: 'right' });
+  await expect(win.locator('.board-pair-stroke')).toHaveCSS(
+    'background-color',
+    'rgb(94, 200, 229)',
+  );
+  await expect(win.locator('.board-pair-fill')).toHaveCSS('background-color', 'rgb(242, 239, 230)');
+  await win.locator('.board-tool', { has: page.locator('input[value="rectangle"]') }).click();
+  await drag(0.1, 0.1, 0.3, 0.3);
+  await expect.poll(paints).toEqual([['rectangle', sky, paper]]);
+  // Excalidraw's letters pick Strata's tools: its own switch is off.
+  await page.keyboard.press('o');
+  await expect.poll(tool).toBe('ellipse');
+  await expect(win.locator('.board-tool.is-active input')).toHaveValue('ellipse');
+  await swatch('yellow').click({ button: 'right' });
+  await drag(0.5, 0.1, 0.7, 0.3);
+  await expect.poll(paints).toEqual([
+    ['rectangle', sky, paper],
+    ['ellipse', sky, yellow],
+  ]);
+  // The selection takes the colour in one step of undo.
+  await page.keyboard.press('v');
+  await expect.poll(tool).toBe('selection');
+  await page.keyboard.press('ControlOrMeta+a');
+  await swatch('pink').click();
+  await expect.poll(paints).toEqual([
+    ['rectangle', pink, paper],
+    ['ellipse', pink, yellow],
+  ]);
+  await page.keyboard.press('ControlOrMeta+z');
+  await expect.poll(paints).toEqual([
+    ['rectangle', sky, paper],
+    ['ellipse', sky, yellow],
+  ]);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  await swatch('none').click({ button: 'right' });
+  const kept = [
+    ['rectangle', pink, 'transparent'],
+    ['ellipse', pink, 'transparent'],
+  ];
+  await expect.poll(paints).toEqual(kept);
+  // The colours are the document's: the board opened again has them.
+  await win.locator('.window-close').click();
+  await expect(win).toHaveCount(0);
+  await openBoard();
+  await expect.poll(paints).toEqual(kept);
   expect(errors).toEqual([]);
 });
 

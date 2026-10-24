@@ -1,5 +1,10 @@
 /// <reference path="./css.d.ts" />
-import { CaptureUpdateAction, Excalidraw, FONT_FAMILY } from '@excalidraw/excalidraw';
+import {
+  CaptureUpdateAction,
+  Excalidraw,
+  FONT_FAMILY,
+  newElementWith,
+} from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import type {
   AppState,
@@ -20,7 +25,7 @@ import {
   writeFiles,
   writeLocal,
 } from './binding';
-import type { BoardTool } from './tools';
+import type { BoardPaint, BoardTool } from './tools';
 
 /**
  * The board's canvas (ADR-0006): Excalidraw on a pinned `next` snapshot,
@@ -55,6 +60,12 @@ export interface BoardHandle {
    * caches are not rebuilt for every step of the zoom until it ends.
    */
   view(x: number, y: number, zoom: number, gesture?: boolean): void;
+  /**
+   * A colour from the palette (07 §8.4): the selected elements take it, with
+   * the texts bound to them for the line, as Excalidraw's own panel does, and
+   * so do the next ones drawn. One step of undo.
+   */
+  paint(which: BoardPaint, color: string): void;
 }
 
 export function BoardCanvas(props: {
@@ -125,6 +136,34 @@ export function BoardCanvas(props: {
         // `null` on unmount.
         if (!a) return;
         props.onReady?.({
+          paint: (which, color) => {
+            const st = a.getAppState();
+            const picked = new Set(
+              Object.entries(st.selectedElementIds).flatMap(([id, on]) => (on ? [id] : [])),
+            );
+            if (st.editingTextElement) picked.add(st.editingTextElement.id);
+            let touched = false;
+            const elements = a.getSceneElementsIncludingDeleted().map((e) => {
+              const bound = which === 'stroke' && e.type === 'text' && e.containerId;
+              const hit = picked.has(e.id) || (bound && picked.has(bound));
+              const now = which === 'stroke' ? e.strokeColor : e.backgroundColor;
+              if (!hit || e.isDeleted || now === color) return e;
+              touched = true;
+              return newElementWith(
+                e,
+                which === 'stroke' ? { strokeColor: color } : { backgroundColor: color },
+              );
+            });
+            a.updateScene({
+              appState: {
+                currentItemStrokeColor: which === 'stroke' ? color : st.currentItemStrokeColor,
+                currentItemBackgroundColor:
+                  which === 'fill' ? color : st.currentItemBackgroundColor,
+              },
+              ...(touched ? { elements } : {}),
+              captureUpdate: touched ? CaptureUpdateAction.IMMEDIATELY : CaptureUpdateAction.NEVER,
+            });
+          },
           elements: () => a.getSceneElements() as unknown as BoardElement[],
           activeTool: () => a.getAppState().activeTool.type,
           files: () => Object.keys(a.getFiles()),

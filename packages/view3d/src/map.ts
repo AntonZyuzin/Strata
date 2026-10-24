@@ -8,4 +8,5 @@ export * from './extract';
 export * from './graph-extract';
 export * from './layout';
 export * from './relax';
+export * from './space-extract';
 export * from './starmap';

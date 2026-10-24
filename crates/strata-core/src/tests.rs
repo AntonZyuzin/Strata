@@ -1065,3 +1065,37 @@ fn a_picture_is_an_asset_by_its_hash_and_travels_in_the_archive() {
             .expect("open");
     assert!(back.asset(&sha).expect("read").is_some());
 }
+
+#[test]
+fn the_star_map_reads_every_live_wire() {
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Арт");
+    let a = create(&mut w, &root, NodeKind::Note, "Идея");
+    let b = create(&mut w, &folder, NodeKind::Note, "Эскиз");
+    let c = create(&mut w, &folder, NodeKind::Note, "Черновик");
+    let wire = |from: &str, to: &str| Op::Connect {
+        from: from.to_owned(),
+        to: to.to_owned(),
+    };
+    w.apply(&[wire(&a, &b), wire(&b, &c)], Label::new("t.wires"))
+        .expect("wires");
+    let ends = |w: &Workspace<MemoryStore>| -> Vec<(String, String)> {
+        w.wires().into_iter().map(|e| (e.from, e.to)).collect()
+    };
+    let mut all = vec![(a.clone(), b.clone()), (b.clone(), c.clone())];
+    all.sort();
+    assert_eq!(ends(&w), all, "across networks, from every network");
+    w.apply(
+        &[Op::Trash {
+            ids: vec![c.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    assert_eq!(
+        ends(&w),
+        vec![(a.clone(), b.clone())],
+        "a wire of a node in the trash stays hidden"
+    );
+}

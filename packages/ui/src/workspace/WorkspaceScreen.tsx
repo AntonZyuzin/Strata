@@ -40,7 +40,7 @@ import { nodeIconFile, nodeIconImages } from '../icons/Icon';
 import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
-import { Map3D, type MapState } from '../proto/map3d';
+import { Map3D, type MapNav, type MapState } from '../proto/map3d';
 import { type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
@@ -49,6 +49,7 @@ import { CoreDocs } from './docs';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
+import { MapSearch } from './MapSearch';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -179,6 +180,8 @@ export function WorkspaceScreen(props: {
   const [listFocus, setListFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
+  /** The star map's search (08 §10): `within` the cluster in focus for `Ctrl+F`. */
+  const [mapSearch, setMapSearch] = useState<{ within: string | null } | null>(null);
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
   /** The core's undo and redo: the session's, across networks (05 §11). */
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
@@ -329,6 +332,32 @@ export function WorkspaceScreen(props: {
       },
     };
 
+    /** The star map navigates the whole space from the core (08 §10). */
+    const mapNav: MapNav = {
+      space: async () => {
+        await sync.current?.settled();
+        const [items, wires] = await Promise.all([core.tree(), core.wires()]);
+        return {
+          items: items.map((i) => ({
+            id: i.id,
+            kind: i.kind,
+            parent: i.parent,
+            status: i.status,
+            name: i.name,
+          })),
+          wires,
+        };
+      },
+      network: () => netRef.current,
+      go: (net, node) => {
+        const show = () => {
+          if (node) editor.current?.focusNode(node);
+        };
+        if (net === netRef.current) show();
+        else void loadRef.current(net).then(show);
+      },
+    };
+
     const up = async () => {
       const path = await core.view(netRef.current).then((v) => v.path);
       const parent = path.at(-2);
@@ -392,7 +421,7 @@ export function WorkspaceScreen(props: {
           : 0;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
-      map3d.current = new Map3D(el, v, g, setView3d);
+      map3d.current = new Map3D(el, v, g, setView3d, mapNav);
       netRef.current = id;
       setNet(nv);
       setMenu(null);
@@ -515,6 +544,7 @@ export function WorkspaceScreen(props: {
         view: v,
         graph: () => graph.current,
         net: () => netRef.current,
+        map: () => map3d.current,
         settled: async () => {
           await busy.current;
           await docs.current?.flush();
@@ -551,13 +581,29 @@ export function WorkspaceScreen(props: {
   }, [menu, name, view3d, boardFocus, covered]);
 
   useEffect(() => {
-    if (view3d !== '3d') return;
+    if (view3d !== '3d') {
+      setMapSearch(null);
+      return;
+    }
+    // The search window takes its own keys while it is open.
+    if (mapSearch) return;
     const key = (e: KeyboardEvent) => {
-      if (e.code === 'KeyM' && !e.metaKey && !e.ctrlKey && !e.altKey) map3d.current?.toggle();
+      const mod = e.metaKey || e.ctrlKey;
+      if (mod && !e.altKey && (e.code === 'KeyO' || e.code === 'KeyF')) {
+        e.preventDefault();
+        const within = e.code === 'KeyF' ? (map3d.current?.focusId() ?? null) : null;
+        setMapSearch({ within });
+        return;
+      }
+      if (e.code === 'KeyM' && !mod && !e.altKey) {
+        map3d.current?.toggle();
+        return;
+      }
+      if (map3d.current?.key(e)) e.preventDefault();
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d]);
+  }, [view3d, mapSearch]);
 
   const focusCanvas = useCallback(() => host.current?.querySelector('canvas')?.focus(), []);
 
@@ -995,6 +1041,8 @@ export function WorkspaceScreen(props: {
           ref={gecko}
           scale={1.5}
           paused={covered}
+          // A dweller of the canvas: away while the star map is shown.
+          hidden={view3d !== '2d'}
           label={t(locale, 'gecko.label')}
           hint={t(locale, 'gecko.hint')}
         />
@@ -1044,6 +1092,22 @@ export function WorkspaceScreen(props: {
           </li>
         ))}
       </ul>
+      {mapSearch && view3d === '3d' ? (
+        <MapSearch
+          locale={locale}
+          items={tree}
+          within={mapSearch.within}
+          left={
+            (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
+          }
+          top={(host.current?.getBoundingClientRect().top ?? 0) + 48}
+          onChoose={(id) => {
+            setMapSearch(null);
+            map3d.current?.flyTo(id);
+          }}
+          onClose={() => setMapSearch(null)}
+        />
+      ) : null}
       {menu ? (
         <TabMenu
           locale={locale}

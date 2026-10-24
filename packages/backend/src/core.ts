@@ -147,6 +147,7 @@ export type CoreRequest =
   | { call: 'pushDoc'; doc: string; update: string }
   | { call: 'node'; id: string }
   | { call: 'tree' }
+  | { call: 'wires' }
   | { call: 'people' }
   | { call: 'putAsset'; bytes: string }
   | { call: 'asset'; sha: string };
@@ -216,6 +217,12 @@ export interface TreeItem {
   icon?: string;
 }
 
+/** A wire's two ends. */
+export interface WireEnds {
+  from: string;
+  to: string;
+}
+
 /** A person of the workspace (05 §10). */
 export interface Person {
   id: string;
@@ -266,6 +273,7 @@ type CoreResponse =
   | { type: 'pushed'; wires: boolean }
   | { type: 'node'; node: NodeDetails }
   | { type: 'tree'; items: TreeItem[] }
+  | { type: 'wires'; wires: WireEnds[] }
   | { type: 'people'; people: Person[] }
   | { type: 'asset'; sha: string; bytes?: string }
   | { type: 'error'; message: string; invalid: boolean };
@@ -368,6 +376,11 @@ export class Core {
 
   async tree(): Promise<TreeItem[]> {
     return expect(await this.call({ call: 'tree' }), 'tree').items;
+  }
+
+  /** Every live wire of the workspace, for the star map (08 §10). */
+  async wires(): Promise<WireEnds[]> {
+    return expect(await this.call({ call: 'wires' }), 'wires').wires;
   }
 
   async people(): Promise<Person[]> {

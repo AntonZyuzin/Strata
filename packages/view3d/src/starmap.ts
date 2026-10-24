@@ -644,6 +644,18 @@ export class StarMap {
     (this.composite.uniforms.uStrength as { value: number }).value = BLOOM * (1 - alpha);
   }
 
+  /**
+   * Where a world point lands on the canvas, CSS px from its top-left
+   * corner (08 §10: picking a star, its label); `null` behind the camera.
+   */
+  screenOf(x: number, y: number, z: number): { x: number; y: number } | null {
+    this.camera.updateMatrixWorld();
+    const v = new Vector3(x, y, z).project(this.camera);
+    if (v.z < -1 || v.z > 1) return null;
+    const size = this.renderer.getSize(new Vector2());
+    return { x: ((v.x + 1) / 2) * size.x, y: ((1 - v.y) / 2) * size.y };
+  }
+
   /** Canvas size in CSS px. */
   setSize(width: number, height: number): void {
     this.renderer.setSize(width, height, false);

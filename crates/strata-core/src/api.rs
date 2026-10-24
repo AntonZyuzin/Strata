@@ -5,7 +5,9 @@
 use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
-use crate::workspace::{History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, Workspace};
+use crate::workspace::{
+    History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds, Workspace,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
@@ -48,6 +50,8 @@ pub enum Request {
     },
     /// Every network for the «Структура» tree.
     Tree,
+    /// Every live wire, for the star map (08 §10).
+    Wires,
     People,
     /// A picture or a file, in base64; answers its SHA-256.
     PutAsset {
@@ -99,6 +103,9 @@ pub enum Response {
     },
     Tree {
         items: Vec<TreeItem>,
+    },
+    Wires {
+        wires: Vec<WireEnds>,
     },
     People {
         people: Vec<Person>,
@@ -160,6 +167,7 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             node: Box::new(node),
         }),
         Request::Tree => Ok(Response::Tree { items: ws.tree() }),
+        Request::Wires => Ok(Response::Wires { wires: ws.wires() }),
         Request::People => Ok(Response::People {
             people: ws.people(),
         }),

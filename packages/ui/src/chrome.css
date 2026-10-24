@@ -563,6 +563,28 @@ button:focus-visible {
   display: none;
 }
 
+/* The selected star's name, just above it (08 §10). */
+.proto-map-label {
+  position: absolute;
+  z-index: 2;
+  translate: -50% calc(-100% - 4 * var(--u));
+  padding: var(--u) calc(4 * var(--u));
+  white-space: nowrap;
+  pointer-events: none;
+  color: var(--st-color-text);
+  background: var(--st-color-surface);
+  border: var(--u) solid var(--st-color-frame);
+}
+
+.proto-map-label[hidden] {
+  display: none;
+}
+
+/* The star map's search: the Tab menu's look, centred over the map. */
+.map-search {
+  translate: -50% 0;
+}
+
 .proto-top {
   position: absolute;
   top: calc(6 * var(--u));

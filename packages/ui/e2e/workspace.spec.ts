@@ -31,6 +31,13 @@ interface WsHook {
   } | null;
   net(): string;
   settled(): Promise<void>;
+  map(): {
+    state: string;
+    selectedId(): string | null;
+    focusId(): string | null;
+    idNamed(name: string): string | null;
+    screenOf(id: string): { x: number; y: number } | null;
+  } | null;
 }
 
 declare global {
@@ -270,6 +277,46 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['page', 'fields', 'tab', 'gear'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`the star map's search keeps its size in RU and EN @${deviceScaleFactor}x (08 §10)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Карта');
+      await createNode(page, 640, 400, 'Звезда с очень длинным именем для проверки');
+      await settled(page);
+      await page.locator('.tabbar-tools [aria-pressed]').click();
+      await expect(page.locator('.workspace')).toHaveAttribute('data-view', '3d', {
+        timeout: 30_000,
+      });
+      await page.keyboard.press('Control+o');
+      await page.locator('.map-search input').fill('Звезда');
+      await expect(page.locator('.map-search .tab-menu-row')).toHaveCount(1);
+      expect(await overflowing(page, '.map-search'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.map-search'),
+        row: await box(page, '.map-search .tab-menu-row'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'row'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -755,6 +802,87 @@ test.describe('a workspace on the core', () => {
     await field.press('Enter');
     await expect.poll(url).toBe('https://example.com/page');
     await expect(page.locator('.toast', { hasText: 'Ядро не приняло' })).toHaveCount(0);
+  });
+
+  test('the star map navigates the whole space: a search, Enter, a click, I and U (08 §10)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    const ws = page.locator('.workspace');
+    // A folder with a note inside, and a note beside it at the root.
+    await page.mouse.move(500, 300);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('папка');
+    await page.locator('.tab-menu-row', { hasText: 'Папка' }).first().click();
+    await page.keyboard.type('Арт');
+    await page.keyboard.press('Enter');
+    await settled(page);
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await createNode(page, 640, 400, 'Эскиз');
+    await page.keyboard.press('KeyU');
+    await expect(ws).toHaveAttribute('data-depth', '1');
+    await createNode(page, 800, 500, 'Идея');
+    await settled(page);
+    const map = () => page.evaluate(() => window.__strataWs?.map());
+    const toMap = async () => {
+      await page.getByRole('button', { name: 'Холст или звёздная карта (M)' }).click();
+      await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    };
+    const ids = () =>
+      page.evaluate(() => {
+        const m = window.__strataWs?.map();
+        return { art: m?.idNamed('Арт'), idea: m?.idNamed('Идея'), sketch: m?.idNamed('Эскиз') };
+      });
+    // Ctrl+O names the whole space; Enter flies to the star and selects it.
+    await toMap();
+    expect(await map()).not.toBeNull();
+    await page.keyboard.press('Control+o');
+    const search = page.locator('.map-search input');
+    await expect(search).toBeFocused();
+    await search.fill('Эскиз');
+    await search.press('Enter');
+    await expect(page.locator('.map-search')).toHaveCount(0);
+    const known = await ids();
+    expect(known.sketch).toBeTruthy();
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.map()?.selectedId()))
+      .toBe(known.sketch);
+    await expect(page.locator('.proto-map-label')).toHaveText('Эскиз');
+    // Enter: back in 2D, in «Арт», with «Эскиз» selected.
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await expect(page.locator('.ins-title-name')).toHaveText('Эскиз');
+    // A click on a star goes to it in 2D: «Идея» at the root.
+    await toMap();
+    const at = await page.evaluate(
+      (id) => window.__strataWs?.map()?.screenOf(id ?? '') ?? null,
+      known.idea,
+    );
+    expect(at).not.toBeNull();
+    await page.mouse.click(at?.x ?? 0, at?.y ?? 0);
+    await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
+    await expect(ws).toHaveAttribute('data-depth', '1');
+    await expect(page.locator('.ins-title-name')).toHaveText('Идея');
+    // I into the folder's cluster, U back to the space.
+    await toMap();
+    await page.keyboard.press('Control+o');
+    await page.locator('.map-search input').fill('Арт');
+    await page.locator('.map-search input').press('Enter');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.map()?.selectedId()))
+      .toBe(known.art);
+    await page.keyboard.press('KeyI');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.map()?.focusId()))
+      .toBe(known.art);
+    await page.keyboard.press('KeyU');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.map()?.focusId()))
+      .not.toBe(known.art);
   });
 
   test('the gecko lives on the canvas and notices a new task (07 §10.4)', async ({ page }) => {

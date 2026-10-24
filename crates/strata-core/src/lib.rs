@@ -31,7 +31,7 @@ pub use store::{MemoryStore, Store, StoreError, StoredDoc};
 pub use strata_model as model;
 pub use workspace::{
     Attrs, CoreError, Fold, History, Linked, NetworkView, NodeDetails, Person, TrashItem, TreeItem,
-    ViewEdge, ViewNode, Workspace,
+    ViewEdge, ViewNode, WireEnds, Workspace,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

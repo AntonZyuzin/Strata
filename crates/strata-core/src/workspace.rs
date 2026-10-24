@@ -255,6 +255,13 @@ pub struct NodeDetails {
     pub fold: Option<Fold>,
 }
 
+/// A wire's ends, for the star map's whole space (08 §10).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireEnds {
+    pub from: String,
+    pub to: String,
+}
+
 /// A node in the «Слои» panel: every live node under its primary network.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TreeItem {
@@ -1557,6 +1564,26 @@ impl<S: Store> Workspace<S> {
     /// Every live node of the workspace under its primary network, for the
     /// «Слои» panel (owner, 2026-10-24: like Figma's layers); the root has
     /// no parent.
+    /// Every wire whose ends are both alive (a wire of a node in the trash
+    /// stays hidden, 05 §11): the star map draws the whole space (08 §10).
+    pub fn wires(&self) -> Vec<WireEnds> {
+        let mut out: Vec<WireEnds> = self
+            .wires_out()
+            .into_iter()
+            .filter(|(from, _)| self.alive(*from))
+            .flat_map(|(from, to)| {
+                to.into_iter()
+                    .filter(|t| self.alive(*t))
+                    .map(move |t| WireEnds {
+                        from: from.to_text(),
+                        to: t.to_text(),
+                    })
+            })
+            .collect();
+        out.sort_by(|a, b| a.from.cmp(&b.from).then(a.to.cmp(&b.to)));
+        out
+    }
+
     pub fn tree(&self) -> Vec<TreeItem> {
         let mut out = Vec::new();
         for shard in self.index_shards() {

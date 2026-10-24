@@ -14,7 +14,7 @@ import { newId } from './ids';
 import { GALLERY_SIZE, seedGraph } from './seed';
 
 const node = (id: string, x = 0, y = 0): GraphNode =>
-  newNode({ id, name: id, kind: 'note', cls: null, icon: 0, x, y });
+  newNode({ id, name: id, kind: 'note', icon: 0, x, y });
 
 /** A graph with nodes a…h and the given wires, history cleared. */
 function graph(wires: string[]): Graph {

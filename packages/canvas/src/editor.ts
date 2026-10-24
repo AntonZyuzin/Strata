@@ -5,7 +5,6 @@ import {
   type Graph,
   type GraphNode,
   insertIntoWire,
-  type NodeClass,
   type NodeKind,
   newId,
   newNode,
@@ -98,7 +97,6 @@ export type MenuChoice =
   | {
       t: 'create';
       kind: NodeKind;
-      cls: NodeClass | null;
       name: string;
       /** Open the name input after creating (the kind's name was used as a placeholder). */
       rename: boolean;
@@ -295,8 +293,7 @@ export class Editor {
       id: newId(),
       name: choice.name,
       kind: choice.kind,
-      cls: choice.cls,
-      icon: this.view.iconFor(choice.kind, choice.cls),
+      icon: this.view.iconFor(choice.kind),
       x: place.x,
       y: place.y,
     });
@@ -807,8 +804,7 @@ export class Editor {
       id: newId(),
       name: '',
       kind: 'note',
-      cls: null,
-      icon: this.view.iconFor('note', null),
+      icon: this.view.iconFor('note'),
       x: w.x,
       y: w.y,
     });

@@ -18,7 +18,10 @@ export function isFinal(status: string | undefined): boolean {
   return status === 'done' || status === 'cancelled';
 }
 
-/** The fields of 05 §6.1 a node carries, as the core keeps them. */
+/**
+ * The fields a node carries, as the core keeps them (05 §4.2–4.4, ADR-0010):
+ * the task's ones on tasks and projects, colour on all, file and link on assets.
+ */
 export interface NodeAttrs {
   status?: string;
   /** `YYYY-MM-DD`. */
@@ -29,10 +32,14 @@ export interface NodeAttrs {
   color?: number;
   /** Person ids (05 §10). */
   assignees?: string[];
-  /** The note that describes it: a task's «Описание» (05 §4.3). */
-  description?: string;
-  /** A media node's picture: its asset's SHA-256 (10 §11). */
+  /** An asset's file: its SHA-256 (10 §11). */
   asset?: string;
+  /** An asset file's type, `image/png` and the like. */
+  mime?: string;
+  /** An asset's link instead of a file. */
+  url?: string;
+  /** An asset's icon chosen by hand (07 §6.1). */
+  icon?: string;
 }
 
 export type AttrKey =
@@ -41,10 +48,30 @@ export type AttrKey =
   | 'deadline'
   | 'priority'
   | 'color'
-  | 'description'
-  | 'asset';
+  | 'asset'
+  | 'mime'
+  | 'url'
+  | 'icon';
 
-/** A network's roll-up (05 §6.4): finished of all with a status, the nearest open deadline. */
+/** What an asset holds (05 §4.4): by its link, else by its file's type. */
+export type AssetType = 'image' | 'video' | 'audio' | 'pdf' | 'file' | 'url' | 'empty';
+
+export function assetType(a: Pick<NodeAttrs, 'asset' | 'mime' | 'url'>): AssetType {
+  if (a.url) return 'url';
+  if (!a.asset) return 'empty';
+  const mime = a.mime ?? '';
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('video/')) return 'video';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime === 'application/pdf') return 'pdf';
+  return 'file';
+}
+
+/**
+ * A roll-up (05 §6.4, ADR-0010): a folder's or project's tasks inside and
+ * their subtasks by wires, or a task's subtasks by wires — finished of all,
+ * the nearest open deadline.
+ */
 export interface CoreFold {
   done: number;
   total: number;
@@ -56,7 +83,6 @@ export type CoreOp =
       op: 'createNode';
       id?: string;
       kind: NodeKind;
-      class?: string;
       name: string;
       net: string;
       x: number;
@@ -93,12 +119,21 @@ export type CoreRequest =
 export interface ViewNode extends NodeAttrs {
   id: string;
   kind: NodeKind;
-  class?: string;
   name: string;
   x: number;
   y: number;
-  /** For networks: the roll-up of what is inside. */
+  /** For folders, projects and tasks: the roll-up of their tasks. */
   fold?: CoreFold;
+}
+
+/** A row of the checklist preview of a task's or project's hierarchy (05 §4.3). */
+export interface TaskRow {
+  id: string;
+  kind: NodeKind;
+  name: string;
+  status?: string;
+  deadline?: string;
+  rows?: TaskRow[];
 }
 
 /** A node at the other end of a wire, or inside a network. */
@@ -107,22 +142,28 @@ export interface Linked {
   kind: NodeKind;
   name: string;
   status?: string;
+  /** An asset's file, type, link and icon: its icon in the panel. */
+  asset?: string;
+  mime?: string;
+  url?: string;
+  icon?: string;
 }
 
 /** One node with everything the properties panel shows. */
 export interface NodeDetails extends NodeAttrs {
   id: string;
   kind: NodeKind;
-  class?: string;
   name: string;
-  /** The network of its primary placement. */
+  /** The folder or project of its primary placement. */
   parent?: string;
-  /** Wires in: what it depends on. */
+  /** Wires in: from a task, it is that task's subtask or material. */
   inputs: Linked[];
-  /** Wires out: what depends on it. */
+  /** Wires out: a task's subtasks and materials (05 §4.3). */
   outputs: Linked[];
-  /** For networks: the nodes inside, a task's subtasks among them. */
+  /** For folders and projects: the nodes inside. */
   children: Linked[];
+  /** For tasks and projects: the checklist preview of the hierarchy. */
+  subtasks: TaskRow[];
   fold?: CoreFold;
 }
 
@@ -131,9 +172,13 @@ export interface TreeItem {
   id: string;
   name: string;
   kind: NodeKind;
-  class?: string;
   status?: string;
   parent?: string;
+  /** An asset's file, type, link and icon: its icon in the tree. */
+  asset?: string;
+  mime?: string;
+  url?: string;
+  icon?: string;
 }
 
 /** A person of the workspace (05 §10). */

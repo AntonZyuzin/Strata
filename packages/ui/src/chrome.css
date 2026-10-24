@@ -1863,7 +1863,7 @@ button:focus-visible {
 }
 
 .ins-description {
-  min-height: 10em;
+  min-height: calc(6 * var(--st-font-ui-line));
   max-height: 40vh;
   overflow: auto;
   background: var(--st-color-surface-sunken);
@@ -1871,16 +1871,74 @@ button:focus-visible {
   box-shadow: var(--st-bevel-sunken);
 }
 
-.ins-picture {
+/* The panel's text, not a note window's (owner, 2026-10-24: not larger than the headings). */
+.ins-description .cm-editor {
+  font: var(--st-font-ui-size) / var(--st-font-ui-line) var(--st-font-ui);
+}
+
+.ins-description .cm-editor .cm-content {
+  padding: calc(3 * var(--u)) calc(4 * var(--u));
+  line-height: var(--st-font-ui-line);
+}
+
+/* The pixel font has no bold: one more pixel unit of ink to the right. */
+.ins-description .cm-st-strong,
+.ins-description .cm-st-h1,
+.ins-description .cm-st-h2,
+.ins-description .cm-st-h3 {
+  text-shadow: var(--u) 0 0 currentColor;
+}
+
+.ins-asset {
   display: grid;
   gap: calc(3 * var(--u));
 }
 
-.ins-picture img {
+.ins-asset img,
+.ins-asset video {
   max-width: 100%;
   max-height: 30vh;
   object-fit: contain;
   border: var(--u) solid var(--st-color-frame);
+}
+
+.ins-asset audio {
+  width: 100%;
+}
+
+.ins-icons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(2 * var(--u));
+}
+
+.ins-icon {
+  display: inline-grid;
+  place-items: center;
+  width: var(--st-size-control);
+  min-width: var(--st-size-control);
+  padding: 0;
+}
+
+.ins-icon.is-active {
+  border-color: var(--st-color-accent);
+}
+
+.ins-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ins-tree .ins-tree {
+  padding-left: calc(8 * var(--u));
+}
+
+.ins-row {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+  min-width: 0;
 }
 
 .ins-links {
@@ -1908,6 +1966,11 @@ button:focus-visible {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
+}
+
+.ins-link.is-done {
+  color: var(--st-color-text-muted);
+  text-decoration: line-through;
 }
 
 .ins-link:hover:not(:disabled) {

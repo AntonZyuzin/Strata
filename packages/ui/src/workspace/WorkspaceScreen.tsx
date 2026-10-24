@@ -8,6 +8,7 @@ import {
   graphOf,
   type History,
   type HomeBackend,
+  isTask,
   type NetworkView,
   type NodeDetails,
   newId,
@@ -31,7 +32,7 @@ import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
-import { nodeIconImages } from '../icons/Icon';
+import { nodeIconFile, nodeIconImages } from '../icons/Icon';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapState } from '../proto/map3d';
@@ -176,7 +177,7 @@ export function WorkspaceScreen(props: {
   /** Pictures shown in bubbles: node → asset; and asset → object URL for the panel. */
   const shown = useRef(new Map<string, string>());
   const urls = useRef(new Map<string, string>());
-  const [pictureUrl, setPictureUrl] = useState<string | null>(null);
+  const [fileUrl, setFileUrl] = useState<string | null>(null);
   const refreshRef = useRef<() => void>(() => undefined);
   const eventsRef = useRef<EditorEvents | null>(null);
   const localeRef = useRef(locale);
@@ -274,7 +275,7 @@ export function WorkspaceScreen(props: {
         const p = v?.nodeAt(id);
         const d = docs.current;
         if (!v || !n || !p || !d) return;
-        if (n.kind === 'network') {
+        if (n.kind === 'network' || n.kind === 'project') {
           void loadRef.current(id);
           return;
         }
@@ -282,6 +283,8 @@ export function WorkspaceScreen(props: {
           d.doc(id).then((doc) => setBoard({ id, doc }), refused);
           return;
         }
+        // A task and an asset are their panel (ADR-0010): it is already open.
+        if (n.kind === 'task' || n.kind === 'asset') return;
         if (n.kind !== 'note') {
           toast('ws.notOpenable');
           return;
@@ -345,16 +348,14 @@ export function WorkspaceScreen(props: {
       map3d.current?.destroy();
       const g = graphOf(
         nv,
-        (k, c) => v.iconFor(k, c),
+        (k) => v.iconFor(k),
         (pid) => peopleRef.current.find((p) => p.id === pid)?.color ?? 0,
       );
       graph.current = g;
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
       editor.current = ed;
-      sync.current = new CoreSync(core, g, id, refused, setHistory, {
-        description: t(localeRef.current, 'ins.description'),
-      });
+      sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d);
       netRef.current = id;
       setNet(nv);
@@ -375,13 +376,15 @@ export function WorkspaceScreen(props: {
       void pictures();
     };
 
-    /** Pictures of media nodes into their bubbles (owner, 2026-10-24). */
+    /** Pictures of photo assets into their bubbles (owner, 2026-10-24). */
     const pictures = async () => {
       const v = viewRef.current;
       const g = graph.current;
       if (!v || !g) return;
       for (const n of g.nodes.values()) {
-        const sha = n.attrs.asset;
+        // A file of another type shows its icon; one with no type may be a picture.
+        const photo = !n.attrs.mime || n.attrs.mime.startsWith('image/');
+        const sha = photo && !n.attrs.url ? n.attrs.asset : undefined;
         if (shown.current.get(n.id) === sha) continue;
         if (!sha) {
           shown.current.delete(n.id);
@@ -450,7 +453,8 @@ export function WorkspaceScreen(props: {
       }
       view = v;
       viewRef.current = v;
-      // The Chrome's icons on the nodes too (owner, 2026-10-24).
+      // The Chrome's icons on the nodes too (owner, 2026-10-24); an asset's by its content.
+      v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
       v.setKindIcons(icons);
       // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
       v.wireEnds = 'sockets';
@@ -603,80 +607,92 @@ export function WorkspaceScreen(props: {
   const failed = (e: unknown) =>
     toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
 
-  /** A task inside network `net`, with its «Описание», as the core makes it (05 §4.3). */
-  const taskOps = (net: string, name: string, y: number): { id: string; ops: CoreOp[] } => {
+  /**
+   * A new subtask of `parent` (05 §4.3, ADR-0010): a task wired from it,
+   * beside it on its canvas; in a project, a task inside. One step of undo.
+   */
+  const addSubtask = (parent: NodeDetails, name: string) => {
+    const g = graph.current;
+    const v = viewRef.current;
     const id = newId();
-    const about = newId();
-    return {
-      id,
-      ops: [
-        { op: 'createNode', id, kind: 'network', class: 'task', name, net, x: 0, y },
-        {
-          op: 'createNode',
-          id: about,
-          kind: 'note',
-          name: t(locale, 'ins.description'),
-          net: id,
-          x: 0,
-          y: 0,
-        },
-        { op: 'setAttr', id, key: 'description', value: about },
-        { op: 'setAttr', id, key: 'status', value: 'todo' },
-      ],
-    };
-  };
-
-  // The selected media node's picture for the panel.
-  useEffect(() => {
-    const sha = details?.kind === 'media' ? details.asset : undefined;
-    if (!sha) {
-      setPictureUrl(null);
+    const inside = parent.kind === 'project';
+    const net = inside ? parent.id : (parent.parent ?? netRef.current);
+    const k = inside ? parent.children.length : parent.outputs.filter((o) => isTask(o.kind)).length;
+    if (g && v && net === netRef.current) {
+      const at = g.nodes.get(parent.id);
+      const x = inside || !at ? 0 : at.x + 180;
+      const y = inside || !at ? 140 * k : at.y + 110 * k;
+      g.transaction({ key: 'proto.change.create', params: { name } }, (tx) => {
+        tx.add(newNode({ id, name, kind: 'task', icon: v.iconFor('task'), x, y }));
+        if (!inside) tx.connect(parent.id, id);
+      });
       return;
     }
-    const known = urls.current.get(sha);
+    const ops: CoreOp[] = [
+      { op: 'createNode', id, kind: 'task', name, net, x: 0, y: 140 * (k + 1) },
+    ];
+    if (!inside) ops.push({ op: 'connect', from: parent.id, to: id });
+    void coreStep(ops, 'proto.change.create', { name }).catch(failed);
+  };
+
+  // The selected asset's file for the panel, typed so the browser can show it.
+  useEffect(() => {
+    const sha = details?.kind === 'asset' ? details.asset : undefined;
+    const mime = details?.mime ?? '';
+    if (!sha) {
+      setFileUrl(null);
+      return;
+    }
+    const key = `${sha}|${mime}`;
+    const known = urls.current.get(key);
     if (known) {
-      setPictureUrl(known);
+      setFileUrl(known);
       return;
     }
     let live = true;
     void core.asset(sha).then((bytes) => {
-      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
-      urls.current.set(sha, url);
-      if (live) setPictureUrl(url);
+      const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
+      urls.current.set(key, url);
+      if (live) setFileUrl(url);
     });
     return () => {
       live = false;
     };
-  }, [core, details?.kind, details?.asset]);
+  }, [core, details?.kind, details?.asset, details?.mime]);
 
-  /** Images dropped on the canvas become media nodes with their pictures. */
-  const dropFiles = async (files: File[], clientX: number, clientY: number) => {
+  /**
+   * Files dropped on the canvas become assets (05 §4.4): each keeps its type,
+   * a picture shows in its circle; a dropped link becomes a link asset.
+   */
+  const dropFiles = async (files: File[], links: string[], clientX: number, clientY: number) => {
     const g = graph.current;
     const v = viewRef.current;
     if (!g || !v) return;
     const r = v.canvas.getBoundingClientRect();
     const w = v.camera.toWorld(clientX - r.left, clientY - r.top);
     let i = 0;
-    for (const f of files.filter((x) => x.type.startsWith('image/'))) {
-      const sha = await core.putAsset(new Uint8Array(await f.arrayBuffer()));
+    const add = (name: string, attrs: [AttrKey, string][]) => {
       const id = newId();
-      const name = f.name.replace(/\.[^.]+$/, '') || t(locale, 'kind.media');
       const x = w.x + i * 90;
       g.transaction({ key: 'proto.change.create', params: { name } }, (tx) => {
-        tx.add(
-          newNode({
-            id,
-            name,
-            kind: 'media',
-            cls: null,
-            icon: v.iconFor('media', null),
-            x,
-            y: w.y,
-          }),
-        );
-        tx.attr(id, 'asset', sha);
+        tx.add(newNode({ id, name, kind: 'asset', icon: v.iconFor('asset'), x, y: w.y }));
+        for (const [key, value] of attrs) tx.attr(id, key, value);
       });
       i++;
+    };
+    for (const f of files) {
+      const sha = await core.putAsset(new Uint8Array(await f.arrayBuffer()));
+      const name = f.name.replace(/\.[^.]+$/, '') || t(locale, 'kind.asset');
+      add(name, [['asset', sha], ...(f.type ? ([['mime', f.type]] as [AttrKey, string][]) : [])]);
+    }
+    for (const url of links) {
+      let name = url;
+      try {
+        name = new URL(url).hostname || url;
+      } catch {
+        // Not a URL the browser parses: the name is the text.
+      }
+      add(name, [['url', url]]);
     }
   };
 
@@ -727,44 +743,20 @@ export function WorkspaceScreen(props: {
             setPeople(ppl);
             return id;
           },
-          description: async () => {
-            const d = docs.current;
-            if (!d) return null;
-            if (details.kind === 'note' || details.kind === 'media') return d.doc(details.id);
-            let about = details.description;
-            if (!about) {
-              about = newId();
-              await coreStep(
-                [
-                  {
-                    op: 'createNode',
-                    id: about,
-                    kind: 'note',
-                    name: t(locale, 'ins.description'),
-                    net: details.id,
-                    x: 0,
-                    y: 0,
-                  },
-                  { op: 'setAttr', id: details.id, key: 'description', value: about },
-                ],
-                'change.attr',
-                { name: details.name, field: t(locale, 'ins.description') },
-              );
-            }
-            return d.doc(about);
-          },
-          canDescribe: details.kind === 'network',
-          picture: (file) =>
+          description: async () => docs.current?.doc(details.id) ?? null,
+          file: (file) =>
             void file
               .arrayBuffer()
               .then((b) => core.putAsset(new Uint8Array(b)))
               .then((sha) =>
-                g.transaction({ key: 'change.picture', params: { name: details.name } }, (tx) =>
-                  tx.attr(details.id, 'asset', sha),
-                ),
+                g.transaction({ key: 'change.picture', params: { name: details.name } }, (tx) => {
+                  tx.attr(details.id, 'asset', sha);
+                  tx.attr(details.id, 'mime', file.type || null);
+                  tx.attr(details.id, 'url', null);
+                }),
               )
               .catch(failed),
-          pictureUrl,
+          fileUrl,
           open: () => eventsRef.current?.open?.(details.id),
           focus: (id) => {
             if (g.nodes.has(id)) {
@@ -780,7 +772,7 @@ export function WorkspaceScreen(props: {
             g.transaction(
               {
                 key: 'change.link',
-                params: { from: g.nodes.get(from)?.name ?? '', to: details.name },
+                params: { from: details.name, to: g.nodes.get(to)?.name ?? '' },
               },
               (tx) => tx.connect(from, to),
             ),
@@ -794,17 +786,20 @@ export function WorkspaceScreen(props: {
             }
           },
           candidates: [...g.nodes.values()].map((n) => ({ id: n.id, kind: n.kind, name: n.name })),
-          subtask: (name) => {
-            const count = details.children.filter((c) => c.kind === 'network').length;
-            const made = taskOps(details.id, name, 140 * (count + 1));
-            void coreStep(made.ops, 'proto.change.create', { name }).catch(failed);
-          },
-          subtaskDone: (id, done) =>
+          subtask: (name) => addSubtask(details, name),
+          done: (id, done) => {
+            const status = done ? 'done' : 'todo';
+            const params = { name: details.name, field: t(locale, 'ins.status') };
+            if (g.nodes.has(id)) {
+              g.transaction({ key: 'change.attr', params }, (tx) => tx.attr(id, 'status', status));
+              return;
+            }
             void coreStep(
-              [{ op: 'setAttr', id, key: 'status', value: done ? 'done' : 'todo' }],
+              [{ op: 'setAttr', id, key: 'status', value: status }],
               'change.attr',
-              { name: details.name, field: t(locale, 'ins.status') },
-            ).catch(failed),
+              params,
+            ).catch(failed);
+          },
         }
       : null;
 
@@ -828,7 +823,7 @@ export function WorkspaceScreen(props: {
     const n = g.nodes.get(at.id);
     if (!n) return [];
     const done = n.attrs.status === 'done';
-    const openable = n.kind === 'network' || n.kind === 'note' || n.kind === 'board';
+    const openable = ['network', 'project', 'note', 'board'].includes(n.kind);
     const items: MenuEntry[] = [];
     if (openable) {
       items.push({
@@ -837,31 +832,31 @@ export function WorkspaceScreen(props: {
         onSelect: () => eventsRef.current?.open?.(n.id),
       });
     }
-    items.push(
-      {
-        label: t(locale, 'ctx.rename'),
-        hint: 'F2',
-        onSelect: () => ed.rename(n.id),
-      },
-      {
-        label: t(locale, done ? 'ctx.undone' : 'ctx.done'),
-        onSelect: () =>
-          g.transaction(
-            { key: 'change.attr', params: { name: n.name, field: t(locale, 'ins.status') } },
-            (tx) => tx.attr(n.id, 'status', done ? 'todo' : 'done'),
-          ),
-      },
-    );
-    if (n.kind === 'network') {
-      items.push({
-        label: t(locale, 'ctx.addSubtask'),
-        onSelect: () => {
-          const made = taskOps(n.id, t(locale, 'ins.newSubtask'), 140);
-          void coreStep(made.ops, 'proto.change.create', {
-            name: t(locale, 'ins.newSubtask'),
-          }).catch(failed);
+    items.push({
+      label: t(locale, 'ctx.rename'),
+      hint: 'F2',
+      onSelect: () => ed.rename(n.id),
+    });
+    // A task's and a project's own entries (ADR-0010).
+    if (isTask(n.kind)) {
+      items.push(
+        {
+          label: t(locale, done ? 'ctx.undone' : 'ctx.done'),
+          onSelect: () =>
+            g.transaction(
+              { key: 'change.attr', params: { name: n.name, field: t(locale, 'ins.status') } },
+              (tx) => tx.attr(n.id, 'status', done ? 'todo' : 'done'),
+            ),
         },
-      });
+        {
+          label: t(locale, 'ctx.addSubtask'),
+          onSelect: () =>
+            void core
+              .node(n.id)
+              .then((d) => addSubtask(d, t(locale, 'ins.newSubtask')))
+              .catch(failed),
+        },
+      );
     }
     items.push({
       label: t(locale, 'ctx.delete'),
@@ -902,13 +897,22 @@ export function WorkspaceScreen(props: {
         role="application"
         aria-label={net?.name ?? ''}
         onDragOver={(e) => {
-          if (e.dataTransfer.types.includes('Files')) e.preventDefault();
+          const types = e.dataTransfer.types;
+          if (types.includes('Files') || types.includes('text/uri-list')) e.preventDefault();
         }}
         onDrop={(e) => {
           const files = [...e.dataTransfer.files];
-          if (files.length === 0) return;
+          const links =
+            files.length > 0
+              ? []
+              : e.dataTransfer
+                  .getData('text/uri-list')
+                  .split(/\r?\n/)
+                  .map((l) => l.trim())
+                  .filter((l) => l && !l.startsWith('#'));
+          if (files.length === 0 && links.length === 0) return;
           e.preventDefault();
-          void dropFiles(files, e.clientX, e.clientY).catch(failed);
+          void dropFiles(files, links, e.clientX, e.clientY).catch(failed);
         }}
       />
       {net ? (

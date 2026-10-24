@@ -69,6 +69,37 @@ fn is_date(s: &str) -> bool {
     }
 }
 
+/// A file type such as `image/png`: two parts, no spaces, not too long.
+fn is_mime(s: &str) -> bool {
+    s.len() <= 127
+        && s.split_once('/')
+            .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty())
+        && !s.chars().any(char::is_whitespace)
+}
+
+/// A link with a scheme (`https://…`, `mailto:…`), no spaces.
+fn is_url(s: &str) -> bool {
+    s.len() <= 2048
+        && s.split_once(':').is_some_and(|(scheme, rest)| {
+            !rest.is_empty()
+                && scheme
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_ascii_alphabetic())
+                && scheme
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+        })
+        && !s.chars().any(char::is_whitespace)
+}
+
+/// An icon's name, `filetype-image` and the like (07 §6.1).
+fn is_icon_name(s: &str) -> bool {
+    (1..=40).contains(&s.len())
+        && s.bytes()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error(transparent)]
@@ -106,16 +137,23 @@ pub struct Attrs {
     pub color: Option<i64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assignees: Vec<String>,
-    /// The note that describes it (a task's «Описание», 05 §4.3).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    /// A media node's picture: the asset's SHA-256 (10 §11).
+    /// An asset's file: its SHA-256 (05 §4.4, 10 §11).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub asset: Option<String>,
+    /// An asset file's type, `image/png` and the like.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    /// An asset's link instead of a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// An asset's icon chosen by hand (07 §6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
-/// A network's roll-up (05 §6.4, ☑ Q-05-2): over its whole depth, each node
-/// once — finished of all with a status, and the nearest open deadline.
+/// A roll-up (05 §6.4, ☑ Q-05-2, ADR-0010): over the tasks inside a folder
+/// or project at any depth and their subtasks by wires, or a task's subtasks
+/// by wires — each once; the finished of all, and the nearest open deadline.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Fold {
     pub done: u32,
@@ -129,17 +167,29 @@ pub struct Fold {
 pub struct ViewNode {
     pub id: String,
     pub kind: NodeKind,
-    /// The class it was made from (05 §4.3), if any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<String>,
     pub name: String,
     pub x: f64,
     pub y: f64,
     #[serde(flatten)]
     pub attrs: Attrs,
-    /// For networks: the roll-up of what is inside.
+    /// For folders, projects and tasks: the roll-up of their tasks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
+}
+
+/// A row of the checklist preview in a task's or project's panel (05 §4.3):
+/// a task or project with its subtasks, a folder with the tasks inside.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TaskRow {
+    pub id: String,
+    pub kind: NodeKind,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rows: Vec<TaskRow>,
 }
 
 /// A node at the other end of a wire, for the properties panel.
@@ -150,6 +200,15 @@ pub struct Linked {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
+    /// An asset's file, type, link and icon: its icon in the panel (07 §6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// One node with everything the properties panel shows (06, «P»).
@@ -157,20 +216,20 @@ pub struct Linked {
 pub struct NodeDetails {
     pub id: String,
     pub kind: NodeKind,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<String>,
     pub name: String,
     #[serde(flatten)]
     pub attrs: Attrs,
     /// The network of its primary placement (05 §5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
-    /// Wires in: what it depends on (05 §8).
+    /// Wires in: from a task, it is that task's subtask or material (05 §4.3).
     pub inputs: Vec<Linked>,
-    /// Wires out: what depends on it.
+    /// Wires out: a task's subtasks and materials.
     pub outputs: Vec<Linked>,
-    /// For networks: the nodes inside (a task's subtasks among them, 05 §4.3).
+    /// For folders and projects: the nodes inside.
     pub children: Vec<Linked>,
+    /// For tasks and projects: the checklist preview of the hierarchy (05 §4.3).
+    pub subtasks: Vec<TaskRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
 }
@@ -182,11 +241,18 @@ pub struct TreeItem {
     pub name: String,
     pub kind: NodeKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub class: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<String>,
+    /// An asset's file, type, link and icon: its icon in the tree (07 §6.1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mime: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<String>,
 }
 
 /// A person of the workspace (05 §10).
@@ -478,10 +544,11 @@ impl<S: Store> Workspace<S> {
         NodeId::parse(id).map_err(|e| invalid(format!("node id {id}: {e}")))
     }
 
+    /// A live folder or project: a node with a canvas (05 §4.2).
     fn network(&self, id: &str) -> Result<NodeId> {
         let n = self.parse(id)?;
-        if self.kind(n) != Some(NodeKind::Network) || !self.alive(n) {
-            return Err(invalid(format!("{id} is not a live network")));
+        if !self.kind(n).is_some_and(NodeKind::has_canvas) || !self.alive(n) {
+            return Err(invalid(format!("{id} is not a live folder or project")));
         }
         Ok(n)
     }
@@ -650,16 +717,14 @@ impl<S: Store> Workspace<S> {
                 Op::CreateNode {
                     id,
                     kind,
-                    class,
                     name,
                     net,
                     x,
                     y,
                 } => {
-                    // A network made earlier in this list takes nodes too: a
-                    // task and its «Описание» are one step (05 §4.3).
+                    // A folder or project made earlier in this list takes nodes too.
                     let parent = match self.parse(net) {
-                        Ok(p) if made.get(&p) == Some(&NodeKind::Network) => p,
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => p,
                         _ => self.network(net)?,
                     };
                     let node = match id {
@@ -678,9 +743,6 @@ impl<S: Store> Workspace<S> {
                         .unwrap_or_default();
                     put(&index, "kind", &key, Some(Val::str(kind_text)));
                     put(&index, "name", &key, Some(Val::str(name.trim())));
-                    if let Some(class) = class {
-                        put(&index, "class", &key, Some(Val::str(class.clone())));
-                    }
                     put(&index, "createdAt", &key, Some(Val::Int(ts)));
                     put(&index, "primaryNet", &key, Some(Val::str(net.clone())));
                     put(
@@ -712,7 +774,7 @@ impl<S: Store> Workspace<S> {
                 }
                 Op::Move { net, id, x, y } => {
                     let parent = match self.parse(net) {
-                        Ok(p) if made.get(&p) == Some(&NodeKind::Network) => p,
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => p,
                         _ => self.network(net)?,
                     };
                     let n = self.parse(id)?;
@@ -801,6 +863,21 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    let kind = made.get(&n).copied().or_else(|| self.kind(n));
+                    let task = kind.is_some_and(NodeKind::is_task);
+                    let asset = kind == Some(NodeKind::Asset);
+                    // Each kind its own fields (05 §4.2–4.4, ADR-0010).
+                    let fits = match key.as_str() {
+                        "status" | "priority" | "start" | "deadline" => task,
+                        "color" => true,
+                        "asset" | "mime" | "url" | "icon" => asset,
+                        _ => false,
+                    };
+                    if !fits {
+                        return Err(invalid(format!(
+                            "attribute {key}: not a field of this kind of node"
+                        )));
+                    }
                     let bad = || invalid(format!("attribute {key}: not a value it takes"));
                     let ok = match (key.as_str(), value) {
                         (_, None) => true,
@@ -808,13 +885,12 @@ impl<S: Store> Workspace<S> {
                         ("priority", Some(Val::Str(v))) => PRIORITIES.contains(&v.as_str()),
                         ("start" | "deadline", Some(Val::Str(v))) => is_date(v),
                         ("color", Some(Val::Int(v))) => (0..COLORS).contains(v),
-                        ("description", Some(Val::Str(v))) => self.parse(v).ok().is_some_and(|d| {
-                            made.get(&d) == Some(&NodeKind::Note)
-                                || (self.alive(d) && self.kind(d) == Some(NodeKind::Note))
-                        }),
                         ("asset", Some(Val::Str(v))) => {
                             v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit())
                         }
+                        ("mime", Some(Val::Str(v))) => is_mime(v),
+                        ("url", Some(Val::Str(v))) => is_url(v),
+                        ("icon", Some(Val::Str(v))) => is_icon_name(v),
                         _ => false,
                     };
                     if !ok {
@@ -825,7 +901,7 @@ impl<S: Store> Workspace<S> {
                         "status" | "priority" | "start" | "deadline" | "color" => {
                             put(&index, key, &n.to_text(), value.clone());
                         }
-                        "description" | "asset" => {
+                        _ => {
                             put(
                                 &index,
                                 "attr",
@@ -833,7 +909,6 @@ impl<S: Store> Workspace<S> {
                                 value.clone(),
                             );
                         }
-                        _ => return Err(bad()),
                     }
                 }
                 Op::Assign { id, person, on } => {
@@ -842,6 +917,12 @@ impl<S: Store> Workspace<S> {
                         return Err(invalid(format!(
                             "node {id} does not exist or is in the trash"
                         )));
+                    }
+                    let kind = made.get(&n).copied().or_else(|| self.kind(n));
+                    if !kind.is_some_and(NodeKind::is_task) {
+                        return Err(invalid(
+                            "assignees are a field of tasks and projects (05 §4.3)",
+                        ));
                     }
                     if *on && read(&self.docs["manifest"], "people", person).is_none() {
                         return Err(invalid(format!("no person {person} in this workspace")));
@@ -937,17 +1018,14 @@ impl<S: Store> Workspace<S> {
         }
     }
 
-    /// The node of a content document `content/<id>` (10 §2.4): live and of a
-    /// kind that has content.
+    /// The node of a content document `content/<id>` (10 §2.4): a note's
+    /// text, a board's scene, a list's items; for a task, project, folder or
+    /// asset — its description (05 §4.2, ADR-0010).
     fn content_node(&self, doc: &str) -> Result<NodeId> {
         let id = doc
             .strip_prefix("content/")
             .ok_or_else(|| invalid(format!("{doc} is not a content document")))?;
-        let n = self.live(id)?;
-        if self.kind(n) == Some(NodeKind::Network) {
-            return Err(invalid("a network has no content document (10 §2.4)"));
-        }
-        Ok(n)
+        self.live(id)
     }
 
     /// A content document as one snapshot for an editor in the UI (15 §3.4);
@@ -1106,9 +1184,10 @@ impl<S: Store> Workspace<S> {
             priority: self.text_field(node, "priority"),
             color: self.field(node, "color").and_then(|v| v.as_i64()),
             assignees,
-            description: attr("description")
-                .filter(|d| NodeId::parse(d).is_ok_and(|n| self.alive(n))),
             asset: attr("asset"),
+            mime: attr("mime"),
+            url: attr("url"),
+            icon: attr("icon"),
         }
     }
 
@@ -1131,41 +1210,178 @@ impl<S: Store> Workspace<S> {
         out
     }
 
-    /// The roll-up of a network (05 §6.4): nodes with a status over the
-    /// whole depth, each once; the nearest deadline of the open ones.
-    fn fold(&self, net: NodeId, children: &HashMap<NodeId, Vec<NodeId>>) -> Fold {
-        let mut seen = BTreeSet::from([net]);
-        let mut stack = vec![net];
-        let mut fold = Fold::default();
-        while let Some(at) = stack.pop() {
-            for &n in children.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                if !seen.insert(n) || !self.alive(n) {
-                    continue;
+    /// Every wire's ends, `from → [to]` in creation order of `to` (05 §8).
+    fn wires_out(&self) -> HashMap<NodeId, Vec<NodeId>> {
+        let mut out: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for v in all.values() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let end = |k: &str| {
+                    v.get(k)
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                if let (Some(from), Some(to)) = (end("from"), end("to")) {
+                    out.entry(from).or_default().push(to);
                 }
-                if let Some(status) = self.text_field(n, "status") {
-                    fold.total += 1;
-                    if is_final(&status) {
-                        fold.done += 1;
-                    } else if let Some(d) = self.text_field(n, "deadline") {
+            }
+        }
+        for list in out.values_mut() {
+            list.sort();
+        }
+        out
+    }
+
+    /// A live task or project.
+    fn is_task(&self, n: NodeId) -> bool {
+        self.alive(n) && self.kind(n).is_some_and(NodeKind::is_task)
+    }
+
+    /// The roll-up of a node (05 §4.3, §6.4, ADR-0010): for a folder or
+    /// project, the tasks and projects inside at any depth; for a task or
+    /// project, also the subtasks it wires to, and theirs. Each once, cycles
+    /// included; the node itself is not counted. A task with no status is open.
+    fn fold(
+        &self,
+        node: NodeId,
+        children: &HashMap<NodeId, Vec<NodeId>>,
+        wires: &HashMap<NodeId, Vec<NodeId>>,
+    ) -> Fold {
+        let mut seen = BTreeSet::from([node]);
+        let mut tasks: Vec<NodeId> = Vec::new();
+        if self.kind(node).is_some_and(NodeKind::has_canvas) {
+            let mut stack = vec![node];
+            while let Some(at) = stack.pop() {
+                for &n in children.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
+                    if !self.alive(n) || !seen.insert(n) {
+                        continue;
+                    }
+                    let kind = self.kind(n);
+                    if kind.is_some_and(NodeKind::is_task) {
+                        tasks.push(n);
+                    }
+                    if kind.is_some_and(NodeKind::has_canvas) {
+                        stack.push(n);
+                    }
+                }
+            }
+        }
+        let mut stack = tasks.clone();
+        if self.kind(node).is_some_and(NodeKind::is_task) {
+            stack.push(node);
+        }
+        while let Some(at) = stack.pop() {
+            for &n in wires.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
+                if self.is_task(n) && seen.insert(n) {
+                    tasks.push(n);
+                    stack.push(n);
+                }
+            }
+        }
+        let mut fold = Fold::default();
+        for n in tasks {
+            fold.total += 1;
+            match self.text_field(n, "status") {
+                Some(status) if is_final(&status) => fold.done += 1,
+                _ => {
+                    if let Some(d) = self.text_field(n, "deadline") {
                         if fold.nearest.as_ref().is_none_or(|x| d < *x) {
                             fold.nearest = Some(d);
                         }
                     }
-                }
-                if self.kind(n) == Some(NodeKind::Network) {
-                    stack.push(n);
                 }
             }
         }
         fold
     }
 
+    /// The checklist preview of a task's or project's hierarchy (05 §4.3):
+    /// a task's subtasks by wires; inside a project, its tasks, projects and
+    /// folders that are not a subtask of a task beside them. Each node once.
+    fn task_rows(
+        &self,
+        node: NodeId,
+        children: &HashMap<NodeId, Vec<NodeId>>,
+        wires: &HashMap<NodeId, Vec<NodeId>>,
+        seen: &mut BTreeSet<NodeId>,
+        depth: u32,
+    ) -> Vec<TaskRow> {
+        if depth > 32 {
+            return Vec::new();
+        }
+        let kind = self.kind(node);
+        let mut ids: Vec<NodeId> = Vec::new();
+        if kind.is_some_and(NodeKind::is_task) {
+            let subtasks = wires.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+            ids.extend(subtasks.iter().copied().filter(|&n| self.is_task(n)));
+        }
+        if kind.is_some_and(NodeKind::has_canvas) {
+            let inside: Vec<NodeId> = children
+                .get(&node)
+                .map(Vec::as_slice)
+                .unwrap_or(&[])
+                .iter()
+                .copied()
+                .filter(|&n| self.alive(n))
+                .collect();
+            let here: BTreeSet<NodeId> = inside.iter().copied().collect();
+            let wired: BTreeSet<NodeId> = inside
+                .iter()
+                .filter(|&&n| self.is_task(n))
+                .flat_map(|n| wires.get(n).map(Vec::as_slice).unwrap_or(&[]))
+                .copied()
+                .filter(|t| here.contains(t))
+                .collect();
+            ids.extend(inside.into_iter().filter(|n| {
+                let k = self.kind(*n);
+                (k.is_some_and(NodeKind::is_task) || k == Some(NodeKind::Network))
+                    && !wired.contains(n)
+            }));
+        }
+        ids.sort();
+        ids.dedup();
+        let mut out = Vec::new();
+        for n in ids {
+            if !seen.insert(n) {
+                continue;
+            }
+            let rows = self.task_rows(n, children, wires, seen, depth + 1);
+            let kind = self.kind(n).unwrap_or(NodeKind::Task);
+            // A folder shows only when it holds tasks.
+            if kind == NodeKind::Network && rows.is_empty() {
+                continue;
+            }
+            out.push(TaskRow {
+                id: n.to_text(),
+                kind,
+                name: self.name(n),
+                status: self.text_field(n, "status"),
+                deadline: self.text_field(n, "deadline"),
+                rows,
+            });
+        }
+        out
+    }
+
     fn linked(&self, n: NodeId) -> Linked {
+        let kind = self.kind(n).unwrap_or(NodeKind::Note);
+        let look = if kind == NodeKind::Asset {
+            self.attrs(n)
+        } else {
+            Attrs::default()
+        };
         Linked {
             id: n.to_text(),
-            kind: self.kind(n).unwrap_or(NodeKind::Note),
+            kind,
             name: self.name(n),
             status: self.text_field(n, "status"),
+            asset: look.asset,
+            mime: look.mime,
+            url: look.url,
+            icon: look.icon,
         }
     }
 
@@ -1201,6 +1417,7 @@ impl<S: Store> Workspace<S> {
         }
         let kind = self.kind(n).unwrap_or(NodeKind::Note);
         let all = self.children();
+        let wires = self.wires_out();
         let mut children: Vec<Linked> = all
             .get(&n)
             .map(Vec::as_slice)
@@ -1212,17 +1429,22 @@ impl<S: Store> Workspace<S> {
         for list in [&mut inputs, &mut outputs, &mut children] {
             list.sort_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         }
+        let subtasks = if kind.is_task() {
+            self.task_rows(n, &all, &wires, &mut BTreeSet::from([n]), 0)
+        } else {
+            Vec::new()
+        };
         Ok(NodeDetails {
             id: id.to_owned(),
             kind,
-            class: self.text_field(n, "class"),
             name: self.name(n),
             attrs: self.attrs(n),
             parent: self.text_field(n, "primaryNet"),
             inputs,
             outputs,
             children,
-            fold: (kind == NodeKind::Network).then(|| self.fold(n, &all)),
+            subtasks,
+            fold: (kind.has_canvas() || kind.is_task()).then(|| self.fold(n, &all, &wires)),
         })
     }
 
@@ -1256,17 +1478,26 @@ impl<S: Store> Workspace<S> {
                 if !self.alive(n) {
                     continue;
                 }
+                let kind = self.kind(n).unwrap_or(NodeKind::Note);
+                let look = if kind == NodeKind::Asset {
+                    self.attrs(n)
+                } else {
+                    Attrs::default()
+                };
                 out.push(TreeItem {
                     id: id.clone(),
                     name: self.name(n),
-                    kind: self.kind(n).unwrap_or(NodeKind::Note),
-                    class: self.text_field(n, "class"),
+                    kind,
                     status: self.text_field(n, "status"),
                     parent: if n == self.root {
                         None
                     } else {
                         self.text_field(n, "primaryNet")
                     },
+                    asset: look.asset,
+                    mime: look.mime,
+                    url: look.url,
+                    icon: look.icon,
                 });
             }
         }
@@ -1311,6 +1542,7 @@ impl<S: Store> Workspace<S> {
             }
         }
         let children = self.children();
+        let wires = self.wires_out();
         let pos = &self.docs[&doc];
         let mut nodes = Vec::new();
         for id in &ids {
@@ -1331,12 +1563,12 @@ impl<S: Store> Workspace<S> {
             nodes.push(ViewNode {
                 id: id.clone(),
                 kind,
-                class: self.text_field(node, "class"),
                 name: self.name(node),
                 x,
                 y,
                 attrs: self.attrs(node),
-                fold: (kind == NodeKind::Network).then(|| self.fold(node, &children)),
+                fold: (kind.has_canvas() || kind.is_task())
+                    .then(|| self.fold(node, &children, &wires)),
             });
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();

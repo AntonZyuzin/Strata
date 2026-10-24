@@ -6,7 +6,21 @@
  * most wires inside a network and some between (14 §1.3, W-sets).
  */
 
-export const KIND = { network: 0, note: 1, board: 2, checklist: 3, media: 4 } as const;
+/** Kinds of 05 §4.2 (ADR-0010); folders and projects are the clusters. */
+export const KIND = {
+  network: 0,
+  note: 1,
+  board: 2,
+  checklist: 3,
+  asset: 4,
+  project: 5,
+  task: 6,
+} as const;
+
+/** A folder or a project: a cluster of stars (08 §3.3). */
+export function isCluster(kind: number): boolean {
+  return kind === KIND.network || kind === KIND.project;
+}
 export const FLAG = { key: 1, pause: 2, template: 4 } as const;
 /** 08 §8.3: 0 plain, 1 soon, 2 today, 3 overdue, 4 final status. */
 export const STATE = { plain: 0, soon: 1, today: 2, overdue: 3, closed: 4 } as const;
@@ -62,7 +76,7 @@ export function syntheticExtract(o: ExtractOptions): StarMapExtract {
     primaryNet[i] = Math.floor(i * r() ** 2.2);
   }
   kind[0] = KIND.network;
-  const others = [KIND.note, KIND.note, KIND.note, KIND.board, KIND.checklist, KIND.media];
+  const others = [KIND.note, KIND.note, KIND.note, KIND.board, KIND.checklist, KIND.asset];
   for (let i = nets; i < n; i++) {
     kind[i] = others[Math.floor(r() * others.length)] ?? KIND.note;
     primaryNet[i] = Math.floor(nets * r() ** 1.6);

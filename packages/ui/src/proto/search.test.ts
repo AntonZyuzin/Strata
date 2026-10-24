@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CLASSES, menuItems } from './menu';
+import { KINDS, menuItems } from './menu';
 import { norm, rank, score, stage, switchLayout } from './search';
 
 describe('Tab menu search (09 §2, temporary TS engine)', () => {
@@ -40,18 +40,16 @@ describe('Tab menu items (06 §5.2)', () => {
     { id: 'b', name: 'Звуковой дизайн', kind: 'network' as const },
   ];
 
-  it('offers kinds and classes for an empty query', () => {
+  it('offers the kinds for an empty query (ADR-0010)', () => {
     const items = menuItems('ru', '', nodes, []);
     expect(items.map((i) => i.label)).toEqual([
-      'Сеть',
+      'Папка',
+      'Проект',
+      'Задача',
       'Заметка',
       'Доска',
       'Список',
-      'Медиа',
-      'Задача',
-      'Проект',
-      'Референсы',
-      'Чек-лист',
+      'Ассет',
     ]);
   });
 
@@ -69,12 +67,11 @@ describe('Tab menu items (06 §5.2)', () => {
     expect(ru?.choice).toEqual({
       t: 'create',
       kind: 'board',
-      cls: null,
       name: 'Мудборд',
       rename: false,
     });
     const [en] = menuItems('ru', 'task: Fix', nodes, []);
-    expect(en?.choice).toMatchObject({ kind: 'network', cls: 'task', name: 'Fix' });
+    expect(en?.choice).toMatchObject({ kind: 'task', name: 'Fix' });
   });
 
   it('does not offer «Заметка «доска»» when the query names a kind', () => {
@@ -83,14 +80,16 @@ describe('Tab menu items (06 §5.2)', () => {
   });
 });
 
-describe('classes of the Tab menu (05 §4.3)', () => {
-  it('builds a task and a project on networks, references on a board, a checklist on a list', () => {
-    const kindOf = Object.fromEntries(CLASSES.map((c) => [c.cls, c.kind]));
-    expect(kindOf).toEqual({
-      task: 'network',
-      project: 'network',
-      references: 'board',
-      checklist: 'checklist',
-    });
+describe('kinds of the Tab menu (05 §4.2, ADR-0010)', () => {
+  it('offers the seven kinds, the folder first', () => {
+    expect(KINDS.map((k) => k.kind)).toEqual([
+      'network',
+      'project',
+      'task',
+      'note',
+      'board',
+      'checklist',
+      'asset',
+    ]);
   });
 });

@@ -17,7 +17,7 @@ import {
 } from './looks';
 
 const node = (over: Partial<GraphNode> = {}) =>
-  newNode({ id: 'a', name: 'a', kind: 'note', cls: null, icon: 0, x: 0, y: 0, ...over });
+  newNode({ id: 'a', name: 'a', kind: 'note', icon: 0, x: 0, y: 0, ...over });
 
 describe('looks of bubbles (07 §4.5–4.9)', () => {
   it('switches levels at 12, 32 and 96 px of diameter', () => {
@@ -113,12 +113,12 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
     expect(over(0x000000, 0xff8000, 1)).toBe(0xff8000);
   });
 
-  it('gives a new node the icon of its class, else of its kind, from the presets (Q-07-21)', () => {
+  it('gives a new node the icon of its kind from the presets (Q-07-21, ADR-0010)', () => {
     const ids = new Set(icons.icons.map((i) => i.id));
-    for (const id of [...Object.values(DEFAULT_ICONS.kind), ...Object.values(DEFAULT_ICONS.cls)]) {
+    for (const id of Object.values(DEFAULT_ICONS)) {
       expect(ids.has(id), id).toBe(true);
     }
-    expect(defaultIcon('note', null)).toBe(DEFAULT_ICONS.kind.note);
-    expect(defaultIcon('network', 'task')).toBe(DEFAULT_ICONS.cls.task);
+    expect(defaultIcon('note')).toBe(DEFAULT_ICONS.note);
+    expect(defaultIcon('task')).toBe(DEFAULT_ICONS.task);
   });
 });

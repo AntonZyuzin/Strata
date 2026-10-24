@@ -1,39 +1,32 @@
-import type { NodeClass, NodeKind } from '@strata/backend';
+import type { NodeKind } from '@strata/backend';
 import type { MenuChoice } from '@strata/canvas';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { norm, rank, score } from './search';
 
 /**
- * Items of the Tab menu (06 §5.2): with an empty query — recent choices, kinds
- * and classes; with a query — «Создать» (a note named by the query first,
- * then matching kinds and classes) and «Вставить здесь» (existing nodes).
+ * Items of the Tab menu (06 §5.2): with an empty query — recent choices and
+ * the kinds; with a query — «Создать» (a note named by the query first, then
+ * matching kinds) and «Вставить здесь» (existing nodes). ADR-0010: no classes.
  */
 
 export interface Template {
   kind: NodeKind;
-  cls: NodeClass | null;
   key: MessageKey;
 }
 
 export const KINDS: Template[] = [
-  { kind: 'network', cls: null, key: 'kind.network' },
-  { kind: 'note', cls: null, key: 'kind.note' },
-  { kind: 'board', cls: null, key: 'kind.board' },
-  { kind: 'checklist', cls: null, key: 'kind.checklist' },
-  { kind: 'media', cls: null, key: 'kind.media' },
+  { kind: 'network', key: 'kind.network' },
+  { kind: 'project', key: 'kind.project' },
+  { kind: 'task', key: 'kind.task' },
+  { kind: 'note', key: 'kind.note' },
+  { kind: 'board', key: 'kind.board' },
+  { kind: 'checklist', key: 'kind.checklist' },
+  { kind: 'asset', key: 'kind.asset' },
 ];
 
-/** Classes on top of kinds (05 §4.3): a task and a project are networks, references a board. */
-export const CLASSES: Template[] = [
-  { kind: 'network', cls: 'task', key: 'class.task' },
-  { kind: 'network', cls: 'project', key: 'class.project' },
-  { kind: 'board', cls: 'references', key: 'class.references' },
-  { kind: 'checklist', cls: 'checklist', key: 'class.checklist' },
-];
+const TEMPLATES = KINDS;
 
-const TEMPLATES = [...KINDS, ...CLASSES];
-
-export type Group = 'recent' | 'kinds' | 'classes' | 'create' | 'insert';
+export type Group = 'recent' | 'kinds' | 'create' | 'insert';
 
 export interface MenuItem {
   id: string;
@@ -67,7 +60,6 @@ function createItem(locale: Locale, tpl: Template, name: string | null, group: G
     choice: {
       t: 'create',
       kind: tpl.kind,
-      cls: tpl.cls,
       name: name ?? label,
       rename: name === null,
     },
@@ -86,11 +78,10 @@ export function menuItems(
       .map((key) => TEMPLATES.find((tpl) => tpl.key === key))
       .filter((tpl): tpl is Template => !!tpl)
       .map((tpl) => createItem(locale, tpl, null, 'recent'));
-    return [
-      ...recentItems,
-      ...KINDS.map((tpl) => createItem(locale, tpl, null, 'kinds')),
-      ...CLASSES.map((tpl) => createItem(locale, tpl, null, 'classes')),
-    ].slice(0, MAX_ROWS);
+    return [...recentItems, ...KINDS.map((tpl) => createItem(locale, tpl, null, 'kinds'))].slice(
+      0,
+      MAX_ROWS,
+    );
   }
   // «вид: имя» creates that kind with that name.
   const colon = q.indexOf(':');
@@ -115,7 +106,7 @@ export function menuItems(
           label: t(locale, 'menu.noteNamed', { q }),
           detail: '',
           kind: 'note',
-          choice: { t: 'create', kind: 'note', cls: null, name: q, rename: false },
+          choice: { t: 'create', kind: 'note', name: q, rename: false },
         },
       ];
   const templates = rank(

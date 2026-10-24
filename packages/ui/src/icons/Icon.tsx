@@ -1,11 +1,21 @@
+import { type AssetType, assetType, type NodeAttrs, type NodeKind } from '@strata/backend';
 import type { CSSProperties } from 'react';
+import hourglass from './hourglass.png';
 import calendar from './serenity/app-calendar.png';
 import paint from './serenity/app-pixel-paint.png';
+import sound from './serenity/app-sound-player.png';
+import video from './serenity/app-video-player.png';
 import book from './serenity/book.png';
 import folder from './serenity/filetype-folder.png';
 import folderOpen from './serenity/filetype-folder-open.png';
+import html from './serenity/filetype-html.png';
 import image from './serenity/filetype-image.png';
+import music from './serenity/filetype-music.png';
+import pdf from './serenity/filetype-pdf.png';
+import symlink from './serenity/filetype-symlink.png';
 import text from './serenity/filetype-text.png';
+import unknown from './serenity/filetype-unknown.png';
+import internet from './serenity/internet.png';
 import office from './serenity/office.png';
 import open from './serenity/open.png';
 import plus from './serenity/plus.png';
@@ -18,72 +28,141 @@ import undo from './serenity/undo.png';
 import close from './serenity/window-close.png';
 
 /**
- * The Chrome's icons, SerenityOS's 16 × 16 set in the Windows 98 spirit
- * (owner, 2026-10-24; BSD 2-Clause, `serenity/LICENSE`, 07 §6.2). Kinds and
- * classes keep their colours; the black outline ones would vanish on the dark
+ * The Chrome's and the nodes' icons, SerenityOS's 16 × 16 set in the Windows
+ * 98 spirit (owner, 2026-10-24; BSD 2-Clause, `serenity/LICENSE`, 07 §6.1).
+ * Files keep SerenityOS's names: an asset's icon chosen by hand is stored by
+ * that name (05 §4.4). The black outline ones would vanish on the dark
  * Chrome, so they are masks drawn in the text colour.
  */
-const ICONS = {
-  network: folder,
-  networkOpen: folderOpen,
-  note: text,
-  board: paint,
-  media: image,
-  checklist: table,
-  task: calendar,
-  project: office,
-  references: book,
-  import: open,
-  export: save,
-  rename,
-  trash,
-  undo,
-  redo,
+const FILES = {
+  // Strata's own, drawn to match (owner, 2026-10-24: a task is an hourglass).
+  hourglass,
+  'app-calendar': calendar,
+  'app-pixel-paint': paint,
+  'app-sound-player': sound,
+  'app-video-player': video,
+  book,
+  'filetype-folder': folder,
+  'filetype-folder-open': folderOpen,
+  'filetype-html': html,
+  'filetype-image': image,
+  'filetype-music': music,
+  'filetype-pdf': pdf,
+  'filetype-symlink': symlink,
+  'filetype-text': text,
+  'filetype-unknown': unknown,
+  internet,
+  office,
+  open,
   plus,
-  close,
+  redo,
+  rename,
+  save,
+  'table-view': table,
+  'trash-can': trash,
+  undo,
+  'window-close': close,
 } as const;
 
-export type IconName = keyof typeof ICONS;
+export type IconFile = keyof typeof FILES;
 
-/** Files of the set that ship, for «Благодарности». */
-export const ICON_FILES = new Set(Object.values(ICONS)).size;
+/** The Chrome's names for what it shows. */
+const NAMED = {
+  network: 'filetype-folder',
+  networkOpen: 'filetype-folder-open',
+  project: 'office',
+  task: 'hourglass',
+  note: 'filetype-text',
+  board: 'app-pixel-paint',
+  checklist: 'table-view',
+  import: 'open',
+  export: 'save',
+  rename: 'rename',
+  trash: 'trash-can',
+  undo: 'undo',
+  redo: 'redo',
+  plus: 'plus',
+  close: 'window-close',
+} as const satisfies Record<string, IconFile>;
 
-const MONO: ReadonlySet<IconName> = new Set(['undo', 'redo', 'plus', 'close']);
+export type IconName = keyof typeof NAMED | IconFile;
 
-/** The icon of a node in the Chrome: its class first, then its kind. */
-export function nodeIcon(kind: string, cls?: string, open = false): IconName {
-  if (cls && cls in ICONS) return cls as IconName;
-  if (kind === 'network') return open ? 'networkOpen' : 'network';
-  return kind in ICONS ? (kind as IconName) : 'note';
+/** An asset's icon by what it holds (07 §6.1). */
+const ASSET_ICON: Record<AssetType, IconFile> = {
+  image: 'filetype-image',
+  video: 'app-video-player',
+  audio: 'app-sound-player',
+  pdf: 'filetype-pdf',
+  file: 'filetype-unknown',
+  url: 'internet',
+  empty: 'filetype-unknown',
+};
+
+/** Icons an asset may take by hand (05 §4.4, 07 §6.1). */
+export const ASSET_ICONS: readonly IconFile[] = [
+  'filetype-image',
+  'app-video-player',
+  'app-sound-player',
+  'filetype-music',
+  'internet',
+  'filetype-html',
+  'filetype-symlink',
+  'filetype-pdf',
+  'book',
+  'filetype-unknown',
+];
+
+/** SerenityOS's files that ship, for «Благодарности»: all but Strata's own hourglass. */
+export const ICON_FILES = Object.keys(FILES).length - 1;
+
+const MONO: ReadonlySet<IconFile> = new Set(['undo', 'redo', 'plus', 'window-close']);
+
+function fileOf(name: IconName): IconFile {
+  return name in NAMED ? NAMED[name as keyof typeof NAMED] : (name as IconFile);
 }
 
-const NODE_ICONS = [
-  'network',
-  'note',
-  'board',
-  'media',
-  'checklist',
-  'task',
-  'project',
-  'references',
-] as const satisfies readonly IconName[];
+function isFile(name: string | undefined): name is IconFile {
+  return name !== undefined && name in FILES;
+}
 
-/** The kind and class icons as decoded pictures for the canvas (view.setKindIcons). */
+/**
+ * The icon of a node (ADR-0010): its kind's; an asset's by what it holds,
+ * or the one chosen by hand; an open folder in «Слои» opens.
+ */
+export function nodeIcon(kind: NodeKind, attrs: NodeAttrs = {}, open = false): IconName {
+  if (kind === 'network') return open ? 'networkOpen' : 'network';
+  if (kind === 'asset') return isFile(attrs.icon) ? attrs.icon : ASSET_ICON[assetType(attrs)];
+  return kind;
+}
+
+/** The file a node shows on the canvas: a key of `nodeIconImages` (view.iconKey). */
+export function nodeIconFile(kind: NodeKind, attrs: NodeAttrs = {}): string {
+  return fileOf(nodeIcon(kind, attrs));
+}
+
+/** The pictures nodes may show, decoded for the canvas (view.setKindIcons), by file. */
 export async function nodeIconImages(): Promise<Record<string, HTMLImageElement>> {
+  const kinds: NodeKind[] = ['network', 'project', 'task', 'note', 'board', 'checklist'];
+  const files = new Set<IconFile>([
+    ...kinds.map((k) => fileOf(nodeIcon(k))),
+    ...Object.values(ASSET_ICON),
+    ...ASSET_ICONS,
+  ]);
   const pairs = await Promise.all(
-    NODE_ICONS.map(async (name) => {
+    [...files].map(async (file) => {
       const img = new Image();
-      img.src = ICONS[name];
+      img.src = FILES[file];
       await img.decode();
-      return [name, img] as const;
+      return [file, img] as const;
     }),
   );
   return Object.fromEntries(pairs);
 }
 
 export function Icon(props: { name: IconName }) {
-  const src = ICONS[props.name];
-  if (MONO.has(props.name)) {
+  const file = fileOf(props.name);
+  const src = FILES[file];
+  if (MONO.has(file)) {
     return (
       <span
         className="kind-icon"

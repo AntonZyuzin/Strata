@@ -1,4 +1,4 @@
-import { FLAG, KIND, type StarMapExtract } from './extract';
+import { FLAG, isCluster, type StarMapExtract } from './extract';
 
 /**
  * Initial layout of the star map (08 §3.3): every body is placed next to the
@@ -47,10 +47,9 @@ export function initialLayout(x: StarMapExtract, seed: number): Float32Array {
     if (p < 0) continue;
     const rp = clusterRadius(x.subtreeSize[p] ?? 1);
     const [dx, dy, dz] = direction(seed, i);
-    const r =
-      x.kind[i] === KIND.network
-        ? rp + clusterRadius(x.subtreeSize[i] ?? 1)
-        : rp * (0.4 + 0.5 * unit(hash32(seed ^ 0x51ed27, i)));
+    const r = isCluster(x.kind[i] ?? 0)
+      ? rp + clusterRadius(x.subtreeSize[i] ?? 1)
+      : rp * (0.4 + 0.5 * unit(hash32(seed ^ 0x51ed27, i)));
     pos[i * 3] = (pos[p * 3] ?? 0) + dx * r;
     pos[i * 3 + 1] = (pos[p * 3 + 1] ?? 0) + dy * r;
     pos[i * 3 + 2] = (pos[p * 3 + 2] ?? 0) + dz * r;

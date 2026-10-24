@@ -393,7 +393,6 @@ mod tests {
             let mk = |id: &str| Op::CreateNode {
                 id: Some(id.to_owned()),
                 kind: NodeKind::Note,
-                class: None,
                 name: format!("Нода {id}"),
                 net: root.clone(),
                 x: 1.0,

@@ -327,7 +327,7 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.tab')).toHaveCount(0);
   });
 
-  test('a task: its fields, people, description and subtasks in the panel (05 §4.3, §6)', async ({
+  test('a task: its fields, people, description and subtasks by wires (05 §4.3, ADR-0010)', async ({
     page,
   }) => {
     test.setTimeout(90_000);
@@ -344,7 +344,7 @@ test.describe('a workspace on the core', () => {
     await expect.poll(async () => (await graphNow(page)).names).toEqual(['Боёвка']);
     const id = await idOf(page, 'Боёвка');
     await settled(page);
-    // Its class's colour, and an «Описание» inside, from the core.
+    // Its kind's colour.
     expect(await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.color, id)).toBe(
       3,
     );
@@ -367,46 +367,53 @@ test.describe('a workspace on the core', () => {
     await panel.getByLabel('Имя человека').fill('Антон');
     await panel.getByLabel('Имя человека').press('Enter');
     await expect(panel.locator('.ins-chip')).toHaveText(['Антон']);
-    // The description: Markdown in the task's «Описание» note.
+    // The description: Markdown in the task's own document, no hint in it.
+    await expect(panel.locator('.ins-description .cm-placeholder')).toHaveCount(0);
     await panel.locator('.ins-description .cm-content').click();
     await page.keyboard.type('**Удар** и _отдача_');
-    // Subtasks: two, one done — «1 из 2».
+    // Subtasks: tasks beside it, wired from it; one done — «1 из 2».
     const sub = panel.getByLabel('Новая подзадача');
     await sub.fill('Анимации');
     await sub.press('Enter');
-    await expect(panel.locator('.ins-links .check')).toHaveCount(1);
+    await expect(panel.locator('.ins-tree .ins-row')).toHaveCount(1);
     await sub.fill('Хитбоксы');
     await sub.press('Enter');
-    await expect(panel.locator('.ins-links .check')).toHaveCount(2);
-    await panel.locator('.ins-links .check input').first().check();
+    await expect(panel.locator('.ins-tree .ins-row')).toHaveCount(2);
+    await expect
+      .poll(async () => (await graphNow(page)).edges)
+      .toEqual(['Боёвка→Анимации', 'Боёвка→Хитбоксы']);
+    await panel.locator('.ins-tree .ins-row input').first().check();
     await expect(panel.locator('.ins-progress')).toHaveText('1 из 2');
-    // The tree: the task is a network of the workspace; it goes inside.
-    // «Слои»: a click selects the node on the canvas, a double click goes in.
-    await page.locator('.layer-name', { hasText: 'Боёвка' }).click();
-    await expect
-      .poll(() =>
-        page.evaluate(
-          () =>
-            window.__strataWs?.view &&
-            document.querySelector('.layer-row.is-selected')?.textContent,
-        ),
-      )
-      .toBe('Боёвка');
+    // One does not dive into a task: a double click in «Слои» keeps the level.
     await page.locator('.layer-name', { hasText: 'Боёвка' }).dblclick();
-    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
-    await expect
-      .poll(async () => (await graphNow(page)).names)
-      .toEqual(['Анимации', 'Описание', 'Хитбоксы']);
-    // The workspace itself is no layer: out with U.
-    await expect(page.locator('.layer-name', { hasText: 'Проекты' })).toHaveCount(0);
-    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
-    await page.keyboard.press('KeyU');
     await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    await expect(page.locator('.layer-name', { hasText: 'Проекты' })).toHaveCount(0);
     // The right button: «Выполнено».
     const p = await at(page, 'Боёвка');
     await page.mouse.click(p.x, p.y, { button: 'right' });
     await page.getByRole('menuitem', { name: 'Выполнено' }).click();
     await expect.poll(async () => (await attrs()).status).toBe('done');
+    // A project is a task one dives into; its new task goes inside.
+    await page.mouse.move(400, 300);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('проект');
+    await page.locator('.tab-menu-row', { hasText: 'Проект' }).first().click();
+    await page.keyboard.type('Срез');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toContain('Срез');
+    await settled(page);
+    await select(page, 'Срез');
+    const inside = panel.getByLabel('Новая задача');
+    await inside.fill('Меню');
+    await inside.press('Enter');
+    await expect(panel.locator('.ins-tree .ins-row')).toHaveText(['Меню']);
+    await expect(inside).toHaveValue('');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Меню']);
+    await page.keyboard.press('KeyU');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
     // The description is there after a restart.
     await settled(page);
     await page.reload();
@@ -416,11 +423,11 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ins-description .cm-content')).toContainText('Удар');
   });
 
-  test('a picture dropped on the canvas is a media node with the picture in its circle', async ({
+  test('a picture dropped on the canvas is an asset with the picture in its circle', async ({
     page,
   }) => {
     await page.goto('/?plain');
-    await createWorkspace(page, 'Медиа');
+    await createWorkspace(page, 'Ассеты');
     await page.evaluate(async () => {
       // A small PNG, made here: 8 × 8 of one colour.
       const c = document.createElement('canvas');
@@ -449,8 +456,11 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(() => page.evaluate((id) => window.__strataWs?.view.hasPicture(id) ?? false, id))
       .toBe(true);
+    expect(
+      await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.attrs.mime, id),
+    ).toBe('image/png');
     await select(page, 'Скетч');
-    await expect(page.locator('.ins-picture img')).toBeVisible();
+    await expect(page.locator('.ins-asset img')).toBeVisible();
   });
 
   test('nodes carry the Chrome icons, in their circles and in «Слои» (07 §6.1)', async ({

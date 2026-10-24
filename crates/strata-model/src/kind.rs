@@ -2,34 +2,50 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Content kind of a node (05 §4.2). Immutable after creation.
+/// Content kind of a node (05 §4.2, ADR-0010). Immutable after creation,
+/// except task ↔ project and folder ↔ project.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NodeKind {
-    /// A canvas with nested nodes (Houdini subnet).
+    /// A folder («Папка»): a canvas with nested nodes (Houdini subnet).
     Network,
+    /// A task one can dive into: the task's fields and a canvas.
+    Project,
+    /// A unit of work: status, priority, dates, assignees, a description;
+    /// one cannot dive into it. Its subtasks are the tasks it wires to.
+    Task,
     /// Markdown text.
     Note,
-    /// Excalidraw scene with widgets.
+    /// Excalidraw scene: drawing and pictures.
     Board,
     /// Items with checkboxes.
     Checklist,
-    /// A single file: image, PDF, video, audio, other.
-    Media,
+    /// One attachment: a file (picture, video, sound, PDF, other) or a link.
+    /// Nodes made before ADR-0010 were `media`.
+    #[serde(alias = "media")]
+    Asset,
 }
 
 impl NodeKind {
-    pub const ALL: [NodeKind; 5] = [
+    pub const ALL: [NodeKind; 7] = [
         Self::Network,
+        Self::Project,
+        Self::Task,
         Self::Note,
         Self::Board,
         Self::Checklist,
-        Self::Media,
+        Self::Asset,
     ];
 
-    /// Whether entering the node dives into a canvas (05 §4.2).
+    /// Whether entering the node dives into a canvas (05 §4.2): a folder or a project.
     pub const fn has_canvas(self) -> bool {
-        matches!(self, Self::Network)
+        matches!(self, Self::Network | Self::Project)
+    }
+
+    /// Whether it carries the task's fields — status, priority, dates,
+    /// assignees (05 §4.3): a task or a project.
+    pub const fn is_task(self) -> bool {
+        matches!(self, Self::Task | Self::Project)
     }
 }
 
@@ -69,7 +85,19 @@ mod tests {
             "\"checklist\""
         );
         assert!(NodeKind::Network.has_canvas());
+        assert!(NodeKind::Project.has_canvas());
+        assert!(!NodeKind::Task.has_canvas());
         assert!(!NodeKind::Note.has_canvas());
+        assert!(NodeKind::Task.is_task() && NodeKind::Project.is_task());
+        assert!(!NodeKind::Network.is_task() && !NodeKind::Note.is_task());
+    }
+
+    #[test]
+    fn media_reads_as_asset() {
+        // Nodes made before ADR-0010 keep opening.
+        let k: NodeKind = serde_json::from_str("\"media\"").unwrap();
+        assert_eq!(k, NodeKind::Asset);
+        assert_eq!(serde_json::to_string(&k).unwrap(), "\"asset\"");
     }
 
     #[test]

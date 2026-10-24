@@ -1,4 +1,4 @@
-import type { GraphNode, NodeClass, NodeKind } from '@strata/backend';
+import type { GraphNode, NodeKind } from '@strata/backend';
 import { fog, type GlyphName, hex, palette } from '@strata/design-tokens';
 import { axisOf, pointAt } from './curve';
 import type { Plate } from './textures';
@@ -154,29 +154,20 @@ export function over(bottom: number, top: number, alpha: number): number {
 }
 
 /**
- * Icon of a new node (07 §6.3, Q-07-21): the class's preset, else the kind's.
- * Never random; the user changes it in the icon palette `Z` (06 §2.1).
+ * Icon of a new node (07 §6.3, Q-07-21): its kind's preset (ADR-0010: no
+ * classes). Never random; the user changes it in the icon palette `Z` (06 §2.1).
  */
 export const DEFAULT_ICONS = {
-  kind: {
-    network: 'delapouite/family-tree',
-    note: 'lorc/quill-ink',
-    board: 'delapouite/palette',
-    checklist: 'lorc/scroll-unfurled',
-    media: 'delapouite/photo-camera',
-  },
-  cls: {
-    task: 'lorc/hourglass',
-    project: 'lorc/compass',
-    references: 'delapouite/bookshelf',
-    checklist: 'delapouite/scroll-quill',
-  },
-} as const satisfies {
-  kind: Record<NodeKind, string>;
-  cls: Record<NodeClass, string>;
-};
+  network: 'delapouite/family-tree',
+  project: 'lorc/compass',
+  task: 'lorc/hourglass',
+  note: 'lorc/quill-ink',
+  board: 'delapouite/palette',
+  checklist: 'lorc/scroll-unfurled',
+  asset: 'delapouite/photo-camera',
+} as const satisfies Record<NodeKind, string>;
 
-/** Preset id of a new node of `kind` and `cls`. */
-export function defaultIcon(kind: NodeKind, cls: NodeClass | null): string {
-  return cls ? DEFAULT_ICONS.cls[cls] : DEFAULT_ICONS.kind[kind];
+/** Preset id of a new node of `kind`. */
+export function defaultIcon(kind: NodeKind): string {
+  return DEFAULT_ICONS[kind];
 }

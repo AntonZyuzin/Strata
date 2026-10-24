@@ -41,7 +41,7 @@ interface Tween {
 
 /** Radius of a bubble: networks M, other kinds S, key nodes one step up (07 §4.2). */
 export function radiusOf(node: Pick<GraphNode, 'kind' | 'key'>): number {
-  const base = node.kind === 'network' ? 'm' : 's';
+  const base = node.kind === 'network' || node.kind === 'project' ? 'm' : 's';
   const d = node.key ? (base === 'm' ? SIZE.l : SIZE.m) : SIZE[base];
   return d / 2;
 }
@@ -202,9 +202,11 @@ export class CanvasView {
 
   private readonly pictures = new Map<string, Texture>();
   private kindIcons = new Map<string, Texture>();
+  /** The icon a node shows, a key of `setKindIcons`: its kind by default (07 §6.1). */
+  iconKey: (n: GraphNode) => string = (n) => n.kind;
 
   /**
-   * Icons by class and kind name (owner, 2026-10-24: the Chrome's SerenityOS
+   * Icons by name (owner, 2026-10-24: the Chrome's SerenityOS
    * set on the nodes too). A node with one shows it instead of its preset, and
    * the kind glyph at six o'clock goes: the icon already says the kind.
    */
@@ -222,7 +224,7 @@ export class CanvasView {
   }
 
   private kindIcon(n: GraphNode): Texture | undefined {
-    return (n.cls ? this.kindIcons.get(n.cls) : undefined) ?? this.kindIcons.get(n.kind);
+    return this.kindIcons.get(this.iconKey(n));
   }
 
   /**
@@ -305,8 +307,8 @@ export class CanvasView {
   }
 
   /** Atlas index of the default icon of a new node (07 §6.3, Q-07-21). */
-  iconFor(kind: GraphNode['kind'], cls: GraphNode['cls']): number {
-    return Math.max(0, this.icons.ids.indexOf(defaultIcon(kind, cls)));
+  iconFor(kind: GraphNode['kind']): number {
+    return Math.max(0, this.icons.ids.indexOf(defaultIcon(kind)));
   }
 
   /** Rendered position and radius of a node. */
@@ -486,6 +488,8 @@ export class CanvasView {
           continue;
         }
         v.node = node;
+        // An asset's icon follows its file, link or the one chosen by hand.
+        this.applyPicture(v);
         this.applyLevel(v);
       }
       if (v.x !== node.x || v.y !== node.y) moved.push(node.id);

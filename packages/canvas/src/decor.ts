@@ -197,8 +197,8 @@ export class Decor {
       } else if (!coloured) {
         rings.add(s.x, s.y, R - 0.5 * U, U, { color: INK, alpha: RIM * a });
       }
-      // Networks: the second ring of the «stack» (07 §4.4).
-      if (n.kind === 'network' && R > 10 * U) {
+      // Folders and projects: the second ring of the «stack» (07 §4.4).
+      if ((n.kind === 'network' || n.kind === 'project') && R > 10 * U) {
         rings.add(s.x, s.y, R - 6.5 * U, U, { color: INK, alpha: RIM * a });
       }
       // Key: a paper contour outside the rim makes the double rim (07 §4.5).

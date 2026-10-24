@@ -16,10 +16,6 @@ pub enum Op {
         #[serde(default)]
         id: Option<String>,
         kind: NodeKind,
-        /// The class it was made from (05 §4.3): `task`, `project`… The
-        /// canvas takes the icon and look from kind and class.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        class: Option<String>,
         name: String,
         net: String,
         x: f64,
@@ -55,10 +51,10 @@ pub enum Op {
     Restore {
         ids: Vec<String>,
     },
-    /// A built-in attribute (05 §6.1): `status`, `start`, `deadline`,
-    /// `priority`, `color`; `description` — the note that describes a task
-    /// (05 §4.3); `asset` — the picture of a media node (10 §11). `null`
-    /// clears it.
+    /// A built-in attribute (05 §6.1, ADR-0010): `status`, `start`,
+    /// `deadline`, `priority` — of tasks and projects; `color` — of any node;
+    /// `asset` (the file's SHA-256, 10 §11), `mime`, `url`, `icon` — of
+    /// assets. `null` clears it.
     SetAttr {
         id: String,
         key: String,

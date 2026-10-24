@@ -23,7 +23,7 @@ import {
   WebGLRenderTarget,
   ZeroFactor,
 } from 'three';
-import { FLAG, KIND, STATE, type StarMapExtract } from './extract';
+import { FLAG, isCluster, STATE, type StarMapExtract } from './extract';
 
 /**
  * The star map of 08 §4 on three.js `WebGLRenderer` (ADR-0005): all of the
@@ -251,7 +251,7 @@ export function starLook(
   state: number,
 ): { rgb: [number, number, number]; alpha: number; size: number; halo: boolean } {
   const key = (flags & FLAG.key) !== 0;
-  const network = kind === KIND.network;
+  const network = isCluster(kind);
   const size = key ? (network ? SIZE.l : SIZE.m) : network ? SIZE.m : SIZE.s;
   let color: string = palette.paper;
   let alpha = 1;

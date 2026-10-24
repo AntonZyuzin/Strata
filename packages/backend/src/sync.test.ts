@@ -38,7 +38,7 @@ async function start(shelf: Shelf = memoryShelf()) {
 }
 
 const node = (id: string, name: string, x = 0, y = 0) =>
-  newNode({ id, name, kind: 'note', cls: null, icon: 0, x, y });
+  newNode({ id, name, kind: 'note', icon: 0, x, y });
 
 // Crockford base32 UUIDv7-shaped ids, as `newId` makes them.
 const A = '01K8A0000000000000000000AA';
@@ -158,7 +158,9 @@ describe('the canvas and the core in step', () => {
 describe('fields of a node (05 §6.1)', () => {
   it('go to the core as steps of the same undo as gestures', async () => {
     const { home, g, sync } = await start();
-    g.transaction({ key: 't' }, (tx) => tx.add(node(A, 'Задача')));
+    g.transaction({ key: 't' }, (tx) =>
+      tx.add(newNode({ id: A, name: 'Задача', kind: 'task', icon: 0, x: 0, y: 0 })),
+    );
     g.transaction({ key: 't.status' }, (tx) => {
       tx.attr(A, 'status', 'doing');
       tx.attr(A, 'deadline', '2026-11-01');
@@ -177,32 +179,27 @@ describe('fields of a node (05 §6.1)', () => {
     expect((await home.core.node(A)).status).toBe('doing');
   });
 
-  it('a new task brings its «Описание» inside, in one step', async () => {
-    const { home, root } = await start();
-    const g = graphOf(await home.core.view(root), () => 0);
-    const sync = new CoreSync(
-      home.core,
-      g,
-      root,
-      () => undefined,
-      () => undefined,
-      {
-        description: 'Описание',
-      },
-    );
-    g.transaction({ key: 't' }, (tx) =>
-      tx.add(newNode({ id: A, name: 'Боёвка', kind: 'network', cls: 'task', icon: 0, x: 0, y: 0 })),
-    );
+  it('a task wired to a task makes it a subtask, in the preview and the roll-up', async () => {
+    const { home, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'Боёвка', kind: 'task', icon: 0, x: 0, y: 0 }));
+      tx.add(newNode({ id: B, name: 'Анимации', kind: 'task', icon: 0, x: 200, y: 0 }));
+      tx.connect(A, B);
+      tx.attr(B, 'status', 'done');
+    });
     await sync.settled();
     const d = await home.core.node(A);
-    expect(d.children.map((c) => c.name)).toEqual(['Описание']);
-    expect(d.description).toBe(d.children[0]?.id);
-    g.undo();
-    await sync.settled();
-    expect((await home.core.view(root)).nodes).toEqual([]);
+    expect(d.subtasks.map((r) => [r.name, r.status])).toEqual([['Анимации', 'done']]);
+    expect([d.fold?.done, d.fold?.total]).toEqual([1, 1]);
+    // A note takes no task fields (ADR-0010): the core refuses, nothing is written.
+    await expect(
+      home.core.apply([{ op: 'setAttr', id: A, key: 'url', value: 'https://example.org' }], {
+        key: 't',
+      }),
+    ).rejects.toThrow();
   });
 
-  it('look: deadlines for the viewer day, status and class colour', async () => {
+  it('look: deadlines for the viewer day, status and the kind colour', async () => {
     expect(dueOf('2026-10-24', '2026-10-24')).toBe('today');
     expect(dueOf('2026-10-27', '2026-10-24')).toBe('soon');
     expect(dueOf('2026-10-28', '2026-10-24')).toBe('far');
@@ -210,7 +207,7 @@ describe('fields of a node (05 §6.1)', () => {
     const { home, root, g, sync } = await start();
     g.day = () => '2026-10-24';
     g.transaction({ key: 't' }, (tx) => {
-      tx.add(newNode({ id: A, name: 'T', kind: 'network', cls: 'task', icon: 0, x: 0, y: 0 }));
+      tx.add(newNode({ id: A, name: 'T', kind: 'task', icon: 0, x: 0, y: 0 }));
       tx.attr(A, 'deadline', '2026-10-20');
     });
     expect(g.nodes.get(A)?.due).toBe('overdue');

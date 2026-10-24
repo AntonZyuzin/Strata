@@ -1,4 +1,4 @@
-import { type Due, Graph, type GraphNode, type NodeClass, type NodeKind, newNode } from './graph';
+import { type Due, Graph, type GraphNode, hasCanvas, type NodeKind, newNode } from './graph';
 import { newId } from './ids';
 
 /**
@@ -46,9 +46,17 @@ const WORDS_EN = [
   'Meeting',
   'Task',
 ];
-const KINDS: NodeKind[] = ['note', 'note', 'note', 'network', 'board', 'checklist', 'media'];
-/** Classes of networks (05 §4.3); references are boards, checklists may be «Чек-лист». */
-const CLASSES: (NodeClass | null)[] = [null, null, null, null, 'task', 'project', 'task'];
+const KINDS: NodeKind[] = ['note', 'note', 'note', 'network', 'board', 'checklist', 'asset'];
+/** What a drawn canvas node becomes (ADR-0010): mostly folders, some tasks and projects. */
+const CANVAS_KINDS: NodeKind[] = [
+  'network',
+  'network',
+  'network',
+  'network',
+  'task',
+  'project',
+  'task',
+];
 
 export const SEED_SPACING = { x: 120, y: 110 };
 /** Icon presets in the atlas (07 §6.3). */
@@ -68,7 +76,7 @@ function looks(rs: () => number, kind: NodeKind, hasDeadline: boolean): Partial<
   if (rs() < 0.06)
     out.assignees = Array.from({ length: 1 + Math.floor(rs() * 4) }, () => Math.floor(rs() * 8));
   if (rs() < 0.06) out.color = Math.floor(rs() * 8);
-  if (kind === 'network') {
+  if (hasCanvas(kind) || kind === 'task') {
     const total = 2 + Math.floor(rs() * 8);
     const burning = rs();
     out.fold = {
@@ -121,7 +129,7 @@ const GALLERY: {
   { ru: 'Заметка', en: 'Note', icon: 60, node: { kind: 'note' } },
   { ru: 'Доска', en: 'Board', icon: 64, node: { kind: 'board' } },
   { ru: 'Список', en: 'List', icon: 68, node: { kind: 'checklist' } },
-  { ru: 'Медиа', en: 'Media', icon: 72, node: { kind: 'media' } },
+  { ru: 'Ассет', en: 'Asset', icon: 72, node: { kind: 'asset' } },
 ];
 
 function rng(seed: number): () => number {
@@ -170,17 +178,13 @@ export function seedGraph(
       const col = i % cols;
       const row = Math.floor(i / cols);
       // The order of draws from `r` is the layout of earlier versions; looks draw from `rs`.
-      const kind = KINDS[Math.floor(r() * KINDS.length)] ?? 'note';
+      const drawn = KINDS[Math.floor(r() * KINDS.length)] ?? 'note';
       const name = `${words[Math.floor(r() * words.length)]} ${i + 1}`;
-      // Boards and checklists take their class from the index: no extra draws, the layout stays.
-      const cls =
-        kind === 'network'
-          ? (CLASSES[Math.floor(r() * CLASSES.length)] ?? null)
-          : kind === 'board' && i % 2 === 0
-            ? 'references'
-            : kind === 'checklist' && i % 2 === 0
-              ? 'checklist'
-              : null;
+      // A canvas node draws once more, as before ADR-0010: the layout stays.
+      const kind =
+        drawn === 'network'
+          ? (CANVAS_KINDS[Math.floor(r() * CANVAS_KINDS.length)] ?? 'network')
+          : drawn;
       const icon = Math.floor(r() * ICON_COUNT);
       const key = r() < 0.1;
       const hasDeadline = r() < 0.05;
@@ -190,7 +194,6 @@ export function seedGraph(
         id: seedId(t0 + i),
         name,
         kind,
-        cls,
         icon,
         key,
         x,
@@ -205,7 +208,6 @@ export function seedGraph(
         newNode({
           id: seedId(t0 + n + k),
           name: opts.locale === 'en' ? g.en : g.ru,
-          cls: null,
           icon: g.icon,
           // 5 × 4 above the network: one screen at zoom ~1 shows every look.
           x: (k % 5) * 150,
@@ -260,7 +262,6 @@ function seedShape(
         id: seedId(t0 + i),
         name: `${words[Math.floor(r() * words.length)]} ${i + 1}`,
         kind,
-        cls: null,
         icon: Math.floor(r() * ICON_COUNT),
         key: r() < 0.05,
         // Scattered: the layout has to find the shape.
@@ -276,7 +277,6 @@ function seedShape(
         newNode({
           id: seedId(t0 + n + k),
           name: opts.locale === 'en' ? g.en : g.ru,
-          cls: null,
           icon: g.icon,
           x: -side - 900 + (k % 5) * 150,
           y: Math.floor(k / 5) * 120,

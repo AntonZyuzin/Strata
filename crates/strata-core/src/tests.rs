@@ -15,7 +15,6 @@ fn create(w: &mut Workspace<MemoryStore>, net: &str, kind: NodeKind, name: &str)
         &[Op::CreateNode {
             id: Some(id.clone()),
             kind,
-            class: None,
             name: name.to_owned(),
             net: net.to_owned(),
             x: 10.0,
@@ -62,7 +61,6 @@ fn a_gesture_of_several_ops_is_one_step_of_undo() {
     let mk = |id: &str, name: &str| Op::CreateNode {
         id: Some(id.to_owned()),
         kind: NodeKind::Note,
-        class: None,
         name: name.to_owned(),
         net: root.clone(),
         x: 0.0,
@@ -174,7 +172,6 @@ fn a_failed_list_writes_nothing() {
             Op::CreateNode {
                 id: Some(id.clone()),
                 kind: NodeKind::Note,
-                class: None,
                 name: "Будет".to_owned(),
                 net: root.clone(),
                 x: 0.0,
@@ -209,7 +206,6 @@ fn nodes_live_in_networks_and_the_path_leads_home() {
             &[Op::CreateNode {
                 id: None,
                 kind: NodeKind::Note,
-                class: None,
                 name: "x".to_owned(),
                 net: note,
                 x: 0.0,
@@ -503,11 +499,16 @@ fn links_in_a_note_become_its_text_wires() {
 }
 
 #[test]
-fn a_network_has_no_content_document() {
+fn every_node_has_a_content_document() {
+    // A folder's description is its content document (05 §4.2, ADR-0010).
     let mut w = ws();
     let root = w.root();
-    assert!(w.doc_snapshot(&format!("content/{root}")).is_err());
+    assert!(w.doc_snapshot(&format!("content/{root}")).is_ok());
     assert!(w.doc_snapshot("net/whatever").is_err());
+    assert!(
+        w.doc_snapshot(&format!("content/{}", NodeId::new().to_text()))
+            .is_err()
+    );
 }
 
 #[test]
@@ -547,7 +548,7 @@ fn attributes_take_only_the_values_of_05_6() {
     use crate::value::Val;
     let mut w = ws();
     let root = w.root();
-    let a = create(&mut w, &root, NodeKind::Note, "A");
+    let a = create(&mut w, &root, NodeKind::Task, "A");
     set(&mut w, &a, "status", Some(Val::str("doing"))).expect("status");
     set(&mut w, &a, "deadline", Some(Val::str("2026-02-28"))).expect("deadline");
     set(&mut w, &a, "start", Some(Val::str("2024-02-29"))).expect("leap day");
@@ -591,7 +592,7 @@ fn attributes_take_only_the_values_of_05_6() {
 fn people_are_assigned_and_only_people_of_the_workspace() {
     let mut w = ws();
     let root = w.root();
-    let a = create(&mut w, &root, NodeKind::Note, "A");
+    let a = create(&mut w, &root, NodeKind::Task, "A");
     let anton = NodeId::new().to_text();
     w.apply(
         &[Op::AddPerson {
@@ -641,97 +642,214 @@ fn people_are_assigned_and_only_people_of_the_workspace() {
 }
 
 #[test]
-fn a_task_with_subtasks_rolls_them_up() {
+fn task_fields_belong_to_tasks_and_projects() {
+    use crate::value::Val;
+    // ADR-0010: status, priority, dates and assignees are a task's fields.
+    let mut w = ws();
+    let root = w.root();
+    let task = create(&mut w, &root, NodeKind::Task, "Боёвка");
+    let project = create(&mut w, &root, NodeKind::Project, "Срез");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    for id in [&task, &project] {
+        set(&mut w, id, "status", Some(Val::str("doing"))).expect("status");
+        set(&mut w, id, "priority", Some(Val::str("high"))).expect("priority");
+        set(&mut w, id, "deadline", Some(Val::str("2026-11-01"))).expect("deadline");
+    }
+    for id in [&note, &folder] {
+        assert!(set(&mut w, id, "status", Some(Val::str("doing"))).is_err());
+        assert!(set(&mut w, id, "deadline", Some(Val::str("2026-11-01"))).is_err());
+        // Colour is everyone's.
+        set(&mut w, id, "color", Some(Val::Int(2))).expect("colour");
+    }
+    w.apply(
+        &[Op::AddPerson {
+            id: Some("p1".to_owned()),
+            name: "Иван".to_owned(),
+            color: None,
+        }],
+        Label::new("t.person"),
+    )
+    .expect("person");
+    let assign = |id: &str| Op::Assign {
+        id: id.to_owned(),
+        person: "p1".to_owned(),
+        on: true,
+    };
+    w.apply(&[assign(&task)], Label::new("t"))
+        .expect("a task's assignee");
+    assert!(w.apply(&[assign(&note)], Label::new("t")).is_err());
+    // An asset's fields are an asset's.
+    assert!(set(&mut w, &task, "url", Some(Val::str("https://example.org"))).is_err());
+    // The description is the node's own content document (05 §4.2).
+    assert!(w.doc_snapshot(&format!("content/{task}")).is_ok());
+    assert!(w.doc_snapshot(&format!("content/{folder}")).is_ok());
+}
+
+#[test]
+fn one_dives_into_folders_and_projects_not_tasks() {
+    let mut w = ws();
+    let root = w.root();
+    let task = create(&mut w, &root, NodeKind::Task, "Задача");
+    let project = create(&mut w, &root, NodeKind::Project, "Проект");
+    create(&mut w, &project, NodeKind::Task, "Внутри проекта");
+    let into_task = w.apply(
+        &[Op::CreateNode {
+            id: None,
+            kind: NodeKind::Note,
+            name: "Нельзя".to_owned(),
+            net: task.clone(),
+            x: 0.0,
+            y: 0.0,
+        }],
+        Label::new("t"),
+    );
+    assert!(into_task.is_err(), "a task has no canvas (ADR-0010)");
+    assert!(w.network_view(&project).is_ok());
+    assert!(w.network_view(&task).is_err());
+}
+
+#[test]
+fn subtasks_are_the_tasks_a_task_wires_to() {
     use crate::value::Val;
     let mut w = ws();
     let root = w.root();
-    let (task, about, sub1, sub2, deep) = (
-        NodeId::new().to_text(),
-        NodeId::new().to_text(),
-        NodeId::new().to_text(),
-        NodeId::new().to_text(),
-        NodeId::new().to_text(),
-    );
-    let mk = |id: &str, kind, class: Option<&str>, name: &str, net: &str| Op::CreateNode {
-        id: Some(id.to_owned()),
-        kind,
-        class: class.map(str::to_owned),
-        name: name.to_owned(),
-        net: net.to_owned(),
-        x: 0.0,
-        y: 0.0,
+    let task = create(&mut w, &root, NodeKind::Task, "Боёвка");
+    let anim = create(&mut w, &root, NodeKind::Task, "Анимации");
+    let hit = create(&mut w, &root, NodeKind::Task, "Хитбоксы");
+    let deep = create(&mut w, &root, NodeKind::Task, "Глубже");
+    let spec = create(&mut w, &root, NodeKind::Note, "Спецификация");
+    let wire = |from: &str, to: &str| Op::Connect {
+        from: from.to_owned(),
+        to: to.to_owned(),
     };
-    // A task as the Tab menu makes it: the network, its «Описание» inside,
-    // the pointer to it — one step (05 §4.3).
     w.apply(
         &[
-            mk(&task, NodeKind::Network, Some("task"), "Боёвка", &root),
-            mk(&about, NodeKind::Note, None, "Описание", &task),
-            Op::SetAttr {
-                id: task.clone(),
-                key: "description".to_owned(),
-                value: Some(Val::str(about.clone())),
-            },
-            Op::SetAttr {
-                id: task.clone(),
-                key: "status".to_owned(),
-                value: Some(Val::str("doing")),
-            },
+            wire(&task, &anim),
+            wire(&task, &hit),
+            wire(&hit, &deep),
+            // A cycle and a second parent: each subtask counts once.
+            wire(&deep, &task),
+            wire(&anim, &deep),
+            // A note is a material, not a subtask.
+            wire(&task, &spec),
         ],
-        Label::new("t.task"),
+        Label::new("t.wires"),
     )
-    .expect("task");
-    w.apply(
-        &[
-            mk(&sub1, NodeKind::Network, Some("task"), "Анимации", &task),
-            mk(&sub2, NodeKind::Network, Some("task"), "Хитбоксы", &task),
-            mk(&deep, NodeKind::Network, Some("task"), "Глубже", &sub2),
-        ],
-        Label::new("t.subtasks"),
-    )
-    .expect("subtasks");
-    set(&mut w, &sub1, "status", Some(Val::str("done"))).expect("done");
-    set(&mut w, &sub2, "status", Some(Val::str("todo"))).expect("todo");
-    set(&mut w, &sub2, "deadline", Some(Val::str("2026-11-03"))).expect("d2");
-    set(&mut w, &deep, "status", Some(Val::str("todo"))).expect("deep");
-    set(&mut w, &deep, "deadline", Some(Val::str("2026-11-01"))).expect("d3");
-    // A finished one's deadline does not count.
-    set(&mut w, &sub1, "deadline", Some(Val::str("2026-10-01"))).expect("d1");
+    .expect("wires");
+    set(&mut w, &anim, "status", Some(Val::str("done"))).expect("done");
+    set(&mut w, &anim, "deadline", Some(Val::str("2026-10-01"))).expect("d0");
+    set(&mut w, &hit, "deadline", Some(Val::str("2026-11-03"))).expect("d1");
+    set(&mut w, &deep, "deadline", Some(Val::str("2026-11-01"))).expect("d2");
 
-    let outside = w.network_view(&root).expect("view");
-    let fold = outside.nodes[0].fold.clone().expect("a network has a fold");
+    let view = w.network_view(&root).expect("view");
+    let fold_of = |id: &str| {
+        view.nodes
+            .iter()
+            .find(|n| n.id == id)
+            .and_then(|n| n.fold.clone())
+            .expect("a task has a fold")
+    };
+    let f = fold_of(&task);
+    assert_eq!((f.done, f.total), (1, 3), "the whole depth, each once");
+    assert_eq!(
+        f.nearest.as_deref(),
+        Some("2026-11-01"),
+        "a finished one's deadline does not count"
+    );
+    let f = fold_of(&hit);
+    assert_eq!(
+        (f.done, f.total),
+        (1, 3),
+        "through the cycle back to the top and down again"
+    );
+
+    // The checklist preview: subtasks by wires, each node once.
+    let d = w.node_details(&task).expect("details");
+    let names: Vec<(&str, Vec<&str>)> = d
+        .subtasks
+        .iter()
+        .map(|r| {
+            (
+                r.name.as_str(),
+                r.rows.iter().map(|c| c.name.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec![("Анимации", vec!["Глубже"]), ("Хитбоксы", vec![])],
+        "creation order; «Глубже» once, under its first parent"
+    );
+    assert!(
+        d.outputs.iter().any(|l| l.name == "Спецификация"),
+        "materials are the wires out to other kinds"
+    );
+    assert!(w.node_details(&spec).expect("note").subtasks.is_empty());
+}
+
+#[test]
+fn a_project_rolls_up_the_tasks_inside_and_their_subtasks() {
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let project = create(&mut w, &root, NodeKind::Project, "Срез");
+    let a = create(&mut w, &project, NodeKind::Task, "Боёвка");
+    let b = create(&mut w, &project, NodeKind::Task, "Анимации");
+    let folder = create(&mut w, &project, NodeKind::Network, "Арт");
+    let c = create(&mut w, &folder, NodeKind::Task, "Свет");
+    create(&mut w, &project, NodeKind::Network, "Пустая папка");
+    // Subtask by a wire, placed elsewhere.
+    let far = create(&mut w, &root, NodeKind::Task, "Снаружи");
+    w.apply(
+        &[
+            Op::Connect {
+                from: a.clone(),
+                to: b.clone(),
+            },
+            Op::Connect {
+                from: a.clone(),
+                to: far.clone(),
+            },
+        ],
+        Label::new("t.wires"),
+    )
+    .expect("wires");
+    set(&mut w, &c, "status", Some(Val::str("done"))).expect("done");
+
+    let d = w.node_details(&project).expect("details");
+    let fold = d.fold.clone().expect("a project has a fold");
     assert_eq!(
         (fold.done, fold.total),
-        (1, 3),
-        "over the whole depth (☑ Q-05-2)"
+        (1, 4),
+        "inside at any depth, and by wires"
     );
-    assert_eq!(fold.nearest.as_deref(), Some("2026-11-01"));
-
-    let d = w.node_details(&task).expect("details");
-    assert_eq!(d.attrs.description.as_deref(), Some(about.as_str()));
-    let names: Vec<&str> = d.children.iter().map(|c| c.name.as_str()).collect();
-    assert_eq!(names, vec!["Анимации", "Описание", "Хитбоксы"]);
-    assert_eq!(d.parent.as_deref(), Some(root.as_str()));
-
-    // The tree: every network with its parent.
-    let tree = w.tree();
-    let parent_of = |id: &str| {
-        tree.iter()
-            .find(|t| t.id == id)
-            .and_then(|t| t.parent.clone())
-    };
-    assert_eq!(parent_of(&root), None);
-    assert_eq!(parent_of(&task), Some(root.clone()));
-    assert_eq!(parent_of(&deep), Some(sub2.clone()));
+    // The preview: tasks inside that are nobody's subtask here; folders with tasks.
+    let rows: Vec<(&str, Vec<&str>)> = d
+        .subtasks
+        .iter()
+        .map(|r| {
+            (
+                r.name.as_str(),
+                r.rows.iter().map(|c| c.name.as_str()).collect(),
+            )
+        })
+        .collect();
     assert_eq!(
-        parent_of(&about),
-        Some(task.clone()),
-        "every node, not only networks"
+        rows,
+        vec![
+            ("Боёвка", vec!["Анимации", "Снаружи"]),
+            ("Арт", vec!["Свет"]),
+        ]
     );
-    assert_eq!(tree.len(), 6);
-
-    // A description must be a note.
-    assert!(set(&mut w, &task, "description", Some(Val::str(sub1.clone()))).is_err());
+    // A folder's own roll-up counts the tasks inside too.
+    let outside = w.network_view(&project).expect("view");
+    let art = outside
+        .nodes
+        .iter()
+        .find(|n| n.id == folder)
+        .expect("folder");
+    assert_eq!(art.fold.as_ref().map(|f| (f.done, f.total)), Some((1, 1)));
 }
 
 #[test]
@@ -774,7 +892,7 @@ fn a_picture_is_an_asset_by_its_hash_and_travels_in_the_archive() {
     use crate::value::Val;
     let mut w = ws();
     let root = w.root();
-    let media = create(&mut w, &root, NodeKind::Media, "Скетч");
+    let media = create(&mut w, &root, NodeKind::Asset, "Скетч");
     let png = b"\x89PNG not really".to_vec();
     let sha = w.put_asset(&png).expect("asset");
     assert_eq!(sha.len(), 64);
@@ -785,6 +903,27 @@ fn a_picture_is_an_asset_by_its_hash_and_travels_in_the_archive() {
     );
     set(&mut w, &media, "asset", Some(Val::str(sha.clone()))).expect("picture");
     assert!(set(&mut w, &media, "asset", Some(Val::str("not-a-hash"))).is_err());
+    set(&mut w, &media, "mime", Some(Val::str("image/png"))).expect("type");
+    assert!(set(&mut w, &media, "mime", Some(Val::str("png"))).is_err());
+    set(
+        &mut w,
+        &media,
+        "url",
+        Some(Val::str("https://example.org/a b")),
+    )
+    .unwrap_err();
+    set(
+        &mut w,
+        &media,
+        "url",
+        Some(Val::str("https://example.org/a")),
+    )
+    .expect("link");
+    set(&mut w, &media, "icon", Some(Val::str("filetype-video"))).expect("icon");
+    assert!(set(&mut w, &media, "icon", Some(Val::str("../x"))).is_err());
+    let d = w.node_details(&media).expect("details");
+    assert_eq!(d.attrs.mime.as_deref(), Some("image/png"));
+    assert_eq!(d.attrs.icon.as_deref(), Some("filetype-video"));
     assert_eq!(w.asset(&sha).expect("read"), Some(png.clone()));
 
     let zip = crate::archive::export(&w).expect("export");

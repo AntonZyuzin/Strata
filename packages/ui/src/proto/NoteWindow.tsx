@@ -29,12 +29,11 @@ export function NoteWindow(props: {
     const ed = createNoteEditor({
       parent: el,
       doc,
-      placeholder: t(locale, 'note.placeholder'),
       onChange: (text) => change.current(text),
     });
     ed.view.focus();
     return () => ed.destroy();
-  }, [doc, locale]);
+  }, [doc]);
 
   const style =
     props.at.side === 'right'

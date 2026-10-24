@@ -139,7 +139,7 @@ const WORDS = [
   'Story',
   'Roadmap',
 ];
-const KINDS = ['note', 'note', 'note', 'network', 'board', 'checklist', 'media'];
+const KINDS = ['note', 'note', 'note', 'network', 'board', 'checklist', 'asset'];
 const STATUSES = ['inbox', 'todo', 'doing', 'review', 'done', 'cancelled'];
 const TAGS = ['art', 'sound', 'code', 'design', 'bug', 'idea', 'ref', 'urgent'];
 const TS = 1_760_000_000_000;

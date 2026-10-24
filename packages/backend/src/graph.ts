@@ -8,8 +8,21 @@
 
 import type { AttrKey, NodeAttrs } from './core';
 
-export type NodeKind = 'network' | 'note' | 'board' | 'checklist' | 'media';
-export type NodeClass = 'task' | 'project' | 'references' | 'checklist';
+/**
+ * Kinds of 05 §4.2 (ADR-0010): a folder (`network`), a project — a task one
+ * can dive into, a task, a note, a board, a list, an asset.
+ */
+export type NodeKind = 'network' | 'project' | 'task' | 'note' | 'board' | 'checklist' | 'asset';
+
+/** Kinds one dives into: a folder or a project. */
+export function hasCanvas(kind: NodeKind): boolean {
+  return kind === 'network' || kind === 'project';
+}
+
+/** Kinds with the task's fields: status, priority, dates, assignees (05 §4.3). */
+export function isTask(kind: NodeKind): boolean {
+  return kind === 'task' || kind === 'project';
+}
 
 /**
  * Deadline state of 07 §4.6. The core derives it from the date and the viewer's
@@ -29,7 +42,6 @@ export interface GraphNode {
   id: string;
   name: string;
   kind: NodeKind;
-  cls: NodeClass | null;
   /** Index into the icon presets (07 §6.3). */
   icon: number;
   /** Flag «Ключевая» (05 §7). */
@@ -50,7 +62,7 @@ export interface GraphNode {
   assignees: number[];
   /** Node colour, an index into the people palette (05 §4.1, ☑ Q-05-8). */
   color: number | null;
-  /** Roll-up for networks, null for other kinds. */
+  /** Roll-up for folders, projects and tasks; null for other kinds. */
   fold: Fold | null;
   /** Placement in this network, world units (05 §9.2). */
   x: number;
@@ -61,7 +73,7 @@ export interface GraphNode {
 
 /** A plain node: open, no deadline, no flags. */
 export function newNode(
-  base: Pick<GraphNode, 'id' | 'name' | 'kind' | 'cls' | 'icon' | 'x' | 'y'> & Partial<GraphNode>,
+  base: Pick<GraphNode, 'id' | 'name' | 'kind' | 'icon' | 'x' | 'y'> & Partial<GraphNode>,
 ): GraphNode {
   return {
     key: false,
@@ -80,11 +92,10 @@ export function newNode(
   };
 }
 
-/** A class's colour when the node has none of its own (07 §2.2): the class reads at a glance. */
-export const CLASS_COLOR: Record<NodeClass, number> = {
+/** A kind's colour when the node has none of its own (07 §2.2, §4.3): tasks read at a glance. */
+export const KIND_COLOR: Partial<Record<NodeKind, number>> = {
   task: 3,
   project: 4,
-  references: 1,
   checklist: 0,
 };
 
@@ -124,7 +135,7 @@ export function lookOf(
   return {
     status: a.status === 'done' ? 'done' : a.status === 'cancelled' ? 'cancelled' : 'open',
     due: final ? 'none' : dueOf(a.deadline, day),
-    color: a.color ?? (node.cls ? CLASS_COLOR[node.cls] : null),
+    color: a.color ?? KIND_COLOR[node.kind] ?? null,
     assignees: (a.assignees ?? []).map(personColor),
   };
 }
@@ -197,8 +208,8 @@ export class Graph {
   personColor: (id: string) => number = () => 0;
   /** The viewer's day for deadlines; a fixed one in tests. */
   day: () => string = () => today();
-  /** A new node of a class takes the class's colour (07 §2.2); off in the prototype's demo. */
-  classColors = false;
+  /** A new task, project or list takes its kind's colour (07 §2.2); off in the prototype's demo. */
+  kindColors = false;
 
   subscribe(fn: (e: GraphEvent) => void): () => void {
     this.listeners.add(fn);
@@ -376,8 +387,14 @@ export class Graph {
       case 'add': {
         if (this.nodes.has(op.node.id)) return null;
         const node = { ...op.node };
-        if (this.classColors && node.color === null && node.cls && node.attrs.color === undefined) {
-          node.color = CLASS_COLOR[node.cls];
+        const tint = KIND_COLOR[node.kind];
+        if (
+          this.kindColors &&
+          node.color === null &&
+          tint !== undefined &&
+          node.attrs.color === undefined
+        ) {
+          node.color = tint;
         }
         this.nodes.set(op.node.id, node);
         return [{ t: 'remove', id: op.node.id }];

@@ -89,7 +89,7 @@ export function Layers(props: {
               onClick={() => props.onSelect(it.id)}
               onDoubleClick={() => props.onOpen(it.id)}
             >
-              <Icon name={nodeIcon(it.kind, it.class, kids && unfolded)} />
+              <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
               <span className="layer-label">{it.name || t(locale, 'note.untitled')}</span>
             </button>
           </div>

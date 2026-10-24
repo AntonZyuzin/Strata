@@ -192,7 +192,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
     const parts = ['.proto-top', '.proto-status', '.proto-status button:first-of-type'];
     for (const side of [ru, en]) {
       expect(await overflowing(side.page, '.proto-top, .proto-status')).toEqual([]);
-      // The Tab menu at the centre of the canvas, empty query: kinds and classes.
+      // The Tab menu at the centre of the canvas, empty query: the kinds.
       await side.page.mouse.move(viewport.width / 2, viewport.height / 2);
       await side.page.keyboard.press('Tab');
       await expect(side.page.locator('.tab-menu')).toBeVisible();

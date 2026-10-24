@@ -6,7 +6,8 @@ import { Glyph } from '../TabBar';
 
 /**
  * «Слои» (owner, 2026-10-24: like Figma's layers): the whole workspace as a
- * tree along the left edge, every node under its network. A click selects
+ * tree along the left edge, every node under its network; the workspace
+ * itself is not a row — it is the whole board. A click selects
  * the node on the canvas (going into its network when needed), a double
  * click opens it, the triangle folds a branch. The trash is the panel's foot.
  */
@@ -33,6 +34,7 @@ export function Layers(props: {
     return m;
   }, [items]);
   const [open, setOpen] = useState<ReadonlySet<string>>(new Set());
+  const root = items.find((i) => !i.parent);
 
   // The way to the network on the canvas stays open.
   useEffect(() => {
@@ -98,7 +100,7 @@ export function Layers(props: {
 
   return (
     <nav className="ws-layers" aria-label={t(locale, 'tree.label')}>
-      <ul className="layers-list">{branch('', 0)}</ul>
+      <ul className="layers-list">{root ? branch(root.id, 0) : null}</ul>
       {props.trash.length > 0 ? (
         <details className="layers-trash">
           <summary>{t(locale, 'ws.trash', { n: props.trash.length })}</summary>

@@ -396,7 +396,10 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(async () => (await graphNow(page)).names)
       .toEqual(['Анимации', 'Описание', 'Хитбоксы']);
-    await page.locator('.layer-name', { hasText: 'Проекты' }).click();
+    // The workspace itself is no layer: out with U.
+    await expect(page.locator('.layer-name', { hasText: 'Проекты' })).toHaveCount(0);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyU');
     await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
     // The right button: «Выполнено».
     const p = await at(page, 'Боёвка');

@@ -167,35 +167,39 @@ export function HomeScreen(props: {
       aria-label={t(locale, 'home.title')}
       data-profile={state?.profile.name ?? ''}
     >
+      {/* Like Figma's files (owner, 2026-10-24): the heading of where the
+          workspaces live, its actions on the same line, room as in the panel. */}
       <div className="home-top">
-        <button
-          type="button"
-          className="is-default home-new home-action"
-          title={t(locale, 'home.new')}
-          disabled={busy}
-          onClick={() => setDialog({ t: 'create' })}
-        >
-          {t(locale, 'home.new')}
-        </button>
-        {home.add ? (
+        <h1 className="home-group">{t(locale, where)}</h1>
+        <div className="home-actions">
           <button
             type="button"
-            className="home-action"
-            title={t(locale, 'home.openHint')}
+            className="is-default home-new home-action"
+            title={t(locale, 'home.new')}
             disabled={busy}
-            onClick={() =>
-              void run(async () => {
-                const path = await pickFolder();
-                return path && home.add ? home.add(path) : undefined;
-              })
-            }
+            onClick={() => setDialog({ t: 'create' })}
           >
-            {t(locale, 'home.open')}
+            {t(locale, 'home.new')}
           </button>
-        ) : null}
+          {home.add ? (
+            <button
+              type="button"
+              className="home-action"
+              title={t(locale, 'home.openHint')}
+              disabled={busy}
+              onClick={() =>
+                void run(async () => {
+                  const path = await pickFolder();
+                  return path && home.add ? home.add(path) : undefined;
+                })
+              }
+            >
+              {t(locale, 'home.open')}
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="home-content">
-        <h1 className="home-group">{t(locale, where)}</h1>
         {error ? (
           <p
             className="home-error"

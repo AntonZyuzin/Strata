@@ -1360,26 +1360,35 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 
 .home-top {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: calc(4 * var(--u)) calc(6 * var(--u));
-  min-height: calc(var(--st-size-bar) + 4 * var(--u));
-  padding: calc(3 * var(--u)) calc(8 * var(--u));
-  background: var(--st-color-surface);
-  border-bottom: var(--u) solid var(--st-color-frame);
+  justify-content: space-between;
+  gap: calc(8 * var(--u));
+  padding: calc(14 * var(--u)) calc(16 * var(--u)) calc(14 * var(--u));
+}
+
+.home-actions {
+  display: flex;
+  flex: none;
+  gap: calc(8 * var(--u));
 }
 
 .home-content {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
-  padding: calc(8 * var(--u)) calc(12 * var(--u));
+  padding: 0 calc(16 * var(--u)) calc(24 * var(--u));
 }
 
+/* Where the workspaces live, as a panel's heading: one and a half times the
+   UI face, like «Ноды» (07 §8.2). */
 .home-group {
-  margin: 0 0 calc(6 * var(--u));
-  font: inherit;
-  color: var(--st-color-text-muted);
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font: calc(1.5 * var(--st-font-ui-size)) / calc(1.5 * var(--st-font-ui-line)) var(--st-font-ui);
+  color: var(--st-color-text);
 }
 
 .home-empty,
@@ -1398,7 +1407,7 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 .home-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, 30ch);
-  gap: calc(6 * var(--u));
+  gap: calc(16 * var(--u));
   margin: 0;
   padding: 0;
   list-style: none;
@@ -1413,9 +1422,9 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 
 .home-open {
   display: grid;
-  gap: calc(2 * var(--u));
+  gap: calc(6 * var(--u));
   height: auto;
-  padding: calc(3 * var(--u));
+  padding: calc(6 * var(--u));
   text-align: left;
   min-width: 0;
 }
@@ -1596,6 +1605,7 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 
 .home-action {
   flex: none;
+  min-height: calc(28 * var(--u));
   max-width: 26ch;
   overflow: hidden;
   white-space: nowrap;
@@ -1605,8 +1615,8 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 /* A card's actions: icons over the top-right corner of its picture. */
 .home-icons {
   position: absolute;
-  top: calc(5 * var(--u));
-  right: calc(5 * var(--u));
+  top: calc(8 * var(--u));
+  right: calc(8 * var(--u));
   display: flex;
   gap: calc(2 * var(--u));
 }

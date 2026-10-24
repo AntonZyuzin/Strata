@@ -19,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import { ASSET_ICONS, Icon, nodeIcon } from '../icons/Icon';
 import type { Clock, DateFormat } from '../prefs';
 import { IconButton } from '../TabBar';
+import { viewable } from './AssetWindow';
 import { ListItems } from './ListItems';
 import { WhenField } from './WhenField';
 
@@ -265,6 +266,8 @@ export function Inspector(props: {
   focusList: boolean;
   /** The note is open in its window: its text is there, not here a second time. */
   noteOpen: boolean;
+  /** The asset is open in its viewer: the large picture or player is there only. */
+  viewerOpen?: boolean;
   /** How dates and times read (✅ Q-06-23). */
   when: { date: DateFormat; clock: Clock };
   onListFocused: () => void;
@@ -289,13 +292,16 @@ export function Inspector(props: {
   const linkable = a.candidates.filter(
     (c) => c.id !== n.id && !n.outputs.some((o) => o.id === c.id),
   );
-  const openable = ['network', 'project', 'note', 'board'].includes(n.kind);
+
   // One fact once on a screen (owner, 2026-10-24): a note open in its window
   // shows its text there only; two editors of one text also raced (WebKit).
   const described =
     n.kind !== 'board' && n.kind !== 'checklist' && !(n.kind === 'note' && props.noteOpen);
   const type = n.kind === 'asset' ? assetType(n) : null;
-  const shown = a.fileUrl;
+  const openable =
+    ['network', 'project', 'note', 'board'].includes(n.kind) || (type !== null && viewable(type));
+  // One fact once: a file open in its viewer is not played twice.
+  const shown = props.viewerOpen ? null : a.fileUrl;
 
   return (
     <aside className="window ws-inspector" aria-label={t(locale, 'ins.label', { name: n.name })}>

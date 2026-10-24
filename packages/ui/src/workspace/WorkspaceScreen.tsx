@@ -11,6 +11,7 @@ import {
   type History,
   type HomeBackend,
   isTask,
+  linkOf,
   type NetworkView,
   type NodeDetails,
   newId,
@@ -31,6 +32,7 @@ import {
   type Pixels,
   processBackdrop,
 } from '@strata/canvas';
+import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
@@ -45,6 +47,7 @@ import { type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
+import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
 import { geckoEvents } from './gecko';
@@ -177,6 +180,13 @@ export function WorkspaceScreen(props: {
     at: { x: number; y: number; side: 'left' | 'right' };
   } | null>(null);
   const [board, setBoard] = useState<{ id: string; doc: LoroDoc } | null>(null);
+  /** An asset in its viewer (06 §13.4): its file's URL once loaded. */
+  const [viewer, setViewer] = useState<{
+    id: string;
+    type: Viewable;
+    url: string | null;
+    at: { x: number; y: number; side: 'left' | 'right' };
+  } | null>(null);
   /** A list opened: its items are in the panel, the keyboard goes there once. */
   const [listFocus, setListFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
@@ -311,8 +321,10 @@ export function WorkspaceScreen(props: {
           d.doc(id).then((doc) => setBoard({ id, doc }), refused);
           return;
         }
-        // A task and an asset are their panel (ADR-0010): it is already open.
-        if (n.kind === 'task' || n.kind === 'asset') return;
+        // A task is its panel (ADR-0010): it is already open; so is an
+        // asset with nothing to view large (a file, a link).
+        const type = n.kind === 'asset' ? assetType(n.attrs) : null;
+        if (n.kind === 'task' || (type !== null && !viewable(type))) return;
         // So is a list (owner, 2026-10-24): the keyboard goes to its new item.
         if (n.kind === 'checklist') {
           setListFocus(id);
@@ -329,6 +341,15 @@ export function WorkspaceScreen(props: {
         const x = el.offsetLeft + (side === 'right' ? s.x + r + 24 : s.x - r - 24);
         const y = el.offsetTop + Math.max(8, Math.min(s.y - 120, v.height - 320));
         const at = { side, x, y } as const;
+        if (type !== null && viewable(type)) {
+          const sha = n.attrs.asset;
+          setViewer({ id, type, url: null, at });
+          if (!sha) return;
+          urlOf(sha, n.attrs.mime ?? '')
+            .then((url) => setViewer((w) => (w?.id === id ? { ...w, url } : w)))
+            .catch(refused);
+          return;
+        }
         d.doc(id).then((doc) => setNote({ id, doc, at }), refused);
       },
     };
@@ -398,6 +419,7 @@ export function WorkspaceScreen(props: {
       if (id !== was) {
         setNote(null);
         setBoard(null);
+        setViewer(null);
         setBoardFocus(false);
       }
       editor.current?.destroy();
@@ -671,6 +693,7 @@ export function WorkspaceScreen(props: {
     docs.current = makeDocs.current();
     setNote(null);
     setBoard(null);
+    setViewer(null);
     setTrash(null);
     netRef.current = opened.root;
     void loadRef.current(opened.root);
@@ -741,7 +764,20 @@ export function WorkspaceScreen(props: {
   // Another node in the panel: a list's open request no longer stands.
   useEffect(() => setListFocus((f) => (f === details?.id ? f : null)), [details?.id]);
 
-  // The selected asset's file for the panel, typed so the browser can show it.
+  /** An asset's file as an object URL, typed so the browser can show it; made once. */
+  const urlOf = async (sha: string, mime: string) => {
+    const key = `${sha}|${mime}`;
+    const known = urls.current.get(key);
+    if (known) return known;
+    const bytes = await core.asset(sha);
+    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
+    urls.current.set(key, url);
+    return url;
+  };
+  const urlRef = useRef(urlOf);
+  urlRef.current = urlOf;
+
+  // The selected asset's file for the panel.
   useEffect(() => {
     const sha = details?.kind === 'asset' ? details.asset : undefined;
     const mime = details?.mime ?? '';
@@ -749,8 +785,7 @@ export function WorkspaceScreen(props: {
       setFileUrl(null);
       return;
     }
-    const key = `${sha}|${mime}`;
-    const known = urls.current.get(key);
+    const known = urls.current.get(`${sha}|${mime}`);
     if (known) {
       setFileUrl(known);
       return;
@@ -758,30 +793,28 @@ export function WorkspaceScreen(props: {
     // Not the last asset's file while this one loads.
     setFileUrl(null);
     let live = true;
-    core
-      .asset(sha)
-      .then((bytes) => {
-        const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
-        urls.current.set(key, url);
+    urlRef
+      .current(sha, mime)
+      .then((url) => {
         if (live) setFileUrl(url);
       })
       .catch(() => undefined);
     return () => {
       live = false;
     };
-  }, [core, details?.kind, details?.asset, details?.mime]);
+  }, [details?.kind, details?.asset, details?.mime]);
 
   /**
-   * Files dropped on the canvas become assets (05 §4.4): each keeps its type,
-   * a picture shows in its circle; a dropped link becomes a link asset.
+   * Files dropped or pasted on the canvas become assets (05 §4.4): each keeps
+   * its type, a picture shows in its circle; a link becomes a link asset.
+   * In a row from `w`, world coordinates; the last one is selected.
    */
-  const dropFiles = async (files: File[], links: string[], clientX: number, clientY: number) => {
+  const addAssets = async (files: File[], links: string[], w: { x: number; y: number }) => {
     const g = graph.current;
     const v = viewRef.current;
     if (!g || !v) return;
-    const r = v.canvas.getBoundingClientRect();
-    const w = v.camera.toWorld(clientX - r.left, clientY - r.top);
     let i = 0;
+    let last: string | null = null;
     const add = (name: string, attrs: [AttrKey, string][]) => {
       const id = newId();
       const x = w.x + i * 90;
@@ -789,6 +822,7 @@ export function WorkspaceScreen(props: {
         tx.add(newNode({ id, name, kind: 'asset', icon: v.iconFor('asset'), x, y: w.y }));
         for (const [key, value] of attrs) tx.attr(id, key, value);
       });
+      last = id;
       i++;
     };
     for (const f of files) {
@@ -807,7 +841,71 @@ export function WorkspaceScreen(props: {
       }
       add(name, [['url', url]]);
     }
+    if (last) editor.current?.focusNode(last);
   };
+
+  const dropFiles = (files: File[], links: string[], clientX: number, clientY: number) => {
+    const v = viewRef.current;
+    if (!v) return Promise.resolve();
+    const r = v.canvas.getBoundingClientRect();
+    return addAssets(files, links, v.camera.toWorld(clientX - r.left, clientY - r.top));
+  };
+
+  /**
+   * The clipboard on the canvas (06 §12.1, 13 §3.9): pictures and files are
+   * assets, a link is a link asset, other text a note — its first line the
+   * name, the rest the body, where `[[links]]` become wires as in any note.
+   */
+  const paste = async (files: File[], text: string, w: { x: number; y: number }) => {
+    const link = files.length === 0 && /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+$/i.test(text);
+    if (files.length > 0 || link) {
+      await addAssets(files, link ? [linkOf(text)] : [], w);
+      return;
+    }
+    const g = graph.current;
+    const v = viewRef.current;
+    if (!g || !v) return;
+    const [first = '', ...rest] = text.split(/\r?\n/);
+    const name = first.replace(/^#+\s+/, '').trim() || t(locale, 'note.untitled');
+    const body = rest.join('\n').replace(/^(?:[ \t]*\n)+/, '');
+    const id = newId();
+    g.transaction({ key: 'proto.change.create', params: { name } }, (tx) => {
+      tx.add(newNode({ id, name, kind: 'note', icon: v.iconFor('note'), x: w.x, y: w.y }));
+    });
+    editor.current?.focusNode(id);
+    if (!body) return;
+    // The note is the core's before its content document is.
+    await sync.current?.settled();
+    const doc = await docs.current?.doc(id);
+    if (!doc) return;
+    noteText(doc).insert(0, body);
+    doc.commit();
+  };
+  const pasteRef = useRef(paste);
+  pasteRef.current = (files, text, w) => paste(files, text, w).catch(failed);
+
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const el = e.target;
+      // Fields, editors and windows paste into themselves.
+      if (
+        el instanceof HTMLElement &&
+        (el.isContentEditable || el.closest('input, textarea, .window, .dialog, .tab-menu'))
+      ) {
+        return;
+      }
+      const w = editor.current?.pasteSpot();
+      const data = e.clipboardData;
+      if (!w || !data) return;
+      const files = [...data.files];
+      const text = files.length > 0 ? '' : data.getData('text/plain').trim();
+      if (files.length === 0 && !text) return;
+      e.preventDefault();
+      void pasteRef.current(files, text, w);
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+  }, []);
 
   /**
    * A layer chosen (owner, 2026-10-24: like Figma): the node selected on
@@ -1081,6 +1179,7 @@ export function WorkspaceScreen(props: {
           actions={actions}
           focusList={listFocus === details.id}
           noteOpen={note?.id === details.id}
+          viewerOpen={viewer?.id === details.id}
           when={reading(props.prefs)}
           onListFocused={() => setListFocus(null)}
         />
@@ -1162,6 +1261,21 @@ export function WorkspaceScreen(props: {
             void docs.current?.flush();
             setBoard(null);
             setBoardFocus(false);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {viewer ? (
+        <AssetWindow
+          key={viewer.id}
+          locale={locale}
+          name={g?.nodes.get(viewer.id)?.name ?? ''}
+          type={viewer.type}
+          url={viewer.url}
+          at={viewer.at}
+          onEscape={focusCanvas}
+          onClose={() => {
+            setViewer(null);
             focusCanvas();
           }}
         />

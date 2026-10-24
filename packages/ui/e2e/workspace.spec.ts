@@ -111,6 +111,71 @@ async function select(page: Page, name: string) {
   await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText(name);
 }
 
+/** A file made in the page and dropped on the canvas: a picture, a sound or a PDF. */
+async function dropMade(page: Page, kind: 'png' | 'wav' | 'pdf', name: string, x = 600, y = 400) {
+  await page.evaluate(
+    async ([kind, name, x, y]) => {
+      let file: File;
+      if (kind === 'png') {
+        const c = document.createElement('canvas');
+        c.width = 160;
+        c.height = 120;
+        const g = c.getContext('2d') as CanvasRenderingContext2D;
+        g.fillStyle = '#b6f36b';
+        g.fillRect(0, 0, 160, 120);
+        const blob = await new Promise<Blob>((done) =>
+          c.toBlob((b) => done(b as Blob), 'image/png'),
+        );
+        file = new File([blob], `${name}.png`, { type: 'image/png' });
+      } else if (kind === 'wav') {
+        // Half a second of silence.
+        const n = 4000;
+        const buf = new ArrayBuffer(44 + n * 2);
+        const v = new DataView(buf);
+        const word = (at: number, s: string) => {
+          for (let i = 0; i < s.length; i++) v.setUint8(at + i, s.charCodeAt(i));
+        };
+        word(0, 'RIFF');
+        v.setUint32(4, 36 + n * 2, true);
+        word(8, 'WAVE');
+        word(12, 'fmt ');
+        v.setUint32(16, 16, true);
+        v.setUint16(20, 1, true);
+        v.setUint16(22, 1, true);
+        v.setUint32(24, 8000, true);
+        v.setUint32(28, 16000, true);
+        v.setUint16(32, 2, true);
+        v.setUint16(34, 16, true);
+        word(36, 'data');
+        v.setUint32(40, n * 2, true);
+        file = new File([buf], `${name}.wav`, { type: 'audio/wav' });
+      } else {
+        const pdf = [
+          '%PDF-1.4',
+          '1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj',
+          '2 0 obj <</Type/Pages/Kids[3 0 R]/Count 1>> endobj',
+          '3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>> endobj',
+          'trailer <</Root 1 0 R>>',
+          '%%EOF',
+        ].join('\n');
+        file = new File([pdf], `${name}.pdf`, { type: 'application/pdf' });
+      }
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      document.querySelector('.proto-canvas')?.dispatchEvent(
+        new DragEvent('drop', {
+          dataTransfer: dt,
+          clientX: x,
+          clientY: y,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    },
+    [kind, name, x, y] as const,
+  );
+}
+
 /** A card's action: its icon, or its right-button menu. */
 async function cardAction(page: Page, card: string, action: string, right = false) {
   const el = page.locator('.home-card', { hasText: card });
@@ -320,6 +385,44 @@ for (const deviceScaleFactor of [1, 2]) {
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['window', 'row'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`an asset's viewer keeps its size in RU and EN @${deviceScaleFactor}x (06 §13.4)`, async ({
+    browser,
+  }) => {
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Звук');
+      await dropMade(page, 'wav', 'Запись с очень длинным именем для проверки окна просмотра');
+      await expect.poll(async () => (await graphNow(page)).names).toHaveLength(1);
+      await settled(page);
+      // The window opens on the side with room: the panel must be there first.
+      await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText(/^Запись/);
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.asset-window audio')).toBeVisible();
+      expect(await overflowing(page, '.asset-window'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.asset-window'),
+        body: await box(page, '.asset-body'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'body'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -770,6 +873,88 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ins-asset img')).toBeVisible();
   });
 
+  test('a sound dropped on the canvas plays in its panel: the CSP lets blob media in', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Звук');
+    await dropMade(page, 'wav', 'Тишина');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Тишина']);
+    await settled(page);
+    await select(page, 'Тишина');
+    const audio = page.locator('.ins-asset audio');
+    await expect(audio).toBeVisible();
+    // HAVE_METADATA: the desktop's CSP (served by the preview too) let it load.
+    await expect
+      .poll(() => audio.evaluate((a: HTMLAudioElement) => a.error?.code ?? a.readyState))
+      .toBeGreaterThanOrEqual(1);
+    expect(await audio.evaluate((a: HTMLAudioElement) => a.error)).toBeNull();
+  });
+
+  test('an asset opens large in its viewer: a picture, a sound, a PDF (06 §13.4)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Просмотр');
+    const blocked: string[] = [];
+    await page.exposeFunction('cspBlocked', (what: string) => blocked.push(what));
+    await page.evaluate(() =>
+      document.addEventListener('securitypolicyviolation', (e) =>
+        (window as unknown as { cspBlocked: (w: string) => void }).cspBlocked(
+          `${e.violatedDirective} ${e.blockedURI}`,
+        ),
+      ),
+    );
+    const win = page.locator('.asset-window');
+    const open = async (name: string) => {
+      await settled(page);
+      await select(page, name);
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      await expect(win).toBeVisible();
+      await expect(win.locator('h2')).toHaveText(name);
+    };
+    // A picture to its size; the panel does not show it twice.
+    await dropMade(page, 'png', 'Скетч');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Скетч']);
+    await open('Скетч');
+    await expect(win).toHaveAttribute('data-type', 'image');
+    await expect
+      .poll(() => win.locator('img').evaluate((i: HTMLImageElement) => i.naturalWidth))
+      .toBe(160);
+    await expect(page.locator('.ins-asset img')).toHaveCount(0);
+    // Esc gives the keys back and leaves the window; × closes it.
+    await win.locator('img').click();
+    await page.keyboard.press('Escape');
+    await expect(win).toBeVisible();
+    await win.locator('.window-close').click();
+    await expect(win).toHaveCount(0);
+    await expect(page.locator('.ins-asset img')).toBeVisible();
+    // A sound plays in the viewer.
+    await dropMade(page, 'wav', 'Тишина', 420, 300);
+    await expect.poll(async () => (await graphNow(page)).names).toContain('Тишина');
+    await open('Тишина');
+    await expect(win).toHaveAttribute('data-type', 'audio');
+    const audio = win.locator('audio');
+    await expect
+      .poll(() => audio.evaluate((a: HTMLAudioElement) => a.error?.code ?? a.readyState))
+      .toBeGreaterThanOrEqual(1);
+    expect(await audio.evaluate((a: HTMLAudioElement) => a.error)).toBeNull();
+    await win.locator('.window-close').click();
+    // A PDF in the WebView's own viewer, at the board's share of the canvas.
+    await dropMade(page, 'pdf', 'Смета', 780, 300);
+    await expect.poll(async () => (await graphNow(page)).names).toContain('Смета');
+    await open('Смета');
+    await expect(win).toHaveAttribute('data-type', 'pdf');
+    await expect(win.locator('iframe')).toHaveAttribute('src', /^blob:/);
+    // As large as a board's window, not a place beside the bubble.
+    const board = await box(page, '.workspace');
+    const w = await box(page, '.asset-window');
+    expect(Math.abs(w.width - board.width * 0.8)).toBeLessThanOrEqual(2);
+    // The desktop's CSP, served by the preview too, let the media and the frame in.
+    expect(blocked).toEqual([]);
+  });
+
   test('a link dropped on the canvas is a link asset; a link typed with no scheme is kept', async ({
     page,
   }) => {
@@ -804,6 +989,92 @@ test.describe('a workspace on the core', () => {
     await field.fill('example.com/page');
     await field.press('Enter');
     await expect.poll(url).toBe('https://example.com/page');
+    await expect(page.locator('.toast', { hasText: 'Ядро не приняло' })).toHaveCount(0);
+  });
+
+  test('Ctrl+V on the canvas: a link, a note from text with its body, a picture (13 §3.9)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Буфер');
+    await page.mouse.move(600, 400);
+    const paste = (text: string | null, png = false) =>
+      page.evaluate(
+        async ([text, png]) => {
+          const dt = new DataTransfer();
+          if (text !== null) dt.setData('text/plain', text);
+          if (png) {
+            const c = document.createElement('canvas');
+            c.width = 32;
+            c.height = 24;
+            const g = c.getContext('2d') as CanvasRenderingContext2D;
+            g.fillStyle = '#3c6';
+            g.fillRect(0, 0, 32, 24);
+            const blob = await new Promise<Blob>((done) =>
+              c.toBlob((b) => done(b as Blob), 'image/png'),
+            );
+            dt.items.add(new File([blob], 'image.png', { type: 'image/png' }));
+          }
+          const target = document.activeElement ?? document.body;
+          target.dispatchEvent(
+            new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }),
+          );
+        },
+        [text, png] as const,
+      );
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    // A link: a link asset named by its host.
+    await paste('  https://example.org/a?b=1  ');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['example.org']);
+    const attr = (name: string, key: string) =>
+      idOf(page, name).then((id) =>
+        page.evaluate(
+          ([id, key]) =>
+            (
+              window.__strataWs?.graph()?.nodes.get(id)?.attrs as
+                | Record<string, unknown>
+                | undefined
+            )?.[key],
+          [id, key] as const,
+        ),
+      );
+    expect(await attr('example.org', 'url')).toBe('https://example.org/a?b=1');
+    // Text: the first line names a note, the rest is its body with its links.
+    await page.mouse.move(400, 300);
+    await paste('Хлеб');
+    await expect.poll(async () => (await graphNow(page)).names).toContain('Хлеб');
+    await page.mouse.move(800, 300);
+    await paste('# Покупки\n\nкупить [[Хлеб]]\nи молоко');
+    await expect.poll(async () => (await graphNow(page)).names).toContain('Покупки');
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Покупки→Хлеб']);
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Покупки');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.note-window .cm-content')).toHaveText(
+      /купить \[\[Хлеб\]\]\s*и молоко/,
+    );
+    await page.locator('.note-window .window-close').click();
+    // A picture: an asset with the picture in its circle; one step of undo.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.mouse.move(600, 550);
+    await paste(null, true);
+    await expect.poll(async () => (await graphNow(page)).names).toContain('image');
+    const pic = await idOf(page, 'image');
+    expect(await attr('image', 'mime')).toBe('image/png');
+    await expect
+      .poll(() => page.evaluate((id) => window.__strataWs?.view.hasPicture(id) ?? false, pic))
+      .toBe(true);
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await graphNow(page)).names).not.toContain('image');
+    // In a field the text is the field's: no node.
+    await settled(page);
+    await select(page, 'example.org');
+    const field = page.locator('.ws-inspector').getByLabel('Ссылка', { exact: true });
+    await field.focus();
+    const before = (await graphNow(page)).names;
+    await paste('Не нода');
+    await settled(page);
+    expect((await graphNow(page)).names).toEqual(before);
     await expect(page.locator('.toast', { hasText: 'Ядро не приняло' })).toHaveCount(0);
   });
 

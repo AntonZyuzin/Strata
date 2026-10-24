@@ -231,6 +231,17 @@ export class Editor {
     this.overlayOpen = open;
   }
 
+  /**
+   * Where a paste lands (06 §12.1, 13 §3.9), in world coordinates, or null
+   * while a menu or input owns the keyboard: at the cursor over the canvas,
+   * else beside the current node, else mid-view.
+   */
+  pasteSpot(): { x: number; y: number } | null {
+    if (this.overlayOpen || this.mode.t !== 'idle') return null;
+    const s = this.anchorScreen();
+    return this.view.camera.toWorld(s.sx, s.sy);
+  }
+
   fitAll(): void {
     const box = this.boxOf([...this.graph.nodes.keys()]);
     if (box) this.view.camera.fit(box, this.seen(), this.view.height);

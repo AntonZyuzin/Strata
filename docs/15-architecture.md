@@ -594,7 +594,7 @@ flowchart TD
 | Раздача | SPA той же версии раздаёт `strata serve` на том же домене ([11](11-server-selfhost.md) §7.6); CORS выключен |
 | Режим | Тонкий клиент: выписки и открытые документы, граф-операции на сервере ([10](10-storage-sync-collab.md) §5, ☑ Q-10-1) |
 | Кэш | Оболочка — Service Worker; выписки, открытые документы и исходящие — IndexedDB ([10](10-storage-sync-collab.md) §6.1) |
-| Безопасность | CSP с `wasm-unsafe-eval` для Loro и поиска, без COEP ([11](11-server-selfhost.md) §8.7) |
+| Безопасность | CSP с `wasm-unsafe-eval` для Loro и поиска, `blob:` для медиа и фреймов просмотрщика ([06](06-canvas-ux.md) §13.4), без COEP ([11](11-server-selfhost.md) §8.7) |
 | Файлы | Импорт vault — на сервере или через `<input webkitdirectory>`: `showDirectoryPicker` есть только в Chromium ([R4](research/R4-app-shell-rendering.md) §1.7) |
 | Этап | 3, вместе с сервером и командой ([11](11-server-selfhost.md) §10) |
 

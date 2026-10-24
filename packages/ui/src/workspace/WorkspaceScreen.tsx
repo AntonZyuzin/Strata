@@ -190,6 +190,7 @@ export function WorkspaceScreen(props: {
   /** A list opened: its items are in the panel, the keyboard goes there once. */
   const [listFocus, setListFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
+  const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
   /** The star map's search (08 §10): `within` the cluster in focus for `Ctrl+F`. */
   const [mapSearch, setMapSearch] = useState<{ within: string | null } | null>(null);
@@ -420,6 +421,7 @@ export function WorkspaceScreen(props: {
         setNote(null);
         setBoard(null);
         setViewer(null);
+        setViewerFocus(false);
         setBoardFocus(false);
       }
       editor.current?.destroy();
@@ -606,9 +608,9 @@ export function WorkspaceScreen(props: {
   useEffect(() => {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
     editor.current?.setOverlayOpen(
-      menu !== null || name !== null || view3d !== '2d' || boardFocus || covered,
+      menu !== null || name !== null || view3d !== '2d' || boardFocus || viewerFocus || covered,
     );
-  }, [menu, name, view3d, boardFocus, covered]);
+  }, [menu, name, view3d, boardFocus, viewerFocus, covered]);
 
   useEffect(() => {
     if (view3d !== '3d') {
@@ -694,6 +696,7 @@ export function WorkspaceScreen(props: {
     setNote(null);
     setBoard(null);
     setViewer(null);
+    setViewerFocus(false);
     setTrash(null);
     netRef.current = opened.root;
     void loadRef.current(opened.root);
@@ -1273,9 +1276,11 @@ export function WorkspaceScreen(props: {
           type={viewer.type}
           url={viewer.url}
           at={viewer.at}
+          onFocus={setViewerFocus}
           onEscape={focusCanvas}
           onClose={() => {
             setViewer(null);
+            setViewerFocus(false);
             focusCanvas();
           }}
         />

@@ -507,7 +507,10 @@ test.describe('a workspace on the core', () => {
     const editor = page.locator('.note-window .cm-content');
     await expect(editor).toBeVisible();
     await editor.click();
-    await page.keyboard.type('Ёлки-палки, см. [[Цель]]');
+    await expect(editor).toBeFocused();
+    // At a person's pace: keys faster than WebKit reads an empty line's DOM
+    // left the caret before the first letter on CI (run #66).
+    await page.keyboard.type('Ёлки-палки, см. [[Цель]]', { delay: 30 });
     await expect
       .poll(async () => (await graphNow(page)).edges)
       .toEqual(['Сценарий→Цель', 'Уровни→Цель']);
@@ -923,10 +926,13 @@ test.describe('a workspace on the core', () => {
       .poll(() => win.locator('img').evaluate((i: HTMLImageElement) => i.naturalWidth))
       .toBe(160);
     await expect(page.locator('.ins-asset img')).toHaveCount(0);
-    // Esc gives the keys back and leaves the window; × closes it.
+    // Esc gives the keys back and leaves the window and the selection; × closes it.
     await win.locator('img').click();
+    await expect(win).toBeFocused();
     await page.keyboard.press('Escape');
     await expect(win).toBeVisible();
+    await expect(page.locator('.proto-canvas canvas').first()).toBeFocused();
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Скетч');
     await win.locator('.window-close').click();
     await expect(win).toHaveCount(0);
     await expect(page.locator('.ins-asset img')).toBeVisible();

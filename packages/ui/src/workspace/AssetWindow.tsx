@@ -15,8 +15,9 @@ export function viewable(type: string): type is Viewable {
  * An asset's viewer (06 §13.1, §13.4): a retro window beside its bubble — a
  * picture to its size within the canvas, a video or sound with its player, a
  * PDF in the WebView's own viewer at the board's size. The panel keeps the
- * small preview; this is the large one. `Esc` gives the keyboard back to the
- * canvas, × closes the window.
+ * small preview; this is the large one. While the focus is inside, the
+ * canvas's keys are off; `Esc` gives the keyboard back to the canvas and
+ * leaves the window and the selection, × closes the window.
  */
 export function AssetWindow(props: {
   locale: Locale;
@@ -26,6 +27,8 @@ export function AssetWindow(props: {
   url: string | null;
   /** Screen point of the bubble's side and which side the window opens on. */
   at: { x: number; y: number; side: 'left' | 'right' };
+  /** The focus came in or went out: inside, the canvas's keys are off. */
+  onFocus: (inside: boolean) => void;
   onEscape: () => void;
   onClose: () => void;
 }) {
@@ -68,6 +71,12 @@ export function AssetWindow(props: {
       data-type={type}
       style={style}
       aria-label={t(locale, 'asset.label', { name: title })}
+      // A click inside takes the focus here, so Esc is the window's, not the canvas's.
+      tabIndex={-1}
+      onFocusCapture={() => props.onFocus(true)}
+      onBlurCapture={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget as Node | null)) props.onFocus(false);
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Escape') {
           e.stopPropagation();

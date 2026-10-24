@@ -1,7 +1,7 @@
 import { isFinal, type TrashItem, type TreeItem } from '@strata/backend';
-import type { GlyphName } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import { useEffect, useMemo, useState } from 'react';
+import { Icon, nodeIcon } from '../icons/Icon';
 import { Glyph } from '../TabBar';
 
 /**
@@ -89,7 +89,7 @@ export function Layers(props: {
               onClick={() => props.onSelect(it.id)}
               onDoubleClick={() => props.onOpen(it.id)}
             >
-              <Glyph name={it.kind as GlyphName} />
+              <Icon name={nodeIcon(it.kind, it.class, kids && unfolded)} />
               <span className="layer-label">{it.name || t(locale, 'note.untitled')}</span>
             </button>
           </div>

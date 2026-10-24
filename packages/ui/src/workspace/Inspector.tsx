@@ -312,7 +312,7 @@ export function Inspector(props: {
                 {l.name}
               </button>
               <IconButton
-                glyph="cross"
+                icon="close"
                 label={t(locale, 'ins.unlink', { name: l.name })}
                 onClick={() => a.unlink(l.id, n.id)}
               />

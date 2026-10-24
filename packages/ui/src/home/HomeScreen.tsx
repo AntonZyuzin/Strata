@@ -284,19 +284,19 @@ export function HomeScreen(props: {
                 </button>
                 <div className="home-icons">
                   <IconButton
-                    glyph="pencil"
+                    icon="rename"
                     label={t(locale, 'home.rename')}
                     disabled={busy || w.missing}
                     onClick={() => setDialog({ t: 'rename', entry: w })}
                   />
                   <IconButton
-                    glyph="export"
+                    icon="export"
                     label={t(locale, 'home.exportHint')}
                     disabled={busy || w.missing}
                     onClick={() => void exportArchive(w)}
                   />
                   <IconButton
-                    glyph="trash"
+                    icon="trash"
                     label={t(locale, 'home.remove')}
                     disabled={busy}
                     onClick={() => setDialog({ t: 'remove', entry: w })}

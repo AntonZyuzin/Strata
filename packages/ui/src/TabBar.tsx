@@ -1,6 +1,7 @@
 import { type GlyphName, glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { CSSProperties, ReactNode } from 'react';
+import { Icon, type IconName } from './icons/Icon';
 
 /**
  * The app's bar, a retro browser's (✅ Q-16-12): the logo goes home, two
@@ -25,9 +26,9 @@ export function Glyph(props: { name: GlyphName }) {
   );
 }
 
-/** A square button with a glyph; its name is the tooltip and the accessible name. */
+/** A square button with an icon; its name is the tooltip and the accessible name. */
 export function IconButton(props: {
-  glyph: GlyphName;
+  icon: IconName;
   label: string;
   disabled?: boolean | undefined;
   className?: string | undefined;
@@ -43,7 +44,7 @@ export function IconButton(props: {
       disabled={props.disabled}
       onClick={props.onClick}
     >
-      <Glyph name={props.glyph} />
+      <Icon name={props.icon} />
       {props.children}
     </button>
   );
@@ -81,22 +82,22 @@ export function TabBar(props: {
         <span aria-hidden="true">Strata</span>
       </button>
       <div className="tabbar-tools">
-        <IconButton glyph="import" label={t(locale, 'home.importHint')} onClick={props.onImport} />
+        <IconButton icon="import" label={t(locale, 'home.importHint')} onClick={props.onImport} />
         <IconButton
-          glyph="export"
+          icon="export"
           label={t(locale, 'home.exportHint')}
           disabled={!props.onExport}
           onClick={() => props.onExport?.()}
         />
         <span className="tabbar-gap" aria-hidden="true" />
         <IconButton
-          glyph="undo"
+          icon="undo"
           label={props.undo?.canUndo ? props.undo.step : t(locale, 'proto.undo')}
           disabled={!props.undo?.canUndo}
           onClick={props.onUndo}
         />
         <IconButton
-          glyph="redo"
+          icon="redo"
           label={t(locale, 'proto.redo')}
           disabled={!props.undo?.canRedo}
           onClick={props.onRedo}
@@ -113,11 +114,11 @@ export function TabBar(props: {
               title={tab.name}
               onClick={() => props.onSelect(tab.id)}
             >
-              <Glyph name="network" />
+              <Icon name="network" />
               <span className="tab-label">{tab.name}</span>
             </button>
             <IconButton
-              glyph="cross"
+              icon="close"
               className="tab-close"
               label={t(locale, 'tabs.close', { name: tab.name })}
               onClick={() => props.onClose(tab.id)}
@@ -125,7 +126,7 @@ export function TabBar(props: {
           </div>
         ))}
         <IconButton
-          glyph="plus"
+          icon="plus"
           className="tab-new"
           label={t(locale, 'home.new')}
           onClick={props.onNew}

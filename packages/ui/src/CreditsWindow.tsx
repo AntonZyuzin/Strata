@@ -2,12 +2,14 @@ import { type IconCredits, iconCredits } from '@strata/canvas';
 import { type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
 import oflText from './fonts/DepartureMono-OFL.txt?raw';
+import { ICON_FILES } from './icons/Icon';
+import bsdText from './icons/serenity/LICENSE?raw';
 
 /**
  * «Благодарности» (07 §3.5, §6.3, ☑ Q-07-3, Q-07-11): Strata's licence, the
  * bundled fonts with their copyright lines and the OFL text, and every
  * game-icons author whose icons ship, with the change CC BY 3.0 §4(b) asks to
- * state. Font lines are copied from each font's LICENSE or, for the board's
+ * state, and SerenityOS's Chrome icons with their BSD 2-Clause text. Font lines are copied from each font's LICENSE or, for the board's
  * fonts, from the font's name table and its maker's page.
  */
 
@@ -43,6 +45,12 @@ const FONTS: { family: string; line: string }[] = [
   },
 ];
 
+/** The Chrome's icons (07 §6.2), copied unchanged from SerenityOS. */
+const SERENITY = {
+  name: 'SerenityOS',
+  line: 'Copyright (c) 2018-2026, the SerenityOS developers. BSD 2-Clause · github.com/SerenityOS/serenity',
+};
+
 /** The OFL itself, without Departure Mono's copyright header. */
 const OFL = oflText.slice(oflText.indexOf('This Font Software'));
 
@@ -54,6 +62,7 @@ export function CreditsWindow(props: { locale: Locale; onBack: () => void }) {
     iconCredits().then(setIcons);
   }, []);
 
+  const serenity = `${t(locale, 'credits.iconsCount', { n: ICON_FILES })} · ${SERENITY.line}`;
   const counts = new Map<string, number>();
   for (const { id } of icons?.icons ?? []) {
     const folder = id.split('/')[0] ?? '';
@@ -91,6 +100,18 @@ export function CreditsWindow(props: { locale: Locale; onBack: () => void }) {
         <details className="credits-ofl">
           <summary>{t(locale, 'credits.ofl')}</summary>
           <pre>{OFL}</pre>
+        </details>
+        <div className="divider" />
+        <h2 className="fonts-heading">{t(locale, 'credits.uiIcons')}</h2>
+        <dl className="credits-list">
+          <div className="fonts-row">
+            <dt title={SERENITY.name}>{SERENITY.name}</dt>
+            <dd title={serenity}>{serenity}</dd>
+          </div>
+        </dl>
+        <details className="credits-ofl">
+          <summary>{t(locale, 'credits.bsd')}</summary>
+          <pre>{bsdText}</pre>
         </details>
         <div className="divider" />
         <h2 className="fonts-heading">{t(locale, 'credits.icons')}</h2>

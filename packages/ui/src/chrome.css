@@ -718,6 +718,22 @@ button:focus-visible {
   image-rendering: pixelated;
 }
 
+/* A colour icon of the SerenityOS set (07 §6.2): whole pixel units only. */
+.icon {
+  flex: none;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  image-rendering: pixelated;
+  user-select: none;
+}
+
+:disabled > .icon,
+.tab:not(.is-active) .icon,
+.layer-name.is-done .icon {
+  filter: grayscale(1);
+  opacity: 0.5;
+}
+
 .name-input {
   position: absolute;
   width: 24ch;

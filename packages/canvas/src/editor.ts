@@ -21,7 +21,9 @@ import { Camera } from './camera';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
 import { RING_DELAY_MS, type RingSlot, ringSlots, SLOT_U, slotAt } from './flagring';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
+import { Minimap } from './minimap';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
+import { arrowStep, chainStep, type Dir, siblingStep } from './traverse';
 import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
 import type { WireStyle } from './wires';
 
@@ -108,6 +110,8 @@ export interface EditorEvents {
   change(): void;
   /** `M`: to the star map and back (08 §7, 06 §17). */
   map?(): void;
+  /** `O` opened or closed the minimap (06 §10.3). */
+  minimap?(open: boolean): void;
   /** Double click or `Enter` on a node: open its content (06 §13.1). */
   open?(id: string): void;
   /** `L`: lay out the selection, or the whole network when nothing is selected (06 §9.1). */
@@ -150,6 +154,14 @@ export type MenuChoice =
   | { t: 'template'; id: string; kind: NodeKind; name: string }
   /** A ghost of this network: a note with its name, which resolves it (05 §8.5). */
   | { t: 'ghost'; id: string };
+
+/** The arrows' directions on the canvas (06 §10.3). */
+const ARROWS: Partial<Record<string, Dir>> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+};
 
 /** The flags with a key on the canvas (06 §8); «Скрыть от AI» and «Замок» come with MCP. */
 const FLAG_KEYS: Partial<Record<string, Flag>> = {
@@ -252,6 +264,8 @@ interface WireBox extends NodeBox {
 
 export class Editor {
   readonly selection = new Set<string>();
+  /** The overview at the canvas's bottom right, `O` (06 §10.3). */
+  readonly minimap: Minimap;
   current: string | null = null;
   wheelMode: WheelMode = /Mac/.test(navigator.platform) ? 'trackpad' : 'mouse';
   /** Swing of the shake in screen px; 0 turns the gesture off (05 §8.4). */
@@ -292,8 +306,16 @@ export class Editor {
     private readonly graph: Graph,
     private readonly events: EditorEvents,
   ) {
+    this.minimap = new Minimap(
+      view,
+      () => this.graph,
+      () => this.seen(),
+    );
     view.wireStyle = (from, to) => this.styleOf(from, to);
-    view.onFrame = (now) => this.drawOverlay(now);
+    view.onFrame = (now) => {
+      this.drawOverlay(now);
+      this.minimap.draw();
+    };
     view.interaction = () => {
       const h = this.hover;
       const hover = this.mode.t === 'idle' && (h.t === 'node' || h.t === 'port') ? h.id : null;
@@ -318,6 +340,7 @@ export class Editor {
 
   destroy(): void {
     for (const f of this.detach) f();
+    this.minimap.destroy();
   }
 
   /** The React Chrome tells the editor when a menu or input owns the keyboard. */
@@ -1350,6 +1373,11 @@ export class Editor {
         if (mod) return;
         this.events.map?.();
         return;
+      case 'KeyO':
+        if (mod || e.altKey || e.shiftKey) return;
+        this.minimap.open = !this.minimap.open;
+        this.events.minimap?.(this.minimap.open);
+        return;
       case 'KeyS':
         if (mod || !e.shiftKey) return;
         e.preventDefault();
@@ -1399,11 +1427,32 @@ export class Editor {
       case 'Digit0':
         cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / cam.zoom);
         break;
+      case 'PageUp':
+      case 'PageDown': {
+        // Along the chain; with Shift — to the neighbours (06 §10.3).
+        if (mod || e.altKey || !this.current) return;
+        e.preventDefault();
+        const down = e.code === 'PageDown';
+        this.step(
+          e.shiftKey
+            ? siblingStep(this.graph, this.current, down)
+            : chainStep(this.graph, this.current, !down),
+        );
+        return;
+      }
       case 'ArrowLeft':
       case 'ArrowRight':
       case 'ArrowUp':
       case 'ArrowDown': {
-        if (!e.shiftKey) return;
+        if (mod || e.altKey) return;
+        if (!e.shiftKey) {
+          // To the nearest node that way (06 §10.3); none chosen — the one in the middle.
+          e.preventDefault();
+          const dir = ARROWS[e.code] ?? 'right';
+          const middle = cam.toWorld(this.seen() / 2, this.view.height / 2);
+          this.step(arrowStep(this.graph, this.current, dir, middle));
+          return;
+        }
         e.preventDefault();
         const step =
           (e.code === 'ArrowLeft' || e.code === 'ArrowRight' ? this.view.width : this.view.height) /
@@ -1635,6 +1684,14 @@ export class Editor {
   }
 
   /** Moves the camera only if the node left the screen, with a 48 px margin (06 §3). */
+  /** A key's step to node `id`: it alone is chosen, the camera keeps it in view. */
+  private step(id: string | null) {
+    if (!id || this.mode.t !== 'idle') return;
+    this.view.stopFlight();
+    this.select([id]);
+    this.follow(id);
+  }
+
   private follow(id: string) {
     const n = this.graph.nodes.get(id);
     if (!n) return;

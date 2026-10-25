@@ -17,6 +17,8 @@ import symlink from './serenity/filetype-symlink.png';
 import text from './serenity/filetype-text.png';
 import unknown from './serenity/filetype-unknown.png';
 import gear from './serenity/gear.png';
+import back from './serenity/go-back.png';
+import forward from './serenity/go-forward.png';
 import internet from './serenity/internet.png';
 import office from './serenity/office.png';
 import open from './serenity/open.png';
@@ -49,6 +51,8 @@ const FILES = {
   'filetype-folder': folder,
   'filetype-folder-open': folderOpen,
   gear,
+  'go-back': back,
+  'go-forward': forward,
   'filetype-html': html,
   'filetype-image': image,
   'filetype-music': music,
@@ -86,6 +90,8 @@ const NAMED = {
   trash: 'trash-can',
   undo: 'undo',
   redo: 'redo',
+  back: 'go-back',
+  forward: 'go-forward',
   plus: 'plus',
   close: 'window-close',
   map: 'app-starfield',

@@ -65,10 +65,24 @@ export function TabBar(props: {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
-  /** Undo and redo of the open workspace, its star map; absent on the home screen. */
-  undo: { canUndo: boolean; canRedo: boolean; step: string; map: boolean } | undefined;
+  /**
+   * Undo and redo of the open workspace, back and forward over its places
+   * (09 §6.1), its star map; absent on the home screen.
+   */
+  undo:
+    | {
+        canUndo: boolean;
+        canRedo: boolean;
+        step: string;
+        map: boolean;
+        canBack: boolean;
+        canForward: boolean;
+      }
+    | undefined;
   onUndo: () => void;
   onRedo: () => void;
+  onBack: () => void;
+  onForward: () => void;
   onMap: () => void;
   /** «Настройки» (✅ Q-06-23): a tab of its own while open, in front or behind. */
   settings: { open: boolean; front: boolean };
@@ -97,6 +111,19 @@ export function TabBar(props: {
           label={t(locale, 'home.exportHint')}
           disabled={!props.onExport}
           onClick={() => props.onExport?.()}
+        />
+        <span className="tabbar-gap" aria-hidden="true" />
+        <IconButton
+          icon="back"
+          label={t(locale, 'nav.back')}
+          disabled={!props.undo?.canBack}
+          onClick={props.onBack}
+        />
+        <IconButton
+          icon="forward"
+          label={t(locale, 'nav.forward')}
+          disabled={!props.undo?.canForward}
+          onClick={props.onForward}
         />
         <span className="tabbar-gap" aria-hidden="true" />
         <IconButton

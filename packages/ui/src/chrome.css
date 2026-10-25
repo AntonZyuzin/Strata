@@ -2065,13 +2065,43 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   top: 0;
   bottom: 0;
   left: var(--layers-w);
-  right: 0;
+  right: var(--minimap-w, 0px);
   z-index: 3;
   pointer-events: none;
 }
 
 .ws-gecko[data-panel="open"] {
-  right: var(--panel-w);
+  right: calc(var(--panel-w) + var(--minimap-w, 0px));
+}
+
+/* The minimap (06 §10.3, `O`): the network's overview at the canvas's bottom
+   right, 200 × 150 px as Houdini's, framed as the path; left of the properties
+   panel. The gecko's home and the path keep clear of it while it is open. */
+.canvas-minimap {
+  position: absolute;
+  right: calc(16 * var(--u));
+  bottom: calc(16 * var(--u));
+  z-index: 2;
+  box-sizing: content-box;
+  width: 200px;
+  height: 150px;
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
+  touch-action: none;
+}
+
+.canvas-minimap[hidden],
+.workspace:not([data-view="2d"]) .canvas-minimap {
+  display: none;
+}
+
+.workspace[data-panel="open"] .canvas-minimap {
+  right: calc(var(--panel-w) + 16 * var(--u));
+}
+
+.workspace[data-minimap="open"] {
+  --minimap-w: calc(200px + 18 * var(--u));
 }
 
 /* The gecko is a button only for the keyboard and screen readers: no bevel,
@@ -2092,18 +2122,33 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   left: calc(var(--layers-w) + 16 * var(--u));
   bottom: calc(16 * var(--u));
   z-index: 2;
-  max-width: min(64ch, calc(100% - var(--layers-w) - 32 * var(--u) - var(--gecko-w)));
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  max-width: min(
+    64ch,
+    calc(100% - var(--layers-w) - 32 * var(--u) - var(--gecko-w) - var(--minimap-w, 0px))
+  );
 }
 
 /* Left of the properties panel when it is open, as the gecko. */
 .ws-path[data-panel="open"] {
   max-width: min(
     64ch,
-    calc(100% - var(--layers-w) - var(--panel-w) - 32 * var(--u) - var(--gecko-w))
+    calc(
+      100% -
+      var(--layers-w) -
+      var(--panel-w) -
+      32 *
+      var(--u) -
+      var(--gecko-w) -
+      var(--minimap-w, 0px)
+    )
   );
 }
 
-.ws-path ol {
+.ws-path ol,
+.ws-marks {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -2113,6 +2158,37 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   background: var(--st-color-surface);
   border: var(--u) solid var(--st-color-frame);
   box-shadow: var(--st-bevel-raised);
+}
+
+.ws-path ol {
+  flex: 0 1 auto;
+}
+
+/* The quick marks set (06 §10.3): ★ and the digit, beside the path. */
+.ws-marks {
+  flex: none;
+}
+
+.ws-mark {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+  min-height: var(--st-size-control);
+  padding: 0 calc(4 * var(--u));
+  color: var(--st-color-text-muted);
+  background: transparent;
+  border: var(--u) solid transparent;
+  box-shadow: none;
+}
+
+.ws-mark:hover {
+  color: var(--st-color-text);
+  background: var(--st-color-surface-raised);
+  border-color: var(--st-color-frame);
+}
+
+.ws-mark:active {
+  box-shadow: var(--st-bevel-sunken);
 }
 
 .ws-path li {
@@ -2175,6 +2251,12 @@ button.ws-path-step:active:not(:disabled) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The marks' slots are no steps of the path: as wide as their ★ and digit. */
+.ws-marks > li {
+  flex: none;
+  min-width: 0;
 }
 
 /* «Слои»: the workspace's nodes as a tree, the whole height. */

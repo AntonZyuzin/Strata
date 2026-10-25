@@ -143,6 +143,8 @@ export function Shell(props: {
         undo={opened ? (undo ?? undefined) : undefined}
         onUndo={() => bridge.current?.undo()}
         onRedo={() => bridge.current?.redo()}
+        onBack={() => bridge.current?.back()}
+        onForward={() => bridge.current?.forward()}
         onMap={() => bridge.current?.map()}
         onHome={() =>
           void act(async () => {

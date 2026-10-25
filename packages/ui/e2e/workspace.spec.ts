@@ -376,6 +376,13 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       await diveInto(page, project, 'Болото у старой мельницы за туманным лесом');
       const path = page.locator('.ws-path');
       await expect(path).toBeVisible();
+      // Two quick marks here (06 §10.3): ★1 and ★2 follow the path.
+      for (const key of ['Digit1', 'Digit2']) {
+        await page.keyboard.down(key);
+        await page.waitForTimeout(700);
+        await page.keyboard.up(key);
+      }
+      await expect(page.locator('.ws-mark')).toHaveCount(2);
       await expect(path).toHaveAttribute(
         'title',
         'Игра «Туман» / Уровни, локации и всё, что между ними / Болото у старой мельницы за туманным лесом',
@@ -388,6 +395,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
         path: await box(page, '.ws-path'),
         here: await box(page, '.ws-path [aria-current="location"]'),
         root: await box(page, '.ws-path .ws-path-root button'),
+        marks: await box(page, '.ws-marks'),
       });
       // The bar stands on the canvas, clear of «Ноды» and of the canvas's bottom edge.
       const layers = await box(page, '.ws-layers');
@@ -401,11 +409,59 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       await expect(path.locator('[aria-current="location"]')).toContainText('Уровни');
       await path.getByRole('button', { name: 'Игра «Туман»' }).click();
       await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
-      await expect(page.locator('.ws-path')).toHaveCount(0);
+      // At the root the marks alone stay.
+      await expect(page.locator('.ws-path ol')).toHaveCount(0);
+      await expect(page.locator('.ws-mark')).toHaveCount(2);
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['path', 'here', 'root'] as const) {
+    for (const part of ['path', 'here', 'root', 'marks'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
+  test(`the minimap keeps its size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x (06 §10.3)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Карта');
+      await createNode(page, 400, 300, 'Север');
+      await createNode(page, 700, 450, 'Юг');
+      const map = page.locator('.canvas-minimap');
+      await expect(map).toBeHidden();
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('KeyO');
+      await expect(map).toBeVisible();
+      const b = await box(page, '.canvas-minimap');
+      // 200 × 150 px inside its frame, at the canvas's bottom right.
+      expect(Math.round(b.width)).toBeGreaterThanOrEqual(200);
+      expect(Math.round(b.height)).toBeGreaterThanOrEqual(150);
+      const canvas = await box(page, '.proto-canvas');
+      expect(b.x + b.width).toBeLessThanOrEqual(canvas.x + canvas.width);
+      expect(b.y + b.height).toBeLessThanOrEqual(canvas.y + canvas.height);
+      // With a node chosen the panel opens: the minimap keeps left of it.
+      await select(page, 'Север');
+      const panel = await box(page, '.ws-inspector');
+      const beside = await box(page, '.canvas-minimap');
+      expect(beside.x + beside.width).toBeLessThanOrEqual(panel.x);
+      boxes.push({ alone: b, beside });
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('KeyO');
+      await expect(map).toBeHidden();
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['alone', 'beside'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -1749,6 +1805,108 @@ test.describe('a workspace on the core', () => {
     expect(await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.kind, task)).toBe(
       'task',
     );
+  });
+
+  test('back, forward, ` and the quick marks go where one has been (09 §6.1–6.2, 06 §10.3)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'История');
+    const depth = page.locator('.workspace');
+    const back = page.getByRole('button', { name: 'Назад (Alt+←)' });
+    const forward = page.getByRole('button', { name: 'Вперёд (Alt+→)' });
+    await expect(back).toBeDisabled();
+    await diveInto(page, 'Папка', 'Глава');
+    await expect(back).toBeEnabled();
+    await page.keyboard.press('Alt+ArrowLeft');
+    await expect(depth).toHaveAttribute('data-depth', '1');
+    await expect(forward).toBeEnabled();
+    await page.keyboard.press('Alt+ArrowRight');
+    await expect(depth).toHaveAttribute('data-depth', '2');
+    // ` goes to the last place and back again.
+    await page.keyboard.press('Backquote');
+    await expect(depth).toHaveAttribute('data-depth', '1');
+    await page.keyboard.press('Backquote');
+    await expect(depth).toHaveAttribute('data-depth', '2');
+    // The bar's buttons too.
+    await back.click();
+    await expect(depth).toHaveAttribute('data-depth', '1');
+    await forward.click();
+    await expect(depth).toHaveAttribute('data-depth', '2');
+
+    // A quick mark: hold 1 here, go up, press 1 — back here; the right button clears it.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.down('Digit1');
+    await page.waitForTimeout(700);
+    await page.keyboard.up('Digit1');
+    const mark = page.locator('.ws-mark');
+    await expect(mark).toHaveCount(1);
+    await expect(mark).toHaveAttribute(
+      'title',
+      'Метка 1: Глава · клик — перейти, правая кнопка — убрать',
+    );
+    await page.keyboard.press('KeyU');
+    await expect(depth).toHaveAttribute('data-depth', '1');
+    await page.keyboard.press('Digit1');
+    await expect(depth).toHaveAttribute('data-depth', '2');
+    await page.keyboard.press('KeyU');
+    await expect(depth).toHaveAttribute('data-depth', '1');
+    await mark.click();
+    await expect(depth).toHaveAttribute('data-depth', '2');
+    await mark.click({ button: 'right' });
+    await expect(mark).toHaveCount(0);
+
+    // The minimap: a click puts the camera there (06 §10.3).
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyO');
+    const mini = await box(page, '.canvas-minimap');
+    const camera = () =>
+      page.evaluate(() => {
+        const c = window.__strataWs?.view.camera as unknown as { x: number; y: number };
+        return [Math.round(c.x), Math.round(c.y)];
+      });
+    const before = await camera();
+    await page.mouse.click(mini.x + 12, mini.y + 12);
+    await expect.poll(camera).not.toEqual(before);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyO');
+    await expect(page.locator('.canvas-minimap')).toBeHidden();
+
+    // The arrows walk the canvas, PgDn and PgUp the chain (06 §10.3).
+    await createNode(page, 500, 300, 'Верх');
+    await createNode(page, 500, 520, 'Низ');
+    await createNode(page, 800, 300, 'Справа');
+    const top = await at(page, 'Верх');
+    const bottom = await at(page, 'Низ');
+    // A wire from «Верх» to «Низ», from the port ring just outside the bubble.
+    const r = await page.evaluate(
+      (id) => {
+        const ws = window.__strataWs as WsHook;
+        const p = ws.view.nodeAt(id);
+        return p ? p.r * (ws.view.camera as unknown as { zoom: number }).zoom : 20;
+      },
+      await idOf(page, 'Верх'),
+    );
+    await page.mouse.move(top.x, top.y + Math.max(r, 12) + Math.max(8, 0.25 * r) / 2);
+    await page.mouse.down();
+    await page.mouse.move(top.x, (top.y + bottom.y) / 2, { steps: 10 });
+    await page.mouse.move(bottom.x, bottom.y, { steps: 10 });
+    await page.mouse.up();
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Верх→Низ']);
+    await select(page, 'Верх');
+    const selected = () =>
+      page.evaluate(() => {
+        const ws = window.__strataWs;
+        return (ws?.editor()?.selected ?? []).map((id) => ws?.graph()?.nodes.get(id)?.name);
+      });
+    await page.keyboard.press('ArrowRight');
+    await expect.poll(selected).toEqual(['Справа']);
+    await page.keyboard.press('ArrowLeft');
+    await expect.poll(selected).toEqual(['Верх']);
+    await page.keyboard.press('PageDown');
+    await expect.poll(selected).toEqual(['Низ']);
+    await page.keyboard.press('PageUp');
+    await expect.poll(selected).toEqual(['Верх']);
   });
 
   test('a rename rewrites the [[links]] that named the node, in an open note too (13 §6.5)', async ({

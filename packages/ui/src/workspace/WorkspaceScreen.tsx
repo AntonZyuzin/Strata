@@ -63,6 +63,7 @@ import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
 import { NodeSearch } from './NodeSearch';
+import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
 import { PathBar } from './PathBar';
 
 /**
@@ -101,6 +102,36 @@ function loadRecent(): string[] {
 
 const pair = (a: string, b: string) => `${a}\u0000${b}`;
 
+/** A quick mark is set by holding its digit this long (06 §10.3). */
+const MARK_HOLD_MS = 600;
+const DIGITS: Partial<Record<string, number>> = {
+  Digit1: 0,
+  Digit2: 1,
+  Digit3: 2,
+  Digit4: 3,
+  Digit5: 4,
+};
+
+const navKey = (ws: string) => `strata.nav.${ws}`;
+const marksKey = (ws: string) => `strata.marks.${ws}`;
+
+/** The device's own notes (05 §13): a private window may refuse them. */
+function readLocal(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The history and the marks are a convenience.
+  }
+}
+
 let fogPixels: Pixels | null = null;
 
 /** The «Туман» background (07 §7), made once per page: every tab shows it. */
@@ -126,6 +157,9 @@ export interface WorkspaceBridge {
   redo(): void;
   /** The star map and back (08 §7), as `M` does. */
   map(): void;
+  /** Back and forward over the places left (09 §6.1), as `Alt+←` / `Alt+→`. */
+  back(): void;
+  forward(): void;
 }
 
 /** What the bar shows of the open workspace: undo and redo, the star map. */
@@ -136,6 +170,9 @@ export interface UndoState {
   step: string;
   /** The star map is shown, or on its way. */
   map: boolean;
+  /** There is a place to go back or forward to (09 §6.1). */
+  canBack: boolean;
+  canForward: boolean;
 }
 
 export function WorkspaceScreen(props: {
@@ -237,6 +274,32 @@ export function WorkspaceScreen(props: {
   /** Link assets already asked for a preview this session. */
   const previewed = useRef(new Set<string>());
   const eventsRef = useRef<EditorEvents | null>(null);
+  /** Where one has been, and the quick marks, on this device (09 §6.1–6.2). */
+  const navRef = useRef(NavHistory.load(readLocal(navKey(opened.workspace.id))));
+  const [marks, setMarks] = useState(() => loadMarks(readLocal(marksKey(opened.workspace.id))));
+  const [navState, setNavState] = useState({
+    back: navRef.current.canBack,
+    forward: navRef.current.canForward,
+  });
+  /** The screen now as an entry of the history; a step that goes somewhere leaves it. */
+  const hereRef = useRef<() => NavEntry>(() => ({ mode: '2d', net: opened.root, at: 0 }));
+  const leaveRef = useRef<() => void>(() => undefined);
+  /** To an entry: its view, network, camera and selection. */
+  const walkRef = useRef<(e: NavEntry) => Promise<void>>(async () => {});
+  /** The history on this device and in the bar after it changed. */
+  const saveNav = () => {
+    writeLocal(navKey(openedRef.current.workspace.id), navRef.current.save());
+    setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
+  };
+  /** The history's own step is going on: it leaves no entry. */
+  const walking = useRef(false);
+  /** A place in 2D to show once the star map is gone. */
+  const pending = useRef<NavEntry | null>(null);
+  const view3dRef = useRef<MapState>('2d');
+  /** The minimap (06 §10.3): open or closed for every network of the session. */
+  const [minimap, setMinimap] = useState(false);
+  const minimapRef = useRef(false);
+  const placeRef = useRef<(e: NavEntry) => Promise<void>>(async () => {});
   const localeRef = useRef(locale);
   localeRef.current = locale;
   /** The companion on the canvas (07 §10.4): it reacts to the user's steps. */
@@ -340,6 +403,10 @@ export function WorkspaceScreen(props: {
         setCtx({ x: e.sx + (r?.left ?? 0), y: e.sy + (r?.top ?? 0), at: e.at });
       },
       map: () => map3d.current?.toggle(),
+      minimap: (open) => {
+        minimapRef.current = open;
+        setMinimap(open);
+      },
       up: () => void up(),
       historyEmpty: (which) => {
         // Steps of other networks, or of this one before it was read again:
@@ -390,6 +457,7 @@ export function WorkspaceScreen(props: {
         const d = docs.current;
         if (!v || !n || !p || !d) return;
         if (n.kind === 'network' || n.kind === 'project') {
+          leaveRef.current();
           void loadRef.current(id);
           return;
         }
@@ -454,12 +522,66 @@ export function WorkspaceScreen(props: {
         if (net === netRef.current) show();
         else void loadRef.current(net).then(show);
       },
+      leave: () => leaveRef.current(),
+    };
+
+    /** Where the screen is: the view, the network or cluster, the camera, the selection. */
+    hereRef.current = () => {
+      const v = viewRef.current;
+      const three = view3dRef.current !== '2d';
+      const selection = editor.current?.selected ?? [];
+      return {
+        mode: three ? '3d' : '2d',
+        net: three ? (map3d.current?.focusId() ?? netRef.current) : netRef.current,
+        ...(v && !three ? { camera: { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom } } : {}),
+        ...(selection.length > 0 && !three ? { selection } : {}),
+        at: Date.now(),
+      };
+    };
+    leaveRef.current = () => {
+      if (walking.current) return;
+      navRef.current.leave(hereRef.current());
+      saveNav();
+    };
+    /** A 2D entry: its network with its camera, its selection. */
+    const place = async (e: NavEntry) => {
+      if (e.net !== netRef.current) {
+        if (e.camera) cameras.current.set(e.net, e.camera);
+        await loadRef.current(e.net);
+      } else if (e.camera) {
+        viewRef.current?.flyTo(e.camera);
+      }
+      editor.current?.selectNodes(e.selection ?? []);
+    };
+    placeRef.current = place;
+    walkRef.current = async (e: NavEntry) => {
+      walking.current = true;
+      try {
+        const now = view3dRef.current;
+        if (e.mode === '2d') {
+          // From the star map: the place shows once the canvas is back.
+          if (now === '3d') {
+            pending.current = e;
+            map3d.current?.toggle();
+            return;
+          }
+          if (now === '2d') await place(e);
+          return;
+        }
+        if (now !== '2d') return;
+        if (e.net !== netRef.current) await loadRef.current(e.net);
+        map3d.current?.toggle();
+      } finally {
+        walking.current = false;
+      }
     };
 
     const up = async () => {
       const path = await core.view(netRef.current).then((v) => v.path);
       const parent = path.at(-2);
-      if (parent) await loadRef.current(parent[0]);
+      if (!parent) return;
+      leaveRef.current();
+      await loadRef.current(parent[0]);
     };
 
     /** The graph's text wires and ghosts as the core has them, outside undo (05 §8.2, §8.5). */
@@ -536,6 +658,7 @@ export function WorkspaceScreen(props: {
           ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
           : 0;
       ed.ringMode = ringModeRef.current;
+      ed.minimap.open = minimapRef.current;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d, mapNav);
@@ -805,6 +928,111 @@ export function WorkspaceScreen(props: {
     if (view3d !== '2d') setFinding(false);
   }, [view3d]);
 
+  // The history's place in 2D, once the star map has gone (09 §6.1).
+  useEffect(() => {
+    view3dRef.current = view3d;
+    const e = pending.current;
+    if (view3d !== '2d' || !e) return;
+    pending.current = null;
+    walking.current = true;
+    void placeRef.current(e).finally(() => {
+      walking.current = false;
+    });
+  }, [view3d]);
+
+  /** `Alt+←`, `Alt+→`, `` ` `` (09 §6.1). */
+  const walk = useCallback((how: 'back' | 'forward' | 'previous') => {
+    const nav = navRef.current;
+    const now = hereRef.current();
+    const to =
+      how === 'back' ? nav.back(now) : how === 'forward' ? nav.forward(now) : nav.previous(now);
+    if (!to) return;
+    writeLocal(navKey(openedRef.current.workspace.id), nav.save());
+    setNavState({ back: nav.canBack, forward: nav.canForward });
+    void walkRef.current(to);
+  }, []);
+
+  /** Quick marks (09 §6.2): set — the place now, without the selection; go — a step of the history. */
+  const setMark = useCallback((i: number) => {
+    setMarks((all) => {
+      const next = [...all];
+      next[i] = markOf(hereRef.current());
+      writeLocal(marksKey(openedRef.current.workspace.id), JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const clearMark = useCallback((i: number) => {
+    setMarks((all) => {
+      const next = [...all];
+      next[i] = null;
+      writeLocal(marksKey(openedRef.current.workspace.id), JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const marksRef = useRef(marks);
+  marksRef.current = marks;
+  const goMark = useCallback((i: number) => {
+    const m = marksRef.current[i];
+    if (!m) return;
+    leaveRef.current();
+    void walkRef.current(m);
+  }, []);
+
+  // The history's and the marks' keys (06 §10.3), on the canvas and the star map.
+  useEffect(() => {
+    if (view3d === 'to3d' || view3d === 'to2d' || finder || covered) return;
+    // A digit held: its timer, or -1 once the mark is set.
+    const held = new Map<string, number>();
+    const down = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (menu || name || e.isComposing) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (e.altKey && !mod && !e.shiftKey && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+        e.preventDefault();
+        walk(e.code === 'ArrowLeft' ? 'back' : 'forward');
+        return;
+      }
+      if (e.code === 'Backquote' && !mod && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        walk('previous');
+        return;
+      }
+      const slot = DIGITS[e.code];
+      if (slot === undefined || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      // `Ctrl+1…5` sets at once on the desktop; the browser keeps it for its tabs.
+      if (mod) {
+        setMark(slot);
+        return;
+      }
+      if (e.repeat || held.has(e.code)) return;
+      held.set(
+        e.code,
+        window.setTimeout(() => {
+          held.set(e.code, -1);
+          setMark(slot);
+        }, MARK_HOLD_MS),
+      );
+    };
+    const up = (e: KeyboardEvent) => {
+      const timer = held.get(e.code);
+      const slot = DIGITS[e.code];
+      if (timer === undefined || slot === undefined) return;
+      held.delete(e.code);
+      if (timer < 0) return;
+      window.clearTimeout(timer);
+      goMark(slot);
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      for (const timer of held.values()) if (timer >= 0) window.clearTimeout(timer);
+    };
+  }, [view3d, finder, covered, menu, name, walk, setMark, goMark]);
+
   const focusCanvas = useCallback(() => host.current?.querySelector('canvas')?.focus(), []);
 
   const choose = useCallback(
@@ -837,6 +1065,8 @@ export function WorkspaceScreen(props: {
       undo: () => editor.current?.undo(),
       redo: () => editor.current?.redo(),
       map: () => map3d.current?.toggle(),
+      back: () => walk('back'),
+      forward: () => walk('forward'),
       leave: async () => {
         if (leaving.current) return { picture: Promise.resolve() };
         leaving.current = true;
@@ -851,7 +1081,7 @@ export function WorkspaceScreen(props: {
         return { picture };
       },
     };
-  }, [home, opened.workspace.id, props.bridge]);
+  }, [home, opened.workspace.id, props.bridge, walk]);
 
   // Another tab: the same canvas, the other workspace's root network.
   useEffect(() => {
@@ -866,6 +1096,9 @@ export function WorkspaceScreen(props: {
     setViewer(null);
     setViewerFocus(false);
     setTrash(null);
+    navRef.current = NavHistory.load(readLocal(navKey(opened.workspace.id)));
+    setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
+    setMarks(loadMarks(readLocal(marksKey(opened.workspace.id))));
     netRef.current = opened.root;
     void loadRef.current(opened.root);
   }, [opened]);
@@ -876,6 +1109,7 @@ export function WorkspaceScreen(props: {
    * folder or project, or its content beside it.
    */
   const goNode = (id: string, open: boolean) => {
+    leaveRef.current();
     void core
       .node(id)
       .then(async (d) => {
@@ -1114,6 +1348,7 @@ export function WorkspaceScreen(props: {
   const selectLayer = async (id: string, open: boolean) => {
     const item = tree.find((x) => x.id === id);
     if (!item) return;
+    leaveRef.current();
     if (!item.parent) {
       await loadRef.current(id);
       return;
@@ -1179,6 +1414,7 @@ export function WorkspaceScreen(props: {
             focusCanvas();
           },
           focus: (id) => {
+            leaveRef.current();
             if (g.nodes.has(id)) {
               ed?.focusNode(id);
               return;
@@ -1360,8 +1596,16 @@ export function WorkspaceScreen(props: {
   const path = net?.path ?? [];
   const { onUndoState } = props;
   useEffect(
-    () => onUndoState({ canUndo, canRedo, step: lastStep, map: view3d !== '2d' }),
-    [onUndoState, canUndo, canRedo, lastStep, view3d],
+    () =>
+      onUndoState({
+        canUndo,
+        canRedo,
+        step: lastStep,
+        map: view3d !== '2d',
+        canBack: navState.back,
+        canForward: navState.forward,
+      }),
+    [onUndoState, canUndo, canRedo, lastStep, view3d, navState],
   );
 
   return (
@@ -1372,6 +1616,8 @@ export function WorkspaceScreen(props: {
       data-nodes={nodes.length}
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
+      data-panel={details ? 'open' : 'closed'}
+      data-minimap={minimap ? 'open' : 'closed'}
     >
       <div className="ws-panel-probe" aria-hidden="true" />
       <div
@@ -1417,7 +1663,13 @@ export function WorkspaceScreen(props: {
           path={net.path}
           kindOf={(id) => tree.find((i) => i.id === id)?.kind ?? 'network'}
           panel={details !== null}
-          onGo={(id) => void loadRef.current(id)}
+          onGo={(id) => {
+            leaveRef.current();
+            void loadRef.current(id);
+          }}
+          marks={marks.map((m) => (m ? (tree.find((i) => i.id === m.net)?.name ?? '') : null))}
+          onMark={goMark}
+          onClearMark={clearMark}
         />
       ) : null}
       <div ref={geckoHost} className="ws-gecko" data-panel={details ? 'open' : 'closed'}>

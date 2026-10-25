@@ -56,6 +56,12 @@ export interface MapNav {
   go: (net: string, node: string | null) => void;
   /** The selected star or the cluster in focus changed. */
   change?: () => void;
+  /**
+   * A step of the map that goes somewhere — 2D ↔ 3D, `Enter`, a click on a
+   * star, `I`, `U`, a search's flight — before it goes: the screen keeps
+   * where it was (09 §6.1).
+   */
+  leave?: () => void;
 }
 
 const REST = { nodes: 3_000, edges: 4_500, seed: 11 };
@@ -161,8 +167,10 @@ export class Map3D {
 
   /** 2D → 3D or 3D → 2D; ignored while the bridge plays. */
   toggle(): void {
+    if (this.state !== '2d' && this.state !== '3d') return;
+    this.nav?.leave?.();
     if (this.state === '2d') void this.to3d();
-    else if (this.state === '3d') this.to2d();
+    else this.to2d();
   }
 
   destroy(): void {
@@ -234,6 +242,7 @@ export class Map3D {
   flyTo(id: string): void {
     const b = this.space?.body.get(id);
     if (b === undefined || this.state !== '3d') return;
+    this.nav?.leave?.();
     this.select(b);
     const p = this.at(b);
     if (p) this.fly(p, (this.starSize(b) * this.pxPerUnit()) / ARRIVE_PX);
@@ -403,11 +412,13 @@ export class Map3D {
     if (id === undefined) return;
     const cluster = isCluster(space.x.kind[b] ?? 0);
     const parent = space.ids[space.x.primaryNet[b] ?? -1] ?? space.ids[0] ?? id;
+    nav.leave?.();
     void this.to2d().then(() => nav.go(cluster ? id : parent, cluster ? null : id));
   }
 
   /** `I` (08 §6.3): fly into a cluster; it is in focus, the rest dimmed. */
   private into(b: number): void {
+    this.nav?.leave?.();
     this.focus = b;
     this.showFocus();
     this.flyToCluster(b);
@@ -419,6 +430,7 @@ export class Map3D {
     const space = this.space;
     if (!space) return;
     const parent = space.x.primaryNet[this.focus] ?? -1;
+    this.nav?.leave?.();
     this.focus = parent >= 0 ? parent : 0;
     this.showFocus();
     this.flyToCluster(this.focus);

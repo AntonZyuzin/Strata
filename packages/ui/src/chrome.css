@@ -698,11 +698,6 @@ button:focus-visible {
   display: none;
 }
 
-/* The star map's search: the Tab menu's look, centred over the map. */
-.map-search {
-  translate: -50% 0;
-}
-
 .proto-top {
   position: absolute;
   top: calc(6 * var(--u));
@@ -898,6 +893,66 @@ button:focus-visible {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* `Ctrl+F` (09 §3.3): a bar at the canvas's top middle, its width in the
+   UI font's `ch` whatever the language; the toggles stay pressed in. */
+.find-bar {
+  position: absolute;
+  z-index: 20;
+  top: calc(8 * var(--u));
+  left: calc(var(--layers-w) + (100% - var(--layers-w)) / 2);
+  translate: -50% 0;
+  width: 64ch;
+  padding: calc(3 * var(--u));
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
+}
+
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+}
+
+.find-row .tab-menu-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.find-toggle[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.find-count {
+  flex: none;
+  width: 10ch;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  color: var(--st-color-text-muted);
+}
+
+.find-fuzzy {
+  padding: calc(2 * var(--u)) calc(4 * var(--u)) 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+/* «Перейти к ноде» on the canvas and the star map: the Tab menu's look,
+   centred over the canvas; the path takes more room than a kind. */
+.node-search {
+  translate: -50% 0;
+}
+
+.node-search .tab-menu-row .tab-menu-detail {
+  max-width: 22ch;
 }
 
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
@@ -2170,6 +2225,12 @@ button.ws-path-step:active:not(:disabled) {
    triangles' column, the nodes' icons stand right of it; one and a half
    times the UI face (owner, 2026-10-24: twice was too big): three device
    pixels a font pixel on DPR 2, softer on DPR 1. */
+/* The filter (09 §2): the Tab menu's prompt, under the title. */
+.layers-filter {
+  flex: none;
+  margin: 0 calc(8 * var(--u)) calc(6 * var(--u)) calc(16 * var(--u));
+}
+
 .layers-title {
   flex: none;
   margin: 0;
@@ -2268,6 +2329,10 @@ button.ws-path-step:active:not(:disabled) {
 .layer-name.is-done .layer-label {
   text-decoration: line-through;
   opacity: 0.6;
+}
+
+.layer-row.is-way .layer-name {
+  color: var(--st-color-text-muted);
 }
 
 .layers-trash {

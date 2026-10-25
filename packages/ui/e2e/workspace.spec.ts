@@ -27,7 +27,9 @@ interface WsHook {
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
     canvas: HTMLCanvasElement;
+    lens: ReadonlySet<string> | null;
   };
+  editor(): { selected: string[] } | null;
   graph(): {
     nodes: Map<string, Node>;
     wireShape: 'straight' | 'bezier' | 'kinetic';
@@ -467,6 +469,58 @@ for (const deviceScaleFactor of [1, 2]) {
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['window', 'row'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`«Перейти к ноде» and the find bar keep their size in RU and EN @${deviceScaleFactor}x (09 §3.3–3.4)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const [locale, folder] of [
+      ['ru-RU', 'Папка'],
+      ['en-US', 'Folder'],
+    ] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Поиск');
+      await diveInto(page, folder, 'Уровни, локации и всё, что между ними');
+      await createNode(page, 640, 400, 'Мельница за туманным лесом у самой реки');
+      await settled(page);
+      await page.keyboard.press('Control+o');
+      const goto = page.locator('.goto');
+      await goto.locator('input').fill('мельн');
+      await expect(goto.locator('.tab-menu-row')).toHaveCount(1);
+      expect(await overflowing(page, '.goto'), `${locale} «Перейти» must fit`).toEqual([]);
+      const gotoBox = await box(page, '.goto');
+      const row = await box(page, '.goto .tab-menu-row');
+      await goto.locator('input').press('Escape');
+      await page.keyboard.press('Control+f');
+      const bar = page.locator('.find-bar');
+      // No match: the fuzzy line comes, a second line of the bar.
+      await bar.locator('input').fill('мельнциа');
+      await expect(bar.locator('.find-fuzzy')).toBeVisible();
+      expect(await overflowing(page, '.find-bar'), `${locale} the bar must fit`).toEqual([]);
+      boxes.push({
+        goto: gotoBox,
+        row,
+        bar: await box(page, '.find-bar'),
+        input: await box(page, '.find-bar input'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['goto', 'row', 'bar', 'input'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -1444,6 +1498,123 @@ test.describe('a workspace on the core', () => {
     await settled(page);
     await page.keyboard.press('Control+z');
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
+  });
+
+  test('Ctrl+O goes to a node anywhere with a flight; Shift+Enter opens; the trash gives back (09 §3.4)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Переход');
+    const ws = page.locator('.workspace');
+    await diveInto(page, 'Папка', 'Уровни');
+    await createNode(page, 500, 300, 'Мельница');
+    await settled(page);
+    await page.keyboard.press('KeyU');
+    await expect(ws).toHaveAttribute('data-depth', '1');
+    const goto = page.locator('.goto');
+    await page.keyboard.press('Control+o');
+    await goto.locator('input').fill('мельн');
+    await expect(goto.locator('.tab-menu-row')).toHaveCount(1);
+    await expect(goto.locator('.tab-menu-detail')).toHaveText('Уровни');
+    await goto.locator('input').press('Enter');
+    await expect(goto).toHaveCount(0);
+    // Its network on the canvas, the node selected at the flight's end.
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Мельница');
+    // An empty query offers the nodes visited last.
+    await page.keyboard.press('Control+o');
+    await expect(goto.locator('.tab-menu-row').first()).toContainText('Мельница');
+    await goto.locator('input').press('Escape');
+    // A node in the trash is found too and comes back.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Delete');
+    await expect(ws).toHaveAttribute('data-nodes', '0');
+    await expect(page.locator('.layers-trash')).toBeVisible();
+    await page.keyboard.press('Control+o');
+    await goto.locator('input').fill('мельн');
+    await expect(goto.locator('.tab-menu-header')).toHaveText('В корзине');
+    await goto.locator('input').press('Enter');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    // Shift+Enter opens: into a folder.
+    await page.keyboard.press('KeyU');
+    await expect(ws).toHaveAttribute('data-depth', '1');
+    await page.keyboard.press('Control+o');
+    await goto.locator('input').fill('уровни');
+    await expect(goto.locator('.tab-menu-row')).toHaveCount(1);
+    await goto.locator('input').press('Shift+Enter');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+  });
+
+  test('Ctrl+F finds by Houdini Find: the rest dims, Enter selects, Esc gives back (09 §3.3)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Найти');
+    await createTask(page, 'Анимация удара');
+    await createNode(page, 900, 250, 'Аниматик');
+    await createNode(page, 900, 550, 'Звук');
+    await select(page, 'Звук');
+    const lens = () =>
+      page.evaluate(() => {
+        const ws = window.__strataWs;
+        const g = ws?.graph();
+        const l = ws?.view.lens;
+        return l ? [...l].map((id) => g?.nodes.get(id)?.name).sort() : null;
+      });
+    const selected = () =>
+      page.evaluate(() => {
+        const ws = window.__strataWs;
+        const g = ws?.graph();
+        return (ws?.editor()?.selected ?? []).map((id) => g?.nodes.get(id)?.name).sort();
+      });
+    await page.keyboard.press('Control+f');
+    const bar = page.locator('.find-bar');
+    const field = bar.locator('input');
+    await field.fill('аним*');
+    await expect(bar.locator('.find-count')).toHaveText('0 из 2');
+    expect(await lens()).toEqual(['Аниматик', 'Анимация удара']);
+    await field.fill('аним* @задача');
+    await expect(bar.locator('.find-count')).toHaveText('0 из 1');
+    await field.press('ArrowDown');
+    await expect(bar.locator('.find-count')).toHaveText('1 из 1');
+    expect(await selected()).toEqual(['Анимация удара']);
+    // Esc: the selection as it was, nothing dimmed.
+    await field.press('Escape');
+    await expect(bar).toHaveCount(0);
+    expect(await selected()).toEqual(['Звук']);
+    expect(await lens()).toBeNull();
+    // Enter selects every match.
+    await page.keyboard.press('Control+f');
+    await field.fill('аним');
+    await expect(bar.locator('.find-count')).toHaveText('0 из 2');
+    await field.press('Enter');
+    await expect(bar).toHaveCount(0);
+    expect(await selected()).toEqual(['Аниматик', 'Анимация удара']);
+    // No match: the nearest names, by the engine's typos.
+    await page.keyboard.press('Control+f');
+    await field.fill('анимцаия');
+    await expect(bar.locator('.find-count')).toHaveText('0 из 0');
+    await expect(bar.locator('.find-fuzzy')).toContainText('«Анимация удара»');
+  });
+
+  test('the filter of «Ноды» keeps the matches and the way to them (09 §2)', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Фильтр');
+    await diveInto(page, 'Папка', 'Уровни');
+    await createNode(page, 500, 300, 'Мельница');
+    await createNode(page, 800, 300, 'Река');
+    await settled(page);
+    const rows = page.locator('.ws-layers .layer-label');
+    await expect(rows).toHaveText(['Уровни', 'Мельница', 'Река']);
+    const filter = page.locator('.layers-filter input');
+    // The other keyboard layout finds too (09 §2.4).
+    await filter.fill('vtkmybwf');
+    await expect(rows).toHaveText(['Уровни', 'Мельница']);
+    await expect(page.locator('.layer-row.is-way .layer-label')).toHaveText(['Уровни']);
+    await filter.press('Enter');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Мельница');
+    await filter.press('Escape');
+    await expect(rows).toHaveText(['Уровни', 'Мельница', 'Река']);
   });
 
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {

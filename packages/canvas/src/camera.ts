@@ -46,3 +46,30 @@ export class Camera {
     this.y = (box.minY + box.maxY) / 2 - h / 2 / this.zoom;
   }
 }
+
+/** Where a camera looks: the world point at the screen's top-left corner and the zoom. */
+export interface View {
+  x: number;
+  y: number;
+  zoom: number;
+}
+
+/** Duration of a flight to a node (09 §3.4: `Ctrl+O` flies; 06 §1.4 timings). */
+export const FLIGHT_MS = 450;
+
+/**
+ * A view between `from` and `to` at `k` ∈ [0, 1] of a flight over a screen
+ * of w × h: the screen's centre goes straight, the zoom changes by the same
+ * factor each step, both eased in and out.
+ */
+export function between(from: View, to: View, w: number, h: number, k: number): View {
+  const e = k < 0.5 ? 4 * k ** 3 : 1 - (-2 * k + 2) ** 3 / 2;
+  const zoom = from.zoom * (to.zoom / from.zoom) ** e;
+  const cx0 = from.x + w / 2 / from.zoom;
+  const cy0 = from.y + h / 2 / from.zoom;
+  const cx1 = to.x + w / 2 / to.zoom;
+  const cy1 = to.y + h / 2 / to.zoom;
+  const cx = cx0 + (cx1 - cx0) * e;
+  const cy = cy0 + (cy1 - cy0) * e;
+  return { x: cx - w / 2 / zoom, y: cy - h / 2 / zoom, zoom };
+}

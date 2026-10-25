@@ -34,6 +34,8 @@ export interface Interaction {
   hover: string | null;
   selection: ReadonlySet<string>;
   current: string | null;
+  /** The nodes a search matched; the rest are dimmed (07 §4.5). */
+  lens?: ReadonlySet<string> | null;
 }
 
 export interface DecorNode {
@@ -190,7 +192,8 @@ export class Decor {
       const lv = levelOf(2 * R);
       if (lv === 'dot') continue;
       const n = v.node;
-      const a = nodeAlpha(n);
+      const a =
+        ia.lens && !ia.lens.has(v.id) ? Math.min(nodeAlpha(n), fog.scene.lensAlpha) : nodeAlpha(n);
       const selected = ia.selection.has(v.id);
       const hovered = ia.hover === v.id;
       const closed = isClosed(n);

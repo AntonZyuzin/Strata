@@ -5,7 +5,7 @@ import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import 'pixi.js/unsafe-eval';
 import type { Pixels } from './backdrop';
 import { BackgroundLayer } from './background';
-import { Camera } from './camera';
+import { between, Camera, FLIGHT_MS, type View } from './camera';
 import { controls } from './curve';
 import { Decor, type DecorNode, type Interaction } from './decor';
 import { hexPath } from './hex';
@@ -100,6 +100,11 @@ export class CanvasView {
   /** Hover and selection, asked every frame; set by the editor. */
   interaction: () => Interaction = () => ({ hover: null, selection: new Set(), current: null });
   private motionReduced = false;
+  /** A flight of the camera under way (09 §3.4). */
+  private flight: { from: View; to: View; start: number | null } | null = null;
+  /** The nodes a search matched; the rest are dimmed (07 §4.5, 09 §3.3). */
+  private lensIds: ReadonlySet<string> | null = null;
+  private readonly dimmed = new WeakMap<WireStyle, WireStyle>();
   private resizer: ResizeObserver | null = null;
   private destroyed = false;
   private pending = 0;
@@ -206,6 +211,46 @@ export class CanvasView {
     this.motionReduced = on;
     this.decor.reducedMotion = on;
     this.background.reducedMotion = on;
+  }
+
+  /**
+   * Flies the camera to `to` (09 §3.4): the screen's centre straight, the
+   * zoom by equal factors; «Меньше движения» jumps. Input stops it.
+   */
+  flyTo(to: View): void {
+    const c = this.camera;
+    if (this.motionReduced) {
+      c.x = to.x;
+      c.y = to.y;
+      c.zoom = to.zoom;
+      this.flight = null;
+    } else {
+      this.flight = { from: { x: c.x, y: c.y, zoom: c.zoom }, to, start: null };
+    }
+    this.invalidate();
+  }
+
+  /** The camera stays where the flight brought it. */
+  stopFlight(): void {
+    this.flight = null;
+  }
+
+  get flying(): boolean {
+    return this.flight !== null;
+  }
+
+  /**
+   * Dims every node but `ids` to 25 % with the wires not between two of
+   * them (07 §4.5 «Приглушено линзой»; `Ctrl+F`, 09 §3.3); null — none dimmed.
+   */
+  get lens(): ReadonlySet<string> | null {
+    return this.lensIds;
+  }
+
+  setLens(ids: ReadonlySet<string> | null): void {
+    this.lensIds = ids;
+    for (const v of this.views.values()) this.applyLevel(v);
+    this.invalidate();
   }
 
   /** Shows a processed background picture (07 §7) and redraws; returns its p95 luminance. */
@@ -404,6 +449,17 @@ export class CanvasView {
       moving = this.tweens.length > 0;
     }
     const cam = this.camera;
+    const flight = this.flight;
+    if (flight) {
+      flight.start ??= now;
+      const k = Math.min(1, (now - flight.start) / FLIGHT_MS);
+      const at = between(flight.from, flight.to, this.width, this.height, k);
+      cam.x = at.x;
+      cam.y = at.y;
+      cam.zoom = at.zoom;
+      if (k >= 1) this.flight = null;
+      else moving = true;
+    }
     this.world.scale.set(cam.zoom);
     this.world.position.set(-cam.x * cam.zoom, -cam.y * cam.zoom);
     if (cam.zoom !== this.lastZoom) {
@@ -421,7 +477,7 @@ export class CanvasView {
       cam,
       this.width,
       this.height,
-      this.interaction(),
+      { ...this.interaction(), lens: this.lensIds },
       now,
     );
     this.app.render();
@@ -462,10 +518,22 @@ export class CanvasView {
       }
       this.wires.set(i, c);
       const style = this.wireStyle(from, to);
-      this.wires.setStyle(i, far && style === NORMAL_WIRE ? FAR_WIRE : style);
+      const shown = far && style === NORMAL_WIRE ? FAR_WIRE : style;
+      const lens = this.lensIds;
+      this.wires.setStyle(i, lens && !(lens.has(from) && lens.has(to)) ? this.dim(shown) : shown);
     }
     this.wires.upload();
     return kinetic && this.kinetics.moving;
+  }
+
+  /** A wire's style dimmed by the lens, one object per style. */
+  private dim(style: WireStyle): WireStyle {
+    let d = this.dimmed.get(style);
+    if (!d) {
+      d = { ...style, alpha: style.alpha * fog.scene.lensAlpha };
+      this.dimmed.set(style, d);
+    }
+    return d;
   }
 
   /** The wires of a node selected since the last frame sway three times (06 §6.8). */
@@ -510,7 +578,8 @@ export class CanvasView {
   private applyLevel(v: NodeView) {
     const n = v.node;
     const lv = levelOf(2 * v.r * this.camera.zoom);
-    const a = nodeAlpha(n);
+    const lens = this.lensIds;
+    const a = lens && !lens.has(v.id) ? Math.min(nodeAlpha(n), fog.scene.lensAlpha) : nodeAlpha(n);
     const closed = isClosed(n);
     v.body.visible = !n.ghost || lv === 'dot';
     v.body.tint = lv === 'dot' ? dotColor(n) : closed ? hex(fog.scene.doneFill) : PAPER;

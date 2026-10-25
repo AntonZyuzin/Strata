@@ -1,7 +1,15 @@
 import { glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { type Group, type MenuItem, type MenuNode, menuItems } from './menu';
+import {
+  type Group,
+  type MenuItem,
+  type MenuNode,
+  type MenuRanking,
+  type MenuSearch,
+  menuItems,
+  rankMenu,
+} from './menu';
 
 /**
  * Tab menu (06 §5, 07 §8.2): a window without a title bar, 52 ch of the UI font
@@ -23,16 +31,34 @@ export function TabMenu(props: {
   recent: readonly string[];
   /** Nodes with the flag «Шаблон» (05 §7), from the whole workspace. */
   templates?: readonly MenuNode[] | undefined;
+  /** The search engine (09 §2): it ranks what a query matches. */
+  search: MenuSearch;
   onChoose: (item: MenuItem) => void;
   onCancel: () => void;
 }) {
-  const { locale } = props;
+  const { locale, search, templates } = props;
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
+  // The engine answers in its worker: the rows stay those of the last
+  // answer until the next one comes, and `Enter` waits for the query's own.
+  const [ranking, setRanking] = useState<MenuRanking | null>(null);
+  const [waiting, setWaiting] = useState(false);
+  useEffect(() => {
+    if (query.trim() === '') return;
+    let live = true;
+    void rankMenu(search, query, templates ?? []).then((r) => {
+      if (live) setRanking(r);
+    });
+    return () => {
+      live = false;
+    };
+  }, [search, query, templates]);
+  const shown = query.trim() === '' ? query : (ranking?.query ?? query);
   const items = useMemo(
-    () => menuItems(locale, query, props.nodes, props.recent, props.templates),
-    [locale, query, props.nodes, props.recent, props.templates],
+    () => menuItems(locale, shown, props.nodes, props.recent, templates, ranking),
+    [locale, shown, props.nodes, props.recent, templates, ranking],
   );
+  const ready = query.trim() === '' || ranking?.query === query;
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: props.x, top: props.y });
@@ -55,6 +81,13 @@ export function TabMenu(props: {
   }, [props.x, props.y, items.length]);
 
   const current = items[Math.min(index, items.length - 1)];
+  // `Enter` typed before the engine's answer chooses once it comes.
+  const { onChoose } = props;
+  useEffect(() => {
+    if (!waiting || !ready) return;
+    setWaiting(false);
+    if (current) onChoose(current);
+  }, [waiting, ready, current, onChoose]);
 
   const onKey = (e: React.KeyboardEvent) => {
     const n = items.length;
@@ -78,7 +111,8 @@ export function TabMenu(props: {
         return;
       case 'Enter':
         e.preventDefault();
-        if (current) props.onChoose(current);
+        if (!ready) setWaiting(true);
+        else if (current) props.onChoose(current);
         return;
       case 'Escape':
         e.preventDefault();
@@ -118,7 +152,7 @@ export function TabMenu(props: {
           />
         </div>
         <div className="tab-menu-list" role="listbox" aria-label={t(locale, 'menu.query')}>
-          {items.length === 0 ? (
+          {items.length === 0 && ready ? (
             <div className="tab-menu-empty">{t(locale, 'menu.nothing', { q: query })}</div>
           ) : null}
           {items.map((item, i) => {

@@ -16,6 +16,7 @@ import {
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
+import { Camera } from './camera';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
@@ -343,6 +344,34 @@ export class Editor {
     this.view.invalidate();
   }
 
+  /**
+   * Flies to nodes and selects them (09 §3.4: `Ctrl+O`; §3.3: the next
+   * match of `Ctrl+F`): the camera ends framing them as `G` does.
+   */
+  flyTo(ids: string[], select = true): void {
+    const box = this.boxOf(ids.filter((id) => this.graph.nodes.has(id)));
+    if (!box) return;
+    const pad = 120;
+    const c = new Camera();
+    c.fit(
+      { minX: box.minX - pad, minY: box.minY - pad, maxX: box.maxX + pad, maxY: box.maxY + pad },
+      this.seen(),
+      this.view.height,
+    );
+    this.view.flyTo({ x: c.x, y: c.y, zoom: c.zoom });
+    if (select) this.select(ids);
+  }
+
+  /** Selects nodes, as a search chose them: `Enter` of `Ctrl+F` (09 §3.3). */
+  selectNodes(ids: string[]): void {
+    this.select(ids.filter((id) => this.graph.nodes.has(id)));
+  }
+
+  /** The selection, for a search to give back on `Esc` (09 §3.3). */
+  get selected(): string[] {
+    return [...this.selection];
+  }
+
   /** Selects a node the core made and keeps it in view, at the zoom one has (a template's copy). */
   reveal(id: string): void {
     if (!this.graph.nodes.has(id)) return;
@@ -595,6 +624,7 @@ export class Editor {
   private onDown(e: PointerEvent) {
     const { sx, sy } = this.local(e);
     this.view.canvas.focus({ preventScroll: true });
+    this.view.stopFlight();
     const m = this.mode;
     if (m.t === 'wire' && m.twoClick && e.button === 0) {
       this.finishWire(sx, sy);
@@ -1076,6 +1106,7 @@ export class Editor {
 
   private onWheel(e: WheelEvent) {
     e.preventDefault();
+    this.view.stopFlight();
     const { sx, sy } = this.local(e);
     const cam = this.view.camera;
     const scale = e.deltaMode === 1 ? 16 : 1;
@@ -1212,6 +1243,8 @@ export class Editor {
       default:
         return;
     }
+    // The keys that reach here move the camera: a flight gives way.
+    this.view.stopFlight();
     this.view.invalidate();
   }
 

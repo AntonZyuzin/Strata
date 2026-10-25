@@ -13,6 +13,7 @@ import {
   graphOf,
   type History,
   type HomeBackend,
+  hasCanvas,
   isTask,
   linkOf,
   type NetworkView,
@@ -38,6 +39,7 @@ import {
 import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
+import type { Scope } from '@strata/search';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { linkPreview } from '../backend';
@@ -51,13 +53,15 @@ import { type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
+import { netItems, searchClient, visited, visits } from '../search';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
+import { FindBar } from './FindBar';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
-import { MapSearch } from './MapSearch';
+import { NodeSearch } from './NodeSearch';
 import { PathBar } from './PathBar';
 
 /**
@@ -197,8 +201,13 @@ export function WorkspaceScreen(props: {
   const [boardFocus, setBoardFocus] = useState(false);
   const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
-  /** The star map's search (08 §10): `within` the cluster in focus for `Ctrl+F`. */
-  const [mapSearch, setMapSearch] = useState<{ within: string | null } | null>(null);
+  /**
+   * «Перейти к ноде» (09 §3.4): `Ctrl+O` on the canvas; on the star map
+   * `Ctrl+O` and `Ctrl+F`, `within` the cluster in focus (08 §10).
+   */
+  const [finder, setFinder] = useState<{ map: boolean; within: string | null } | null>(null);
+  /** `Ctrl+F` on the canvas (09 §3.3). */
+  const [finding, setFinding] = useState(false);
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
   /** The core's undo and redo: the session's, across networks (05 §11). */
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
@@ -301,6 +310,9 @@ export function WorkspaceScreen(props: {
       // the Tab menu is fixed to the page, the name field lies in this screen.
       tabMenu: (e) => {
         const r = el.getBoundingClientRect();
+        // The menu ranks the canvas's nodes as they are now (09 §2.7).
+        const g = graph.current;
+        if (g) searchClient().set('net', netItems(g.nodes.values(), netRef.current));
         setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top });
       },
       nameInput: (e) =>
@@ -670,6 +682,7 @@ export function WorkspaceScreen(props: {
       (window as unknown as { __strataWs: unknown }).__strataWs = {
         view: v,
         graph: () => graph.current,
+        editor: () => editor.current,
         core,
         net: () => netRef.current,
         map: () => map3d.current,
@@ -709,23 +722,46 @@ export function WorkspaceScreen(props: {
   useEffect(() => {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
     editor.current?.setOverlayOpen(
-      menu !== null || name !== null || view3d !== '2d' || boardFocus || viewerFocus || covered,
+      menu !== null ||
+        name !== null ||
+        finder !== null ||
+        view3d !== '2d' ||
+        boardFocus ||
+        viewerFocus ||
+        covered,
     );
-  }, [menu, name, view3d, boardFocus, viewerFocus, covered]);
+  }, [menu, name, finder, view3d, boardFocus, viewerFocus, covered]);
+
+  // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
+  useEffect(() => searchClient().set('space', tree), [tree]);
 
   useEffect(() => {
-    if (view3d !== '3d') {
-      setMapSearch(null);
-      return;
-    }
-    // The search window takes its own keys while it is open.
-    if (mapSearch) return;
+    // Mid-bridge (08 §7) neither view takes keys.
+    if (view3d === 'to3d' || view3d === 'to2d') return;
+    // A search window takes its own keys while it is open.
+    if (finder || covered) return;
     const key = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && !e.altKey && (e.code === 'KeyO' || e.code === 'KeyF')) {
+      const search = mod && !e.altKey && !e.shiftKey && (e.code === 'KeyO' || e.code === 'KeyF');
+      if (view3d === '2d') {
+        // A note's or a list's own search keeps its keys; so does any field.
+        const t = e.target as HTMLElement | null;
+        const typing =
+          t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+        if (!search || typing || menu || name) return;
+        e.preventDefault();
+        if (e.code === 'KeyO') {
+          setFinding(false);
+          setFinder({ map: false, within: null });
+        } else {
+          setFinding(true);
+        }
+        return;
+      }
+      if (search) {
         e.preventDefault();
         const within = e.code === 'KeyF' ? (map3d.current?.focusId() ?? null) : null;
-        setMapSearch({ within });
+        setFinder({ map: true, within });
         return;
       }
       if (e.code === 'KeyM' && !mod && !e.altKey) {
@@ -736,7 +772,13 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, mapSearch]);
+  }, [view3d, finder, covered, menu, name]);
+
+  // A search of one view closes with it (2D ↔ 3D).
+  useEffect(() => {
+    setFinder((f) => (f && f.map !== (view3d === '3d') ? null : f));
+    if (view3d !== '2d') setFinding(false);
+  }, [view3d]);
 
   const focusCanvas = useCallback(() => host.current?.querySelector('canvas')?.focus(), []);
 
@@ -802,6 +844,26 @@ export function WorkspaceScreen(props: {
     netRef.current = opened.root;
     void loadRef.current(opened.root);
   }, [opened]);
+
+  /**
+   * Goes to a node (09 §3.4): the network of its primary placement on the
+   * canvas, a flight to it, the node selected (06 §10.3); `open` — into a
+   * folder or project, or its content beside it.
+   */
+  const goNode = (id: string, open: boolean) => {
+    void core
+      .node(id)
+      .then(async (d) => {
+        if (!d.parent || (open && hasCanvas(d.kind))) {
+          await loadRef.current(id);
+          return;
+        }
+        if (d.parent !== netRef.current) await loadRef.current(d.parent);
+        editor.current?.flyTo([id]);
+        if (open) eventsRef.current?.open?.(id);
+      })
+      .catch(failed);
+  };
 
   const restore = async (item: TrashItem) => {
     try {
@@ -1233,6 +1295,15 @@ export function WorkspaceScreen(props: {
     return items;
   };
 
+  // What «Перейти к ноде» ranks with, taken when it opens.
+  const finderScope = useMemo<Scope>(
+    () => (finder?.within ? { t: 'under', net: finder.within } : { t: 'all' }),
+    [finder],
+  );
+  const finderVisits = useMemo(
+    () => (finder ? visits(openedRef.current.workspace.id) : {}),
+    [finder],
+  );
   // Templates of the whole workspace for the Tab menu (06 §5.2); what this
   // screen has not written yet is in the tree after its next refresh.
   const templates = useMemo(
@@ -1301,6 +1372,7 @@ export function WorkspaceScreen(props: {
           onSelect={(id) => void selectLayer(id, false)}
           onOpen={(id) => void selectLayer(id, true)}
           onRestore={(item) => void restore(item)}
+          search={searchClient()}
         />
       ) : null}
       {net && view3d === '2d' ? (
@@ -1369,20 +1441,59 @@ export function WorkspaceScreen(props: {
           </li>
         ))}
       </ul>
-      {mapSearch && view3d === '3d' ? (
-        <MapSearch
+      {finder && (view3d === '3d') === finder.map ? (
+        <NodeSearch
           locale={locale}
+          label={t(
+            locale,
+            finder.map ? (finder.within ? 'map.findHere' : 'map.find') : 'search.goTo',
+          )}
+          className={finder.map ? 'map-search' : 'goto'}
+          search={searchClient()}
           items={tree}
-          within={mapSearch.within}
+          scope={finderScope}
+          here={finder.map ? undefined : netRef.current}
+          visits={finderVisits}
+          trash={finder.map ? undefined : (trash ?? undefined)}
           left={
             (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
           }
           top={(host.current?.getBoundingClientRect().top ?? 0) + 48}
-          onChoose={(id) => {
-            setMapSearch(null);
-            map3d.current?.flyTo(id);
+          onChoose={(id, how) => {
+            const map = finder.map;
+            setFinder(null);
+            visited(openedRef.current.workspace.id, id);
+            if (map) {
+              map3d.current?.flyTo(id);
+              return;
+            }
+            focusCanvas();
+            if (how === 'restore') {
+              const item = trash?.find((x) => x.id === id);
+              if (item) void restore(item).then(() => goNode(id, false));
+              return;
+            }
+            goNode(id, how === 'open');
           }}
-          onClose={() => setMapSearch(null)}
+          onClose={() => {
+            setFinder(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {finding && view3d === '2d' && g && ed ? (
+        <FindBar
+          locale={locale}
+          search={searchClient()}
+          graph={g}
+          editor={ed}
+          view={viewRef.current}
+          net={netRef.current}
+          tree={tree}
+          onClose={() => {
+            setFinding(false);
+            focusCanvas();
+          }}
         />
       ) : null}
       {menu ? (
@@ -1395,6 +1506,7 @@ export function WorkspaceScreen(props: {
           nodes={nodes}
           recent={recent}
           templates={templates}
+          search={searchClient()}
           onChoose={choose}
           onCancel={() => {
             setMenu(null);

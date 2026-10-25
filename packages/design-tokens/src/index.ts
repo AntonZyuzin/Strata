@@ -100,6 +100,8 @@ export const fog = {
     doneAlpha: 0.4,
     pauseAlpha: 0.6,
     ghostAlpha: 0.5,
+    /** Nodes a lens or `Ctrl+F` does not match (07 §4.5 «Приглушено линзой»). */
+    lensAlpha: 0.25,
     labelPlate: 'rgba(0, 0, 0, 0.7)',
     attention: palette.yellow500,
     overdue: palette.red500,

@@ -2,6 +2,8 @@ import {
   canInsert,
   downstream,
   extract,
+  type Flag,
+  flagsOf,
   type Graph,
   type GraphNode,
   insertIntoWire,
@@ -9,6 +11,7 @@ import {
   newId,
   newNode,
   shake,
+  switchFlag,
   type WireShape,
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
@@ -98,6 +101,11 @@ export interface EditorEvents {
    * canvas at a screen point; the Chrome shows its menu there.
    */
   contextMenu?(e: { sx: number; sy: number; at: MenuTarget }): void;
+  /**
+   * A template chosen in the Tab menu (05 §7): its copy goes at (x, y), the
+   * `inputs` wired into it. The copy is the core's: everything inside comes too.
+   */
+  template?(e: { id: string; name: string; x: number; y: number; inputs: string[] }): void;
 }
 
 /** What the right button was pressed on. */
@@ -114,7 +122,16 @@ export type MenuChoice =
       /** Open the name input after creating (the kind's name was used as a placeholder). */
       rename: boolean;
     }
-  | { t: 'existing'; id: string };
+  | { t: 'existing'; id: string }
+  /** A node with the flag «Шаблон»: its copy (05 §7). */
+  | { t: 'template'; id: string; kind: NodeKind; name: string };
+
+/** The flags with a key on the canvas (06 §8); «Скрыть от AI» and «Замок» come with MCP. */
+const FLAG_KEYS: Partial<Record<string, Flag>> = {
+  KeyR: 'key',
+  KeyQ: 'pause',
+  KeyE: 'template',
+};
 
 type Hit =
   | { t: 'node'; id: string }
@@ -326,11 +343,51 @@ export class Editor {
     this.view.invalidate();
   }
 
+  /** Selects a node the core made and keeps it in view, at the zoom one has (a template's copy). */
+  reveal(id: string): void {
+    if (!this.graph.nodes.has(id)) return;
+    this.select([id]);
+    this.follow(id);
+  }
+
   /** Selects one node and keeps it in view (the «Структура» tree, the panel's links). */
   focusNode(id: string): void {
     if (!this.graph.nodes.has(id)) return;
     this.select([id]);
     this.frameNodes([id]);
+  }
+
+  /**
+   * The nodes a flag's key hits (06 §8): the node under the cursor — the
+   * whole selection when it is in it; with nothing under it, the selection.
+   */
+  flagTargets(id: string | null = this.hoverNode()): string[] {
+    if (id && !this.selection.has(id)) return [id];
+    return [...this.selection];
+  }
+
+  /**
+   * `R`, `Q`, `E` and the menu's flags (06 §8): set on all the nodes when
+   * one of them lacks it, else cleared on all; one step of undo.
+   */
+  switchFlag(flag: Flag, ids: string[] = this.flagTargets()): void {
+    const nodes = ids.filter((id) => this.graph.nodes.has(id));
+    if (this.mode.t !== 'idle' || nodes.length === 0) return;
+    const on = nodes.some((id) => {
+      const n = this.graph.nodes.get(id);
+      return !!n && !flagsOf(n).includes(flag);
+    });
+    const label = {
+      key: `proto.change.flag.${flag}.${on ? 'on' : 'off'}`,
+      params: { n: nodes.length },
+    };
+    this.graph.transaction(label, (tx) => switchFlag(this.graph, tx, nodes, flag));
+    this.view.invalidate();
+  }
+
+  private hoverNode(): string | null {
+    const h = this.hover;
+    return this.pointer.inside && (h.t === 'node' || h.t === 'port') ? h.id : null;
   }
 
   /** The style `Shift+S` turns the network's wires to next (06 §6.2). */
@@ -376,6 +433,12 @@ export class Editor {
     }
     const r = radiusOf({ kind: choice.kind, key: false });
     const place = this.placeNew(m, r);
+    const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
+    if (choice.t === 'template') {
+      const { id, name } = choice;
+      this.events.template?.({ id, name, x: place.x, y: place.y, inputs: [...inputs] });
+      return;
+    }
     const node = newNode({
       id: newId(),
       name: choice.name,
@@ -384,7 +447,6 @@ export class Editor {
       x: place.x,
       y: place.y,
     });
-    const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
     this.graph.transaction({ key: 'proto.change.create', params: { name: node.name } }, (tx) => {
       tx.add(node);
       for (const s of inputs) tx.connect(s, node.id);
@@ -1093,6 +1155,15 @@ export class Editor {
         if (mod) return;
         this.scissorsCursor();
         return;
+      case 'KeyR':
+      case 'KeyQ':
+      case 'KeyE': {
+        const flag = FLAG_KEYS[e.code];
+        if (mod || e.shiftKey || e.altKey || !flag) return;
+        e.preventDefault();
+        this.switchFlag(flag);
+        return;
+      }
       case 'KeyL':
         if (mod) return;
         this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);

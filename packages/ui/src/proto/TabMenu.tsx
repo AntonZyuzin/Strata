@@ -21,6 +21,8 @@ export function TabMenu(props: {
   initialQuery: string;
   nodes: readonly MenuNode[];
   recent: readonly string[];
+  /** Nodes with the flag «Шаблон» (05 §7), from the whole workspace. */
+  templates?: readonly MenuNode[] | undefined;
   onChoose: (item: MenuItem) => void;
   onCancel: () => void;
 }) {
@@ -28,8 +30,8 @@ export function TabMenu(props: {
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
   const items = useMemo(
-    () => menuItems(locale, query, props.nodes, props.recent),
-    [locale, query, props.nodes, props.recent],
+    () => menuItems(locale, query, props.nodes, props.recent, props.templates),
+    [locale, query, props.nodes, props.recent, props.templates],
   );
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);

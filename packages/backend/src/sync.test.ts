@@ -86,6 +86,28 @@ describe('the canvas and the core in step', () => {
     expect(errors).toEqual([]);
   });
 
+  it('keeps the flags in the core and copies a template, one step of undo (05 §7)', async () => {
+    const { home, root, g, sync, errors } = await start();
+    g.transaction({ key: 't.create' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'Баг', kind: 'project', icon: 0, x: 0, y: 0 }));
+      tx.flag(A, 'template', true);
+      tx.flag(A, 'key', true);
+    });
+    await sync.settled();
+    const tree = await home.core.tree();
+    expect(tree.find((i) => i.id === A)?.flags).toEqual(['key', 'template']);
+    expect(graphOf(await home.core.view(root), () => 0).nodes.get(A)).toMatchObject({
+      key: true,
+      template: true,
+    });
+    const at = { net: root, x: 300, y: 40 };
+    const { id, history } = await home.core.copyNode(A, at, [], { key: 't.copy' });
+    expect(history.undo).toEqual({ key: 't.copy' });
+    const copy = (await home.core.view(root)).nodes.find((n) => n.id === id);
+    expect(copy).toMatchObject({ name: 'Баг', kind: 'project', x: 300, y: 40, flags: ['key'] });
+    expect(errors).toEqual([]);
+  });
+
   it("follows a link's preview from the core, outside undo (✅ Q-13-16)", async () => {
     const { home, root, g, sync } = await start();
     g.transaction({ key: 't.link' }, (tx) => {

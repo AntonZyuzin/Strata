@@ -14,7 +14,7 @@
 //! and turns a note's `[[links]]` into its text wires.
 
 use crate::changeset::{Changeset, KeyWrite, Label, RevertReport};
-use crate::ops::{Op, WireStyle};
+use crate::ops::{Flag, Op, WireStyle};
 use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
@@ -195,6 +195,9 @@ pub struct Attrs {
     /// A link asset's preview picture, its SHA-256 (05 §4.4, ✅ Q-13-16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Its flags (05 §7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<Flag>,
 }
 
 /// A roll-up (05 §6.4, ☑ Q-05-2, ADR-0010): over the tasks inside a folder
@@ -311,6 +314,9 @@ pub struct TreeItem {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Its flags (05 §7): templates are offered in the Tab menu.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<Flag>,
 }
 
 /// A person of the workspace (05 §10).
@@ -837,6 +843,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     let from = made.get(&n).copied().or_else(|| self.kind(n));
                     let pair = matches!(
                         (from, *kind),
@@ -888,6 +895,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     put(
                         &self.index_doc(n),
                         "name",
@@ -961,6 +969,7 @@ impl<S: Store> Workspace<S> {
                         if n == self.root {
                             return Err(invalid("the root network cannot go to the trash"));
                         }
+                        self.unlocked(n)?;
                         let index = self.index_doc(n);
                         let key = n.to_text();
                         put(&index, "trashedAt", &key, Some(Val::Int(ts)));
@@ -986,6 +995,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     let kind = made.get(&n).copied().or_else(|| self.kind(n));
                     let task = kind.is_some_and(NodeKind::is_task);
                     let asset = kind == Some(NodeKind::Asset);
@@ -1049,6 +1059,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     let kind = made.get(&n).copied().or_else(|| self.kind(n));
                     // Taking a person off stays open to any kind, as clearing a field.
                     if *on && !kind.is_some_and(NodeKind::is_task) {
@@ -1085,6 +1096,20 @@ impl<S: Store> Workspace<S> {
                     };
                     p.insert("name".to_owned(), Val::str(name.trim()));
                     put("manifest", "people", id, Some(Val::Map(p)));
+                }
+                Op::SetFlag { id, flag, on } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    put(
+                        &self.index_doc(n),
+                        "flag",
+                        &format!("{}|{}", n.to_text(), flag.as_str()),
+                        on.then_some(Val::Int(1)),
+                    );
                 }
                 Op::SetWireStyle { net, style } => {
                     // A setting of the network's own document (05 §9.2).
@@ -1188,6 +1213,7 @@ impl<S: Store> Workspace<S> {
     /// then become its text wires; the answer says whether they changed.
     pub fn doc_push(&mut self, doc: &str, update: &[u8]) -> Result<bool> {
         let node = self.content_node(doc)?;
+        self.unlocked(node)?;
         self.ensure_doc(doc)?;
         let d = &self.docs[doc];
         let vv = d.oplog_vv();
@@ -1336,7 +1362,43 @@ impl<S: Store> Workspace<S> {
             url: attr("url"),
             icon: attr("icon"),
             preview: attr("preview"),
+            flags: self.flags(node),
         }
+    }
+
+    /// The node's flags (05 §7), in their order.
+    fn flags(&self, node: NodeId) -> Vec<Flag> {
+        let Some(index) = self.docs.get(&self.index_doc(node)) else {
+            return Vec::new();
+        };
+        let key = node.to_text();
+        Flag::ALL
+            .into_iter()
+            .filter(|f| read(index, "flag", &format!("{key}|{}", f.as_str())).is_some())
+            .collect()
+    }
+
+    /// «Замок» (05 §7): a locked node keeps its name, fields and content and
+    /// stays out of the trash; it moves and its wires change.
+    fn unlocked(&self, node: NodeId) -> Result<()> {
+        if self.flagged(node, Flag::Lock) {
+            return Err(invalid(format!(
+                "node {} is locked (05 §7)",
+                node.to_text()
+            )));
+        }
+        Ok(())
+    }
+
+    fn flagged(&self, node: NodeId, flag: Flag) -> bool {
+        self.docs.get(&self.index_doc(node)).is_some_and(|index| {
+            read(
+                index,
+                "flag",
+                &format!("{}|{}", node.to_text(), flag.as_str()),
+            )
+            .is_some()
+        })
     }
 
     /// Every network's placed nodes: `net → nodes`, from the placements.
@@ -1404,7 +1466,8 @@ impl<S: Store> Workspace<S> {
             let mut stack = vec![node];
             while let Some(at) = stack.pop() {
                 for &n in children.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                    if !self.alive(n) || !seen.insert(n) {
+                    // A node on pause stays out of roll-ups, and what is inside it (05 §6.4).
+                    if !self.alive(n) || self.flagged(n, Flag::Pause) || !seen.insert(n) {
                         continue;
                     }
                     let kind = self.kind(n);
@@ -1423,7 +1486,7 @@ impl<S: Store> Workspace<S> {
         }
         while let Some(at) = stack.pop() {
             for &n in wires.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                if self.is_task(n) && seen.insert(n) {
+                if self.is_task(n) && !self.flagged(n, Flag::Pause) && seen.insert(n) {
                     tasks.push(n);
                     stack.push(n);
                 }
@@ -1552,7 +1615,8 @@ impl<S: Store> Workspace<S> {
     }
 
     /// A row of the preview with the rows under it; none for a node shown
-    /// already or a folder with no tasks.
+    /// already, a node on pause — the roll-up skips it (05 §7) — or a folder
+    /// with no tasks.
     fn task_row(
         &self,
         n: NodeId,
@@ -1561,7 +1625,7 @@ impl<S: Store> Workspace<S> {
         seen: &mut BTreeSet<NodeId>,
         depth: u32,
     ) -> Option<TaskRow> {
-        if !seen.insert(n) {
+        if self.flagged(n, Flag::Pause) || !seen.insert(n) {
             return None;
         }
         let rows = self.task_rows(n, children, wires, seen, depth + 1);
@@ -1678,6 +1742,180 @@ impl<S: Store> Workspace<S> {
         Ok(self.store.asset(sha)?)
     }
 
+    /// A copy of a node where a template is chosen (05 §7, `E`): a new node
+    /// of its kind at (x, y) in `net`, with its name, fields, people and
+    /// flags — the copy is no template — and its content document; a folder
+    /// or a project copies everything inside it, deep, with the positions,
+    /// the hand-drawn wires between the copies and the networks' wire style
+    /// (05 §5 «Копировать»). `inputs` wire into the copy, as into a node made
+    /// at the end of a wire being drawn (06 §5.1). One step of undo; the
+    /// copied notes' text wires follow as the system's (05 §8.2 rule 4). The
+    /// new node's id back.
+    pub fn copy_node(
+        &mut self,
+        from: &str,
+        net: &str,
+        (x, y): (f64, f64),
+        inputs: &[String],
+        label: Label,
+    ) -> Result<String> {
+        let source = self.live(from)?;
+        self.network(net)?;
+        let children = self.children();
+        // Source, copy, the copy's network and position; parents before children.
+        let top = NodeId::new();
+        let mut copies: Vec<(NodeId, NodeId, String, f64, f64)> =
+            vec![(source, top, net.to_owned(), x, y)];
+        let mut stack = vec![(source, top)];
+        while let Some((s, d)) = stack.pop() {
+            if !self.kind(s).is_some_and(NodeKind::has_canvas) {
+                continue;
+            }
+            let doc = format!("net/{}", s.to_text());
+            self.ensure_doc(&doc)?;
+            for &child in children.get(&s).map(Vec::as_slice).unwrap_or(&[]) {
+                // What lives here; an appearance of a node elsewhere is no copy (05 §5).
+                let home = self
+                    .field(child, "primaryNet")
+                    .and_then(|v| v.as_str().map(str::to_owned));
+                if !self.alive(child) || home.as_deref() != Some(s.to_text().as_str()) {
+                    continue;
+                }
+                let (px, py) = match read(&self.docs[&doc], "pos", &child.to_text()) {
+                    Some(Val::List(p)) => (
+                        p.first().and_then(Val::as_f64).unwrap_or(0.0),
+                        p.get(1).and_then(Val::as_f64).unwrap_or(0.0),
+                    ),
+                    _ => (0.0, 0.0),
+                };
+                let copy = NodeId::new();
+                copies.push((child, copy, d.to_text(), px, py));
+                stack.push((child, copy));
+            }
+        }
+        let made: HashMap<NodeId, NodeId> = copies.iter().map(|c| (c.0, c.1)).collect();
+        let mut ops = Vec::new();
+        for (s, d, parent, px, py) in &copies {
+            let id = d.to_text();
+            let kind = self.kind(*s).unwrap_or(NodeKind::Note);
+            ops.push(Op::CreateNode {
+                id: Some(id.clone()),
+                kind,
+                name: self.name(*s),
+                net: parent.clone(),
+                x: *px,
+                y: *py,
+            });
+            let a = self.attrs(*s);
+            let text = |key: &str, v: Option<String>| {
+                v.map(|v| Op::SetAttr {
+                    id: id.clone(),
+                    key: key.to_owned(),
+                    value: Some(Val::str(v)),
+                })
+            };
+            ops.extend(
+                [
+                    text("status", a.status),
+                    text("start", a.start),
+                    text("deadline", a.deadline),
+                    text("priority", a.priority),
+                    text("asset", a.asset),
+                    text("mime", a.mime),
+                    text("url", a.url),
+                    text("icon", a.icon),
+                    text("preview", a.preview),
+                ]
+                .into_iter()
+                .flatten(),
+            );
+            if let Some(color) = a.color {
+                ops.push(Op::SetAttr {
+                    id: id.clone(),
+                    key: "color".to_owned(),
+                    value: Some(Val::Int(color)),
+                });
+            }
+            for person in a.assignees {
+                ops.push(Op::Assign {
+                    id: id.clone(),
+                    person,
+                    on: true,
+                });
+            }
+            // The copy of a template is no template; a template inside stays one.
+            for flag in a
+                .flags
+                .into_iter()
+                .filter(|f| !(*s == source && *f == Flag::Template))
+            {
+                ops.push(Op::SetFlag {
+                    id: id.clone(),
+                    flag,
+                    on: true,
+                });
+            }
+            if kind.has_canvas() {
+                let style = read(
+                    &self.docs[&format!("net/{}", s.to_text())],
+                    "settings",
+                    "wireStyle",
+                )
+                .and_then(|v| v.as_str().and_then(WireStyle::parse));
+                if style.is_some() {
+                    ops.push(Op::SetWireStyle { net: id, style });
+                }
+            }
+        }
+        // Wires drawn by hand between the copies; text wires come from the text.
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for (key, v) in all.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let end = |k: &str| {
+                    v.get(k)
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                let (Some(a), Some(b)) = (end("from"), end("to")) else {
+                    continue;
+                };
+                let manual = ["manual", "import"]
+                    .iter()
+                    .any(|o| read(shard, "edgeOrigin", &format!("{key}|{o}")).is_some());
+                if let (true, Some(ca), Some(cb)) = (manual, made.get(&a), made.get(&b)) {
+                    ops.push(Op::Connect {
+                        from: ca.to_text(),
+                        to: cb.to_text(),
+                    });
+                }
+            }
+        }
+        for input in inputs {
+            ops.push(Op::Connect {
+                from: input.clone(),
+                to: top.to_text(),
+            });
+        }
+        self.apply(&ops, label)?;
+        // Content documents as the editors' pushes are: outside the step.
+        for (s, d, ..) in &copies {
+            let Some(doc) = load(&self.store, &format!("content/{}", s.to_text()))? else {
+                continue;
+            };
+            let bytes = doc.export(ExportMode::Snapshot).map_err(engine)?;
+            let name = format!("content/{}", d.to_text());
+            self.store.append(&name, &bytes, now_ms())?;
+            self.docs.insert(name, doc);
+            if self.kind(*d) == Some(NodeKind::Note) {
+                self.relink(*d)?;
+            }
+        }
+        Ok(top.to_text())
+    }
+
     /// The link asset's URL, for its preview to be fetched (✅ Q-13-16).
     pub fn link_of(&self, id: &str) -> Result<Option<String>> {
         let n = self.live(id)?;
@@ -1692,7 +1930,8 @@ impl<S: Store> Workspace<S> {
     /// page's title becomes the node's name while the name is still the one
     /// it got with the link — its host, the link itself, or nothing. Derived
     /// from the link, so a step of the system, not of the user's undo (05
-    /// §11). False when nothing changed, or the node's link is another by now.
+    /// §11). False when nothing changed, the node's link is another by now,
+    /// or the node is locked (05 §7).
     pub fn apply_preview(
         &mut self,
         id: &str,
@@ -1701,7 +1940,10 @@ impl<S: Store> Workspace<S> {
         picture: Option<&[u8]>,
     ) -> Result<bool> {
         let n = self.live(id)?;
-        if self.kind(n) != Some(NodeKind::Asset) || self.attrs(n).url.as_deref() != Some(url) {
+        if self.kind(n) != Some(NodeKind::Asset)
+            || self.attrs(n).url.as_deref() != Some(url)
+            || self.flagged(n, Flag::Lock)
+        {
             return Ok(false);
         }
         let mut ops = Vec::new();
@@ -1791,6 +2033,7 @@ impl<S: Store> Workspace<S> {
                     mime: look.mime,
                     url: look.url,
                     icon: look.icon,
+                    flags: self.flags(n),
                 });
             }
         }

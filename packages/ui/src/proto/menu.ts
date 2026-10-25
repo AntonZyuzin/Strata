@@ -5,8 +5,10 @@ import { norm, rank, score } from './search';
 
 /**
  * Items of the Tab menu (06 §5.2): with an empty query — the kinds, and
- * recent choices that are not among them; with a query — «Создать» (a note named by the query first, then
- * matching kinds) and «Вставить здесь» (existing nodes). ADR-0010: no classes.
+ * recent choices that are not among them, then «Шаблоны» (nodes with the
+ * flag, 05 §7); with a query — «Создать» (a note named by the query first, then
+ * matching kinds), the matching templates and «Вставить здесь» (existing
+ * nodes). ADR-0010: no classes.
  */
 
 export interface Template {
@@ -26,7 +28,7 @@ export const KINDS: Template[] = [
 
 const TEMPLATES = KINDS;
 
-export type Group = 'recent' | 'kinds' | 'create' | 'insert';
+export type Group = 'recent' | 'kinds' | 'create' | 'templates' | 'insert';
 
 export interface MenuItem {
   id: string;
@@ -66,11 +68,24 @@ function createItem(locale: Locale, tpl: Template, name: string | null, group: G
   };
 }
 
+/** A template's row: choosing it makes its copy (05 §7). */
+function templateItem(locale: Locale, n: MenuNode): MenuItem {
+  return {
+    id: `template:${n.id}`,
+    group: 'templates',
+    label: n.name,
+    detail: t(locale, `kind.${n.kind}` as const),
+    kind: n.kind,
+    choice: { t: 'template', id: n.id, kind: n.kind, name: n.name },
+  };
+}
+
 export function menuItems(
   locale: Locale,
   query: string,
   nodes: readonly MenuNode[],
   recent: readonly string[],
+  templates: readonly MenuNode[] = [],
 ): MenuItem[] {
   const q = query.trim();
   if (q === '') {
@@ -82,10 +97,15 @@ export function menuItems(
       .map((key) => TEMPLATES.find((tpl) => tpl.key === key))
       .filter((tpl): tpl is Template => !!tpl)
       .map((tpl) => createItem(locale, tpl, null, 'recent'));
-    return [...recentItems, ...KINDS.map((tpl) => createItem(locale, tpl, null, 'kinds'))].slice(
-      0,
-      MAX_ROWS,
-    );
+    // The templates by name, so the same template keeps its row.
+    const ours = [...templates]
+      .sort((a, b) => a.name.localeCompare(b.name, locale))
+      .map((n) => templateItem(locale, n));
+    return [
+      ...recentItems,
+      ...KINDS.map((tpl) => createItem(locale, tpl, null, 'kinds')),
+      ...ours,
+    ].slice(0, MAX_ROWS);
   }
   // «вид: имя» creates that kind with that name.
   const colon = q.indexOf(':');
@@ -100,7 +120,10 @@ export function menuItems(
       .sort((a, b) => b.s - a.s)[0]?.x;
     if (tpl && name !== '') return [createItem(locale, tpl, name, 'create')];
   }
-  const exact = TEMPLATES.some((tpl) => namesOf(tpl).some((n) => norm(n) === norm(q)));
+  // A query that names a kind or a template asks for it, not for a note so named.
+  const exact =
+    TEMPLATES.some((tpl) => namesOf(tpl).some((n) => norm(n) === norm(q))) ||
+    templates.some((n) => norm(n.name) === norm(q));
   const create: MenuItem[] = exact
     ? []
     : [
@@ -113,18 +136,19 @@ export function menuItems(
           choice: { t: 'create', kind: 'note', name: q, rename: false },
         },
       ];
-  const templates = rank(
+  const kinds = rank(
     q,
     TEMPLATES.flatMap((tpl) => namesOf(tpl).map((n) => ({ tpl, n }))),
     (x) => x.n,
     TEMPLATES.length * 2,
   );
   const seen = new Set<string>();
-  for (const { tpl } of templates) {
+  for (const { tpl } of kinds) {
     if (seen.has(tpl.key)) continue;
     seen.add(tpl.key);
     create.push(createItem(locale, tpl, null, 'create'));
   }
+  const ours = rank(q, templates, (n) => n.name, MAX_ROWS).map((n) => templateItem(locale, n));
   const insert = rank(q, nodes, (n) => n.name, MAX_ROWS).map(
     (n): MenuItem => ({
       id: `insert:${n.id}`,
@@ -135,7 +159,7 @@ export function menuItems(
       choice: { t: 'existing', id: n.id },
     }),
   );
-  return [...create, ...insert].slice(0, MAX_ROWS);
+  return [...create, ...ours, ...insert].slice(0, MAX_ROWS);
 }
 
 /** Recent choices, the last 8, kept on this device (06 §5.2). */

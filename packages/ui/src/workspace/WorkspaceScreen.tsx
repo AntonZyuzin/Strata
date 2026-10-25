@@ -4,6 +4,8 @@ import {
   type ChangeLabel,
   type CoreOp,
   CoreSync,
+  type Flag,
+  flagsOf,
   followFolds,
   followPreviews,
   followWires,
@@ -37,7 +39,7 @@ import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
-import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { nodeIconFile, nodeIconImages } from '../icons/Icon';
@@ -327,6 +329,18 @@ export function WorkspaceScreen(props: {
           const h = which === 'undo' ? await core.undo() : await core.redo();
           setHistory(h);
           await show(netRef.current);
+        }).catch(refused);
+      },
+      // A template's copy is the core's (05 §7): everything inside comes too,
+      // one step of undo; the network is read again with it.
+      template: (e) => {
+        void queue(async () => {
+          await sync.current?.settled();
+          const label = { key: 'proto.change.template', params: { name: e.name } };
+          const at = { net: netRef.current, x: e.x, y: e.y };
+          const { id } = await core.copyNode(e.id, at, e.inputs, label);
+          await show(netRef.current);
+          editor.current?.reveal(id);
         }).catch(refused);
       },
       layout: (ids) => {
@@ -1200,6 +1214,16 @@ export function WorkspaceScreen(props: {
     if (n.kind === 'project') {
       items.push(makeInto('task', 'ctx.makeTask'), makeInto('network', 'ctx.makeFolder'));
     }
+    // The flags of 06 §8, ticked when every node they hit has them.
+    const hit = ed.flagTargets(n.id).flatMap((id) => g.nodes.get(id) ?? []);
+    const flag = (f: Flag, hint: string, separated = false): MenuEntry => ({
+      label: t(locale, `flag.${f}` as MessageKey),
+      hint,
+      separated,
+      checked: hit.every((x) => flagsOf(x).includes(f)),
+      onSelect: () => ed.switchFlag(f, ed.flagTargets(n.id)),
+    });
+    items.push(flag('key', 'R', true), flag('pause', 'Q'), flag('template', 'E'));
     items.push({
       label: t(locale, 'ctx.delete'),
       hint: 'Del',
@@ -1209,6 +1233,15 @@ export function WorkspaceScreen(props: {
     return items;
   };
 
+  // Templates of the whole workspace for the Tab menu (06 §5.2); what this
+  // screen has not written yet is in the tree after its next refresh.
+  const templates = useMemo(
+    () =>
+      tree
+        .filter((i) => i.flags?.includes('template'))
+        .map((i) => ({ id: i.id, name: i.name, kind: i.kind })),
+    [tree],
+  );
   const nodes: MenuNode[] = g
     ? [...g.nodes.values()].map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
     : [];
@@ -1361,6 +1394,7 @@ export function WorkspaceScreen(props: {
           initialQuery={menu.query}
           nodes={nodes}
           recent={recent}
+          templates={templates}
           onChoose={choose}
           onCancel={() => {
             setMenu(null);

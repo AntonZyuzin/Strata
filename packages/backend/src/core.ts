@@ -42,7 +42,13 @@ export interface NodeAttrs {
   icon?: string;
   /** A link asset's preview picture, its SHA-256 (05 §4.4, ✅ Q-13-16); the core sets it. */
   preview?: string;
+  /** Its flags (05 §7), in their order. */
+  flags?: Flag[];
 }
+
+/** The flags of 05 §7: `R`, `Q`, `E`; «Скрыть от AI» and «Замок» get their interface with MCP. */
+export const FLAGS = ['key', 'pause', 'template', 'hideAi', 'lock'] as const;
+export type Flag = (typeof FLAGS)[number];
 
 export type AttrKey =
   | 'status'
@@ -138,6 +144,8 @@ export type CoreOp =
   | { op: 'assign'; id: string; person: string; on: boolean }
   | { op: 'addPerson'; id?: string; name: string; color?: number }
   | { op: 'renamePerson'; id: string; name: string }
+  /** A flag set or cleared (05 §7). */
+  | { op: 'setFlag'; id: string; flag: Flag; on: boolean }
   /** The network's wire style (05 §9.2, 06 §6.2); null — Bézier. */
   | { op: 'setWireStyle'; net: string; style: WireShape | null };
 
@@ -145,6 +153,15 @@ export type CoreRequest =
   | { call: 'workspace' }
   | { call: 'view'; net: string }
   | { call: 'apply'; ops: CoreOp[]; label: ChangeLabel; amend?: boolean }
+  | {
+      call: 'copyNode';
+      from: string;
+      net: string;
+      x: number;
+      y: number;
+      inputs: string[];
+      label: ChangeLabel;
+    }
   | { call: 'undo' }
   | { call: 'redo' }
   | { call: 'cancel' }
@@ -224,6 +241,8 @@ export interface TreeItem {
   mime?: string;
   url?: string;
   icon?: string;
+  /** Its flags: templates are offered in the Tab menu (06 §5.2). */
+  flags?: Flag[];
 }
 
 /** A wire's two ends. */
@@ -280,6 +299,7 @@ type CoreResponse =
   | { type: 'workspace'; id: string; root: string }
   | { type: 'view'; view: NetworkView }
   | { type: 'applied'; changeset: string | null; history: History }
+  | { type: 'copied'; id: string; history: History }
   | { type: 'reverted'; report: unknown; history: History }
   | { type: 'history'; history: History }
   | { type: 'trash'; items: TrashItem[] }
@@ -357,6 +377,23 @@ export class Core {
   /** Operations as one step of undo; `amend` adds them to the last step. */
   async apply(ops: CoreOp[], label: ChangeLabel, amend = false): Promise<History> {
     return expect(await this.call({ call: 'apply', ops, label, amend }), 'applied').history;
+  }
+
+  /**
+   * A copy of a node at (x, y) in `net`, everything inside it too: a template
+   * chosen in the Tab menu (05 §7); `inputs` wire into it. One step of undo;
+   * the copy's id back.
+   */
+  async copyNode(
+    from: string,
+    at: { net: string; x: number; y: number },
+    inputs: string[],
+    label: ChangeLabel,
+  ): Promise<{ id: string; history: History }> {
+    const { net, x, y } = at;
+    const request: CoreRequest = { call: 'copyNode', from, net, x, y, inputs, label };
+    const r = expect(await this.call(request), 'copied');
+    return { id: r.id, history: r.history };
   }
 
   async undo(): Promise<History> {

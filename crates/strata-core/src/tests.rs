@@ -1275,3 +1275,379 @@ fn a_link_preview_is_the_systems_step_and_names_only_an_unnamed_link() {
         .expect("v6 preview");
     assert_eq!(w.node_details(&bare).expect("details").name, "Локально");
 }
+
+fn flag(
+    w: &mut Workspace<MemoryStore>,
+    id: &str,
+    flag: crate::Flag,
+    on: bool,
+) -> crate::workspace::Result<crate::Changeset> {
+    w.apply(
+        &[Op::SetFlag {
+            id: id.to_owned(),
+            flag,
+            on,
+        }],
+        Label::new("t.flag"),
+    )
+}
+
+#[test]
+fn a_flag_is_set_and_cleared_in_one_step_each() {
+    use crate::Flag;
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let flags = |w: &mut Workspace<MemoryStore>| {
+        let root = w.root();
+        let v = w.network_view(&root).expect("view");
+        v.nodes[0].attrs.flags.clone()
+    };
+    flag(&mut w, &note, Flag::Template, true).expect("template");
+    flag(&mut w, &note, Flag::Key, true).expect("key");
+    assert_eq!(
+        flags(&mut w),
+        vec![Flag::Key, Flag::Template],
+        "flags come in the order of 05 §7"
+    );
+    let tree = w.tree();
+    let item = tree.iter().find(|i| i.id == note).expect("in the tree");
+    assert_eq!(
+        item.flags,
+        vec![Flag::Key, Flag::Template],
+        "the tree carries them for the Tab menu's templates (06 §5.2)"
+    );
+    w.undo().expect("undo");
+    assert_eq!(
+        flags(&mut w),
+        vec![Flag::Template],
+        "each switch is one step (06 §8)"
+    );
+    flag(&mut w, &note, Flag::Template, false).expect("off");
+    assert!(flags(&mut w).is_empty());
+    flag(&mut w, &note, Flag::HideAi, true).expect("the model holds every bit from the MVP");
+    w.apply(
+        &[Op::Trash {
+            ids: vec![note.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    assert!(
+        flag(&mut w, &note, Flag::Key, true).is_err(),
+        "a node in the trash takes no flags"
+    );
+    w.undo().expect("restore");
+    let mut again = Workspace::open(w.into_store()).expect("open");
+    assert_eq!(flags(&mut again), vec![Flag::HideAi], "flags are stored");
+}
+
+#[test]
+fn a_node_on_pause_stays_out_of_roll_ups() {
+    use crate::Flag;
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let project = create(&mut w, &root, NodeKind::Project, "Срез");
+    let a = create(&mut w, &project, NodeKind::Task, "Боёвка");
+    let b = create(&mut w, &project, NodeKind::Task, "Анимации");
+    let folder = create(&mut w, &project, NodeKind::Network, "Арт");
+    create(&mut w, &folder, NodeKind::Task, "Свет");
+    let far = create(&mut w, &root, NodeKind::Task, "Снаружи");
+    w.apply(
+        &[Op::Connect {
+            from: a.clone(),
+            to: far.clone(),
+        }],
+        Label::new("t.wire"),
+    )
+    .expect("wire");
+    set(&mut w, &a, "status", Some(Val::str("done"))).expect("done");
+    let fold = |w: &Workspace<MemoryStore>| {
+        let f = w
+            .node_details(&project)
+            .expect("details")
+            .fold
+            .expect("fold");
+        (f.done, f.total)
+    };
+    let rows = |w: &Workspace<MemoryStore>| -> Vec<String> {
+        let d = w.node_details(&project).expect("details");
+        d.subtasks.iter().map(|r| r.name.clone()).collect()
+    };
+    assert_eq!(fold(&w), (1, 4));
+    flag(&mut w, &b, Flag::Pause, true).expect("pause a task");
+    assert_eq!(fold(&w), (1, 3), "a task on pause is not counted (05 §7)");
+    assert_eq!(rows(&w), vec!["Боёвка", "Арт"], "nor shown in the preview");
+    flag(&mut w, &folder, Flag::Pause, true).expect("pause a folder");
+    assert_eq!(fold(&w), (1, 2), "what is inside a paused folder neither");
+    flag(&mut w, &far, Flag::Pause, true).expect("pause a subtask");
+    assert_eq!(fold(&w), (1, 1), "a paused subtask by a wire neither");
+    let own = w
+        .node_details(&folder)
+        .expect("details")
+        .fold
+        .expect("fold");
+    assert_eq!(
+        (own.done, own.total),
+        (0, 1),
+        "a paused folder still rolls up its own tasks"
+    );
+    w.undo().expect("undo");
+    assert_eq!(fold(&w), (1, 2));
+}
+
+#[test]
+fn a_locked_node_keeps_its_name_fields_and_content() {
+    use crate::Flag;
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let task = create(&mut w, &root, NodeKind::Task, "Сдать");
+    let other = create(&mut w, &root, NodeKind::Note, "Рядом");
+    w.apply(
+        &[Op::AddPerson {
+            id: Some("p1".to_owned()),
+            name: "Аня".to_owned(),
+            color: None,
+        }],
+        Label::new("t.person"),
+    )
+    .expect("person");
+    flag(&mut w, &task, Flag::Lock, true).expect("lock");
+    let refused =
+        |w: &mut Workspace<MemoryStore>, op: Op| w.apply(&[op], Label::new("t.x")).is_err();
+    let id = task.clone();
+    assert!(refused(
+        &mut w,
+        Op::Rename {
+            id: id.clone(),
+            name: "Иначе".to_owned(),
+        }
+    ));
+    assert!(set(&mut w, &task, "status", Some(Val::str("done"))).is_err());
+    assert!(refused(
+        &mut w,
+        Op::Assign {
+            id: id.clone(),
+            person: "p1".to_owned(),
+            on: true,
+        }
+    ));
+    assert!(refused(
+        &mut w,
+        Op::SetKind {
+            id: id.clone(),
+            kind: NodeKind::Project,
+        }
+    ));
+    assert!(refused(
+        &mut w,
+        Op::Trash {
+            ids: vec![id.clone()]
+        }
+    ));
+    let ed = Editor::open(&mut w, &task);
+    let t = ed.doc.get_text("text");
+    t.insert(0, "текст").expect("type");
+    ed.doc.commit();
+    let update = ed
+        .doc
+        .export(loro::ExportMode::updates(&ed.sent))
+        .expect("export");
+    assert!(
+        w.doc_push(&format!("content/{task}"), &update).is_err(),
+        "nor its content"
+    );
+    // It moves, its wires change, and the lock comes off from the menu.
+    w.apply(
+        &[
+            Op::Move {
+                net: root.clone(),
+                id: id.clone(),
+                x: 300.0,
+                y: 40.0,
+            },
+            Op::Connect {
+                from: other.clone(),
+                to: id.clone(),
+            },
+        ],
+        Label::new("t.move"),
+    )
+    .expect("a locked node moves and takes wires (05 §7)");
+    flag(&mut w, &task, Flag::Lock, false).expect("unlock");
+    w.apply(
+        &[Op::Rename {
+            id,
+            name: "Иначе".to_owned(),
+        }],
+        Label::new("t.rename"),
+    )
+    .expect("an unlocked node is renamed");
+
+    // The system keeps the lock too: a locked link takes no preview.
+    let url = "https://example.org/";
+    let link = create(&mut w, &root, NodeKind::Asset, "example.org");
+    set(&mut w, &link, "url", Some(Val::str(url))).expect("link");
+    flag(&mut w, &link, Flag::Lock, true).expect("lock the link");
+    assert!(
+        !w.apply_preview(&link, url, Some("Заголовок"), None)
+            .expect("preview")
+    );
+    assert_eq!(w.node_details(&link).expect("details").name, "example.org");
+}
+
+#[test]
+fn a_template_is_copied_with_everything_inside() {
+    use crate::value::Val;
+    use crate::{Flag, WireStyle};
+    let mut w = ws();
+    let root = w.root();
+    w.apply(
+        &[Op::AddPerson {
+            id: Some("p1".to_owned()),
+            name: "Аня".to_owned(),
+            color: None,
+        }],
+        Label::new("t.person"),
+    )
+    .expect("person");
+    let goal = create(&mut w, &root, NodeKind::Note, "Цель");
+    let bug = create(&mut w, &root, NodeKind::Project, "Баг");
+    set(&mut w, &bug, "color", Some(Val::Int(3))).expect("colour");
+    set(&mut w, &bug, "priority", Some(Val::str("high"))).expect("priority");
+    let repro = create(&mut w, &bug, NodeKind::Task, "Повторить");
+    set(&mut w, &repro, "status", Some(Val::str("todo"))).expect("status");
+    w.apply(
+        &[
+            Op::Assign {
+                id: repro.clone(),
+                person: "p1".to_owned(),
+                on: true,
+            },
+            Op::Move {
+                net: bug.clone(),
+                id: repro.clone(),
+                x: 120.0,
+                y: -40.0,
+            },
+            Op::SetWireStyle {
+                net: bug.clone(),
+                style: Some(WireStyle::Straight),
+            },
+        ],
+        Label::new("t.fields"),
+    )
+    .expect("fields");
+    let steps = create(&mut w, &bug, NodeKind::Note, "Шаги");
+    let mut ed = Editor::open(&mut w, &steps);
+    assert!(ed.type_text(&mut w, &steps, "1. Открыть [[Цель]]"));
+    let deep = create(&mut w, &bug, NodeKind::Network, "Логи");
+    create(&mut w, &deep, NodeKind::Asset, "лог.txt");
+    w.apply(
+        &[
+            Op::Connect {
+                from: repro.clone(),
+                to: steps.clone(),
+            },
+            // A wire out of the template is not between copies: it stays behind.
+            Op::Connect {
+                from: repro.clone(),
+                to: goal.clone(),
+            },
+        ],
+        Label::new("t.wires"),
+    )
+    .expect("wires");
+    flag(&mut w, &bug, Flag::Template, true).expect("template");
+    flag(&mut w, &bug, Flag::Key, true).expect("key");
+    let wires_before = w.wires().len();
+    let label = Label::new("t.copy");
+    let copy = w
+        .copy_node(
+            &bug,
+            &root,
+            (500.0, 60.0),
+            std::slice::from_ref(&goal),
+            label.clone(),
+        )
+        .expect("copy");
+    assert_ne!(copy, bug);
+    assert_eq!(
+        w.history().undo,
+        Some(label),
+        "the copy is one step of undo"
+    );
+
+    let d = w.node_details(&copy).expect("details");
+    assert_eq!(d.name, "Баг");
+    assert_eq!(d.kind, NodeKind::Project);
+    assert_eq!(d.attrs.color, Some(3));
+    assert_eq!(d.attrs.priority.as_deref(), Some("high"));
+    assert_eq!(
+        d.attrs.flags,
+        vec![Flag::Key],
+        "the copy keeps its flags but is no template (05 §7)"
+    );
+    let v = w.network_view(&root).expect("root");
+    let placed = v.nodes.iter().find(|n| n.id == copy).expect("placed");
+    assert_eq!((placed.x, placed.y), (500.0, 60.0));
+    let inside = w.network_view(&copy).expect("inside");
+    assert_eq!(inside.wire_style, Some(WireStyle::Straight));
+    let mut here: Vec<&str> = inside.nodes.iter().map(|n| n.name.as_str()).collect();
+    here.sort();
+    assert_eq!(here, vec!["Логи", "Повторить", "Шаги"]);
+    let task = inside
+        .nodes
+        .iter()
+        .find(|n| n.name == "Повторить")
+        .expect("task");
+    assert_ne!(task.id, repro, "a new node, not an appearance (05 §5)");
+    assert_eq!((task.x, task.y), (120.0, -40.0), "positions come along");
+    assert_eq!(task.attrs.status.as_deref(), Some("todo"));
+    assert_eq!(task.attrs.assignees, vec!["p1".to_owned()]);
+    let note = inside
+        .nodes
+        .iter()
+        .find(|n| n.name == "Шаги")
+        .expect("note");
+    let logs = inside
+        .nodes
+        .iter()
+        .find(|n| n.name == "Логи")
+        .expect("folder");
+    let logs = logs.id.clone();
+    assert_eq!(names(&mut w, &logs), vec!["лог.txt"], "deep");
+    assert_eq!(
+        Editor::open(&mut w, &note.id)
+            .doc
+            .get_text("text")
+            .to_string(),
+        "1. Открыть [[Цель]]",
+        "the content document comes along"
+    );
+    let wires = w.wires();
+    let has = |a: &str, b: &str| wires.iter().any(|e| e.from == a && e.to == b);
+    assert!(has(&task.id, &note.id), "a wire between copies is copied");
+    assert!(!has(&task.id, &goal), "a wire out of the copy is not");
+    assert!(
+        has(&note.id, &goal),
+        "the copied note's link wires it by its text"
+    );
+    assert!(has(&goal, &copy), "an input wires into the copy (06 §5.1)");
+    assert_eq!(wires.len(), wires_before + 3);
+    assert_eq!(
+        w.node_details(&bug).expect("source").attrs.flags,
+        vec![Flag::Key, Flag::Template],
+        "the template stays as it was"
+    );
+
+    w.undo().expect("undo");
+    assert!(w.node_details(&copy).is_err(), "undo takes the copy away");
+    assert!(
+        w.copy_node(&bug, &note.id, (0.0, 0.0), &[], Label::new("t.copy"))
+            .is_err(),
+        "a copy goes into a live folder or project only"
+    );
+}

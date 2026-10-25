@@ -29,6 +29,18 @@ pub enum Request {
         #[serde(default)]
         amend: bool,
     },
+    /// A copy of a node at (x, y) in `net`, everything inside it too: a
+    /// template chosen in the Tab menu (05 §7); `inputs` wire into it. One
+    /// step of undo.
+    CopyNode {
+        from: String,
+        net: String,
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        inputs: Vec<String>,
+        label: Label,
+    },
     Undo,
     Redo,
     /// The last step reverted and forgotten: a gesture cancelled with Esc.
@@ -76,6 +88,11 @@ pub enum Response {
     /// when an amend only renamed the step.
     Applied {
         changeset: Option<String>,
+        history: History,
+    },
+    /// The copy is made: its id, the undo and redo steps after it.
+    Copied {
+        id: String,
         history: History,
     },
     /// An undo or redo: `None` when there was nothing to undo or redo.
@@ -141,6 +158,19 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 history: ws.history(),
             })
         }
+        Request::CopyNode {
+            from,
+            net,
+            x,
+            y,
+            inputs,
+            label,
+        } => ws
+            .copy_node(&from, &net, (x, y), &inputs, label)
+            .map(|id| Response::Copied {
+                id,
+                history: ws.history(),
+            }),
         Request::Undo => ws.undo().map(|report| Response::Reverted {
             report,
             history: ws.history(),

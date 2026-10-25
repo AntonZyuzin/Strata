@@ -1716,6 +1716,14 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   color: var(--st-color-text-muted);
 }
 
+/* A tick of an entry that is on (06 §8 flags), in a column of its own. */
+.context-menu-tick {
+  flex: none;
+  display: flex;
+  width: calc(16 * var(--u));
+  margin-right: calc(-4 * var(--u));
+}
+
 .context-menu-row.is-current .context-menu-hint {
   color: inherit;
 }

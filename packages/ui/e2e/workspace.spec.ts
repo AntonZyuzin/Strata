@@ -55,6 +55,8 @@ async function createWorkspace(page: Page, name: string) {
   await page.locator('.dialog button[type="submit"]').click();
   await expect(page.locator('.workspace')).toBeVisible();
   await page.waitForFunction(() => window.__strataWs?.graph() != null);
+  // The graph comes before the network's path: the root's depth is 1 once both are in.
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
 }
 
 const graphNow = (page: Page) =>
@@ -1381,6 +1383,63 @@ test.describe('a workspace on the core', () => {
     await page.locator('.home-open').click();
     await page.waitForFunction(() => window.__strataWs?.graph() != null);
     expect(await shape()).toBe('straight');
+  });
+
+  test('R, Q, E flag the node under the cursor; a template is copied from Tab (05 §7, 06 §8)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Флаги');
+    await createNode(page, 500, 300, 'Баг');
+    await createNode(page, 800, 300, 'Шаги');
+    const flags = (name: string) =>
+      page.evaluate((name) => {
+        const g = window.__strataWs?.graph();
+        const all = [...(g?.nodes.values() ?? [])].filter((x) => x.name === name);
+        return all.map((n) => [n.key, n.pause, n.template].map((f) => (f ? 1 : 0)).join(''));
+      }, name);
+    const bug = await at(page, 'Баг');
+    await page.mouse.move(bug.x, bug.y);
+    await page.keyboard.press('KeyR');
+    expect(await flags('Баг')).toEqual(['100']);
+    await page.keyboard.press('KeyR');
+    expect(await flags('Баг')).toEqual(['000']);
+    // Each switch is one step of undo.
+    await page.keyboard.press('Control+z');
+    expect(await flags('Баг')).toEqual(['100']);
+    await page.keyboard.press('KeyQ');
+    await page.keyboard.press('KeyE');
+    expect(await flags('Баг')).toEqual(['111']);
+    await page.keyboard.press('KeyQ');
+
+    // Nothing under the cursor: the selection; one lacks the flag — all get it.
+    await page.keyboard.press('Control+a');
+    await page.mouse.move(650, 600);
+    await page.keyboard.press('KeyR');
+    expect([...(await flags('Баг')), ...(await flags('Шаги'))]).toEqual(['101', '100']);
+
+    // The right button's menu ticks the flags the node has.
+    await page.keyboard.press('Escape');
+    const steps = await at(page, 'Шаги');
+    await page.mouse.click(steps.x, steps.y, { button: 'right' });
+    await expect(page.getByRole('menuitemcheckbox', { name: 'Ключевая' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    await page.getByRole('menuitemcheckbox', { name: 'Пауза' }).click();
+    expect(await flags('Шаги')).toEqual(['110']);
+
+    // The template in the Tab menu: its copy keeps its flags but «Шаблон».
+    await page.mouse.move(650, 600);
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.tab-menu-header', { hasText: 'Шаблоны' })).toBeVisible();
+    await page.keyboard.type('Баг');
+    await page.locator('.tab-menu-row', { hasText: 'Баг' }).first().click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '3');
+    expect((await flags('Баг')).sort()).toEqual(['100', '101']);
+    await settled(page);
+    await page.keyboard.press('Control+z');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
   });
 
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {

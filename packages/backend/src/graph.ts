@@ -6,7 +6,7 @@
  * same calls; nodes carry their placement in this network directly (05 §9.2).
  */
 
-import type { AttrKey, NodeAttrs, WireShape } from './core';
+import { type AttrKey, FLAGS, type Flag, type NodeAttrs, type WireShape } from './core';
 
 /**
  * Kinds of 05 §4.2 (ADR-0010): a folder (`network`), a project — a task one
@@ -134,7 +134,7 @@ export function dueOf(deadline: string | undefined, day: string, time = clockNow
 
 /**
  * The look of a node from its fields (07 §4.5–4.6): status, deadline,
- * colour, the assignees' dots. A node with no fields keeps its look.
+ * colour, the assignees' dots, the flags. A node with no fields keeps its look.
  */
 export function lookOf(
   node: GraphNode,
@@ -143,12 +143,29 @@ export function lookOf(
 ): Partial<GraphNode> {
   const a = node.attrs;
   const final = a.status === 'done' || a.status === 'cancelled';
-  return {
+  const look: Partial<GraphNode> = {
     status: a.status === 'done' ? 'done' : a.status === 'cancelled' ? 'cancelled' : 'open',
     due: final ? 'none' : dueOf(a.deadline, day),
     color: a.color ?? KIND_COLOR[node.kind] ?? null,
     assignees: (a.assignees ?? []).map(personColor),
   };
+  if (a.flags) {
+    look.key = a.flags.includes('key');
+    look.pause = a.flags.includes('pause');
+    look.template = a.flags.includes('template');
+  }
+  return look;
+}
+
+/** The node's flags (05 §7): its fields', or, in the prototype's demo, its look's. */
+export function flagsOf(node: GraphNode): Flag[] {
+  if (node.attrs.flags) return node.attrs.flags;
+  return FLAGS.filter(
+    (f) =>
+      (f === 'key' && node.key) ||
+      (f === 'pause' && node.pause) ||
+      (f === 'template' && node.template),
+  );
 }
 
 export type Op =
@@ -160,6 +177,8 @@ export type Op =
   | { t: 'rename'; id: string; name: string }
   | { t: 'attr'; id: string; key: AttrKey; value: string | number | null }
   | { t: 'assign'; id: string; person: string; on: boolean }
+  /** A flag of 05 §7 set or cleared. */
+  | { t: 'flag'; id: string; flag: Flag; on: boolean }
   /** The network's wire style (06 §6.2); null — Bézier. */
   | { t: 'wireShape'; value: WireShape | null };
 
@@ -209,6 +228,7 @@ export interface Tx {
   /** A field of 05 §6.1; null clears it. */
   attr(id: string, key: AttrKey, value: string | number | null): void;
   assign(id: string, person: string, on: boolean): void;
+  flag(id: string, flag: Flag, on: boolean): void;
   wireShape(value: WireShape | null): void;
 }
 
@@ -324,6 +344,9 @@ export class Graph {
       },
       assign: (id, person, on) => {
         run({ t: 'assign', id, person, on });
+      },
+      flag: (id, flag, on) => {
+        run({ t: 'flag', id, flag, on });
       },
       wireShape: (value) => {
         run({ t: 'wireShape', value });
@@ -500,6 +523,16 @@ export class Graph {
         this.nodes.set(op.id, Object.assign(next, lookOf(next, this.day(), this.personColor)));
         return [{ t: 'assign', id: op.id, person: op.person, on: !op.on }];
       }
+      case 'flag': {
+        const node = this.nodes.get(op.id);
+        if (!node) return null;
+        const had = flagsOf(node);
+        if (had.includes(op.flag) === op.on) return null;
+        const flags = FLAGS.filter((f) => (f === op.flag ? op.on : had.includes(f)));
+        const next = { ...node, attrs: { ...node.attrs, flags } };
+        this.nodes.set(op.id, Object.assign(next, lookOf(next, this.day(), this.personColor)));
+        return [{ t: 'flag', id: op.id, flag: op.flag, on: !op.on }];
+      }
       case 'connect': {
         if (op.from === op.to) return null; // 05 §8.2 rule 2: no self-loop
         if (!this.nodes.has(op.from) || !this.nodes.has(op.to)) return null;
@@ -543,6 +576,17 @@ export function insertIntoWire(graph: Graph, tx: Tx, x: string, from: string, to
   tx.connect(from, x);
   tx.connect(x, to);
   return true;
+}
+
+/**
+ * A flag switched on nodes (06 §8): set on all when one of them lacks it,
+ * else cleared on all. True when it is set.
+ */
+export function switchFlag(graph: Graph, tx: Tx, ids: readonly string[], flag: Flag): boolean {
+  const nodes = ids.flatMap((id) => graph.nodes.get(id) ?? []);
+  const on = nodes.some((n) => !flagsOf(n).includes(flag));
+  for (const n of nodes) tx.flag(n.id, flag, on);
+  return on;
 }
 
 /** 05 §8.4 precondition for inserting into a wire: the node has no wires. */

@@ -74,6 +74,29 @@ describe('Tab menu items (06 §5.2)', () => {
     expect(en?.choice).toMatchObject({ kind: 'task', name: 'Fix' });
   });
 
+  it('offers the templates after the kinds, and by a query (05 §7)', () => {
+    const tpls = [
+      { id: 't2', name: 'Релиз', kind: 'network' as const },
+      { id: 't1', name: 'Баг', kind: 'project' as const },
+    ];
+    const items = menuItems('ru', '', nodes, [], tpls);
+    expect(items.filter((i) => i.group === 'templates').map((i) => i.label)).toEqual([
+      'Баг',
+      'Релиз',
+    ]);
+    expect(items.at(-2)).toMatchObject({
+      detail: 'Проект',
+      choice: { t: 'template', id: 't1', kind: 'project', name: 'Баг' },
+    });
+    // A query that names a template asks for it, not for a note so named.
+    const [first] = menuItems('ru', 'баг', nodes, [], tpls);
+    expect(first?.choice).toEqual({ t: 'template', id: 't1', kind: 'project', name: 'Баг' });
+    expect(menuItems('ru', 'рел', nodes, [], tpls).map((i) => i.group)).toEqual([
+      'create',
+      'templates',
+    ]);
+  });
+
   it('does not offer «Заметка «доска»» when the query names a kind', () => {
     const items = menuItems('ru', 'доска', nodes, []);
     expect(items[0]?.choice).toMatchObject({ t: 'create', kind: 'board', rename: true });

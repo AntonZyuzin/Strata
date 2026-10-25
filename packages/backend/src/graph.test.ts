@@ -9,6 +9,7 @@ import {
   insertIntoWire,
   newNode,
   shake,
+  switchFlag,
   UNDO_DEPTH,
 } from './graph';
 import { newId } from './ids';
@@ -111,6 +112,42 @@ describe('extract a set (Mod+Shift+X)', () => {
     const g = graph(['ac', 'bc', 'cd']);
     g.transaction({ key: 't' }, (tx) => expect(extract(g, tx, ['c']).inputs).toBe(2));
     expect(wires(g)).toEqual([]);
+  });
+});
+
+describe('flags (05 §7, 06 §8)', () => {
+  it('sets a flag on all when one lacks it, else clears it on all; one step each', () => {
+    const g = graph([]);
+    g.transaction({ key: 'key' }, (tx) => tx.flag('a', 'key', true));
+    expect(g.nodes.get('a')).toMatchObject({ key: true, attrs: { flags: ['key'] } });
+    // Mixed: a has it, b not — both get it.
+    g.transaction({ key: 'key' }, (tx) => expect(switchFlag(g, tx, ['a', 'b'], 'key')).toBe(true));
+    expect([g.nodes.get('a')?.key, g.nodes.get('b')?.key]).toEqual([true, true]);
+    g.transaction({ key: 'key' }, (tx) => expect(switchFlag(g, tx, ['a', 'b'], 'key')).toBe(false));
+    expect([g.nodes.get('a')?.key, g.nodes.get('b')?.key]).toEqual([false, false]);
+    g.undo();
+    expect([g.nodes.get('a')?.key, g.nodes.get('b')?.key]).toEqual([true, true]);
+  });
+
+  it('keeps the flags in their order and draws pause and template from them', () => {
+    const g = graph([]);
+    g.transaction({ key: 'flags' }, (tx) => {
+      tx.flag('a', 'template', true);
+      tx.flag('a', 'pause', true);
+    });
+    expect(g.nodes.get('a')).toMatchObject({
+      pause: true,
+      template: true,
+      attrs: { flags: ['pause', 'template'] },
+    });
+    expect(g.transaction({ key: 'again' }, (tx) => tx.flag('a', 'pause', true))).toBeNull();
+  });
+
+  it("switches a prototype node's flags from its look", () => {
+    const g = new Graph();
+    g.transaction({ key: 't' }, (tx) => tx.add(newNode({ ...node('p'), pause: true })));
+    g.transaction({ key: 'pause' }, (tx) => expect(switchFlag(g, tx, ['p'], 'pause')).toBe(false));
+    expect(g.nodes.get('p')?.pause).toBe(false);
   });
 });
 

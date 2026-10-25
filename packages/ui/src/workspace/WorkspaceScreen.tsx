@@ -64,6 +64,8 @@ import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
 import { netItems, searchClient, visited, visits } from '../search';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
+import { CommandPalette } from './CommandPalette';
+import type { CommandContext } from './commands';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
 import { FindBar } from './FindBar';
@@ -261,6 +263,8 @@ export function WorkspaceScreen(props: {
   const [finder, setFinder] = useState<{ map: boolean; within: string | null } | null>(null);
   /** `Ctrl+F` on the canvas (09 §3.3). */
   const [finding, setFinding] = useState(false);
+  /** The command palette, `Ctrl+P` (09 §3.5). */
+  const [palette, setPalette] = useState(false);
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
   /** The core's undo and redo: the session's, across networks (05 §11). */
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
@@ -879,12 +883,13 @@ export function WorkspaceScreen(props: {
       menu !== null ||
         name !== null ||
         finder !== null ||
+        palette ||
         view3d !== '2d' ||
         boardFocus ||
         viewerFocus ||
         covered,
     );
-  }, [menu, name, finder, view3d, boardFocus, viewerFocus, covered]);
+  }, [menu, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
 
   useEffect(() => {
     ringModeRef.current = props.prefs.ring;
@@ -900,10 +905,21 @@ export function WorkspaceScreen(props: {
   useLayoutEffect(() => {
     // Mid-bridge (08 §7) neither view takes keys.
     if (view3d === 'to3d' || view3d === 'to2d') return;
-    // A search window takes its own keys while it is open.
-    if (finder || covered) return;
+    // A search window and the palette take their own keys while open.
+    if (finder || palette || covered) return;
     const key = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
+      // `Ctrl+P` — the palette, on the canvas and on the star map (09 §3.5).
+      if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyP') {
+        const t = e.target as HTMLElement | null;
+        const typing =
+          t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+        if (typing || menu || name) return;
+        e.preventDefault();
+        setFinding(false);
+        setPalette(true);
+        return;
+      }
       const search = mod && !e.altKey && !e.shiftKey && (e.code === 'KeyO' || e.code === 'KeyF');
       if (view3d === '2d') {
         // A note's or a list's own search keeps its keys; so does any field.
@@ -934,7 +950,7 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, finder, covered, menu, name]);
+  }, [view3d, finder, palette, covered, menu, name]);
 
   // A search of one view closes with it (2D ↔ 3D).
   useEffect(() => {
@@ -995,7 +1011,7 @@ export function WorkspaceScreen(props: {
   // The history's and the marks' keys (06 §10.3), on the canvas and the star
   // map; a layout effect for the same reason as the view's keys above.
   useLayoutEffect(() => {
-    if (view3d === 'to3d' || view3d === 'to2d' || finder || covered) return;
+    if (view3d === 'to3d' || view3d === 'to2d' || finder || palette || covered) return;
     // A digit held: its timer, or -1 once the mark is set.
     const held = new Map<string, number>();
     const down = (e: KeyboardEvent) => {
@@ -1046,7 +1062,7 @@ export function WorkspaceScreen(props: {
       window.removeEventListener('keyup', up);
       for (const timer of held.values()) if (timer >= 0) window.clearTimeout(timer);
     };
-  }, [view3d, finder, covered, menu, name, walk, setMark, goMark]);
+  }, [view3d, finder, palette, covered, menu, name, walk, setMark, goMark]);
 
   const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
 
@@ -1605,6 +1621,29 @@ export function WorkspaceScreen(props: {
   }, [menu]);
   const canUndo = Boolean(g?.canUndo || history.undo);
   const canRedo = Boolean(g?.canRedo || history.redo);
+  /** What the palette's commands may do here (09 §3.5). */
+  const commandContext: CommandContext = {
+    view: view3d === '2d' ? '2d' : '3d',
+    selected: ed?.selection.size ?? 0,
+    current: ed && ed.selection.size === 1 ? ed.current : null,
+    canUndo,
+    canRedo,
+    canBack: navState.back,
+    canForward: navState.forward,
+    marks: marks.map((m) => m !== null),
+    act: (action) => editor.current?.act(action),
+    goTo: () => {
+      setFinding(false);
+      setFinder({ map: view3d !== '2d', within: null });
+    },
+    find: () => {
+      if (view3d === '2d') setFinding(true);
+      else setFinder({ map: true, within: map3d.current?.focusId() ?? null });
+    },
+    walk,
+    setMark,
+    goMark,
+  };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
     : label(null);
@@ -1780,6 +1819,26 @@ export function WorkspaceScreen(props: {
           }}
           onClose={() => {
             setFinder(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {palette ? (
+        <CommandPalette
+          locale={locale}
+          search={searchClient()}
+          context={commandContext}
+          left={
+            (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
+          }
+          top={(host.current?.getBoundingClientRect().top ?? 0) + 48}
+          onRun={(command) => {
+            setPalette(false);
+            focusCanvas();
+            command.run(commandContext);
+          }}
+          onClose={() => {
+            setPalette(false);
             focusCanvas();
           }}
         />

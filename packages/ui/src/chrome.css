@@ -955,6 +955,13 @@ button:focus-visible {
   max-width: 22ch;
 }
 
+/* The command palette (09 §3.5): the Tab menu's window; its list scrolls past
+   fourteen rows, the keys right in each row. */
+.command-palette .tab-menu-list {
+  max-height: calc(14 * var(--st-size-row));
+  overflow-y: auto;
+}
+
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
 .kind-icon {
   flex: none;

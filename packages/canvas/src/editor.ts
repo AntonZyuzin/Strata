@@ -135,6 +135,30 @@ export interface EditorEvents {
   template?(e: { id: string; name: string; x: number; y: number; inputs: string[] }): void;
 }
 
+/** The canvas's actions by name (06 §1 rule 6): its keys and the palette's commands. */
+export type CanvasAction =
+  | 'create'
+  | 'undo'
+  | 'redo'
+  | 'extract'
+  | 'selectAll'
+  | 'delete'
+  | 'rename'
+  | 'fitAll'
+  | 'frame'
+  | 'map'
+  | 'minimap'
+  | 'wireStyle'
+  | 'flag:key'
+  | 'flag:pause'
+  | 'flag:template'
+  | 'layout'
+  | 'up'
+  | 'open'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'zoomReset';
+
 /** What the right button was pressed on. */
 export type MenuTarget =
   | { t: 'node'; id: string }
@@ -520,6 +544,83 @@ export class Editor {
   private hoverNode(): string | null {
     const h = this.hover;
     return this.pointer.inside && (h.t === 'node' || h.t === 'port') ? h.id : null;
+  }
+
+  /**
+   * A canvas action by its name, as its key does it: every gesture has a
+   * command (06 §1 rule 6), the palette's included (09 §3.5).
+   */
+  act(action: CanvasAction): void {
+    const cam = this.view.camera;
+    const zoom = (factor: number) => {
+      this.view.stopFlight();
+      cam.zoomAt(this.seen() / 2, this.view.height / 2, factor);
+      this.view.invalidate();
+    };
+    switch (action) {
+      case 'create':
+        this.tabKey(false);
+        return;
+      case 'undo':
+        this.undo();
+        return;
+      case 'redo':
+        this.redo();
+        return;
+      case 'extract':
+        this.extractSelection();
+        return;
+      case 'selectAll':
+        this.select([...this.graph.nodes.keys()]);
+        return;
+      case 'delete':
+        this.deleteSelection();
+        return;
+      case 'rename':
+        if (this.current) this.openName(this.current, false);
+        return;
+      case 'fitAll':
+        this.fitAll();
+        return;
+      case 'frame':
+        if (this.selection.size > 0) this.frameNodes([...this.selection]);
+        else this.fitAll();
+        return;
+      case 'map':
+        this.events.map?.();
+        return;
+      case 'minimap':
+        this.minimap.open = !this.minimap.open;
+        this.events.minimap?.(this.minimap.open);
+        return;
+      case 'wireStyle':
+        this.cycleWireShape();
+        return;
+      case 'flag:key':
+      case 'flag:pause':
+      case 'flag:template':
+        // From a command the selection, not the node under the cursor (06 §8).
+        this.switchFlag(action.slice('flag:'.length) as Flag, [...this.selection]);
+        return;
+      case 'layout':
+        this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);
+        return;
+      case 'up':
+        this.events.up?.();
+        return;
+      case 'open':
+        if (this.current) this.events.open?.(this.current);
+        return;
+      case 'zoomIn':
+        zoom(1.25);
+        return;
+      case 'zoomOut':
+        zoom(1 / 1.25);
+        return;
+      case 'zoomReset':
+        zoom(1 / cam.zoom);
+        return;
+    }
   }
 
   /** The style `Shift+S` turns the network's wires to next (06 §6.2). */
@@ -1344,44 +1445,42 @@ export class Editor {
       case 'KeyZ':
         if (!mod) return;
         e.preventDefault();
-        if (e.shiftKey) this.redo();
-        else this.undo();
+        this.act(e.shiftKey ? 'redo' : 'undo');
         return;
       case 'KeyX':
         if (!(mod && e.shiftKey)) return;
         e.preventDefault();
-        this.extractSelection();
+        this.act('extract');
         return;
       case 'KeyA':
         if (!mod) return;
         e.preventDefault();
-        this.select([...this.graph.nodes.keys()]);
+        this.act('selectAll');
         return;
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
-        this.deleteSelection();
+        this.act('delete');
         return;
       case 'F2':
-        if (this.current) this.openName(this.current, false);
+        this.act('rename');
         return;
       case 'KeyH':
         if (mod) return;
-        this.fitAll();
+        this.act('fitAll');
         return;
       case 'KeyM':
         if (mod) return;
-        this.events.map?.();
+        this.act('map');
         return;
       case 'KeyO':
         if (mod || e.altKey || e.shiftKey) return;
-        this.minimap.open = !this.minimap.open;
-        this.events.minimap?.(this.minimap.open);
+        this.act('minimap');
         return;
       case 'KeyS':
         if (mod || !e.shiftKey) return;
         e.preventDefault();
-        this.cycleWireShape();
+        this.act('wireStyle');
         return;
       case 'KeyY':
         if (mod) return;
@@ -1398,35 +1497,34 @@ export class Editor {
       }
       case 'KeyL':
         if (mod) return;
-        this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);
+        this.act('layout');
         return;
       case 'KeyU':
         if (mod) return;
-        this.events.up?.();
+        this.act('up');
         return;
       case 'Enter':
       case 'NumpadEnter':
         if (mod || !this.current) return;
         e.preventDefault();
-        this.events.open?.(this.current);
+        this.act('open');
         return;
       case 'KeyG':
       case 'KeyF':
         if (mod) return;
-        if (this.selection.size > 0) this.frameNodes([...this.selection]);
-        else this.fitAll();
+        this.act('frame');
         return;
       case 'Equal':
       case 'NumpadAdd':
-        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1.25);
-        break;
+        this.act('zoomIn');
+        return;
       case 'Minus':
       case 'NumpadSubtract':
-        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / 1.25);
-        break;
+        this.act('zoomOut');
+        return;
       case 'Digit0':
-        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / cam.zoom);
-        break;
+        this.act('zoomReset');
+        return;
       case 'PageUp':
       case 'PageDown': {
         // Along the chain; with Shift — to the neighbours (06 §10.3).

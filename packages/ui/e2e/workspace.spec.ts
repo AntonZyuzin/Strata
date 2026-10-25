@@ -542,6 +542,48 @@ for (const deviceScaleFactor of [1, 2]) {
 }
 
 for (const deviceScaleFactor of [1, 2]) {
+  test(`the command palette keeps its size in RU and EN @${deviceScaleFactor}x (09 §3.5)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Команды');
+      await createNode(page, 640, 400, 'Мельница');
+      await select(page, 'Мельница');
+      await page.keyboard.press('Control+p');
+      const palette = page.locator('.command-palette');
+      await expect(palette).toBeVisible();
+      await expect(palette.locator('input')).toBeFocused();
+      expect(await overflowing(page, '.command-palette'), `${locale} the palette must fit`).toEqual(
+        [],
+      );
+      const rows = await palette.locator('.tab-menu-row').count();
+      boxes.push({
+        palette: await box(page, '.command-palette'),
+        row: await box(page, '.command-palette .tab-menu-row.is-current'),
+        rows,
+      });
+      await palette.locator('input').press('Escape');
+      await expect(palette).toHaveCount(0);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    expect(en.rows).toBe(ru.rows);
+    for (const part of ['palette', 'row'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
   test(`«Перейти к ноде» and the find bar keep their size in RU and EN @${deviceScaleFactor}x (09 §3.3–3.4)`, async ({
     browser,
   }) => {
@@ -1909,6 +1951,52 @@ test.describe('a workspace on the core', () => {
     await expect.poll(selected).toEqual(['Низ']);
     await page.keyboard.press('PageUp');
     await expect.poll(selected).toEqual(['Верх']);
+  });
+
+  test('Ctrl+P runs a command found in either language; the last ones come first (09 §3.5)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Палитра');
+    await createNode(page, 500, 360, 'Север');
+    const palette = page.locator('.command-palette');
+    const input = palette.locator('input');
+    // Nothing chosen: no «Удалить»; the minimap by its English name.
+    await page.keyboard.press('Control+p');
+    await input.fill('удалить');
+    await expect(palette.locator('.tab-menu-empty')).toBeVisible();
+    await input.fill('minimap');
+    await expect(palette.locator('.tab-menu-row').first()).toContainText('Мини-карта');
+    await expect(palette.locator('.tab-menu-row').first().locator('.tab-menu-detail')).toHaveText(
+      'O',
+    );
+    await input.press('Enter');
+    await expect(palette).toHaveCount(0);
+    await expect(page.locator('.canvas-minimap')).toBeVisible();
+    // Again: «Недавние» first, the minimap there; Enter at once closes it again.
+    await page.keyboard.press('Control+p');
+    await expect(palette.locator('.tab-menu-header').first()).toHaveText('Недавние');
+    await expect(palette.locator('.tab-menu-row').first()).toContainText('Мини-карта');
+    await input.press('Enter');
+    await expect(page.locator('.canvas-minimap')).toBeHidden();
+    // A node chosen: «Переименовать» opens its name field.
+    await select(page, 'Север');
+    await page.keyboard.press('Control+p');
+    await input.fill('переим');
+    await input.press('Enter');
+    await expect(page.locator('.name-input')).toBeVisible();
+    await page.keyboard.press('Escape');
+    // On the star map too: the canvas's commands are not there, the map's are.
+    const ws = page.locator('.workspace');
+    await page.getByRole('button', { name: 'Холст или звёздная карта (M)' }).click();
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    await page.keyboard.press('Control+p');
+    await expect(input).toBeFocused();
+    await expect(palette.locator('.tab-menu-row', { hasText: 'Разложить' })).toHaveCount(0);
+    await input.fill('star map');
+    await expect(palette.locator('.tab-menu-row').first()).toContainText('Звёздная карта');
+    await input.press('Enter');
+    await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
   });
 
   test('a rename rewrites the [[links]] that named the node, in an open note too (13 §6.5)', async ({

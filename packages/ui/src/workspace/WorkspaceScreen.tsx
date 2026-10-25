@@ -905,7 +905,7 @@ export function WorkspaceScreen(props: {
 
   /**
    * Files dropped or pasted on the canvas become assets (05 §4.4): each keeps
-   * its type, a picture shows in its circle; a link becomes a link asset.
+   * its type, a picture shows in its body; a link becomes a link asset.
    * In a row from `w`, world coordinates; the last one is selected.
    */
   const addAssets = async (files: File[], links: string[], w: { x: number; y: number }) => {

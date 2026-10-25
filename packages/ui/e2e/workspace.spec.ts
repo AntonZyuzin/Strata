@@ -912,7 +912,7 @@ test.describe('a workspace on the core', () => {
     await expect(panel.locator('.ins-progress')).toHaveText('2 из 3');
   });
 
-  test('a picture dropped on the canvas is an asset with the picture in its circle', async ({
+  test('a picture dropped on the canvas is an asset with the picture in its body', async ({
     page,
   }) => {
     await page.goto('/?plain');
@@ -1174,7 +1174,7 @@ test.describe('a workspace on the core', () => {
       /купить \[\[Хлеб\]\]\s*и молоко/,
     );
     await page.locator('.note-window .window-close').click();
-    // A picture: an asset with the picture in its circle; one step of undo.
+    // A picture: an asset with the picture in its body; one step of undo.
     await page.evaluate(() => window.__strataWs?.view.canvas.focus());
     await page.mouse.move(600, 550);
     await paste(null, true);
@@ -1421,7 +1421,7 @@ test.describe('a workspace on the core', () => {
     await expect(gecko).toHaveAttribute('data-animation', 'task-created');
   });
 
-  test('nodes carry the Chrome icons, in their circles and in «Слои» (07 §6.1)', async ({
+  test('nodes carry the Chrome icons, in their bodies and in «Слои» (07 §6.1)', async ({
     page,
   }) => {
     await page.goto('/?plain');

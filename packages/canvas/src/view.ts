@@ -287,7 +287,7 @@ export class CanvasView {
     return this.pictures.has(id);
   }
 
-  /** What a node's circle shows: its picture, its kind's icon or a preset. */
+  /** What a node's body shows: its picture, its kind's icon or a preset. */
   iconOf(id: string): 'picture' | 'kind' | 'preset' | null {
     const v = this.views.get(id);
     if (!v) return null;

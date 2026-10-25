@@ -71,11 +71,21 @@ jobs:
   # Playwright's own image carries the browsers and their system libraries:
   # `playwright install --with-deps` on the bare runner took 19 minutes and
   # once hung for an hour.
+  # One job per engine, side by side: one job ran both in 10–14 minutes, the
+  # software WebGL of both sharing four vCPUs.
   e2e:
-    name: E2E · Chromium and WebKit
+    name: E2E · ${{ matrix.name }}
     needs: web
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - project: chromium
+            name: Chromium ≈ WebView2
+          - project: webkit
+            name: WebKit ≈ WKWebView
     container:
       image: mcr.microsoft.com/playwright:v1.56.1-noble
       options: --ipc=host
@@ -91,12 +101,12 @@ jobs:
         with:
           name: wasm-pkg
           path: packages
-      - name: Layout and gesture tests (Chromium ≈ WebView2, WebKit ≈ WKWebView)
-        run: pnpm --filter @strata/ui e2e
+      - name: Layout and gesture tests
+        run: pnpm --filter @strata/ui e2e --project=${{ matrix.project }}
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: ui-layout-screenshots
+          name: ui-layout-screenshots-${{ matrix.project }}
           path: packages/ui/test-results
           if-no-files-found: ignore
           retention-days: 14

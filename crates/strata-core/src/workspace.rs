@@ -788,6 +788,8 @@ impl<S: Store> Workspace<S> {
         };
         // Nodes made earlier in this list count as existing for the ops after them.
         let mut made: HashMap<NodeId, NodeKind> = HashMap::new();
+        // People added earlier in this list, for the next one's colour.
+        let mut people_added = 0i64;
         let exists =
             |n: NodeId, made: &HashMap<NodeId, NodeKind>| made.contains_key(&n) || self.alive(n);
         for op in ops {
@@ -1082,7 +1084,14 @@ impl<S: Store> Workspace<S> {
                     if read(&self.docs["manifest"], "people", &pid).is_some() {
                         return Err(invalid(format!("person {pid} already exists")));
                     }
-                    let c = color.unwrap_or(0).rem_euclid(COLORS);
+                    // With no colour asked, the next of the palette in the order
+                    // people come (07 §2.2 «Раздача цветов»), those of this list too.
+                    let known = match self.docs["manifest"].get_map("people").get_value() {
+                        LoroValue::Map(m) => m.len() as i64,
+                        _ => 0,
+                    };
+                    let c = color.unwrap_or(known + people_added).rem_euclid(COLORS);
+                    people_added += 1;
                     put(
                         "manifest",
                         "people",

@@ -1128,7 +1128,8 @@ export function WorkspaceScreen(props: {
           addPerson: async (name) => {
             const id = newId();
             await coreStep(
-              [{ op: 'addPerson', id, name, color: peopleRef.current.length % 8 }],
+              // The core gives the next colour of the palette (07 §2.2).
+              [{ op: 'addPerson', id, name }],
               'change.assign',
               { name },
             ).catch(failed);

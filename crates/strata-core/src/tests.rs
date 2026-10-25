@@ -1651,3 +1651,44 @@ fn a_template_is_copied_with_everything_inside() {
         "a copy goes into a live folder or project only"
     );
 }
+
+#[test]
+fn people_take_the_palette_in_the_order_they_come() {
+    let mut w = ws();
+    let before = w.people().len();
+    let add = |name: &str, color: Option<i64>| Op::AddPerson {
+        id: None,
+        name: name.to_owned(),
+        color,
+    };
+    w.apply(
+        &[add("Аня", None), add("Борис", None)],
+        Label::new("t.people"),
+    )
+    .expect("two at once");
+    w.apply(&[add("Вера", Some(6))], Label::new("t.person"))
+        .expect("one with her colour");
+    for name in ["Глеб", "Дина", "Егор", "Женя", "Зоя", "Ира"] {
+        w.apply(&[add(name, None)], Label::new("t.person"))
+            .expect("one more");
+    }
+    let mut people = w.people();
+    people.sort_by(|a, b| a.name.cmp(&b.name));
+    let colours: Vec<(String, i64)> = people.into_iter().map(|p| (p.name, p.color)).collect();
+    let next = |k: i64| (before as i64 + k).rem_euclid(8);
+    assert_eq!(
+        colours,
+        vec![
+            ("Аня".to_owned(), next(0)),
+            ("Борис".to_owned(), next(1)),
+            ("Вера".to_owned(), 6),
+            ("Глеб".to_owned(), next(3)),
+            ("Дина".to_owned(), next(4)),
+            ("Егор".to_owned(), next(5)),
+            ("Женя".to_owned(), next(6)),
+            ("Зоя".to_owned(), next(7)),
+            ("Ира".to_owned(), next(8)),
+        ],
+        "07 §2.2: in order, the ninth the first's again; a chosen colour stays"
+    );
+}

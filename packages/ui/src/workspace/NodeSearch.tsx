@@ -25,7 +25,8 @@ interface Row {
  * names (collection `space`) in `scope`; with no query — the nodes visited
  * last; nodes in the trash below, three at most. `Enter` or a click goes to
  * the node, `Shift+Enter` opens it; a node in the trash comes back first.
- * Drawn like the Tab menu, its width in `ch` whatever the language.
+ * An `Enter` typed before the engine's answer chooses once it comes, as in
+ * the Tab menu. Drawn like the Tab menu, its width in `ch` whatever the language.
  */
 export function NodeSearch(props: {
   locale: Locale;
@@ -47,6 +48,8 @@ export function NodeSearch(props: {
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const [found, setFound] = useState<{ q: string; ids: string[]; trashed: string[] } | null>(null);
+  /** `Enter` before the answer: open or go, once it comes. */
+  const [waiting, setWaiting] = useState<{ open: boolean } | null>(null);
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
 
   useEffect(() => {
@@ -102,10 +105,20 @@ export function NodeSearch(props: {
   }
   const ready = query.trim() === '' || found?.q === query;
   const choose = (i: number, open: boolean) => {
+    if (!ready) {
+      setWaiting({ open });
+      return;
+    }
     const r = rows[i];
-    if (!r || !ready) return;
-    props.onChoose(r.id, r.trashed ? 'restore' : open ? 'open' : 'go');
+    if (r) props.onChoose(r.id, r.trashed ? 'restore' : open ? 'open' : 'go');
   };
+  const first = rows[Math.min(index, rows.length - 1)];
+  const { onChoose } = props;
+  useEffect(() => {
+    if (!waiting || !ready) return;
+    setWaiting(null);
+    if (first) onChoose(first.id, first.trashed ? 'restore' : waiting.open ? 'open' : 'go');
+  }, [waiting, ready, first, onChoose]);
   let headed = false;
   return (
     <>
@@ -129,6 +142,7 @@ export function NodeSearch(props: {
             onChange={(e) => {
               setQuery(e.target.value);
               setIndex(0);
+              setWaiting(null);
             }}
             onKeyDown={(e) => {
               e.stopPropagation();

@@ -3,6 +3,7 @@ import { glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { Scope, SearchClient, Visit } from '@strata/search';
 import { type CSSProperties, useEffect, useMemo, useState } from 'react';
+import { pointerMoved } from '../pointer';
 
 const ROWS = 12;
 const TRASH_ROWS = 3;
@@ -47,6 +48,7 @@ export function NodeSearch(props: {
   const { locale, items, search, scope, here, visits, trash } = props;
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
+  const [moved] = useState(pointerMoved);
   const [found, setFound] = useState<{ q: string; ids: string[]; trashed: string[] } | null>(null);
   /** `Enter` before the answer: open or go, once it comes. */
   const [waiting, setWaiting] = useState<{ open: boolean } | null>(null);
@@ -175,7 +177,9 @@ export function NodeSearch(props: {
                 aria-selected={i === index}
                 className={i === index ? 'tab-menu-row is-current' : 'tab-menu-row'}
                 title={r.trashed ? t(locale, 'search.restore') : undefined}
-                onPointerEnter={() => setIndex(i)}
+                onPointerMove={(e) => {
+                  if (moved(e)) setIndex(i);
+                }}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   choose(i, e.shiftKey);

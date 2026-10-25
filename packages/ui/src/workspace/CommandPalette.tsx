@@ -1,6 +1,7 @@
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { SearchClient } from '@strata/search';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { pointerMoved } from '../pointer';
 import {
   available,
   COMMANDS,
@@ -61,6 +62,7 @@ export function CommandPalette(props: {
   const { locale, search, context } = props;
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
+  const [moved] = useState(pointerMoved);
   const [found, setFound] = useState<{ q: string; commands: Command[] } | null>(null);
   const [waiting, setWaiting] = useState(false);
   const names = useMemo(() => commandNames(), []);
@@ -184,7 +186,9 @@ export function CommandPalette(props: {
                 tabIndex={-1}
                 aria-selected={i === index}
                 className={i === index ? 'tab-menu-row is-current' : 'tab-menu-row'}
-                onPointerEnter={() => setIndex(i)}
+                onPointerMove={(e) => {
+                  if (moved(e)) setIndex(i);
+                }}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   run(i);

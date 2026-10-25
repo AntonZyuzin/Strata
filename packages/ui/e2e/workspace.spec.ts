@@ -1961,6 +1961,22 @@ test.describe('a workspace on the core', () => {
     await createNode(page, 500, 360, 'Север');
     const palette = page.locator('.command-palette');
     const input = palette.locator('input');
+    const rows = palette.locator('.tab-menu-row');
+    // A pointer resting where the rows open chooses none: the first is current.
+    await page.keyboard.press('Control+p');
+    const fifth = await rows.nth(4).boundingBox();
+    if (!fifth) throw new Error('no fifth row');
+    await input.press('Escape');
+    await page.mouse.move(fifth.x + 20, fifth.y + fifth.height / 2);
+    await page.keyboard.press('Control+p');
+    await expect(rows.first()).toHaveClass(/is-current/);
+    await expect(palette.locator('.tab-menu-row.is-current')).toHaveCount(1);
+    // A move over a row makes it current.
+    await page.mouse.move(fifth.x + 40, fifth.y + fifth.height / 2);
+    await page.mouse.move(fifth.x + 60, fifth.y + fifth.height / 2);
+    await expect(rows.nth(4)).toHaveClass(/is-current/);
+    await input.press('Escape');
+    await page.mouse.move(20, 780);
     // Nothing chosen: no «Удалить»; the minimap by its English name.
     await page.keyboard.press('Control+p');
     await input.fill('удалить');

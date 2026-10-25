@@ -1,6 +1,7 @@
 import { glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { pointerMoved } from '../pointer';
 import {
   type Group,
   type MenuGhost,
@@ -44,6 +45,7 @@ export function TabMenu(props: {
   const { locale, search, templates, ghosts, named } = props;
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
+  const [moved] = useState(pointerMoved);
   // The engine answers in its worker: the rows stay those of the last
   // answer until the next one comes, and `Enter` waits for the query's own.
   const [ranking, setRanking] = useState<MenuRanking | null>(null);
@@ -186,7 +188,9 @@ export function TabMenu(props: {
                 tabIndex={-1}
                 aria-selected={i === index}
                 className={i === index ? 'tab-menu-row is-current' : 'tab-menu-row'}
-                onPointerEnter={() => setIndex(i)}
+                onPointerMove={(e) => {
+                  if (moved(e)) setIndex(i);
+                }}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   props.onChoose(item);

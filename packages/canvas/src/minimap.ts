@@ -59,7 +59,8 @@ const ACCENT = fog.scene.accent;
 export class Minimap {
   readonly element: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D | null;
-  private dots: HTMLCanvasElement | null = null;
+  /** The dots as a picture, drawn again only when the graph or the fit changed. */
+  private readonly dots = document.createElement('canvas');
   private dotsKey = '';
   private drawnKey = '';
   private fit: Fit = { scale: 1, x: 0, y: 0 };
@@ -163,9 +164,9 @@ export class Minimap {
       el.width = w;
       el.height = h;
     }
-    if (dotsKey !== this.dotsKey || !this.dots) {
+    if (dotsKey !== this.dotsKey) {
       this.dotsKey = dotsKey;
-      this.dots = this.paintDots(g, fit, dpr, w, h);
+      this.paintDots(g, fit, dpr, w, h);
     }
     ctx.clearRect(0, 0, w, h);
     ctx.drawImage(this.dots, 0, 0);
@@ -180,12 +181,15 @@ export class Minimap {
     ctx.strokeRect(x0, y0, Math.max(1, x1 - x0), Math.max(1, y1 - y0));
   }
 
-  private paintDots(g: Graph, fit: Fit, dpr: number, w: number, h: number): HTMLCanvasElement {
-    const layer = document.createElement('canvas');
-    layer.width = w;
-    layer.height = h;
+  private paintDots(g: Graph, fit: Fit, dpr: number, w: number, h: number): void {
+    const layer = this.dots;
+    if (layer.width !== w || layer.height !== h) {
+      layer.width = w;
+      layer.height = h;
+    }
     const c = layer.getContext('2d');
-    if (!c) return layer;
+    if (!c) return;
+    c.clearRect(0, 0, w, h);
     // A dot is 3 px, a whole number of device pixels at every DPR.
     const size = Math.max(3, Math.round(3 * dpr));
     c.fillStyle = PAPER;
@@ -196,7 +200,6 @@ export class Minimap {
       const y = Math.round((n.y - fit.y) * fit.scale * dpr - size / 2);
       c.fillRect(x, y, size, size);
     }
-    return layer;
   }
 
   /** The camera centred on the world point under the pointer. */

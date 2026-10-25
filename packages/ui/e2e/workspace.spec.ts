@@ -250,12 +250,16 @@ async function linkedAway(page: Page) {
 /** Opens the list behind node `id`'s «↗N» by a click on the mark. */
 async function openExternal(page: Page, id: string) {
   await page.keyboard.press('Escape');
-  const mark = await page.evaluate((id) => {
-    const ws = window.__strataWs as WsHook;
-    const m = ws.view.externalOf(id);
-    const r = ws.view.canvas.getBoundingClientRect();
-    return m ? { x: r.left + m.x, y: r.top + m.y } : null;
-  }, id);
+  const markOf = () =>
+    page.evaluate((id) => {
+      const ws = window.__strataWs as WsHook;
+      const m = ws.view.externalOf(id);
+      const r = ws.view.canvas.getBoundingClientRect();
+      return m ? { x: r.left + m.x, y: r.top + m.y } : null;
+    }, id);
+  // The mark is where the last frame drew it: the count comes before the frame.
+  await expect.poll(markOf).not.toBeNull();
+  const mark = await markOf();
   if (!mark) throw new Error('no «↗N» drawn');
   await page.mouse.click(mark.x, mark.y);
   await expect(page.locator('.ext-list .tab-menu-row')).toHaveCount(1);
@@ -1846,7 +1850,8 @@ test.describe('a workspace on the core', () => {
     const field = bar.locator('input');
     await field.fill('аним*');
     await expect(bar.locator('.find-count')).toHaveText('0 из 2');
-    expect(await lens()).toEqual(['Аниматик', 'Анимация удара']);
+    // The lens follows the count's render: an effect after it (WebKit under load).
+    await expect.poll(lens).toEqual(['Аниматик', 'Анимация удара']);
     await field.fill('аним* @задача');
     await expect(bar.locator('.find-count')).toHaveText('0 из 1');
     await field.press('ArrowDown');
@@ -1856,7 +1861,7 @@ test.describe('a workspace on the core', () => {
     await field.press('Escape');
     await expect(bar).toHaveCount(0);
     expect(await selected()).toEqual(['Звук']);
-    expect(await lens()).toBeNull();
+    await expect.poll(lens).toBeNull();
     // Enter selects every match.
     await page.keyboard.press('Control+f');
     await field.fill('аним');
@@ -2287,7 +2292,8 @@ test.describe('a workspace on the core', () => {
     // Esc: the lens goes, the choice of before comes back.
     await input.press('Escape');
     await expect(bar).toHaveCount(0);
-    expect(await map()).toMatchObject({ lens: null, selected: null });
+    // The lens goes with the bar's effects, after the bar has left the page.
+    await expect.poll(map).toMatchObject({ lens: null, selected: null });
     // Enter keeps the star found, the map in 3D.
     await page.keyboard.press('Control+f');
     await input.fill('реки');
@@ -2295,7 +2301,7 @@ test.describe('a workspace on the core', () => {
     await input.press('Enter');
     await expect(bar).toHaveCount(0);
     await expect.poll(async () => (await map()).selected).toBe(river);
-    expect((await map()).lens).toBeNull();
+    await expect.poll(async () => (await map()).lens).toBeNull();
     await expect(ws).toHaveAttribute('data-view', '3d');
   });
 

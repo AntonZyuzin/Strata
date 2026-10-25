@@ -764,5 +764,9 @@ export class StarMap {
     this.quad.geometry.dispose();
     if (this.targets) for (const t of this.targets) t.dispose();
     this.renderer.dispose();
+    // `dispose` frees the buffers but not the context, which would live
+    // until the canvas is collected: a map is made again with every network
+    // loaded under it, and browsers keep only so many contexts at once.
+    this.renderer.forceContextLoss();
   }
 }

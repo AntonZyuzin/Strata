@@ -7,7 +7,7 @@
 export type Locale = 'ru' | 'en';
 
 const ru = {
-  'app.title': 'Strata',
+  'app.title': 'Gexogon',
   'app.stage': 'Этап 1 · веха 1A «Скелет»',
   'app.tagline': 'Нодовая база знаний и проектов',
   'about.core': 'Ядро',
@@ -188,7 +188,7 @@ const ru = {
   'credits.open': 'Благодарности',
   'credits.title': 'Благодарности',
   'credits.strata':
-    'Strata — свободная программа, AGPL-3.0-or-later. Код: github.com/AntonZyuzin/Strata',
+    'Gexogon — свободная программа, AGPL-3.0-or-later. Код: github.com/AntonZyuzin/Strata',
   'credits.fonts': 'Шрифты',
   'credits.icons': 'Иконки',
   'credits.iconsNote':
@@ -411,7 +411,7 @@ type Catalog = {
 };
 
 const en: Catalog = {
-  'app.title': 'Strata',
+  'app.title': 'Gexogon',
   'app.stage': 'Stage 1 · milestone 1A “Skeleton”',
   'app.tagline': 'Node-based knowledge and projects',
   'about.core': 'Core',
@@ -592,7 +592,7 @@ const en: Catalog = {
   'credits.open': 'Credits',
   'credits.title': 'Credits',
   'credits.strata':
-    'Strata is free software, AGPL-3.0-or-later. Code: github.com/AntonZyuzin/Strata',
+    'Gexogon is free software, AGPL-3.0-or-later. Code: github.com/AntonZyuzin/Strata',
   'credits.fonts': 'Fonts',
   'credits.icons': 'Icons',
   'credits.iconsNote': 'game-icons.net, CC BY 3.0. Changed: inverted, a black figure on paper',

@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Strata",
+  "productName": "Gexogon",
   "version": "0.0.1",
   "identifier": "app.strata.desktop",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "Strata",
+        "title": "Gexogon",
         "width": 1280,
         "height": 800,
         "minWidth": 800,
@@ -29,7 +29,7 @@
     "targets": "all",
     "category": "Productivity",
     "shortDescription": "Node-based notes and projects",
-    "copyright": "Strata contributors, AGPL-3.0-or-later",
+    "copyright": "Gexogon contributors, AGPL-3.0-or-later",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

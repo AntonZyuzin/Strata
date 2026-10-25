@@ -8,7 +8,7 @@ use strata_model::NodeId;
 #[command(
     name = "strata",
     version,
-    about = "Strata — node-based notes and projects"
+    about = "Gexogon — node-based notes and projects"
 )]
 struct Cli {
     #[command(subcommand)]

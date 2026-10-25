@@ -88,7 +88,7 @@ export function TabBar(props: {
         onClick={props.onHome}
       >
         <Glyph name="logo" />
-        <span aria-hidden="true">Strata</span>
+        <span aria-hidden="true">{t(locale, 'app.title')}</span>
       </button>
       <div className="tabbar-tools">
         <IconButton icon="import" label={t(locale, 'home.importHint')} onClick={props.onImport} />

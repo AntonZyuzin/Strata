@@ -121,7 +121,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![build_info, core, home])
         .run(tauri::generate_context!())
-        .expect("failed to run the Strata desktop shell");
+        .expect("failed to run the Gexogon desktop shell");
 }
 
 #[cfg(test)]

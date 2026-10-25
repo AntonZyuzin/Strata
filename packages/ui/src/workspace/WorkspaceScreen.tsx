@@ -5,6 +5,7 @@ import {
   type CoreOp,
   CoreSync,
   followFolds,
+  followPreviews,
   followWires,
   type Graph,
   graphOf,
@@ -37,6 +38,7 @@ import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko'
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
+import { linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { nodeIconFile, nodeIconImages } from '../icons/Icon';
 import { type Prefs, reading } from '../prefs';
@@ -211,6 +213,10 @@ export function WorkspaceScreen(props: {
   const urls = useRef(new Map<string, string>());
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const refreshRef = useRef<() => void>(() => undefined);
+  /** Fetches the previews of these link assets (✅ Q-13-16); set with the canvas. */
+  const previewRef = useRef<(ids: string[]) => Promise<void>>(async () => {});
+  /** Link assets already asked for a preview this session. */
+  const previewed = useRef(new Set<string>());
   const eventsRef = useRef<EditorEvents | null>(null);
   const localeRef = useRef(locale);
   localeRef.current = locale;
@@ -469,6 +475,13 @@ export function WorkspaceScreen(props: {
       graph.current = g;
       g.subscribe((e) => {
         for (const event of geckoEvents(e)) gecko.current?.react(event);
+        // A link given by the user: its preview follows (✅ Q-13-16).
+        if ((e.type === 'apply' || e.type === 'redo') && e.changeset.source === 'user') {
+          const links = e.changeset.ops.flatMap((op) =>
+            op.t === 'attr' && op.key === 'url' && op.value ? [op.id] : [],
+          );
+          if (links.length > 0) void previewRef.current(links);
+        }
       });
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       const ed = new Editor(v, g, events);
@@ -502,14 +515,37 @@ export function WorkspaceScreen(props: {
       void pictures();
     };
 
-    /** Pictures of photo assets into their bubbles (owner, 2026-10-24). */
+    /**
+     * Previews of links (05 §4.4, ✅ Q-13-16, ADR-0012): the core fetches each
+     * page on desktop, then the canvas, the pictures and the panel read the
+     * node again. A link with no preview to be had stays as it is: best effort,
+     * no toast; each node is asked once a session.
+     */
+    previewRef.current = async (ids: string[]) => {
+      await sync.current?.settled();
+      const g = graph.current;
+      const asked = previewed.current;
+      for (const id of ids) {
+        asked.add(id);
+        const changed = await linkPreview(id).catch(() => false);
+        if (!changed || cancelled || graph.current !== g || !g) continue;
+        const nv = await core.view(netRef.current);
+        if (cancelled || graph.current !== g || nv.net !== netRef.current) return;
+        followPreviews(g, nv);
+        void pictures();
+        refreshRef.current();
+      }
+    };
+
+    /** Pictures of photo assets and link previews into their bubbles (owner, 2026-10-24). */
     const pictures = async () => {
       const v = viewRef.current;
       const g = graph.current;
       if (!v || !g) return;
       for (const n of g.nodes.values()) {
         // A picture by its type, as the panel and «Ноды» read it; a file shows its icon.
-        const sha = assetType(n.attrs) === 'image' ? n.attrs.asset : undefined;
+        const type = assetType(n.attrs);
+        const sha = type === 'image' ? n.attrs.asset : type === 'url' ? n.attrs.preview : undefined;
         if (shown.current.get(n.id) === sha) continue;
         if (!sha) {
           shown.current.delete(n.id);
@@ -831,9 +867,11 @@ export function WorkspaceScreen(props: {
   const urlRef = useRef(urlOf);
   urlRef.current = urlOf;
 
-  // The selected asset's file for the panel.
+  // The selected asset's file for the panel; a link's preview picture.
   useEffect(() => {
-    const sha = details?.kind === 'asset' ? details.asset : undefined;
+    // A link asset is a link whatever file it holds (assetType).
+    const link = Boolean(details?.url);
+    const sha = details?.kind !== 'asset' ? undefined : link ? details.preview : details.asset;
     const mime = details?.mime ?? '';
     if (!sha) {
       setFileUrl(null);
@@ -856,7 +894,14 @@ export function WorkspaceScreen(props: {
     return () => {
       live = false;
     };
-  }, [details?.kind, details?.asset, details?.mime]);
+  }, [details?.kind, details?.asset, details?.mime, details?.preview, details?.url]);
+
+  // A link without a preview shown in the panel asks for it once (made before
+  // previews, or offline then).
+  useEffect(() => {
+    const id = details?.kind === 'asset' && details.url && !details.preview ? details.id : null;
+    if (id && !previewed.current.has(id)) void previewRef.current([id]);
+  }, [details?.id, details?.kind, details?.url, details?.preview]);
 
   /**
    * Files dropped or pasted on the canvas become assets (05 §4.4): each keeps

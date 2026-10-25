@@ -215,6 +215,24 @@ export function followFolds(graph: Graph, view: NetworkView, day: string = graph
 }
 
 /**
+ * Brings link assets to their previews from the core (05 §4.4, ✅ Q-13-16),
+ * outside undo: the picture, and the page's title for a link the user has
+ * not named. The core's step of the system, read back.
+ */
+export function followPreviews(graph: Graph, view: NetworkView): void {
+  graph.derive({ key: 'core.change.preview' }, (tx) => {
+    for (const n of view.nodes) {
+      const g = graph.nodes.get(n.id);
+      if (!g || n.kind !== 'asset') continue;
+      if (g.name !== n.name) tx.rename(n.id, n.name);
+      if ((g.attrs.preview ?? null) !== (n.preview ?? null)) {
+        tx.attr(n.id, 'preview', n.preview ?? null);
+      }
+    }
+  });
+}
+
+/**
  * Brings the graph's wires to what the core says, outside undo: text wires
  * that the core made or took away after a note changed (05 §8.2 rule 4).
  */

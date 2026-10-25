@@ -168,7 +168,7 @@ strata/
 | Крейт | Отвечает за | Зависит от | Цели |
 |---|---|---|---|
 | `strata-model` | ID (UUIDv7, текстовая форма — 05 §4.1), `NodeKind`, поля, `DomainOp`, `Changeset` (структура и откат — [10](10-storage-sync-collab.md) §9.1, §9.3), форматы выписок | — | native, wasm32 |
-| `strata-core` | Доменные операции и инварианты; `DocEngine` над Loro; `store.sqlite`, `projection.sqlite`, tantivy; ассеты; журнал и откат наборов; актор пространства; компактирование, перешардирование, миграции, сверка ([10](10-storage-sync-collab.md)) | model, markdown, search, layout | native |
+| `strata-core` | Доменные операции и инварианты; `DocEngine` над Loro; `store.sqlite`, `projection.sqlite`, tantivy; ассеты; журнал и откат наборов; актор пространства; компактирование, перешардирование, миграции, сверка ([10](10-storage-sync-collab.md)); превью ссылок за фичей `net` ([ADR-0012](adr/0012-link-preview.md)) | model, markdown, search, layout | native; wasm32 — без фич `sqlite` и `net` |
 | `strata-markdown` | Извлечение `[[ссылок]]`, embed, тегов, свойств, задач из Markdown для нитей с происхождением `text` и импорта. Rust-библиотеки разбора Markdown и YAML не выбирались (не исследовалось): выбор — спайк 11 (§2.6, §7) | model | native |
 | `strata-search` | Нормализация, ступени сопоставления, ранжирование ([09](09-search-navigation.md) §2) | model | native, wasm32 |
 | `strata-layout` | Слоистый DAG, радиальное дерево, силовая раскладка с ограничениями, раздвигание соседей ([06](06-canvas-ux.md) §9) | model | native, wasm32 |

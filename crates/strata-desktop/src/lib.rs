@@ -1,8 +1,8 @@
 //! Desktop shell (ADR-0004): one TypeScript SPA talking to the Rust core over
 //! Tauri IPC. `home` takes the home screen's calls (`strata_core::home`:
 //! the workspaces of this device, ✅ Q-16-12), `core` the calls for the open
-//! workspace (`strata_core::api`); `build_info` feeds «О программе» and the
-//! benchmark.
+//! workspace (`strata_core::api`); `preview` fetches a link asset's preview
+//! (ADR-0012); `build_info` feeds «О программе» and the benchmark.
 
 use serde::Serialize;
 use std::sync::Mutex;
@@ -101,6 +101,48 @@ fn home(state: tauri::State<'_, Core>, request: String) -> String {
     }
 }
 
+/// A link asset's preview (05 §4.4, ✅ Q-13-16, ADR-0012): the link is read
+/// from the core, the page fetched off the core's lock and the main thread,
+/// and the result written back as a step of the system. True when the node
+/// changed; false when it is no link, or the workspace or its link changed
+/// while the page loaded.
+#[tauri::command]
+async fn preview(state: tauri::State<'_, Core>, id: String) -> Result<bool, String> {
+    let (workspace, url) = {
+        let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+        match guard.as_ref() {
+            Ok(App {
+                current: Some(ws), ..
+            }) => (
+                ws.id().to_owned(),
+                ws.link_of(&id).map_err(|e| e.to_string())?,
+            ),
+            Ok(_) => return Err("no workspace is open".to_owned()),
+            Err(e) => return Err(e.clone()),
+        }
+    };
+    let Some(url) = url else { return Ok(false) };
+    let link = url.clone();
+    let fetched = tauri::async_runtime::spawn_blocking(move || strata_core::preview::fetch(&link))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+    match guard.as_mut() {
+        Ok(App {
+            current: Some(ws), ..
+        }) if ws.id() == workspace => ws
+            .apply_preview(
+                &id,
+                &url,
+                fetched.title.as_deref(),
+                fetched.picture.as_deref(),
+            )
+            .map_err(|e| e.to_string()),
+        _ => Ok(false),
+    }
+}
+
 /// Starts the desktop application.
 pub fn run() {
     tauri::Builder::default()
@@ -119,7 +161,7 @@ pub fn run() {
             app.manage(Core(Mutex::new(loaded)));
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![build_info, core, home])
+        .invoke_handler(tauri::generate_handler![build_info, core, home, preview])
         .run(tauri::generate_context!())
         .expect("failed to run the Gexogon desktop shell");
 }

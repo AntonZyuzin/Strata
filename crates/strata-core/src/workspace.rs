@@ -112,6 +112,30 @@ fn is_url(s: &str) -> bool {
         && !s.chars().any(char::is_whitespace)
 }
 
+/// The name a link asset gets with its link (13 §3.9): the host, the link
+/// itself, or none — a name the user has not given it.
+fn auto_name(name: &str, url: &str) -> bool {
+    let name = name.trim();
+    if name.is_empty() || name == url.trim() {
+        return true;
+    }
+    // The host: after the scheme's `//`, up to the first `/`, `?`, `#` or `:`.
+    let host = url
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(url)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    let host = host.rsplit_once('@').map_or(host, |(_, h)| h);
+    // An IPv6 host keeps its brackets, as the browser's `URL.hostname` does.
+    let host = match host.find(']') {
+        Some(end) if host.starts_with('[') => &host[..=end],
+        _ => host.split(':').next().unwrap_or(""),
+    };
+    !host.is_empty() && name.eq_ignore_ascii_case(host)
+}
+
 /// An icon's name, `filetype-image` and the like (07 §6.1).
 fn is_icon_name(s: &str) -> bool {
     (1..=40).contains(&s.len())
@@ -168,6 +192,9 @@ pub struct Attrs {
     /// An asset's icon chosen by hand (07 §6.1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// A link asset's preview picture, its SHA-256 (05 §4.4, ✅ Q-13-16).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preview: Option<String>,
 }
 
 /// A roll-up (05 §6.4, ☑ Q-05-2, ADR-0010): over the tasks inside a folder
@@ -715,6 +742,15 @@ impl<S: Store> Workspace<S> {
 
     /// Checks and writes the operations as one changeset, outside undo.
     fn commit_ops(&mut self, ops: &[Op], label: Label) -> Result<Changeset> {
+        self.commit_ops_as(ChangesetOrigin::User, ops, label)
+    }
+
+    fn commit_ops_as(
+        &mut self,
+        origin: ChangesetOrigin,
+        ops: &[Op],
+        label: Label,
+    ) -> Result<Changeset> {
         // Documents of the networks the operations touch, before the transaction.
         for op in ops {
             match op {
@@ -727,7 +763,7 @@ impl<S: Store> Workspace<S> {
             }
         }
         let plan = self.plan(ops)?;
-        self.write(ChangesetOrigin::User, label, |tx| {
+        self.write(origin, label, |tx| {
             for (doc, map, key, value) in plan {
                 tx.set(&doc, &map, &key, value)?;
             }
@@ -959,7 +995,7 @@ impl<S: Store> Workspace<S> {
                     let fits = match key.as_str() {
                         "status" | "priority" | "start" | "deadline" => task || clear,
                         "color" => true,
-                        "asset" | "mime" | "url" | "icon" => asset || clear,
+                        "asset" | "mime" | "url" | "icon" | "preview" => asset || clear,
                         _ => false,
                     };
                     if !fits {
@@ -974,7 +1010,7 @@ impl<S: Store> Workspace<S> {
                         ("priority", Some(Val::Str(v))) => PRIORITIES.contains(&v.as_str()),
                         ("start" | "deadline", Some(Val::Str(v))) => is_when(v),
                         ("color", Some(Val::Int(v))) => (0..COLORS).contains(v),
-                        ("asset", Some(Val::Str(v))) => {
+                        ("asset" | "preview", Some(Val::Str(v))) => {
                             v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit())
                         }
                         ("mime", Some(Val::Str(v))) => is_mime(v),
@@ -986,6 +1022,12 @@ impl<S: Store> Workspace<S> {
                         return Err(bad());
                     }
                     let index = self.index_doc(n);
+                    // A preview shows its link (05 §4.4): another link takes it away.
+                    if key == "url"
+                        && self.attrs(n).url.as_deref() != value.as_ref().and_then(Val::as_str)
+                    {
+                        put(&index, "attr", &format!("{}|preview", n.to_text()), None);
+                    }
                     match key.as_str() {
                         "status" | "priority" | "start" | "deadline" | "color" => {
                             put(&index, key, &n.to_text(), value.clone());
@@ -1293,6 +1335,7 @@ impl<S: Store> Workspace<S> {
             mime: attr("mime"),
             url: attr("url"),
             icon: attr("icon"),
+            preview: attr("preview"),
         }
     }
 
@@ -1633,6 +1676,64 @@ impl<S: Store> Workspace<S> {
 
     pub fn asset(&self, sha: &str) -> Result<Option<Vec<u8>>> {
         Ok(self.store.asset(sha)?)
+    }
+
+    /// The link asset's URL, for its preview to be fetched (✅ Q-13-16).
+    pub fn link_of(&self, id: &str) -> Result<Option<String>> {
+        let n = self.live(id)?;
+        if self.kind(n) != Some(NodeKind::Asset) {
+            return Ok(None);
+        }
+        Ok(self.attrs(n).url)
+    }
+
+    /// A link's preview (05 §4.4, ✅ Q-13-16), fetched for `url`: the picture
+    /// becomes an asset by its hash (10 §11) and the node's `preview`; the
+    /// page's title becomes the node's name while the name is still the one
+    /// it got with the link — its host, the link itself, or nothing. Derived
+    /// from the link, so a step of the system, not of the user's undo (05
+    /// §11). False when nothing changed, or the node's link is another by now.
+    pub fn apply_preview(
+        &mut self,
+        id: &str,
+        url: &str,
+        title: Option<&str>,
+        picture: Option<&[u8]>,
+    ) -> Result<bool> {
+        let n = self.live(id)?;
+        if self.kind(n) != Some(NodeKind::Asset) || self.attrs(n).url.as_deref() != Some(url) {
+            return Ok(false);
+        }
+        let mut ops = Vec::new();
+        if let Some(bytes) = picture.filter(|b| !b.is_empty()) {
+            let sha = self.put_asset(bytes)?;
+            if self.attrs(n).preview.as_deref() != Some(sha.as_str()) {
+                ops.push(Op::SetAttr {
+                    id: id.to_owned(),
+                    key: "preview".to_owned(),
+                    value: Some(Val::str(sha)),
+                });
+            }
+        }
+        let title = title
+            .map(|t| t.split_whitespace().collect::<Vec<_>>().join(" "))
+            .map(|t| t.chars().take(200).collect::<String>())
+            .filter(|t| !t.is_empty());
+        let name = self.name(n);
+        if let Some(title) = title.filter(|t| *t != name && auto_name(&name, url)) {
+            ops.push(Op::Rename {
+                id: id.to_owned(),
+                name: title,
+            });
+        }
+        if ops.is_empty() {
+            return Ok(false);
+        }
+        let label = Label::new("core.change.preview");
+        Ok(!self
+            .commit_ops_as(ChangesetOrigin::System, &ops, label)?
+            .writes
+            .is_empty())
     }
 
     /// Every live node of the workspace under its primary network, for the

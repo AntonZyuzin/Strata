@@ -9,9 +9,12 @@ repository.workspace = true
 authors.workspace = true
 
 [features]
-default = ["sqlite"]
+default = ["sqlite", "net"]
 # The workspace folder's store.sqlite (10 §3.2); off in the browser build.
 sqlite = ["dep:rusqlite"]
+# Link previews fetched from the page (ADR-0012); off in the browser build,
+# where a page cannot read another site.
+net = ["dep:ureq", "dep:html5gum", "dep:url", "dep:encoding_rs"]
 
 [dependencies]
 base64 = "0.22"
@@ -25,6 +28,12 @@ strata-model.workspace = true
 thiserror.workspace = true
 # `.strata.zip` (10 §3.5); deflate in pure Rust, so the browser build has it too.
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# Link previews (ADR-0012): HTTP over the system's TLS and trust store, the
+# page's head through a WHATWG tokenizer, any charset to UTF-8.
+ureq = { version = "3.5", default-features = false, features = ["native-tls-no-default", "gzip"], optional = true }
+html5gum = { version = "0.8", optional = true }
+url = { version = "2.5", optional = true }
+encoding_rs = { version = "0.8", optional = true }
 
 [lints]
 workspace = true

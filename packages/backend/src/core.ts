@@ -40,6 +40,8 @@ export interface NodeAttrs {
   url?: string;
   /** An asset's icon chosen by hand (07 §6.1). */
   icon?: string;
+  /** A link asset's preview picture, its SHA-256 (05 §4.4, ✅ Q-13-16); the core sets it. */
+  preview?: string;
 }
 
 export type AttrKey =
@@ -51,7 +53,8 @@ export type AttrKey =
   | 'asset'
   | 'mime'
   | 'url'
-  | 'icon';
+  | 'icon'
+  | 'preview';
 
 /** What an asset holds (05 §4.4): by its link, else by its file's type. */
 export type AssetType = 'image' | 'video' | 'audio' | 'pdf' | 'file' | 'url' | 'empty';

@@ -1203,3 +1203,75 @@ fn a_network_keeps_its_wire_style_one_step_of_undo() {
         "the style is written with its network's document"
     );
 }
+
+#[test]
+fn a_link_preview_is_the_systems_step_and_names_only_an_unnamed_link() {
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let url = "https://www.example.org/mill?x=1";
+    let link = create(&mut w, &root, NodeKind::Asset, "www.example.org");
+    set(&mut w, &link, "url", Some(Val::str(url))).expect("link");
+    let steps = w.history();
+    assert_eq!(w.link_of(&link).expect("link of"), Some(url.to_owned()));
+    let picture = b"\x89PNG preview".to_vec();
+    assert!(
+        w.apply_preview(&link, url, Some("  Старая   мельница\n"), Some(&picture))
+            .expect("preview")
+    );
+    let d = w.node_details(&link).expect("details");
+    assert_eq!(
+        d.name, "Старая мельница",
+        "a link named by its host takes the page's title"
+    );
+    let sha = d.attrs.preview.expect("a preview");
+    assert_eq!(w.asset(&sha).expect("asset"), Some(picture.clone()));
+    assert_eq!(
+        w.history(),
+        steps,
+        "the preview is derived: no step of the user's undo (05 §11)"
+    );
+    assert!(
+        !w.apply_preview(&link, url, Some("Старая мельница"), Some(&picture))
+            .expect("again"),
+        "the same preview again changes nothing"
+    );
+
+    // A name the user gave stays.
+    w.apply(
+        &[Op::Rename {
+            id: link.clone(),
+            name: "Референс".to_owned(),
+        }],
+        Label::new("t.rename"),
+    )
+    .expect("rename");
+    w.apply_preview(&link, url, Some("Другой заголовок"), None)
+        .expect("title only");
+    assert_eq!(w.node_details(&link).expect("details").name, "Референс");
+
+    // A preview late for a link changed meanwhile is dropped; a new link drops the old preview.
+    let other = "https://example.com/";
+    set(&mut w, &link, "url", Some(Val::str(other))).expect("another link");
+    assert_eq!(w.node_details(&link).expect("details").attrs.preview, None);
+    assert!(
+        !w.apply_preview(&link, url, Some("Поздно"), Some(&picture))
+            .expect("late")
+    );
+    w.undo().expect("undo");
+    assert_eq!(
+        w.node_details(&link).expect("details").attrs.preview,
+        Some(sha),
+        "undo of the new link brings its preview back"
+    );
+
+    // Only a link asset has a preview.
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    assert!(!w.apply_preview(&note, url, Some("x"), None).expect("note"));
+    assert!(set(&mut w, &note, "preview", Some(Val::str("0".repeat(64)))).is_err());
+    let bare = create(&mut w, &root, NodeKind::Asset, "");
+    set(&mut w, &bare, "url", Some(Val::str("http://[::1]:8080/a"))).expect("v6");
+    w.apply_preview(&bare, "http://[::1]:8080/a", Some("Локально"), None)
+        .expect("v6 preview");
+    assert_eq!(w.node_details(&bare).expect("details").name, "Локально");
+}

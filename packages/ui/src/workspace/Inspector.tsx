@@ -342,7 +342,10 @@ export function Inspector(props: {
         <section className="ins-section">
           {n.kind === 'asset' ? (
             <div className="ins-asset" data-type={type ?? ''}>
-              {shown && type === 'image' ? <img src={shown} alt={n.name} /> : null}
+              {shown && (type === 'image' || type === 'url') ? (
+                // A link's picture is its page's preview (05 §4.4, ✅ Q-13-16).
+                <img src={shown} alt={n.name} />
+              ) : null}
               {shown && type === 'video' ? (
                 // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
                 <video src={shown} controls />

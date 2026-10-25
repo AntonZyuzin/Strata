@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
 import type { HomeBackend, NetworkView } from './core';
 import { dueOf, type Graph, newNode } from './graph';
-import { CoreSync, followFolds, followWires, graphOf } from './sync';
+import { CoreSync, followFolds, followPreviews, followWires, graphOf } from './sync';
 
 beforeAll(async () => {
   await loadCore(readFileSync(new URL('../pkg/strata_core_bg.wasm', import.meta.url)));
@@ -84,6 +84,27 @@ describe('the canvas and the core in step', () => {
     expect(g.wireShape).toBe('straight');
     expect((await home.core.view(root)).wire_style).toBe('straight');
     expect(errors).toEqual([]);
+  });
+
+  it("follows a link's preview from the core, outside undo (✅ Q-13-16)", async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't.link' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'example.org', kind: 'asset', icon: 0, x: 0, y: 0 }));
+      tx.attr(A, 'url', 'https://example.org/mill');
+    });
+    await sync.settled();
+    const view = await home.core.view(root);
+    const sha = 'a'.repeat(64);
+    // What the core holds after its step of the system: the page's title and picture.
+    const after = {
+      ...view,
+      nodes: view.nodes.map((n) => (n.id === A ? { ...n, name: 'Мельница', preview: sha } : n)),
+    };
+    const steps = g.undoLabel;
+    followPreviews(g, after);
+    expect(g.nodes.get(A)?.name).toBe('Мельница');
+    expect(g.nodes.get(A)?.attrs.preview).toBe(sha);
+    expect(g.undoLabel).toEqual(steps);
   });
 
   it('forgets a cancelled gesture in the core too', async () => {

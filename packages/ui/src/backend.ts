@@ -38,6 +38,17 @@ export async function closeAppWindow(): Promise<boolean> {
 }
 
 /**
+ * A link asset's preview (05 §4.4, ✅ Q-13-16, ADR-0012): on desktop the core
+ * fetches the page and stores its picture and title; true when the node
+ * changed. A browser page cannot read another site (Q-13-17): false.
+ */
+export async function linkPreview(id: string): Promise<boolean> {
+  if (!isTauri()) return false;
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<boolean>('preview', { id });
+}
+
+/**
  * The home screen's backend (✅ Q-16-12): on desktop the Rust core over
  * Tauri IPC, workspaces in folders; in a browser the same core as WASM,
  * workspaces in IndexedDB (e2e, `pnpm dev`).

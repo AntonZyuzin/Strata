@@ -97,6 +97,8 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
       // A broken list starts empty; the workspaces' bytes stay on the shelf.
     }
   }
+  // The workspaces open in tabs, with their undo (05 §11); one on the canvas.
+  const tabs = new Map<string, WasmCore>();
   let current: { id: string; core: WasmCore } | null = null;
   // Writes go to the shelf one after another, in the order of the calls.
   let queue: Promise<unknown> = Promise.resolve();
@@ -114,16 +116,21 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
     profile: saved.profile,
     current: current?.id ?? null,
   });
-  const close = () => {
-    current?.core.free();
-    current = null;
+  /** A tab closes: its workspace leaves memory. */
+  const release = (id: string) => {
+    tabs.get(id)?.free();
+    tabs.delete(id);
+    if (current?.id === id) current = null;
   };
   const remember = async (core: WasmCore): Promise<Opened> => {
     const entry: WorkspaceEntry = { id: core.id(), name: core.rootName(), openedAt: now() };
     saved.workspaces = [...saved.workspaces.filter((e) => e.id !== entry.id), entry];
     await shelf.set(ws(entry.id), core.bytes());
     await save();
-    close();
+    // A workspace of the same id in a tab gives way to this one.
+    const was = tabs.get(entry.id);
+    if (was && was !== core) was.free();
+    tabs.set(entry.id, core);
     current = { id: entry.id, core };
     return { workspace: entry, root: core.root() };
   };
@@ -157,17 +164,23 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         if (!n) throw new CoreError('a workspace needs a name', true);
         return remember(WasmCore.create(n));
       }),
-    open: (id) => later(async () => remember(await load(id))),
+    // A workspace in a tab comes back as it was, its undo too.
+    open: (id) => later(async () => remember(tabs.get(id) ?? (await load(id)))),
     close: () =>
       later(async () => {
-        close();
+        current = null;
+        return state();
+      }),
+    release: (id) =>
+      later(async () => {
+        release(id);
         return state();
       }),
     rename: (id, name) =>
       later(async () => {
         const n = name.trim();
         if (!n) throw new CoreError('a workspace needs a name', true);
-        const c = current?.id === id ? current.core : await load(id);
+        const c = tabs.get(id) ?? (await load(id));
         const out = JSON.parse(
           c.call(
             JSON.stringify({
@@ -179,14 +192,14 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         ) as { type: string; message?: string };
         if (out.type === 'error') throw new CoreError(out.message ?? 'rename', true);
         await shelf.set(ws(id), c.bytes());
-        if (c !== current?.core) c.free();
+        if (!tabs.has(id)) c.free();
         saved.workspaces = saved.workspaces.map((e) => (e.id === id ? { ...e, name: n } : e));
         await save();
         return state();
       }),
     forget: (id) =>
       later(async () => {
-        if (current?.id === id) close();
+        release(id);
         saved.workspaces = saved.workspaces.filter((e) => e.id !== id);
         await shelf.delete(preview(id));
         await save();
@@ -195,7 +208,7 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
     // A browser has no system trash: the workspace's bytes go too.
     remove: (id) =>
       later(async () => {
-        if (current?.id === id) close();
+        release(id);
         saved.workspaces = saved.workspaces.filter((e) => e.id !== id);
         await shelf.delete(ws(id));
         await shelf.delete(preview(id));
@@ -212,7 +225,8 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
       }),
     exportArchive: (id) =>
       later(async () => {
-        if (current?.id === id) return current.core.exportArchive();
+        const open = tabs.get(id);
+        if (open) return open.exportArchive();
         const c = await load(id);
         try {
           return c.exportArchive();

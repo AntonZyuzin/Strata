@@ -748,6 +748,11 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '0');
     await page.locator('.tab', { hasText: 'Без названия' }).locator('.tab-name').click();
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    // Its undo came back with it (05 §11): the node made before the switch goes.
+    await page.keyboard.press('Control+z');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '0');
+    await page.keyboard.press('Control+Shift+z');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
     // The logo: home, with both cards; the tabs stay.
     await page.getByRole('button', { name: 'Главная' }).click();
     await expect(page.locator('.home-card')).toHaveCount(2);

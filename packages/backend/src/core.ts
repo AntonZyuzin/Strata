@@ -491,7 +491,10 @@ export interface HomeBackend {
   open(id: string): Promise<Opened>;
   /** «Открыть…»: a workspace folder of the user's choice (desktop). */
   add?(path: string): Promise<Opened>;
+  /** Back to the home screen: the tabs' workspaces stay open behind it. */
   close(): Promise<HomeState>;
+  /** A tab closes: its workspace leaves memory, and its undo with it (05 §11). */
+  release(id: string): Promise<HomeState>;
   rename(id: string, name: string): Promise<HomeState>;
   forget(id: string): Promise<HomeState>;
   /** To the system trash on desktop; gone for good in a browser. */
@@ -540,6 +543,7 @@ export function jsonHome(home: Transport, core: Transport): HomeBackend {
     open: (id) => opened({ call: 'open', id }),
     add: (path) => opened({ call: 'add', path }),
     close: () => state({ call: 'close' }),
+    release: (id) => state({ call: 'release', id }),
     rename: (id, name) => state({ call: 'rename', id, name }),
     forget: (id) => state({ call: 'forget', id }),
     remove: (id) => state({ call: 'remove', id }),

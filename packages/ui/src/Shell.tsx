@@ -198,8 +198,13 @@ export function Shell(props: {
             const at = tabs.findIndex((x) => x.id === id);
             const rest = tabs.filter((x) => x.id !== id);
             setTabs(rest);
-            if (id !== active) return;
+            // The tab's workspace leaves memory, its undo with it (05 §11).
+            if (id !== active) {
+              await home.release(id);
+              return;
+            }
             await away();
+            await home.release(id);
             const next = rest[Math.min(at, rest.length - 1)];
             if (next) show(await home.open(next.id));
             else await toHome();

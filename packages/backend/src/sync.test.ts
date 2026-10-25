@@ -318,6 +318,29 @@ describe('fields of a node (05 §6.1)', () => {
 });
 
 describe('the home screen in a browser', () => {
+  it("keeps a tab's undo while another opens, and lets it go with the tab (05 §11)", async () => {
+    const home = await browserHome(memoryShelf());
+    const a = await home.create('А');
+    const step = { key: 't.create' };
+    await home.core.apply(
+      [{ op: 'createNode', kind: 'note', name: 'Заметка', net: a.root, x: 0, y: 0 }],
+      step,
+    );
+    await home.create('Б');
+    expect((await home.core.history()).undo).toBeNull();
+    await home.open(a.workspace.id);
+    expect((await home.core.history()).undo).toEqual(step);
+    // The home screen keeps the tabs behind it.
+    await home.close();
+    await home.open(a.workspace.id);
+    expect((await home.core.history()).undo).toEqual(step);
+    // A closed tab: opened again, the workspace starts afresh, its work kept.
+    expect((await home.release(a.workspace.id)).current).toBeNull();
+    await home.open(a.workspace.id);
+    expect((await home.core.history()).undo).toBeNull();
+    expect((await home.core.view(a.root)).nodes.map((n) => n.name)).toEqual(['Заметка']);
+  });
+
   it('creates, renames, lists by last opened and removes workspaces', async () => {
     let t = 1_000;
     const home: HomeBackend = await browserHome(memoryShelf(), () => t++);

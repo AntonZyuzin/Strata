@@ -436,6 +436,8 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       await createWorkspace(page, 'Карта');
       await createNode(page, 400, 300, 'Север');
       await createNode(page, 700, 450, 'Юг');
+      // Nothing chosen: the panel, which follows the core, has closed.
+      await expect(page.locator('.workspace')).toHaveAttribute('data-panel', 'closed');
       const map = page.locator('.canvas-minimap');
       await expect(map).toBeHidden();
       await page.evaluate(() => window.__strataWs?.view.canvas.focus());
@@ -2022,6 +2024,39 @@ test.describe('a workspace on the core', () => {
       timeout: 10_000,
     });
     await expect(map).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('another tab opened under the star map comes in 2D, and M opens its own map (08 §7)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Первое');
+    await createNode(page, 640, 400, 'Звезда');
+    await page.locator('.tab-new').click();
+    await expect(page.locator('.tab.is-active')).toHaveText('Без названия');
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await createNode(page, 640, 400, 'Комета');
+    const ws = page.locator('.workspace');
+    const map = page.getByRole('button', { name: 'Холст или звёздная карта (M)' });
+    await map.click();
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    await page.locator('.tab', { hasText: 'Первое' }).locator('.tab-name').click();
+    await expect(page.locator('.tab.is-active')).toHaveText('Первое');
+    await expect(ws).toHaveAttribute('data-view', '2d');
+    await expect(map).toHaveAttribute('aria-pressed', 'false');
+    await expect(page.locator('.proto-map')).toHaveCount(1);
+    await expect(page.locator('.proto-map')).toBeHidden();
+    // The keys are the canvas's again; M opens the map of this workspace.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyM');
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    const names = await page.evaluate(() => {
+      const m = window.__strataWs?.map();
+      return { star: m?.idNamed('Звезда') ?? null, comet: m?.idNamed('Комета') ?? null };
+    });
+    expect(names.star).toBeTruthy();
+    expect(names.comet).toBeNull();
   });
 
   test('the profile and the language are kept on this device, in «Настройки»', async ({ page }) => {

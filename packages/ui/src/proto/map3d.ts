@@ -98,6 +98,11 @@ export class Map3D {
   private worker: Worker | null = null;
   private drag: { x: number; y: number; moved: number } | null = null;
   private flight = 0;
+  /**
+   * Destroyed: a network loaded under the map makes a new one. A bridge or a
+   * layout still under way stops there and tells the screen nothing more.
+   */
+  private dead = false;
   /** The selected star and the cluster in focus, as bodies (08 §5.1). */
   private selected: number | null = null;
   private focus = 0;
@@ -174,6 +179,7 @@ export class Map3D {
   }
 
   destroy(): void {
+    this.dead = true;
     this.stop();
     this.resize.disconnect();
     this.worker?.terminate();
@@ -261,6 +267,7 @@ export class Map3D {
   }
 
   private set(s: MapState): void {
+    if (this.dead) return;
     this.state = s;
     this.label.hidden = s !== '3d' || this.selected === null;
     this.onState(s);
@@ -304,10 +311,12 @@ export class Map3D {
     const nav = this.nav;
     if (!nav) return;
     const { items, wires } = await nav.space();
+    if (this.dead) return;
     const signature = `${items.map((i) => `${i.id}${i.parent ?? ''}`).join()}|${wires.map((w) => w.from + w.to).join()}`;
     if (!this.space || !this.pos || signature !== this.signature) {
       const space = spaceExtract(items, wires);
       const pos = await this.layout(space.x, initialLayout(space.x, 1));
+      if (this.dead) return;
       this.map ??= new StarMap({ canvas: this.canvas, dpr: window.devicePixelRatio, bloom: true });
       this.map.setData(space.x, pos);
       const name = new Map(items.map((i) => [i.id, i.name]));
@@ -350,7 +359,7 @@ export class Map3D {
       return;
     }
     const { map, merged, pos } = this;
-    if (!map || !merged || !pos) return;
+    if (this.dead || !map || !merged || !pos) return;
     map.setSize(this.host.clientWidth, this.host.clientHeight);
     const v = this.view2d();
     const flat = new Float32Array(merged.ids.length * 2);
@@ -604,6 +613,8 @@ export class Map3D {
     return new Promise((done) => {
       const t0 = performance.now();
       const step = (now: number) => {
+        // Never done once destroyed: what was to follow the bridge does not.
+        if (this.dead) return;
         const k = Math.min(1, (now - t0) / BRIDGE_MS);
         bridge.frame(from + (to - from) * k);
         if (k < 1) requestAnimationFrame(step);

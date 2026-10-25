@@ -42,7 +42,15 @@ import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko'
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { Scope } from '@strata/search';
 import type { LoroDoc } from 'loro-crdt';
-import { type MutableRefObject, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  type MutableRefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { nodeIconFile, nodeIconImages } from '../icons/Icon';
@@ -662,6 +670,9 @@ export function WorkspaceScreen(props: {
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d, mapNav);
+      // A network loads onto the canvas: the screen is in 2D with the new map,
+      // even when the old one was open (another tab under the star map).
+      setView3d('2d');
       netRef.current = id;
       setNet(nv);
       setMenu(null);
@@ -883,7 +894,10 @@ export function WorkspaceScreen(props: {
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
   useEffect(() => searchClient().set('space', tree), [tree]);
 
-  useEffect(() => {
+  // The keys are there as soon as the view is: a layout effect runs in the
+  // commit that shows the star map, a passive one after paint, and a key
+  // pressed between the two was lost (CI under load).
+  useLayoutEffect(() => {
     // Mid-bridge (08 §7) neither view takes keys.
     if (view3d === 'to3d' || view3d === 'to2d') return;
     // A search window takes its own keys while it is open.
@@ -978,8 +992,9 @@ export function WorkspaceScreen(props: {
     void walkRef.current(m);
   }, []);
 
-  // The history's and the marks' keys (06 §10.3), on the canvas and the star map.
-  useEffect(() => {
+  // The history's and the marks' keys (06 §10.3), on the canvas and the star
+  // map; a layout effect for the same reason as the view's keys above.
+  useLayoutEffect(() => {
     if (view3d === 'to3d' || view3d === 'to2d' || finder || covered) return;
     // A digit held: its timer, or -1 once the mark is set.
     const held = new Map<string, number>();
@@ -1033,7 +1048,7 @@ export function WorkspaceScreen(props: {
     };
   }, [view3d, finder, covered, menu, name, walk, setMark, goMark]);
 
-  const focusCanvas = useCallback(() => host.current?.querySelector('canvas')?.focus(), []);
+  const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
 
   const choose = useCallback(
     (item: MenuItem) => {

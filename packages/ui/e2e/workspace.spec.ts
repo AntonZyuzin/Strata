@@ -222,6 +222,24 @@ async function createTask(page: Page, name: string) {
   await expect(page.locator('.ws-inspector')).toBeVisible();
 }
 
+/** A folder or project from the Tab menu, named, and the canvas inside it. */
+async function diveInto(page: Page, kind: string, name: string) {
+  const depth = Number(await page.locator('.workspace').getAttribute('data-depth'));
+  const c = await box(page, '.proto-canvas');
+  await page.mouse.move(c.x + c.width * 0.3, c.y + c.height * 0.4);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type(kind);
+  await page.locator('.tab-menu-row', { hasText: kind }).first().click();
+  await expect(page.locator('.name-input')).toBeVisible();
+  await page.keyboard.type(name);
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await graphNow(page)).names).toContain(name);
+  await select(page, name);
+  await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', String(depth + 1));
+}
+
 /** The items of the list in the panel: two spaces a level, `x` when ticked. */
 const outline = (page: Page) =>
   page.locator('.ws-inspector .list-row').evaluateAll((rows) =>
@@ -316,6 +334,63 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       'layersTitle',
       'layer',
     ] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
+  test(`the path keeps its size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x (✅ Q-06-25)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const [locale, folder, project] of [
+      ['ru-RU', 'Папка', 'Проект'],
+      ['en-US', 'Folder', 'Project'],
+    ] as const) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Игра «Туман»');
+      // At the root the tab says where one is: no path.
+      await expect(page.locator('.ws-path')).toHaveCount(0);
+      await diveInto(page, folder, 'Уровни, локации и всё, что между ними');
+      await diveInto(page, project, 'Болото у старой мельницы за туманным лесом');
+      const path = page.locator('.ws-path');
+      await expect(path).toBeVisible();
+      await expect(path).toHaveAttribute(
+        'title',
+        'Игра «Туман» / Уровни, локации и всё, что между ними / Болото у старой мельницы за туманным лесом',
+      );
+      // Cut names keep themselves whole in their tooltips; nothing else is cut.
+      expect(await overflowing(page, '.ws-path'), `${locale} path must fit`).toEqual([]);
+      const here = path.locator('[aria-current="location"]');
+      await expect(here).toContainText('Болото');
+      boxes.push({
+        path: await box(page, '.ws-path'),
+        here: await box(page, '.ws-path [aria-current="location"]'),
+        root: await box(page, '.ws-path .ws-path-root button'),
+      });
+      // The bar stands on the canvas, clear of «Ноды» and of the canvas's bottom edge.
+      const layers = await box(page, '.ws-layers');
+      const canvas = await box(page, '.proto-canvas');
+      const b = await box(page, '.ws-path');
+      expect(b.x).toBeGreaterThanOrEqual(layers.x + layers.width);
+      expect(b.y + b.height).toBeLessThanOrEqual(canvas.y + canvas.height);
+      // A click on a folder goes there; on the workspace's icon — to the root, and the path goes.
+      await path.getByRole('button', { name: 'Уровни, локации и всё, что между ними' }).click();
+      await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
+      await expect(path.locator('[aria-current="location"]')).toContainText('Уровни');
+      await path.getByRole('button', { name: 'Игра «Туман»' }).click();
+      await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+      await expect(page.locator('.ws-path')).toHaveCount(0);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['path', 'here', 'root'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }

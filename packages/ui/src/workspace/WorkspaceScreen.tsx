@@ -54,6 +54,7 @@ import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
 import { MapSearch } from './MapSearch';
+import { PathBar } from './PathBar';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -1222,6 +1223,15 @@ export function WorkspaceScreen(props: {
           onSelect={(id) => void selectLayer(id, false)}
           onOpen={(id) => void selectLayer(id, true)}
           onRestore={(item) => void restore(item)}
+        />
+      ) : null}
+      {net && view3d === '2d' ? (
+        <PathBar
+          locale={locale}
+          path={net.path}
+          kindOf={(id) => tree.find((i) => i.id === id)?.kind ?? 'network'}
+          panel={details !== null}
+          onGo={(id) => void loadRef.current(id)}
         />
       ) : null}
       <div ref={geckoHost} className="ws-gecko" data-panel={details ? 'open' : 'closed'}>

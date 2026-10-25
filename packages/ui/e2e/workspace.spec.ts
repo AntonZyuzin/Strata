@@ -14,6 +14,10 @@ interface Node {
   attrs: Record<string, unknown>;
   color: number | null;
   fold: { done: number; total: number } | null;
+  /** The flags' looks (05 §7). */
+  key: boolean;
+  pause: boolean;
+  template: boolean;
 }
 
 interface WsHook {

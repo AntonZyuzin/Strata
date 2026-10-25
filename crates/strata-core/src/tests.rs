@@ -2087,3 +2087,99 @@ fn editors_learn_what_the_core_edited_while_it_keeps_it() {
     assert_eq!(w.edited(299).docs, Some(vec![format!("content/{note}")]));
     assert_eq!(text_of(&mut w, &note), "[[Ц300]]");
 }
+
+fn connect(w: &mut Workspace<MemoryStore>, from: &str, to: &str) {
+    w.apply(
+        &[Op::Connect {
+            from: from.to_owned(),
+            to: to.to_owned(),
+        }],
+        Label::new("t.wire"),
+    )
+    .expect("connect");
+}
+
+#[test]
+fn wires_that_leave_a_network_are_counted_and_rolled_up_to_its_bubbles() {
+    // 05 §8.3: «↗N» counts a node's wires whose other end is not placed in
+    // the network; a wire into a network placed here is drawn to its bubble
+    // as a roll-up wire with a count (06 §13.3) — only a view.
+    let mut w = ws();
+    let root = w.root();
+    let net = create(&mut w, &root, NodeKind::Network, "Сеть");
+    let away = create(&mut w, &root, NodeKind::Network, "В стороне");
+    let a = create(&mut w, &net, NodeKind::Note, "А");
+    let inner = create(&mut w, &net, NodeKind::Network, "Внутри");
+    let b = create(&mut w, &inner, NodeKind::Note, "Б");
+    let deep = create(&mut w, &inner, NodeKind::Network, "Глубже");
+    let c = create(&mut w, &deep, NodeKind::Note, "В");
+    let far = create(&mut w, &away, NodeKind::Note, "Далеко");
+    connect(&mut w, &a, &b);
+    connect(&mut w, &c, &a);
+    connect(&mut w, &far, &a);
+    connect(&mut w, &a, &inner);
+    let v = w.network_view(&net).expect("view");
+    let ext = |id: &str| v.nodes.iter().find(|n| n.id == id).map(|n| n.external);
+    assert_eq!(
+        ext(&a),
+        Some(3),
+        "Б, В and «Далеко» lie elsewhere; «Внутри» is here"
+    );
+    assert_eq!(ext(&inner), Some(0));
+    let rolled: Vec<(String, String, u32)> = v
+        .rollups
+        .iter()
+        .map(|r| (r.a.clone(), r.b.clone(), r.count))
+        .collect();
+    // А → Б and В → А, both ways, as one roll-up between А and «Внутри».
+    let (x, y) = if a < inner {
+        (&a, &inner)
+    } else {
+        (&inner, &a)
+    };
+    assert_eq!(
+        rolled,
+        vec![(x.clone(), y.clone(), 2)],
+        "«Далеко» is inside no network placed here"
+    );
+    assert_eq!(v.edges.len(), 1, "the real wire А → «Внутри» stays a wire");
+
+    // The list behind «↗3» (06 §14): inputs first, each with its path.
+    let list = w.external_wires(&net, &a).expect("external");
+    let rows: Vec<(&str, bool, Vec<&str>)> = list
+        .iter()
+        .map(|e| {
+            let path = e.path.iter().map(|(_, n)| n.as_str()).collect();
+            (e.name.as_str(), e.incoming, path)
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("В", true, vec!["Корень", "Сеть", "Внутри", "Глубже"]),
+            ("Далеко", true, vec!["Корень", "В стороне"]),
+            ("Б", false, vec!["Корень", "Сеть", "Внутри"]),
+        ]
+    );
+    assert!(list.iter().all(|e| e.manual && !e.text));
+    assert!(
+        w.external_wires(&net, &far).is_err(),
+        "«Далеко» is not placed in «Сеть»"
+    );
+
+    // An end in the trash counts for nothing.
+    w.apply(&[Op::Trash { ids: vec![far] }], Label::new("t.trash"))
+        .expect("trash");
+    let v = w.network_view(&net).expect("view");
+    assert_eq!(
+        v.nodes.iter().find(|n| n.id == a).map(|n| n.external),
+        Some(2)
+    );
+    let names: Vec<String> = w
+        .external_wires(&net, &a)
+        .expect("external")
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, ["В", "Б"]);
+}

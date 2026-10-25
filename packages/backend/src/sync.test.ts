@@ -6,6 +6,7 @@ import type { HomeBackend, NetworkView } from './core';
 import { dueOf, type Graph, ghostId, ghostSpot, newNode } from './graph';
 import {
   CoreSync,
+  followExternal,
   followFolds,
   followGhosts,
   followPreviews,
@@ -336,6 +337,44 @@ describe('fields of a node (05 §6.1)', () => {
     ).rejects.toThrow();
   });
 
+  it('«↗N» and the roll-up wires come from the core, outside undo (05 §8.3, 06 §13.3)', async () => {
+    const { home, root, g, sync } = await start();
+    // «Арт» here wired to «Эскиз» inside the folder «Папка» placed here.
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Арт', 0, 0));
+      tx.add(newNode({ id: B, name: 'Папка', kind: 'network', icon: 0, x: 300, y: 0 }));
+    });
+    await sync.settled();
+    await home.core.apply(
+      [
+        { op: 'createNode', id: C, kind: 'note', name: 'Эскиз', net: B, x: 0, y: 0 },
+        { op: 'connect', from: A, to: C },
+      ],
+      { key: 't' },
+    );
+    const view = await home.core.view(root);
+    expect(view.nodes.find((n) => n.id === A)?.external).toBe(1);
+    const looks: (string | null)[] = [];
+    g.subscribe((e) => {
+      if (e.type === 'look') looks.push(e.id);
+    });
+    followExternal(g, view);
+    expect(g.nodes.get(A)?.external).toBe(1);
+    expect(g.rollups).toEqual([{ a: A < B ? A : B, b: A < B ? B : A, count: 1 }]);
+    expect(looks).toEqual([A, null]);
+    // Looks only, no step: the same answer again changes nothing.
+    followExternal(g, view);
+    expect(looks).toHaveLength(2);
+    // A fresh graph reads them at once.
+    expect(graphOf(view, () => 0).rollups).toHaveLength(1);
+    expect(graphOf(view, () => 0).nodes.get(A)?.external).toBe(1);
+    // The list behind «↗1» (06 §14): the other end, its way and its path.
+    const list = await home.core.external(root, A);
+    expect(list.map((w) => [w.name, w.incoming, w.manual, w.path.map(([, n]) => n)])).toEqual([
+      ['Эскиз', false, true, ['Тест', 'Папка']],
+    ]);
+  });
+
   it("a tick follows into the parent's progress arc on the canvas, outside undo", async () => {
     const { home, root, g, sync } = await start();
     g.transaction({ key: 't' }, (tx) => {
@@ -346,7 +385,7 @@ describe('fields of a node (05 §6.1)', () => {
     await sync.settled();
     followFolds(g, await home.core.view(root));
     expect(g.nodes.get(A)?.fold).toMatchObject({ done: 0, total: 1 });
-    const looks: string[] = [];
+    const looks: (string | null)[] = [];
     g.subscribe((e) => {
       if (e.type === 'look') looks.push(e.id);
     });

@@ -247,8 +247,23 @@ export interface Changeset {
 export type GraphEvent =
   | { type: 'apply'; changeset: Changeset; amend: boolean }
   | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset }
-  /** A node's look changed with no step: a list's ticks in its window. */
-  | { type: 'look'; id: string };
+  /**
+   * A look changed with no step: a node's (a list's ticks in its window, a
+   * roll-up or «↗N» read back from the core) or, with no id, the network's
+   * roll-up wires.
+   */
+  | { type: 'look'; id: string | null };
+
+/**
+ * A roll-up wire (05 §8.3, 06 §13.3): `count` wires between nodes inside a
+ * network placed here and other nodes, drawn between the bubbles `a` and
+ * `b` placed here, both ways together. Only a view: no wire of the graph.
+ */
+export interface Rollup {
+  a: string;
+  b: string;
+  count: number;
+}
 
 /** 06 §1.2, NFR-79: 200 steps per session. */
 export const UNDO_DEPTH = 200;
@@ -285,10 +300,16 @@ export class Graph {
   kindColors = false;
   /** How this network draws its wires (05 §9.2, 06 §6.2); null — Bézier. Set through `Tx`. */
   private shape: WireShape | null = null;
+  private rolled: readonly Rollup[] = [];
   private stamp = 0;
 
   get wireShape(): WireShape {
     return this.shape ?? 'bezier';
+  }
+
+  /** The network's roll-up wires as the core counts them (06 §13.3). */
+  get rollups(): readonly Rollup[] {
+    return this.rolled;
   }
 
   /**
@@ -485,6 +506,30 @@ export class Graph {
     if (same) return;
     n.fold = fold;
     this.emit({ type: 'look', id });
+  }
+
+  /**
+   * A node's wires to nodes not placed here, «↗N» (05 §8.3), as the core
+   * counts them after a step. Derived state: no step, nothing for the core.
+   */
+  setExternal(id: string, count: number): void {
+    const n = this.nodes.get(id);
+    if (!n || n.external === count) return;
+    n.external = count;
+    this.emit({ type: 'look', id });
+  }
+
+  /** The roll-up wires as the core counts them; derived state, as `setExternal`. */
+  setRollups(list: readonly Rollup[]): void {
+    const same =
+      list.length === this.rolled.length &&
+      list.every((r, i) => {
+        const was = this.rolled[i];
+        return was && was.a === r.a && was.b === r.b && was.count === r.count;
+      });
+    if (same) return;
+    this.rolled = list;
+    this.emit({ type: 'look', id: null });
   }
 
   /** Forgets undo and redo, for example after loading the demo network. */

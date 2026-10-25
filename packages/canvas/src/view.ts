@@ -1,4 +1,4 @@
-import type { Graph, GraphNode } from '@strata/backend';
+import type { Graph, GraphNode, Rollup } from '@strata/backend';
 import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-tokens';
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
@@ -6,7 +6,7 @@ import 'pixi.js/unsafe-eval';
 import type { Pixels } from './backdrop';
 import { BackgroundLayer } from './background';
 import { between, Camera, FLIGHT_MS, type View } from './camera';
-import { controls } from './curve';
+import { controls, pointAt } from './curve';
 import { Decor, type DecorNode, type Interaction } from './decor';
 import { hexPath } from './hex';
 import {
@@ -105,6 +105,10 @@ export class CanvasView {
   /** The nodes a search matched; the rest are dimmed (07 §4.5, 09 §3.3). */
   private lensIds: ReadonlySet<string> | null = null;
   private readonly dimmed = new WeakMap<WireStyle, WireStyle>();
+  /** A roll-up wire (07 §5, 06 §13.3): dotted 1u at 50 %. */
+  private readonly rollupStyle: WireStyle;
+  /** The «×N» of the roll-up wires drawn this frame, at their middles, world units. */
+  private readonly counts: { x: number; y: number; text: string }[] = [];
   private resizer: ResizeObserver | null = null;
   private destroyed = false;
   private pending = 0;
@@ -117,6 +121,13 @@ export class CanvasView {
     const dpr = app.renderer.resolution;
     this.decor = new Decor(pixelUnit(dpr), dpr, uiFontPx(dpr));
     this.wires.setUnit(pixelUnit(dpr) / dpr);
+    this.rollupStyle = {
+      color: PAPER,
+      alpha: fog.scene.ghostAlpha,
+      width: pixelUnit(dpr) / dpr,
+      dot: false,
+      dash: 1,
+    };
     this.decor.curveOf = (a, b) => this.curveOf(a, b);
     this.world.addChild(this.wires.mesh, this.layer.halos, this.layer.bodies, this.layer.icons);
     app.stage.addChild(this.background.container, this.world, this.decor.container, this.overlay);
@@ -376,6 +387,16 @@ export class CanvasView {
     return Math.max(0, this.icons.ids.indexOf(defaultIcon(kind)));
   }
 
+  /** The node whose «↗N» is under (sx, sy), CSS px, as last drawn (06 §14). */
+  externalAt(sx: number, sy: number): string | null {
+    return this.decor.externalAt(sx, sy);
+  }
+
+  /** The middle of node `id`'s «↗N» as last drawn, CSS px of the canvas; for tests. */
+  externalOf(id: string): { x: number; y: number } | null {
+    return this.decor.externalOf(id);
+  }
+
   /** Rendered position and radius of a node. */
   nodeAt(id: string): { x: number; y: number; r: number } | null {
     const v = this.views.get(id);
@@ -485,6 +506,7 @@ export class CanvasView {
       this.height,
       { ...this.interaction(), lens: this.lensIds },
       now,
+      this.counts,
     );
     this.app.render();
     if (moving || animating || swaying) this.invalidate();
@@ -507,7 +529,8 @@ export class CanvasView {
     }
     this.kinetic = kinetic;
     const zoom = this.camera.zoom;
-    this.wires.setCount(list.length);
+    const rollups = this.graph?.rollups ?? [];
+    this.wires.setCount(list.length + rollups.length);
     for (let i = 0; i < list.length; i++) {
       const [from, to] = list[i] as [string, string];
       const a = this.views.get(from);
@@ -528,8 +551,48 @@ export class CanvasView {
       const lens = this.lensIds;
       this.wires.setStyle(i, lens && !(lens.has(from) && lens.has(to)) ? this.dim(shown) : shown);
     }
+    this.writeRollups(list.length, rollups, straight);
     this.wires.upload();
     return kinetic && this.kinetics.moving;
+  }
+
+  /**
+   * The roll-up wires (05 §8.3, 06 §13.3) after the graph's, from index
+   * `first`: no wires of the graph, so nothing hits, cuts or sockets them.
+   * One beside a real wire between the same bubbles bends off it, so the
+   * two never lie on one curve.
+   */
+  private writeRollups(first: number, rollups: readonly Rollup[], straight: boolean): void {
+    const counts = this.counts;
+    counts.length = 0;
+    const lens = this.lensIds;
+    const mid = { x: 0, y: 0 };
+    for (let j = 0; j < rollups.length; j++) {
+      const r = rollups[j] as Rollup;
+      const i = first + j;
+      const a = this.views.get(r.a);
+      const b = this.views.get(r.b);
+      if (!a || !b) {
+        this.wires.setStyle(i, HIDDEN_WIRE);
+        continue;
+      }
+      const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight });
+      if (this.graph?.hasEdge(r.a, r.b) || this.graph?.hasEdge(r.b, r.a)) {
+        const gap = Math.hypot(c[6] - c[0], c[7] - c[1]) || 1;
+        const off = Math.min(ROLLUP_BEND, 0.25 * gap);
+        const nx = (-(c[7] - c[1]) / gap) * off;
+        const ny = ((c[6] - c[0]) / gap) * off;
+        c[2] += nx;
+        c[3] += ny;
+        c[4] += nx;
+        c[5] += ny;
+      }
+      this.wires.set(i, c);
+      const style = this.rollupStyle;
+      this.wires.setStyle(i, lens && !(lens.has(r.a) && lens.has(r.b)) ? this.dim(style) : style);
+      pointAt(c, 0.5, mid);
+      counts.push({ x: mid.x, y: mid.y, text: `×${r.count}` });
+    }
   }
 
   /** A wire's style dimmed by the lens, one object per style. */
@@ -691,6 +754,11 @@ export class CanvasView {
     return v;
   }
 }
+
+/** A wire slot with nothing to draw this frame. */
+const HIDDEN_WIRE: WireStyle = { color: PAPER, alpha: 0, width: 1, dot: false };
+/** World units a roll-up wire bends off a real wire between the same bubbles. */
+const ROLLUP_BEND = 40;
 
 export const NORMAL_WIRE: WireStyle = {
   color: PAPER,

@@ -174,6 +174,7 @@ export type CoreRequest =
   | { call: 'node'; id: string }
   | { call: 'tree' }
   | { call: 'wires' }
+  | { call: 'external'; net: string; id: string }
   | { call: 'people' }
   | { call: 'putAsset'; bytes: string }
   | { call: 'asset'; sha: string };
@@ -186,6 +187,8 @@ export interface ViewNode extends NodeAttrs {
   y: number;
   /** For folders, projects and tasks: the roll-up of their tasks. */
   fold?: CoreFold;
+  /** Its wires whose other end is not placed in this network: «↗N» (05 §8.3). */
+  external?: number;
 }
 
 /** A row of the checklist preview of a task's or project's hierarchy (05 §4.3). */
@@ -291,6 +294,31 @@ export interface ViewGhost {
   name: string;
 }
 
+/**
+ * A roll-up wire (05 §8.3, 06 §13.3): the wires between two bubbles placed
+ * here that run inside a network, both ways together. Only a view.
+ */
+export interface ViewRollup {
+  a: string;
+  b: string;
+  count: number;
+}
+
+/** A wire of «↗N» (06 §14): its other end, not placed in the network. */
+export interface ExternalWire {
+  id: string;
+  name: string;
+  kind: NodeKind;
+  /** It comes into the node: `id → node`. */
+  incoming: boolean;
+  /** It comes (also) from a `[[link]]` in text. */
+  text: boolean;
+  /** It was drawn by hand or imported. */
+  manual: boolean;
+  /** From the root to the other end's primary network: `[id, name]`. */
+  path: [string, string][];
+}
+
 /** One network for the canvas (10 §7.3). */
 export interface NetworkView {
   net: string;
@@ -301,6 +329,8 @@ export interface NetworkView {
   edges: ViewEdge[];
   /** `[[Links]]` of the notes here to no node (05 §8.5). */
   ghosts: ViewGhost[];
+  /** Roll-up wires to and from the networks placed here (06 §13.3). */
+  rollups: ViewRollup[];
   /** The network's wire style; none — Bézier. */
   wire_style?: WireShape;
 }
@@ -333,6 +363,7 @@ type CoreResponse =
   | { type: 'node'; node: NodeDetails }
   | { type: 'tree'; items: TreeItem[] }
   | { type: 'wires'; wires: WireEnds[] }
+  | { type: 'external'; wires: ExternalWire[] }
   | { type: 'people'; people: Person[] }
   | { type: 'asset'; sha: string; bytes?: string }
   | { type: 'error'; message: string; invalid: boolean };
@@ -457,6 +488,11 @@ export class Core {
   /** Every live wire of the workspace, for the star map (08 §10). */
   async wires(): Promise<WireEnds[]> {
     return expect(await this.call({ call: 'wires' }), 'wires').wires;
+  }
+
+  /** The wires of `id` in `net` to nodes not placed there: the list behind «↗N» (06 §14). */
+  async external(net: string, id: string): Promise<ExternalWire[]> {
+    return expect(await this.call({ call: 'external', net, id }), 'external').wires;
   }
 
   async people(): Promise<Person[]> {

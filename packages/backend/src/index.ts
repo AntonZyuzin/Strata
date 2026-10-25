@@ -4,6 +4,7 @@ export { newId } from './ids';
 export { GALLERY_SIZE, SEED_SPACING, type SeedShape, seedGraph } from './seed';
 export {
   CoreSync,
+  followExternal,
   followFolds,
   followGhosts,
   followPreviews,

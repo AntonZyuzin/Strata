@@ -6,7 +6,8 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::workspace::{
-    Edited, History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds, Workspace,
+    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds,
+    Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -75,6 +76,11 @@ pub enum Request {
     Tree,
     /// Every live wire, for the star map (08 §10).
     Wires,
+    /// The wires of `id` in `net` to nodes not placed there: «↗N» (05 §8.3).
+    External {
+        net: String,
+        id: String,
+    },
     People,
     /// A picture or a file, in base64; answers its SHA-256.
     PutAsset {
@@ -142,6 +148,9 @@ pub enum Response {
     },
     Wires {
         wires: Vec<WireEnds>,
+    },
+    External {
+        wires: Vec<ExternalWire>,
     },
     People {
         people: Vec<Person>,
@@ -227,6 +236,9 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
         }),
         Request::Tree => Ok(Response::Tree { items: ws.tree() }),
         Request::Wires => Ok(Response::Wires { wires: ws.wires() }),
+        Request::External { net, id } => ws
+            .external_wires(&net, &id)
+            .map(|wires| Response::External { wires }),
         Request::People => Ok(Response::People {
             people: ws.people(),
         }),

@@ -82,6 +82,8 @@ const ARROW = { length: 10, half: 5 };
 const MID = { t: 0.6, length: 8, half: 4 };
 /** Half-size of a rim glyph: 8u picture on a 2u plate (textures.ts). */
 const GLYPH_REACH = 6;
+/** The least click target of a mark on the rim, CSS px (07 §4.10, WCAG 2.5.8). */
+const TARGET = 24;
 const CORNERS = [
   [-1, -1],
   [1, -1],
@@ -111,6 +113,14 @@ export class Decor {
   private plateUsed = 0;
   private badgeUsed = 0;
   private textUsed = 0;
+  /**
+   * Where each «↗N» was drawn this frame, CSS px of the canvas: its click
+   * target (06 §14), at least 24 px (07 §4.10), only while it shows (d ≥ 32 px).
+   */
+  private readonly externals = new Map<
+    string,
+    { x0: number; y0: number; x1: number; y1: number }
+  >();
   private antsFor: string | null = null;
   private antsStart = 0;
   reducedMotion = false;
@@ -166,8 +176,11 @@ export class Decor {
     h: number,
     ia: Interaction,
     now: number,
+    /** The «×N» of the roll-up wires at their middles, world units (06 §13.3). */
+    counts: readonly { x: number; y: number; text: string }[] = [],
   ): boolean {
     const g = this.g;
+    this.externals.clear();
     const rings = this.rings;
     g.clear();
     this.hatching.clear();
@@ -396,7 +409,14 @@ export class Decor {
         if (n.external > 0) {
           const [ex, ey] = slot(1.5);
           this.badge('external', 'ink', ex, ey);
-          this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
+          const count = this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
+          const half = Math.max(TARGET / 2, GLYPH_REACH * U);
+          this.externals.set(v.id, {
+            x0: ex - half,
+            y0: ey - half,
+            x1: Math.max(ex + half, ex + 7 * U + count.width + U),
+            y1: ey + half,
+          });
         }
         if (!n.ghost && this.kindBadge) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
       }
@@ -451,6 +471,15 @@ export class Decor {
           }
         }
       }
+    }
+    // «×N» of the roll-up wires on a plate at their middles (07 §5, 06 §13.3).
+    for (const c of counts) {
+      const p = cam.toScreen(c.x, c.y);
+      if (p.x < -40 * U || p.x > w + 40 * U || p.y < -40 * U || p.y > h + 40 * U) continue;
+      const t = this.text(c.text, p.x, p.y - this.uiCss / 2);
+      const left = this.snap(p.x - t.width / 2);
+      t.position.x = left;
+      this.plate(left - 2 * U, t.position.y - U, t.width + 4 * U, this.uiCss + 2 * U);
     }
     if (corners) g.stroke({ width: U, color: ACCENT });
     if (hatched) this.hatching.stroke({ width: U, color: INK, alpha: 0.5 * fog.scene.pauseAlpha });
@@ -511,7 +540,31 @@ export class Decor {
     sprite.visible = true;
   }
 
-  private text(str: string, x: number, y: number): void {
+  /**
+   * The node whose «↗N» is at (x, y), CSS px of the canvas, as drawn in the
+   * last frame; of two, the one whose mark's centre is nearer.
+   */
+  externalAt(x: number, y: number): string | null {
+    let best: string | null = null;
+    let near = Number.POSITIVE_INFINITY;
+    for (const [id, r] of this.externals) {
+      if (x < r.x0 || x > r.x1 || y < r.y0 || y > r.y1) continue;
+      const d = Math.hypot(x - (r.x0 + r.x1) / 2, y - (r.y0 + r.y1) / 2);
+      if (d < near) {
+        near = d;
+        best = id;
+      }
+    }
+    return best;
+  }
+
+  /** The middle of node `id`'s «↗N» as drawn in the last frame, CSS px; for tests. */
+  externalOf(id: string): { x: number; y: number } | null {
+    const r = this.externals.get(id);
+    return r ? { x: (r.x0 + r.x1) / 2, y: (r.y0 + r.y1) / 2 } : null;
+  }
+
+  private text(str: string, x: number, y: number): BitmapText {
     let t = this.textPool[this.textUsed];
     if (!t) {
       t = this.makeText(false);
@@ -522,6 +575,7 @@ export class Decor {
     if (t.text !== str) t.text = str;
     t.position.set(this.snap(x), this.snap(y));
     t.visible = true;
+    return t;
   }
 
   private makeText(large: boolean): BitmapText {

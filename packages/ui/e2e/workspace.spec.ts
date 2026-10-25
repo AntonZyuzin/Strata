@@ -20,6 +20,8 @@ interface Node {
   template: boolean;
   /** The note whose `[[X]]` this ghost is (05 §8.5); null for a node. */
   ghostOf: string | null;
+  /** Its wires to nodes not placed here, «↗N» (05 §8.3). */
+  external: number;
   x: number;
   y: number;
 }
@@ -30,6 +32,7 @@ interface WsHook {
     iconOf(id: string): 'picture' | 'kind' | 'preset' | null;
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
+    externalOf(id: string): { x: number; y: number } | null;
     canvas: HTMLCanvasElement;
     lens: ReadonlySet<string> | null;
   };
@@ -40,6 +43,7 @@ interface WsHook {
   graph(): {
     nodes: Map<string, Node>;
     wireShape: 'straight' | 'bezier' | 'kinetic';
+    rollups: readonly { a: string; b: string; count: number }[];
     edges(): [string, string][];
     transaction(label: { key: string }, build: (tx: unknown) => void): unknown;
   } | null;
@@ -205,6 +209,56 @@ async function cardAction(page: Page, card: string, action: string, right = fals
 
 /** Every step so far is written by the core. */
 const settled = (page: Page) => page.evaluate(() => window.__strataWs?.settled());
+
+/**
+ * «Арт», a folder with «Эскиз» inside, and «Идея» at the root whose text
+ * links to «Эскиз»: a wire to a node placed elsewhere (05 §8.3).
+ */
+async function linkedAway(page: Page) {
+  const ws = page.locator('.workspace');
+  await page.mouse.move(420, 300);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('папка');
+  // The kind by its name in the UI's language.
+  const kind = page.locator('.tab-menu-label', { hasText: /^(Папка|Folder)$/ });
+  await page.locator('.tab-menu-row', { has: kind }).first().click();
+  await page.keyboard.type('Арт');
+  await page.keyboard.press('Enter');
+  await settled(page);
+  await page.keyboard.press('Enter');
+  await expect(ws).toHaveAttribute('data-depth', '2');
+  await createNode(page, 640, 400, 'Эскиз');
+  await page.keyboard.press('KeyU');
+  await expect(ws).toHaveAttribute('data-depth', '1');
+  await createNode(page, 760, 520, 'Идея');
+  await select(page, 'Идея');
+  await page.keyboard.press('Enter');
+  const editor = page.locator('.note-window .cm-content');
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.keyboard.type('См. [[Эскиз]]', { delay: 30 });
+  await page.locator('.note-window .window-close').click();
+  await expect(page.locator('.note-window')).toHaveCount(0);
+  const idea = await idOf(page, 'Идея');
+  await expect
+    .poll(() => page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.external, idea))
+    .toBe(1);
+  return idea;
+}
+
+/** Opens the list behind node `id`'s «↗N» by a click on the mark. */
+async function openExternal(page: Page, id: string) {
+  await page.keyboard.press('Escape');
+  const mark = await page.evaluate((id) => {
+    const ws = window.__strataWs as WsHook;
+    const m = ws.view.externalOf(id);
+    const r = ws.view.canvas.getBoundingClientRect();
+    return m ? { x: r.left + m.x, y: r.top + m.y } : null;
+  }, id);
+  if (!mark) throw new Error('no «↗N» drawn');
+  await page.mouse.click(mark.x, mark.y);
+  await expect(page.locator('.ext-list .tab-menu-row')).toHaveCount(1);
+}
 
 /** A list from the Tab menu, named at once, opened: its items are in the panel. */
 async function openList(page: Page, kind: string, name: string) {
@@ -578,6 +632,47 @@ for (const deviceScaleFactor of [1, 2]) {
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     expect(en.rows).toBe(ru.rows);
     for (const part of ['palette', 'row'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
+  test(`the list behind «↗N» keeps its size in RU and EN @${deviceScaleFactor}x (06 §14)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Связи');
+      const idea = await linkedAway(page);
+      await openExternal(page, idea);
+      const list = page.locator('.ext-list');
+      await expect(list.locator('.ext-origin')).not.toHaveText('');
+      expect(await overflowing(page, '.ext-list'), `${locale} the list must fit`).toEqual([]);
+      await expect(page.locator('.ws-inspector')).toBeVisible();
+      const panel = await box(page, '.ws-inspector');
+      const shown = await box(page, '.ext-list');
+      expect(shown.x + shown.width, 'left of the panel').toBeLessThanOrEqual(panel.x);
+      boxes.push({
+        list: await box(page, '.ext-list'),
+        row: await box(page, '.ext-list .tab-menu-row'),
+        path: await box(page, '.ext-list .ext-path'),
+        origin: await box(page, '.ext-list .ext-origin'),
+      });
+      await page.keyboard.press('Escape');
+      await expect(list).toHaveCount(0);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['list', 'row', 'path', 'origin'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2161,6 +2256,62 @@ test.describe('a workspace on the core', () => {
     });
     expect(names.star).toBeTruthy();
     expect(names.comet).toBeNull();
+  });
+
+  test('«↗N» lists the wires that leave the network; the folder gets a roll-up wire (05 §8.3, 06 §13.3, §14)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Связи');
+    const idea = await linkedAway(page);
+    const art = await idOf(page, 'Арт');
+    // The roll-up: «Идея» — «Арт» ×1, a view only, no wire of the graph.
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.graph()?.rollups.map((r) => r.count)))
+      .toEqual([1]);
+    const rolled = await page.evaluate(() => window.__strataWs?.graph()?.rollups[0]);
+    expect([rolled?.a, rolled?.b].sort()).toEqual([idea, art].sort());
+    expect((await graphNow(page)).edges).toEqual([]);
+    // A click on «↗1»: the list, the node chosen; the row — «Эскиз», «Арт», from text.
+    await openExternal(page, idea);
+    const list = page.locator('.ext-list');
+    await expect(list).toHaveAttribute('aria-label', 'Внешние связи «Идея»');
+    const row = list.locator('.tab-menu-row');
+    await expect(row.locator('.tab-menu-label')).toHaveText('Эскиз');
+    await expect(row.locator('.ext-path')).toHaveText('Арт');
+    await expect(row.locator('.ext-origin')).toHaveText('из текста');
+    await expect(row.locator('.ext-way')).toHaveAttribute('title', 'Нить выходит из «Идея»');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Идея');
+    // Beside the bubble, left of the panel: with no room right of the mark, on its left.
+    const shown = await box(page, '.ext-list');
+    const panel = await box(page, '.ws-inspector');
+    expect(shown.x + shown.width).toBeLessThanOrEqual(panel.x);
+    const bubble = await at(page, 'Идея');
+    expect(shown.x + shown.width < bubble.x || shown.x > bubble.x, 'clear of the bubble').toBe(
+      true,
+    );
+    // Esc closes it; Enter on the row goes to «Эскиз» in «Арт».
+    await page.keyboard.press('Escape');
+    await expect(list).toHaveCount(0);
+    await openExternal(page, idea);
+    await page.keyboard.press('Enter');
+    await expect(list).toHaveCount(0);
+    const ws = page.locator('.workspace');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    const sketch = await idOf(page, 'Эскиз');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.editor()?.selected))
+      .toEqual([sketch]);
+    // Inside «Арт», «Эскиз» has its «↗1» too: «Идея» is not placed here.
+    await expect
+      .poll(() =>
+        page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.external, sketch),
+      )
+      .toBe(1);
+    await openExternal(page, sketch);
+    await expect(list.locator('.ext-way')).toHaveAttribute('title', 'Нить входит в «Эскиз»');
+    await expect(list.locator('.ext-path')).toHaveText('');
   });
 
   test('the profile and the language are kept on this device, in «Настройки»', async ({ page }) => {

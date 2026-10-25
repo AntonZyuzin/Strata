@@ -19,7 +19,7 @@ use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_model::{
     ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
@@ -228,6 +228,43 @@ pub struct ViewNode {
     /// list, of its items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
+    /// Its wires whose other end is not placed in this network: «↗N» (05 §8.3).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub external: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+/// A wire of «↗N» (05 §8.3, 06 §14): its other end, not placed in the
+/// network, which way it goes and where it comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExternalWire {
+    /// The node at the other end.
+    pub id: String,
+    pub name: String,
+    pub kind: NodeKind,
+    /// The wire comes into the node: `id → node`.
+    pub incoming: bool,
+    /// It comes (also) from a `[[link]]` in text.
+    pub text: bool,
+    /// It was drawn by hand or imported.
+    pub manual: bool,
+    /// From the root to the other end's primary network: `[id, name]`.
+    pub path: Vec<(String, String)>,
+}
+
+/// A roll-up wire (05 §8.3, 06 §13.3): wires between nodes inside a network
+/// placed here and the nodes outside it, drawn between the bubbles placed
+/// here with their count, both ways together. Only a view: no such wire is
+/// in the data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewRollup {
+    /// The two bubbles, `a < b`.
+    pub a: String,
+    pub b: String,
+    pub count: u32,
 }
 
 /// A row of the checklist preview in a task's or project's panel (05 §4.3):
@@ -363,6 +400,9 @@ pub struct NetworkView {
     /// `[[Links]]` of the notes here to no node (05 §8.5).
     #[serde(default)]
     pub ghosts: Vec<ViewGhost>,
+    /// Roll-up wires to and from the networks placed here (06 §13.3).
+    #[serde(default)]
+    pub rollups: Vec<ViewRollup>,
     /// The network's wire style (05 §9.2); none — Bézier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_style: Option<WireStyle>,
@@ -2116,7 +2156,12 @@ impl<S: Store> Workspace<S> {
                 y,
                 attrs: self.attrs(node),
                 fold: self.fold_of(node, kind, &children, &wires),
+                external: 0,
             });
+        }
+        let (external, rollups) = self.beyond(&nodes, &wires);
+        for v in &mut nodes {
+            v.external = external.get(v.id.as_str()).copied().unwrap_or(0);
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();
         let mut edges = Vec::new();
@@ -2177,8 +2222,121 @@ impl<S: Store> Workspace<S> {
             nodes,
             edges,
             ghosts,
+            rollups,
             wire_style,
         })
+    }
+
+    /// The wires of node `id` in network `net` whose other end is not placed
+    /// there (05 §8.3, 06 §14): inputs first, then outputs, each by name.
+    /// Ends in the trash count for nothing, as in «↗N».
+    pub fn external_wires(&mut self, net: &str, id: &str) -> Result<Vec<ExternalWire>> {
+        let view = self.network_view(net)?;
+        let node = self.live(id)?;
+        let placed: HashSet<&str> = view.nodes.iter().map(|v| v.id.as_str()).collect();
+        if !placed.contains(id) {
+            return Err(invalid(format!("{id} is not placed in {net}")));
+        }
+        let mut out = Vec::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for (key, v) in all.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let end = |k: &str| {
+                    v.get(k)
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                let (Some(from), Some(to)) = (end("from"), end("to")) else {
+                    continue;
+                };
+                let (other, incoming) = match (from == node, to == node) {
+                    (true, false) => (to, false),
+                    (false, true) => (from, true),
+                    _ => continue,
+                };
+                let other_id = other.to_text();
+                if placed.contains(other_id.as_str()) || !self.alive(other) {
+                    continue;
+                }
+                let has = |o: &str| read(shard, "edgeOrigin", &format!("{key}|{o}")).is_some();
+                out.push(ExternalWire {
+                    name: self.name(other),
+                    kind: self.kind(other).unwrap_or(NodeKind::Note),
+                    incoming,
+                    text: has("text"),
+                    manual: has("manual") || has("import"),
+                    path: self
+                        .ancestors(other)
+                        .into_iter()
+                        .rev()
+                        .map(|a| (a.to_text(), self.name(a)))
+                        .collect(),
+                    id: other_id,
+                });
+            }
+        }
+        out.sort_by(|a, b| (!a.incoming, &a.name, &a.id).cmp(&(!b.incoming, &b.name, &b.id)));
+        Ok(out)
+    }
+
+    /// The wires of a network's nodes that leave it (05 §8.3): their count
+    /// per node, «↗N», and the roll-up wires — a wire whose other end lies
+    /// inside a network placed here is drawn to that network's bubble, the
+    /// wires between the same two bubbles counted together whichever way
+    /// they go (06 §13.3). Ends in the trash count for nothing.
+    fn beyond(
+        &self,
+        nodes: &[ViewNode],
+        wires: &HashMap<NodeId, Vec<NodeId>>,
+    ) -> (HashMap<String, u32>, Vec<ViewRollup>) {
+        let placed: HashSet<NodeId> = nodes
+            .iter()
+            .filter_map(|v| NodeId::parse(&v.id).ok())
+            .collect();
+        let mut inside: HashMap<NodeId, Option<NodeId>> = HashMap::new();
+        let mut bubble = |n: NodeId| -> Option<NodeId> {
+            if placed.contains(&n) {
+                return Some(n);
+            }
+            *inside
+                .entry(n)
+                .or_insert_with(|| self.ancestors(n).into_iter().find(|a| placed.contains(a)))
+        };
+        let mut external: HashMap<String, u32> = HashMap::new();
+        let mut rolled: BTreeMap<(NodeId, NodeId), u32> = BTreeMap::new();
+        for (&a, tos) in wires {
+            if !self.alive(a) {
+                continue;
+            }
+            for &b in tos {
+                let (here_a, here_b) = (placed.contains(&a), placed.contains(&b));
+                if (here_a && here_b) || !self.alive(b) {
+                    continue;
+                }
+                for (n, here) in [(a, here_a), (b, here_b)] {
+                    if here {
+                        *external.entry(n.to_text()).or_default() += 1;
+                    }
+                }
+                if let (Some(x), Some(y)) = (bubble(a), bubble(b)) {
+                    if x != y {
+                        *rolled.entry((x.min(y), x.max(y))).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let rollups = rolled
+            .into_iter()
+            .map(|((a, b), count)| ViewRollup {
+                a: a.to_text(),
+                b: b.to_text(),
+                count,
+            })
+            .collect();
+        (external, rollups)
     }
 
     /// Nodes in the trash, newest first.

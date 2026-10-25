@@ -133,6 +133,11 @@ export interface EditorEvents {
    * `inputs` wired into it. The copy is the core's: everything inside comes too.
    */
   template?(e: { id: string; name: string; x: number; y: number; inputs: string[] }): void;
+  /**
+   * A click on a node's «↗N» (05 §8.3, 06 §14): the Chrome lists its wires
+   * that leave the network, by the mark at (sx, sy). The node is chosen.
+   */
+  external?(e: { id: string; sx: number; sy: number }): void;
 }
 
 /** The canvas's actions by name (06 §1 rule 6): its keys and the palette's commands. */
@@ -907,6 +912,15 @@ export class Editor {
     const slot = this.slotUnder(sx, sy);
     if (slot && this.ring) {
       this.switchFlag(slot.flag, this.flagTargets(this.ring.id));
+      return;
+    }
+    // «↗N» on the rim (06 §14): its list, not a press on the bubble.
+    const external = this.events.external ? this.view.externalAt(sx, sy) : null;
+    if (external) {
+      // No mousedown after it: the list keeps the focus it takes.
+      e.preventDefault();
+      this.select([external]);
+      this.events.external?.({ id: external, sx, sy });
       return;
     }
     this.mode = {

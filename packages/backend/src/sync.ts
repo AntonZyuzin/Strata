@@ -68,7 +68,7 @@ export function graphOf(
   g.kindColors = true;
   g.derive({ key: 'core.change.load' }, (tx) => {
     for (const n of view.nodes) {
-      const { id, kind, name, x, y, fold, ...attrs } = n;
+      const { id, kind, name, x, y, fold, external, ...attrs } = n;
       const node = newNode({
         id,
         name,
@@ -80,12 +80,14 @@ export function graphOf(
       });
       Object.assign(node, lookOf(node, day(), personColor));
       if (fold) node.fold = foldOf(fold, day());
+      node.external = external ?? 0;
       tx.add(node);
     }
     for (const e of view.edges) tx.connect(e.from, e.to);
     for (const ghost of view.ghosts) addGhost(g, tx, ghost, icon('note'));
     tx.wireShape(view.wire_style ?? null);
   });
+  g.setRollups(view.rollups);
   g.clearHistory();
   return g;
 }
@@ -259,6 +261,17 @@ export function followFolds(graph: Graph, view: NetworkView, day: string = graph
     if (n.kind === 'checklist' || !graph.nodes.has(n.id)) continue;
     graph.setFold(n.id, n.fold ? foldOf(n.fold, day) : null);
   }
+}
+
+/**
+ * Brings «↗N» and the roll-up wires to what the core says (05 §8.3, 06
+ * §13.3): a wire, a placement or the trash elsewhere changes them, which
+ * only the core sees. Derived state, outside undo.
+ */
+export function followExternal(graph: Graph, view: NetworkView): void {
+  for (const n of view.nodes) graph.setExternal(n.id, n.external ?? 0);
+  // Bubbles the graph no longer has (a step since the question) draw nothing.
+  graph.setRollups(view.rollups.filter((r) => graph.nodes.has(r.a) && graph.nodes.has(r.b)));
 }
 
 /**

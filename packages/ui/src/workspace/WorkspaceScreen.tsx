@@ -4,8 +4,10 @@ import {
   type ChangeLabel,
   type CoreOp,
   CoreSync,
+  type ExternalWire,
   type Flag,
   flagsOf,
+  followExternal,
   followFolds,
   followGhosts,
   followPreviews,
@@ -68,6 +70,7 @@ import { CommandPalette } from './CommandPalette';
 import type { CommandContext } from './commands';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
+import { ExternalList } from './ExternalList';
 import { FindBar } from './FindBar';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
@@ -265,6 +268,14 @@ export function WorkspaceScreen(props: {
   const [finding, setFinding] = useState(false);
   /** The command palette, `Ctrl+P` (09 §3.5). */
   const [palette, setPalette] = useState(false);
+  /** The list behind a node's «↗N» (06 §14), by the mark at (x, y); `wires` null until the core answers. */
+  const [external, setExternal] = useState<{
+    id: string;
+    x: number;
+    y: number;
+    flipX: number;
+    wires: ExternalWire[] | null;
+  } | null>(null);
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
   /** The core's undo and redo: the session's, across networks (05 §11). */
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
@@ -413,6 +424,28 @@ export function WorkspaceScreen(props: {
       contextMenu: (e) => {
         const r = viewRef.current?.canvas.getBoundingClientRect();
         setCtx({ x: e.sx + (r?.left ?? 0), y: e.sy + (r?.top ?? 0), at: e.at });
+      },
+      // «↗N» (06 §14): the list opens beside the mark at once, its top level
+      // with it, clear of the label under the bubble; the rows come from the core.
+      external: (e) => {
+        const r = el.getBoundingClientRect();
+        const net = netRef.current;
+        const v = viewRef.current;
+        const n = v?.nodeAt(e.id);
+        const left = v && n ? v.camera.toScreen(n.x - n.r, n.y).x : e.sx;
+        const at = {
+          id: e.id,
+          x: e.sx + r.left + 16,
+          y: e.sy + r.top - 12,
+          flipX: left + r.left - 16,
+        };
+        setExternal({ ...at, wires: null });
+        void (sync.current?.settled() ?? Promise.resolve())
+          .then(() => core.external(net, e.id))
+          .then((wires) => {
+            setExternal((x) => (x?.id === e.id && netRef.current === net ? { ...x, wires } : x));
+          })
+          .catch(refused);
       },
       map: () => map3d.current?.toggle(),
       minimap: (open) => {
@@ -601,6 +634,8 @@ export function WorkspaceScreen(props: {
       textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       followWires(g, nv);
       followGhosts(g, nv, viewRef.current?.iconFor('note') ?? 0);
+      // A wire to a node elsewhere, by hand or from text: «↗N» and the roll-ups (05 §8.3).
+      followExternal(g, nv);
     };
 
     /** Shows network `id`: a fresh graph from the core, the camera it had. */
@@ -681,6 +716,7 @@ export function WorkspaceScreen(props: {
       setNet(nv);
       setMenu(null);
       setName(null);
+      setExternal(null);
       const cam = cameras.current.get(id);
       if (cam) {
         v.camera.x = cam.x;
@@ -771,9 +807,11 @@ export function WorkspaceScreen(props: {
         .then(() => core.view(netRef.current))
         .then((nv) => {
           if (cancelled || graph.current !== g || !g || nv.net !== netRef.current) return;
+          // A step made since the question is not in the answer yet; the
+          // looks read back below move the version too, so it is asked first.
+          const fresh = g.version === at;
           followFolds(g, nv);
-          // A step made since the question is not in the answer yet.
-          if (g.version === at) followLinks(g, nv);
+          if (fresh) followLinks(g, nv);
         })
         .catch(() => undefined);
       const ed = editor.current;
@@ -1065,6 +1103,13 @@ export function WorkspaceScreen(props: {
   }, [view3d, finder, palette, covered, menu, name, walk, setMark, goMark]);
 
   const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
+  /** The canvas one sees, page px: the properties panel covers its right (review 2026-10-24). */
+  const seenBounds = (): DOMRect | undefined => {
+    const r = host.current?.getBoundingClientRect();
+    if (!r) return undefined;
+    const covered = editor.current?.coveredRight() ?? 0;
+    return new DOMRect(r.left, r.top, Math.max(0, r.width - covered), r.height);
+  };
 
   const choose = useCallback(
     (item: MenuItem) => {
@@ -1819,6 +1864,26 @@ export function WorkspaceScreen(props: {
           }}
           onClose={() => {
             setFinder(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {external && view3d === '2d' ? (
+        <ExternalList
+          locale={locale}
+          name={g?.nodes.get(external.id)?.name ?? ''}
+          wires={external.wires}
+          x={external.x}
+          y={external.y}
+          flipX={external.flipX}
+          bounds={seenBounds()}
+          onGo={(id) => {
+            setExternal(null);
+            focusCanvas();
+            goNode(id, false);
+          }}
+          onClose={() => {
+            setExternal(null);
             focusCanvas();
           }}
         />

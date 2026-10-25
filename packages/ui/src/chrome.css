@@ -962,6 +962,34 @@ button:focus-visible {
   overflow-y: auto;
 }
 
+/* The list behind «↗N» (06 §14): the Tab menu's window, its width in `ch`
+   whatever the language; the path and the origin in fixed columns for the
+   longest language, each line on one row with an ellipsis. */
+.ext-list {
+  width: 64ch;
+}
+
+.ext-list .tab-menu-list {
+  max-height: calc(12 * var(--st-size-row));
+  overflow-y: auto;
+  outline: none;
+}
+
+.ext-way {
+  display: inline-flex;
+  flex: none;
+}
+
+.ext-list .ext-path {
+  width: 24ch;
+  max-width: 24ch;
+}
+
+.ext-list .ext-origin {
+  width: 10ch;
+  max-width: 10ch;
+}
+
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
 .kind-icon {
   flex: none;

@@ -616,6 +616,8 @@ export function WorkspaceScreen(props: {
     /** The selected node from the core, for the panel; the pictures follow too. */
     refreshRef.current = () => {
       void pictures();
+      // The core's own edits of open texts: links a rename rewrote (13 §6.5).
+      void (sync.current?.settled() ?? Promise.resolve()).then(() => docs.current?.follow());
       void (sync.current?.settled() ?? Promise.resolve())
         .then(() => core.tree())
         .then((items) => {

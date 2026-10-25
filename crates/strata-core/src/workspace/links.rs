@@ -9,11 +9,15 @@
 //! its wire goes and `from → X` comes with the same origins, in one system
 //! changeset (05 §11). The networks keep no route or `hidden` per wire yet,
 //! so there is nothing of them to carry to the new key.
+//!
+//! A rename rewrites the links that named the node, `[[Старое]]` →
+//! `[[Новое]]`, with point edits in the texts (13 §6.5, ☑ Q-10-9): which
+//! links named it is the rule above with the names as they were.
 
-use super::{Changeset, Store, Val, Workspace, read};
+use super::{Changeset, Store, Val, Workspace, engine, load, read};
 use crate::changeset::Label;
 use crate::workspace::Result;
-use loro::LoroValue;
+use loro::{ExportMode, LoroValue};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_markdown::link_key;
 use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
@@ -22,6 +26,19 @@ use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
 const NAMING: [&str; 4] = ["name", "kind", "trashedAt", "primaryNet"];
 /// Origins of a wire (10 §2.3).
 const ORIGINS: [&str; 3] = ["text", "manual", "import"];
+/// A name with these breaks a link (13 §3.4): no link is rewritten to it.
+const BREAKS_LINKS: [char; 5] = ['[', ']', '|', '#', '^'];
+
+/// Names of nodes as they were before a step, by node; empty — as they are.
+type Before = HashMap<NodeId, String>;
+
+/// The parts of a link key between `/`: a path's networks and the name last.
+fn segments(key: &str) -> Vec<String> {
+    key.split('/')
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
 
 /// What a link names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,17 +76,21 @@ impl<S: Store> Workspace<S> {
         out
     }
 
+    fn name_as(&self, n: NodeId, was: &Before) -> String {
+        was.get(&n).cloned().unwrap_or_else(|| self.name(n))
+    }
+
     /// Link keys of a node's canonical path, its own name last and the root
     /// left out (05 §9.3): `/Проекты/Игра` is `["проекты", "игра"]`.
-    fn path_keys(&self, n: NodeId) -> Vec<String> {
+    fn path_keys(&self, n: NodeId, was: &Before) -> Vec<String> {
         let mut out: Vec<String> = self
             .ancestors(n)
             .into_iter()
             .rev()
             .filter(|a| *a != self.root)
-            .map(|a| link_key(&self.name(a)))
+            .map(|a| link_key(&self.name_as(a, was)))
             .collect();
-        out.push(link_key(&self.name(n)));
+        out.push(link_key(&self.name_as(n, was)));
         out
     }
 
@@ -82,11 +103,12 @@ impl<S: Store> Workspace<S> {
         segs: &[String],
         held: &BTreeSet<NodeId>,
         names: &HashMap<String, Vec<NodeId>>,
+        was: &Before,
     ) -> Target {
         let Some(last) = segs.last() else {
             return Target::Ghost;
         };
-        let answers = |n: NodeId| self.path_keys(n).ends_with(segs);
+        let answers = |n: NodeId| self.path_keys(n, was).ends_with(segs);
         // Sticking (13 §3.5): a new node with the name takes no link over.
         if let Some(&n) = held.iter().find(|&&n| self.kind(n).is_some() && answers(n)) {
             return Target::Node(n);
@@ -97,14 +119,14 @@ impl<S: Store> Workspace<S> {
             .unwrap_or_default();
         if segs.len() > 1 && found.len() > 1 {
             // A path: from the root exactly, then from the note's folder.
-            let mut here: Vec<String> = self.path_keys(src);
+            let mut here: Vec<String> = self.path_keys(src, was);
             here.pop();
             here.extend(segs.iter().cloned());
             for whole in [segs.to_vec(), here] {
                 let exact: Vec<NodeId> = found
                     .iter()
                     .copied()
-                    .filter(|&n| self.path_keys(n) == whole)
+                    .filter(|&n| self.path_keys(n, was) == whole)
                     .collect();
                 if !exact.is_empty() {
                     found = exact;
@@ -203,15 +225,11 @@ impl<S: Store> Workspace<S> {
             let mut resolved: HashMap<String, NodeId> = HashMap::new();
             for link in strata_markdown::scan(text).links {
                 let k = link_key(&link.target);
-                let segs: Vec<String> = k
-                    .split('/')
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_owned)
-                    .collect();
+                let segs = segments(&k);
                 if segs.is_empty() {
                     continue;
                 }
-                match self.resolve(note, &segs, &held, &names) {
+                match self.resolve(note, &segs, &held, &names, &Before::new()) {
                     // A link to itself makes no wire (05 §8.2 rule 2).
                     Target::Node(n) if n == note => {}
                     Target::Node(n) => {
@@ -316,12 +334,140 @@ impl<S: Store> Workspace<S> {
         .map(|c| Some(c).filter(|c| !c.writes.is_empty()))
     }
 
+    /// `[[Старое]]` → `[[Новое]]` in the notes whose links named a node the
+    /// step renamed (13 §6.5, ☑ Q-10-9). Which links named it is 13 §3.5
+    /// with the names before the step; a path keeps its networks and an
+    /// `.md` stays. Point edits of the texts, stored as the editors' are,
+    /// outside undo (15 §3.4): undoing the rename renames back, and the
+    /// links follow it again. A name that breaks links (13 §3.4) is not
+    /// written into them: they become ghosts.
+    fn rewrite_links(&mut self, step: &Changeset) -> Result<()> {
+        let mut was = Before::new();
+        let mut now: HashMap<NodeId, String> = HashMap::new();
+        for w in &step.writes {
+            if !w.doc.starts_with("index/") || w.map != "name" {
+                continue;
+            }
+            let (Some(before), Some(after)) = (
+                w.before.as_ref().and_then(Val::as_str),
+                w.after.as_ref().and_then(Val::as_str),
+            ) else {
+                continue;
+            };
+            let Ok(n) = NodeId::parse(&w.key) else {
+                continue;
+            };
+            was.entry(n).or_insert_with(|| before.to_owned());
+            now.insert(n, after.to_owned());
+        }
+        was.retain(|n, before| self.alive(*n) && now.get(n).is_some_and(|a| a != before));
+        if was.is_empty() {
+            return Ok(());
+        }
+        let mut notes = BTreeSet::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(edges) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for (key, v) in edges.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let end = |k: &str| {
+                    v.get(k)
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                let (Some(from), Some(to)) = (end("from"), end("to")) else {
+                    continue;
+                };
+                if was.contains_key(&to)
+                    && read(shard, "edgeOrigin", &format!("{key}|text")).is_some()
+                {
+                    notes.insert(from);
+                }
+            }
+        }
+        // Live names as they were before the step.
+        let mut names = self.link_names();
+        for (n, before) in &was {
+            if let Some(list) = names.get_mut(&link_key(&self.name(*n))) {
+                list.retain(|m| m != n);
+            }
+            names.entry(link_key(before)).or_default().push(*n);
+        }
+        for note in notes {
+            if !self.alive(note) || self.kind(note) != Some(NodeKind::Note) {
+                continue;
+            }
+            let doc = format!("content/{}", note.to_text());
+            self.ensure_doc(&doc)?;
+            let text = self.docs[&doc].get_text("text").to_string();
+            let held: BTreeSet<NodeId> = self.outgoing(note).wires.keys().copied().collect();
+            // (byte position, length, the target as it is to be written)
+            let mut edits: Vec<(usize, usize, String)> = Vec::new();
+            for link in strata_markdown::scan(&text).links {
+                let segs = segments(&link_key(&link.target));
+                let Target::Node(n) = self.resolve(note, &segs, &held, &names, &was) else {
+                    continue;
+                };
+                let Some(name) = now.get(&n).filter(|_| was.contains_key(&n)) else {
+                    continue;
+                };
+                if name.contains(BREAKS_LINKS) {
+                    continue;
+                }
+                let target = link.target.as_str();
+                let Some(at) = text[link.range.clone()].find(target) else {
+                    continue;
+                };
+                let (head, last) = match target.rfind('/') {
+                    Some(i) => (&target[..=i], &target[i + 1..]),
+                    None => ("", target),
+                };
+                let md = last
+                    .get(last.len().saturating_sub(3)..)
+                    .filter(|e| e.eq_ignore_ascii_case(".md"))
+                    .unwrap_or_default();
+                let written = format!("{head}{name}{md}");
+                if written != target {
+                    edits.push((link.range.start + at, target.len(), written));
+                }
+            }
+            if edits.is_empty() {
+                continue;
+            }
+            let d = &self.docs[&doc];
+            let vv = d.oplog_vv();
+            let t = d.get_text("text");
+            for (at, len, written) in edits.iter().rev() {
+                t.delete_utf8(*at, *len).map_err(engine)?;
+                t.insert_utf8(*at, written).map_err(engine)?;
+            }
+            d.commit();
+            let bytes = d.export(ExportMode::updates(&vv)).map_err(engine)?;
+            if let Err(e) = self.store.append(&doc, &bytes, now_ms()) {
+                // Memory goes back to what the store holds (10 §3.3).
+                let d = load(&self.store, &doc)?.unwrap_or_default();
+                self.docs.insert(doc, d);
+                return Err(e.into());
+            }
+            self.note_edit(&doc);
+        }
+        Ok(())
+    }
+
     /// After a step that named, made, removed, trashed, restored or moved
     /// nodes, the links it may change find their nodes again: ghosts that a
     /// new name answers resolve (05 §8.5), and a wire whose node no longer
     /// answers its link becomes a ghost (13 §3.5). Undo and redo too, since
     /// the text wires of 05 §11 are the system's, outside the step.
-    pub(super) fn links_after(&mut self, step: &Changeset) -> Result<Option<Changeset>> {
+    pub(super) fn links_after(
+        &mut self,
+        step: &Changeset,
+        rewrite: bool,
+    ) -> Result<Option<Changeset>> {
+        if rewrite {
+            self.rewrite_links(step)?;
+        }
         let mut changed: BTreeSet<NodeId> = BTreeSet::new();
         let mut paths = false;
         for w in &step.writes {

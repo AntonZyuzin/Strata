@@ -6,7 +6,7 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::workspace::{
-    History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds, Workspace,
+    Edited, History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -55,6 +55,17 @@ pub enum Request {
     PushDoc {
         doc: String,
         update: String,
+    },
+    /// What a content document has that an editor at `since` — its Loro
+    /// version vector, encoded, in base64 — has not: the core's own edits.
+    PullDoc {
+        doc: String,
+        since: String,
+    },
+    /// The content documents the core changed after its edit `since`: the
+    /// links a rename rewrote (13 §6.5).
+    Edited {
+        since: u64,
     },
     /// One node for the properties panel.
     Node {
@@ -114,6 +125,14 @@ pub enum Response {
     /// The updates are stored; `wires` when the note's text wires changed.
     Pushed {
         wires: bool,
+    },
+    /// Updates of a content document for an editor, in base64; empty — none.
+    Updates {
+        doc: String,
+        update: String,
+    },
+    Edited {
+        edited: Edited,
     },
     Node {
         node: Box<NodeDetails>,
@@ -193,6 +212,16 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 .map(|wires| Response::Pushed { wires }),
             Err(e) => Err(crate::CoreError::Invalid(format!("update: {e}"))),
         },
+        Request::PullDoc { doc, since } => match B64.decode(since) {
+            Ok(vv) => ws.doc_updates(&doc, &vv).map(|bytes| Response::Updates {
+                doc,
+                update: B64.encode(bytes),
+            }),
+            Err(e) => Err(crate::CoreError::Invalid(format!("since: {e}"))),
+        },
+        Request::Edited { since } => Ok(Response::Edited {
+            edited: ws.edited(since),
+        }),
         Request::Node { id } => ws.node_details(&id).map(|node| Response::Node {
             node: Box::new(node),
         }),
@@ -269,6 +298,41 @@ mod tests {
         let undone = ask(&mut ws, json!({ "call": "undo" }));
         assert_eq!(undone["type"], "reverted");
         assert_eq!(undone["history"]["redo"]["key"], "proto.change.create");
+    }
+
+    #[test]
+    fn an_editor_pulls_what_the_core_edited() {
+        // 15 §3.4: `edited` names the documents, `pullDoc` gives the updates
+        // an editor at its version vector has not seen.
+        let mut ws = Workspace::create(MemoryStore::default(), "Root").expect("create");
+        let root = ws.root();
+        let note = strata_model::NodeId::new().to_text();
+        ask(
+            &mut ws,
+            json!({ "call": "apply", "label": { "key": "t" },
+                    "ops": [{ "op": "createNode", "id": note, "kind": "note", "name": "A", "net": root, "x": 0, "y": 0 }] }),
+        );
+        let doc = format!("content/{note}");
+        let edited = ask(&mut ws, json!({ "call": "edited", "since": 0 }));
+        assert_eq!(edited["edited"], json!({ "seq": 0, "docs": [] }));
+        let editor = loro::LoroDoc::new();
+        let since = B64.encode(editor.oplog_vv().encode());
+        let pulled = ask(
+            &mut ws,
+            json!({ "call": "pullDoc", "doc": doc, "since": since }),
+        );
+        assert_eq!(pulled["type"], "updates");
+        let bytes = B64
+            .decode(pulled["update"].as_str().expect("update"))
+            .expect("base64");
+        if !bytes.is_empty() {
+            editor.import(&bytes).expect("import");
+        }
+        let bad = ask(
+            &mut ws,
+            json!({ "call": "pullDoc", "doc": doc, "since": "!" }),
+        );
+        assert_eq!(bad["invalid"], true);
     }
 
     #[test]

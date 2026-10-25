@@ -1789,7 +1789,8 @@ fn a_link_to_no_node_is_a_ghost_until_a_node_answers_it() {
 #[test]
 fn a_wire_keeps_its_node_while_the_node_answers_its_link() {
     // 13 §3.5, sticking: a new node with the name takes no link over; a
-    // renamed node gives its links to another answer, or to a ghost.
+    // node that no longer answers gives its link to another answer, or to
+    // a ghost.
     let mut w = ws();
     let root = w.root();
     let goal = create(&mut w, &root, NodeKind::Task, "Цель");
@@ -1801,12 +1802,18 @@ fn a_wire_keeps_its_node_while_the_node_answers_its_link() {
     // Typing again keeps it too.
     assert!(!ed.type_text(&mut w, &note, "[[Цель]]"));
 
+    // Renamed, the node keeps its link: the text follows (13 §6.5).
     rename(&mut w, &goal, "Главная цель");
+    assert_eq!(text_of(&mut w, &note), "[[Главная цель]]");
+    assert_eq!(links(&mut w, &root).0, vec![(note.clone(), goal.clone())]);
+    // The old name typed again is the other node's now.
+    assert!(ed.type_text(&mut w, &note, "[[Цель]]"));
     assert_eq!(
         links(&mut w, &root),
         (vec![(note.clone(), other.clone())], vec![])
     );
-    rename(&mut w, &other, "Средство");
+    // A name no link can carry (13 §3.4) leaves the link a ghost.
+    rename(&mut w, &other, "Средство | цель");
     assert_eq!(
         links(&mut w, &root),
         (vec![], vec![(note.clone(), "Цель".to_owned())])
@@ -1874,8 +1881,11 @@ fn a_name_of_several_nodes_goes_to_the_nearest_and_a_path_names_its_node() {
     assert!(ed3.type_text(&mut w, &third, "[[План]]"));
     assert_eq!(out(&mut w, &third), vec![far.clone()]);
     rename(&mut w, &far, "Бывший план");
+    let fourth = create(&mut w, &other, NodeKind::Note, "Четвёртая");
+    let mut ed4 = Editor::open(&mut w, &fourth);
+    assert!(ed4.type_text(&mut w, &fourth, "[[План]]"));
     assert_eq!(
-        out(&mut w, &third),
+        out(&mut w, &fourth),
         vec![near.clone()],
         "made before the one in «Архив»"
     );
@@ -1935,4 +1945,145 @@ fn a_note_linking_itself_has_no_wire_and_no_ghost() {
     let mut ed = Editor::open(&mut w, &note);
     assert!(!ed.type_text(&mut w, &note, "См. [[сама]]"));
     assert_eq!(links(&mut w, &root), (vec![], vec![]));
+}
+
+fn text_of(w: &mut Workspace<MemoryStore>, note: &str) -> String {
+    Editor::open(w, note).doc.get_text("text").to_string()
+}
+
+#[test]
+fn a_rename_rewrites_the_links_that_named_the_node() {
+    // 13 §6.5, ☑ Q-10-9: `[[Старое]]` → `[[Новое]]` in every text whose
+    // link named the node; anchors, aliases, a path's networks and `.md`
+    // stay; the wire stays too. Undo renames back, and the texts follow.
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Проекты");
+    let goal = create(&mut w, &folder, NodeKind::Task, "Цель");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    let text = "См. [[Цель]], ![[цель#План|план]] и [[Проекты/Цель.md]]; [[Нет такой]]";
+    assert!(ed.type_text(&mut w, &note, text));
+    let seen = w.edited(0).seq;
+
+    rename(&mut w, &goal, "Миссия");
+    let rewritten = "См. [[Миссия]], ![[Миссия#План|план]] и [[Проекты/Миссия.md]]; [[Нет такой]]";
+    assert_eq!(text_of(&mut w, &note), rewritten);
+    let d = w.node_details(&note).expect("details");
+    assert_eq!(
+        d.outputs.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+        vec![goal.clone()]
+    );
+    assert_eq!(
+        links(&mut w, &root).1,
+        vec![(note.clone(), "Нет такой".to_owned())]
+    );
+    assert_eq!(
+        w.history().undo,
+        Some(Label::new("t.rename")),
+        "the rewrite is no step"
+    );
+
+    // The open editor catches up from the core (15 §3.4).
+    let edited = w.edited(seen);
+    assert_eq!(edited.docs, Some(vec![format!("content/{note}")]));
+    let update = w
+        .doc_updates(&format!("content/{note}"), &ed.doc.oplog_vv().encode())
+        .expect("updates");
+    ed.doc.import(&update).expect("import");
+    assert_eq!(ed.doc.get_text("text").to_string(), rewritten);
+    let none = w
+        .doc_updates(&format!("content/{note}"), &ed.doc.oplog_vv().encode())
+        .expect("updates");
+    assert!(none.is_empty(), "nothing new is no bytes at all");
+    assert_eq!(w.edited(edited.seq).docs, Some(vec![]));
+
+    w.undo().expect("undo").expect("a step");
+    assert_eq!(
+        text_of(&mut w, &note),
+        "См. [[Цель]], ![[Цель#План|план]] и [[Проекты/Цель.md]]; [[Нет такой]]"
+    );
+
+    // A name that breaks links is not written into them: the link is a ghost.
+    rename(&mut w, &goal, "Цель | вторая");
+    assert_eq!(
+        text_of(&mut w, &note),
+        "См. [[Цель]], ![[Цель#План|план]] и [[Проекты/Цель.md]]; [[Нет такой]]"
+    );
+    assert!(
+        links(&mut w, &root)
+            .1
+            .contains(&(note.clone(), "Цель".to_owned()))
+    );
+}
+
+#[test]
+fn a_rename_leaves_the_links_of_another_node_with_the_name() {
+    // 13 §3.5: the link named the nearest «План»; renaming the other one
+    // changes nothing in the text.
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let near = create(&mut w, &a, NodeKind::Note, "План");
+    let far = create(&mut w, &b, NodeKind::Note, "План");
+    let note = create(&mut w, &a, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[План]]"));
+    rename(&mut w, &far, "Другой");
+    assert_eq!(text_of(&mut w, &note), "[[План]]");
+    rename(&mut w, &near, "Главный");
+    assert_eq!(text_of(&mut w, &note), "[[Главный]]");
+}
+
+#[test]
+fn naming_a_node_just_made_rewrites_no_link() {
+    // 06 §5.5: the name typed right after creating is the rest of the step;
+    // a ghost the placeholder name resolved goes back to being a ghost.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[Задача]]"));
+    let task = create(&mut w, &root, NodeKind::Task, "Задача");
+    assert_eq!(links(&mut w, &root).0, vec![(note.clone(), task.clone())]);
+    w.amend(
+        &[Op::Rename {
+            id: task.clone(),
+            name: "Купить хлеб".to_owned(),
+        }],
+        Label::new("t.named"),
+    )
+    .expect("amend");
+    assert_eq!(text_of(&mut w, &note), "[[Задача]]");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note, "Задача".to_owned())])
+    );
+}
+
+#[test]
+fn editors_learn_what_the_core_edited_while_it_keeps_it() {
+    // 15 §3.4: an editor asks with the number it last saw; one too old to
+    // be answered reads every open document again.
+    let mut w = ws();
+    let root = w.root();
+    let goal = create(&mut w, &root, NodeKind::Task, "Ц0");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[Ц0]]"));
+    assert_eq!(
+        w.edited(0),
+        crate::workspace::Edited {
+            seq: 0,
+            docs: Some(vec![])
+        }
+    );
+    for i in 1..=300 {
+        rename(&mut w, &goal, &format!("Ц{i}"));
+    }
+    let now = w.edited(0);
+    assert_eq!((now.seq, now.docs), (300, None), "older than what is kept");
+    assert_eq!(w.edited(299).docs, Some(vec![format!("content/{note}")]));
+    assert_eq!(text_of(&mut w, &note), "[[Ц300]]");
 }

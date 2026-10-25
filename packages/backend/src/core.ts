@@ -169,6 +169,8 @@ export type CoreRequest =
   | { call: 'trash' }
   | { call: 'openDoc'; doc: string }
   | { call: 'pushDoc'; doc: string; update: string }
+  | { call: 'pullDoc'; doc: string; since: string }
+  | { call: 'edited'; since: number }
   | { call: 'node'; id: string }
   | { call: 'tree' }
   | { call: 'wires' }
@@ -270,6 +272,16 @@ export interface ViewEdge {
 /** How a network draws its wires (06 §6.2): a segment, an S-curve, an S-curve that follows the hand. */
 export type WireShape = 'straight' | 'bezier' | 'kinetic';
 
+/**
+ * What the core changed in content documents after edit `seq` (15 §3.4):
+ * the links a rename rewrote (13 §6.5). `docs` null — the question was
+ * older than what the core keeps: every open document is to be read again.
+ */
+export interface Edited {
+  seq: number;
+  docs: string[] | null;
+}
+
 /** A ghost (05 §8.5): the wire of a note's `[[X]]` to no node. */
 export interface ViewGhost {
   /** The wire's key, `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5). */
@@ -316,6 +328,8 @@ type CoreResponse =
   | { type: 'trash'; items: TrashItem[] }
   | { type: 'doc'; doc: string; snapshot: string }
   | { type: 'pushed'; wires: boolean }
+  | { type: 'updates'; doc: string; update: string }
+  | { type: 'edited'; edited: Edited }
   | { type: 'node'; node: NodeDetails }
   | { type: 'tree'; items: TreeItem[] }
   | { type: 'wires'; wires: WireEnds[] }
@@ -457,6 +471,17 @@ export class Core {
   async asset(sha: string): Promise<Uint8Array> {
     const r = expect(await this.call({ call: 'asset', sha }), 'asset');
     return fromBase64(r.bytes ?? '');
+  }
+
+  /** What a content document has that an editor at version `since` has not. */
+  async pullDoc(doc: string, since: Uint8Array): Promise<Uint8Array> {
+    const r = await this.call({ call: 'pullDoc', doc, since: toBase64(since) });
+    return fromBase64(expect(r, 'updates').update);
+  }
+
+  /** The content documents the core changed after its edit `since`. */
+  async edited(since: number): Promise<Edited> {
+    return expect(await this.call({ call: 'edited', since }), 'edited').edited;
   }
 
   /** An editor's updates; true when the note's text wires changed. */

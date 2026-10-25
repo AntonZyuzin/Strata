@@ -395,6 +395,24 @@ pub struct Workspace<S: Store> {
     clock: fn() -> i64,
     undo: Vec<Changeset>,
     redo: Vec<Changeset>,
+    /// Content documents the core itself changed — the links rewritten after
+    /// a rename (13 §6.5) — by a growing number, for open editors to read
+    /// them again (15 §3.4). The last `EDITS_KEPT` only.
+    edits: Vec<(u64, String)>,
+    edit_seq: u64,
+}
+
+/// Edits of content documents kept for editors to catch up with.
+const EDITS_KEPT: usize = 256;
+
+/// What the core changed in content documents since an editor last asked.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Edited {
+    /// The number to ask with next time.
+    pub seq: u64,
+    /// The documents; none when the question is older than what is kept:
+    /// every open document is to be read again.
+    pub docs: Option<Vec<String>>,
 }
 
 impl<S: Store> std::fmt::Debug for Workspace<S> {
@@ -462,6 +480,8 @@ impl<S: Store> Workspace<S> {
             clock: now_ms,
             undo: Vec::new(),
             redo: Vec::new(),
+            edits: Vec::new(),
+            edit_seq: 0,
         };
         for doc in ["manifest", "sys"] {
             ws.docs.insert(doc.to_owned(), LoroDoc::new());
@@ -514,6 +534,8 @@ impl<S: Store> Workspace<S> {
             clock: now_ms,
             undo: Vec::new(),
             redo: Vec::new(),
+            edits: Vec::new(),
+            edit_seq: 0,
         };
         ws.load_index()?;
         Ok(ws)
@@ -719,7 +741,7 @@ impl<S: Store> Workspace<S> {
             self.undo.push(changeset.clone());
             self.redo.clear();
         }
-        self.links_after(&changeset)?;
+        self.links_after(&changeset, true)?;
         Ok(changeset)
     }
 
@@ -751,8 +773,10 @@ impl<S: Store> Workspace<S> {
         if written {
             self.redo.clear();
         }
+        // The rest of a gesture names what it made (06 §5.5): no text named
+        // it before, so nothing is rewritten.
         if let Some(c) = &changeset {
-            self.links_after(c)?;
+            self.links_after(c, false)?;
         }
         Ok(changeset)
     }
@@ -763,7 +787,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (back, report) = self.revert(&cs)?;
-        self.links_after(&back)?;
+        self.links_after(&back, true)?;
         Ok(Some(report))
     }
 
@@ -1199,7 +1223,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (back, report) = self.revert(&cs)?;
-        self.links_after(&back)?;
+        self.links_after(&back, true)?;
         self.redo.push(back);
         Ok(Some(report))
     }
@@ -1210,7 +1234,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (again, report) = self.revert(&cs)?;
-        self.links_after(&again)?;
+        self.links_after(&again, true)?;
         self.undo.push(again);
         Ok(Some(report))
     }
@@ -1264,6 +1288,47 @@ impl<S: Store> Workspace<S> {
             return self.relink(&BTreeSet::from([node])).map(|c| c.is_some());
         }
         Ok(false)
+    }
+
+    /// What a content document has that an editor at `since` (an encoded
+    /// Loro version vector) has not: the core's own edits (13 §6.5).
+    pub fn doc_updates(&mut self, doc: &str, since: &[u8]) -> Result<Vec<u8>> {
+        self.content_node(doc)?;
+        self.ensure_doc(doc)?;
+        let vv = VersionVector::decode(since).map_err(engine)?;
+        let d = &self.docs[doc];
+        // Nothing new: no bytes, not an update with only its header.
+        if vv.includes_vv(&d.oplog_vv()) {
+            return Ok(Vec::new());
+        }
+        d.export(ExportMode::updates(&vv)).map_err(engine)
+    }
+
+    /// The content documents the core changed after edit `since` (15 §3.4).
+    pub fn edited(&self, since: u64) -> Edited {
+        let oldest = self.edits.first().map_or(self.edit_seq + 1, |(n, _)| *n);
+        let docs = (since + 1 >= oldest || since >= self.edit_seq).then(|| {
+            let set: BTreeSet<&String> = self
+                .edits
+                .iter()
+                .filter(|(n, _)| *n > since)
+                .map(|(_, d)| d)
+                .collect();
+            set.into_iter().cloned().collect()
+        });
+        Edited {
+            seq: self.edit_seq,
+            docs,
+        }
+    }
+
+    /// Notes that the core changed a content document: editors read it again.
+    fn note_edit(&mut self, doc: &str) {
+        self.edit_seq += 1;
+        self.edits.push((self.edit_seq, doc.to_owned()));
+        if self.edits.len() > EDITS_KEPT {
+            self.edits.drain(..self.edits.len() - EDITS_KEPT);
+        }
     }
 
     fn text_field(&self, node: NodeId, map: &str) -> Option<String> {
@@ -1913,7 +1978,7 @@ impl<S: Store> Workspace<S> {
         let label = Label::new("core.change.preview");
         let step = self.commit_ops_as(ChangesetOrigin::System, &ops, label)?;
         // The page's title may be the name a ghost waits for (05 §8.5).
-        self.links_after(&step)?;
+        self.links_after(&step, true)?;
         Ok(!step.writes.is_empty())
     }
 

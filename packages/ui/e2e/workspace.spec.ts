@@ -1751,6 +1751,47 @@ test.describe('a workspace on the core', () => {
     );
   });
 
+  test('a rename rewrites the [[links]] that named the node, in an open note too (13 §6.5)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Переименование');
+    await createNode(page, 400, 360, 'Дневник');
+    await createNode(page, 800, 360, 'Цель');
+    await select(page, 'Дневник');
+    await page.keyboard.press('Enter');
+    const editor = page.locator('.note-window .cm-content');
+    await expect(editor).toBeVisible();
+    await editor.click();
+    await page.keyboard.type('См. [[Цель]]', { delay: 30 });
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Цель']);
+
+    // The note stays open; `Esc` gives the keys back to the canvas, `Ctrl+O`
+    // goes to the node (the window may cover it), `F2` renames it.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.note-window')).toBeVisible();
+    await page.keyboard.press('Control+o');
+    await page.locator('.goto input').fill('Цель');
+    await page.locator('.goto input').press('Enter');
+    const goal = await idOf(page, 'Цель');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.editor()?.selected))
+      .toEqual([goal]);
+    await page.keyboard.press('F2');
+    await expect(page.locator('.name-input')).toBeVisible();
+    await page.keyboard.type('Миссия');
+    await page.keyboard.press('Enter');
+    // Live preview shows a link without its brackets.
+    await expect(editor).toHaveText('См. Миссия');
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Миссия']);
+
+    // Undo renames back, and the text follows.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect(editor).toHaveText('См. Цель');
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Цель']);
+  });
+
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {
     await page.goto('/?plain');
     await createWorkspace(page, 'Сроки');

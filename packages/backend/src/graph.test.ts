@@ -99,6 +99,27 @@ describe('shake (05 §8.4, ✅ D1)', () => {
     g.transaction({ key: 't' }, (tx) => shake(g, tx, 'd'));
     expect(wires(g)).toEqual(['ab']);
   });
+
+  it("keeps a ghost's wire: it is the note's link (05 §8.2 rule 5, §8.5)", () => {
+    const g = graph(['ad', 'db']);
+    g.derive({ key: 't' }, (tx) => {
+      tx.add(
+        newNode({
+          id: '?g',
+          name: 'Идея',
+          kind: 'note',
+          icon: 0,
+          x: 0,
+          y: 0,
+          ghost: true,
+          ghostOf: 'd',
+        }),
+      );
+      tx.connect('d', '?g');
+    });
+    g.transaction({ key: 't' }, (tx) => shake(g, tx, 'd'));
+    expect(wires(g)).toEqual(['ab', 'd?g']);
+  });
 });
 
 describe('extract a set (Mod+Shift+X)', () => {

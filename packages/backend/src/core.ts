@@ -270,6 +270,15 @@ export interface ViewEdge {
 /** How a network draws its wires (06 §6.2): a segment, an S-curve, an S-curve that follows the hand. */
 export type WireShape = 'straight' | 'bezier' | 'kinetic';
 
+/** A ghost (05 §8.5): the wire of a note's `[[X]]` to no node. */
+export interface ViewGhost {
+  /** The wire's key, `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5). */
+  edge: string;
+  from: string;
+  /** `X` as the text spells it. */
+  name: string;
+}
+
 /** One network for the canvas (10 §7.3). */
 export interface NetworkView {
   net: string;
@@ -278,6 +287,8 @@ export interface NetworkView {
   path: [string, string][];
   nodes: ViewNode[];
   edges: ViewEdge[];
+  /** `[[Links]]` of the notes here to no node (05 §8.5). */
+  ghosts: ViewGhost[];
   /** The network's wire style; none — Bézier. */
   wire_style?: WireShape;
 }

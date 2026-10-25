@@ -24,6 +24,8 @@ use strata_model::{
     ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
 
+mod links;
+
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
 /// The tree of a list's items in its content document (10 §2.4).
@@ -338,6 +340,16 @@ pub struct ViewEdge {
     pub manual: bool,
 }
 
+/// A ghost (05 §8.5): the wire of a note's `[[X]]` to no node.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewGhost {
+    /// The wire's key, `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5).
+    pub edge: String,
+    pub from: String,
+    /// `X` as the text spells it.
+    pub name: String,
+}
+
 /// One network for the canvas (10 §7.3): its nodes, the wires between them,
 /// the way from the root.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -348,6 +360,9 @@ pub struct NetworkView {
     pub path: Vec<(String, String)>,
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
+    /// `[[Links]]` of the notes here to no node (05 §8.5).
+    #[serde(default)]
+    pub ghosts: Vec<ViewGhost>,
     /// The network's wire style (05 §9.2); none — Bézier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_style: Option<WireStyle>,
@@ -704,6 +719,7 @@ impl<S: Store> Workspace<S> {
             self.undo.push(changeset.clone());
             self.redo.clear();
         }
+        self.links_after(&changeset)?;
         Ok(changeset)
     }
 
@@ -735,6 +751,9 @@ impl<S: Store> Workspace<S> {
         if written {
             self.redo.clear();
         }
+        if let Some(c) = &changeset {
+            self.links_after(c)?;
+        }
         Ok(changeset)
     }
 
@@ -743,7 +762,9 @@ impl<S: Store> Workspace<S> {
         let Some(cs) = self.undo.pop() else {
             return Ok(None);
         };
-        self.revert(&cs).map(|(_, report)| Some(report))
+        let (back, report) = self.revert(&cs)?;
+        self.links_after(&back)?;
+        Ok(Some(report))
     }
 
     /// Checks and writes the operations as one changeset, outside undo.
@@ -1178,6 +1199,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (back, report) = self.revert(&cs)?;
+        self.links_after(&back)?;
         self.redo.push(back);
         Ok(Some(report))
     }
@@ -1188,6 +1210,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (again, report) = self.revert(&cs)?;
+        self.links_after(&again)?;
         self.undo.push(again);
         Ok(Some(report))
     }
@@ -1238,102 +1261,9 @@ impl<S: Store> Workspace<S> {
             return Err(e.into());
         }
         if self.kind(node) == Some(NodeKind::Note) {
-            return self.relink(node).map(|c| c.is_some());
+            return self.relink(&BTreeSet::from([node])).map(|c| c.is_some());
         }
         Ok(false)
-    }
-
-    /// The note's text wires follow its `[[links]]` (05 §8.2 rule 4): a link
-    /// to a live node by its name adds the origin `text`, a link gone takes
-    /// it away, and a wire with no origin left goes. A system changeset,
-    /// outside undo (05 §11). Links to no node become ghosts in 1C (05 §8.5).
-    fn relink(&mut self, note: NodeId) -> Result<Option<Changeset>> {
-        let doc = format!("content/{}", note.to_text());
-        let text = self.docs[&doc].get_text("text").to_string();
-        let mut by_name: HashMap<String, NodeId> = HashMap::new();
-        for shard in self.index_shards() {
-            let LoroValue::Map(names) = shard.get_map("name").get_value() else {
-                continue;
-            };
-            for (id, name) in names.iter() {
-                let (Ok(n), Some(name)) = (NodeId::parse(id), name.as_string()) else {
-                    continue;
-                };
-                // One name, several nodes: the oldest wins (UUIDv7 sorts by time).
-                let slot = by_name.entry(name.trim().to_lowercase()).or_insert(n);
-                if n < *slot {
-                    *slot = n;
-                }
-            }
-        }
-        let want: BTreeSet<NodeId> = strata_markdown::scan(&text)
-            .links
-            .iter()
-            .filter_map(|l| by_name.get(&l.target.trim().to_lowercase()).copied())
-            .filter(|&n| n != note && self.alive(n))
-            .collect();
-        let index = self.index_doc(note);
-        let from = note.to_text();
-        let mut have: BTreeMap<NodeId, String> = BTreeMap::new();
-        if let LoroValue::Map(edges) = self.docs[&index].get_map("edge").get_value() {
-            for (key, v) in edges.iter() {
-                let Some(v) = Val::from_loro(v) else { continue };
-                if v.get("from").and_then(Val::as_str) != Some(from.as_str())
-                    || read(&self.docs[&index], "edgeOrigin", &format!("{key}|text")).is_none()
-                {
-                    continue;
-                }
-                if let Some(to) = v
-                    .get("to")
-                    .and_then(Val::as_str)
-                    .and_then(|t| NodeId::parse(t).ok())
-                {
-                    have.insert(to, key.clone());
-                }
-            }
-        }
-        let ts = now_ms();
-        let mut plan: Vec<(&str, String, Option<Val>)> = Vec::new();
-        for &to in want.iter().filter(|t| !have.contains_key(t)) {
-            let edge = EdgeKey::between(note, to).to_text();
-            let ends = Val::map([
-                ("from", Val::str(from.clone())),
-                ("to", Val::str(to.to_text())),
-            ]);
-            plan.push((
-                "edgeOrigin",
-                format!("{edge}|text"),
-                Some(Val::map([("at", Val::Int(ts))])),
-            ));
-            plan.push(("edge", edge, Some(ends)));
-        }
-        for edge in have
-            .iter()
-            .filter(|(t, _)| !want.contains(t))
-            .map(|(_, e)| e)
-        {
-            plan.push(("edgeOrigin", format!("{edge}|text"), None));
-            let other = ["manual", "import"]
-                .iter()
-                .any(|o| read(&self.docs[&index], "edgeOrigin", &format!("{edge}|{o}")).is_some());
-            if !other {
-                plan.push(("edge", edge.clone(), None));
-            }
-        }
-        if plan.is_empty() {
-            return Ok(None);
-        }
-        self.write(
-            ChangesetOrigin::System,
-            Label::new("core.change.links"),
-            |tx| {
-                for (map, key, value) in plan {
-                    tx.set(&index, map, &key, value)?;
-                }
-                Ok(())
-            },
-        )
-        .map(Some)
     }
 
     fn text_field(&self, node: NodeId, map: &str) -> Option<String> {
@@ -1910,6 +1840,7 @@ impl<S: Store> Workspace<S> {
         }
         self.apply(&ops, label)?;
         // Content documents as the editors' pushes are: outside the step.
+        let mut notes = BTreeSet::new();
         for (s, d, ..) in &copies {
             let Some(doc) = load(&self.store, &format!("content/{}", s.to_text()))? else {
                 continue;
@@ -1918,10 +1849,9 @@ impl<S: Store> Workspace<S> {
             let name = format!("content/{}", d.to_text());
             self.store.append(&name, &bytes, now_ms())?;
             self.docs.insert(name, doc);
-            if self.kind(*d) == Some(NodeKind::Note) {
-                self.relink(*d)?;
-            }
+            notes.insert(*d);
         }
+        self.relink(&notes)?;
         Ok(top.to_text())
     }
 
@@ -1981,10 +1911,10 @@ impl<S: Store> Workspace<S> {
             return Ok(false);
         }
         let label = Label::new("core.change.preview");
-        Ok(!self
-            .commit_ops_as(ChangesetOrigin::System, &ops, label)?
-            .writes
-            .is_empty())
+        let step = self.commit_ops_as(ChangesetOrigin::System, &ops, label)?;
+        // The page's title may be the name a ghost waits for (05 §8.5).
+        self.links_after(&step)?;
+        Ok(!step.writes.is_empty())
     }
 
     /// Every live node of the workspace under its primary network, for the
@@ -2125,6 +2055,7 @@ impl<S: Store> Workspace<S> {
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();
         let mut edges = Vec::new();
+        let mut ghosts = Vec::new();
         for shard in self.index_shards() {
             let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
                 continue;
@@ -2135,10 +2066,20 @@ impl<S: Store> Workspace<S> {
             };
             for (key, v) in all.iter() {
                 let Some(v) = Val::from_loro(v) else { continue };
-                let (Some(from), Some(to)) = (
-                    v.get("from").and_then(Val::as_str),
-                    v.get("to").and_then(Val::as_str),
-                ) else {
+                let Some(from) = v.get("from").and_then(Val::as_str) else {
+                    continue;
+                };
+                if let Some(name) = v.get("ghost").and_then(Val::as_str) {
+                    if shown.contains(from) {
+                        ghosts.push(ViewGhost {
+                            edge: key.clone(),
+                            from: from.to_owned(),
+                            name: name.to_owned(),
+                        });
+                    }
+                    continue;
+                }
+                let Some(to) = v.get("to").and_then(Val::as_str) else {
                     continue;
                 };
                 if !shown.contains(from) || !shown.contains(to) {
@@ -2154,6 +2095,7 @@ impl<S: Store> Workspace<S> {
             }
         }
         edges.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+        ghosts.sort_by(|a, b| (&a.from, &a.name, &a.edge).cmp(&(&b.from, &b.name, &b.edge)));
         let mut path: Vec<(String, String)> = self
             .ancestors(n)
             .into_iter()
@@ -2169,6 +2111,7 @@ impl<S: Store> Workspace<S> {
             path,
             nodes,
             edges,
+            ghosts,
             wire_style,
         })
     }

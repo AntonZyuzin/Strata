@@ -7,8 +7,10 @@ import type { Ranked, SearchContext } from '@strata/search';
  * Items of the Tab menu (06 §5.2): with an empty query — the kinds, and
  * recent choices that are not among them, then «Шаблоны» (nodes with the
  * flag, 05 §7); with a query — «Создать» (a note named by the query first, then
- * matching kinds), the matching templates and «Вставить здесь» (existing
- * nodes). ADR-0010: no classes. The ranking is the search engine's (09 §2,
+ * matching kinds), the matching templates, «Призраки» (this network's
+ * `[[links]]` to no node, 05 §8.5; 09 §3.1) and «Вставить здесь» (existing
+ * nodes). Opened from a ghost with Shift (06 §14) — the kinds for its name.
+ * ADR-0010: no classes. The ranking is the search engine's (09 §2,
  * `@strata/search` in its worker): `rankMenu` asks it, `menuItems` lays out
  * what it answered.
  */
@@ -29,7 +31,7 @@ export const KINDS: KindEntry[] = [
   { kind: 'asset', key: 'kind.asset' },
 ];
 
-export type Group = 'recent' | 'kinds' | 'create' | 'templates' | 'insert';
+export type Group = 'recent' | 'kinds' | 'create' | 'templates' | 'ghosts' | 'insert';
 
 export interface MenuItem {
   id: string;
@@ -47,6 +49,14 @@ export interface MenuNode {
   kind: NodeKind;
 }
 
+/** A ghost of the network (05 §8.5): its name and the note it is in. */
+export interface MenuGhost {
+  id: string;
+  name: string;
+  /** The name of the note whose `[[link]]` it is. */
+  from: string;
+}
+
 /** The engine's calls the menu needs: `SearchClient` in the app, the module itself in tests. */
 export interface MenuSearch {
   rank(q: string, names: readonly string[], limit: number): Promise<Ranked[]>;
@@ -62,6 +72,8 @@ export interface MenuRanking {
   head: number | null;
   /** Rows of the templates' names, best first. */
   templates: Ranked[];
+  /** Rows of the ghosts' names, best first. */
+  ghosts: Ranked[];
   /** Ids of the canvas's nodes (collection `net`), best first. */
   nodes: string[];
 }
@@ -80,15 +92,23 @@ export async function rankMenu(
   search: MenuSearch,
   query: string,
   templates: readonly MenuNode[],
+  ghosts: readonly MenuGhost[] = [],
 ): Promise<MenuRanking> {
   const q = query.trim();
   const colon = q.indexOf(':');
   const head = colon > 0 ? q.slice(0, colon) : '';
   const names = templates.map((n) => n.name);
-  const [kinds, heads, tpls, nodes] = await Promise.all([
+  const [kinds, heads, tpls, ghostRows, nodes] = await Promise.all([
     search.rank(q, NAMES, NAMES.length),
     head ? search.rank(head, NAMES, 1) : Promise.resolve([]),
     search.rank(q, names, MAX_ROWS),
+    ghosts.length > 0
+      ? search.rank(
+          q,
+          ghosts.map((g) => g.name),
+          MAX_ROWS,
+        )
+      : Promise.resolve([]),
     search.query('net', q, { limit: MAX_ROWS }),
   ]);
   const top = heads[0];
@@ -97,6 +117,7 @@ export async function rankMenu(
     kinds,
     head: top ? (KIND_NAMES[top.index]?.at ?? null) : null,
     templates: tpls,
+    ghosts: ghostRows,
     nodes,
   };
 }
@@ -132,7 +153,8 @@ function templateItem(locale: Locale, n: MenuNode): MenuItem {
 
 /**
  * The menu's rows for `query`. A query asks the engine first: with no
- * `ranking` for it there are no rows yet.
+ * `ranking` for it there are no rows yet. `named` — a ghost's name: with no
+ * query, the kinds for a node of that name (06 §14).
  */
 export function menuItems(
   locale: Locale,
@@ -141,8 +163,13 @@ export function menuItems(
   recent: readonly string[],
   templates: readonly MenuNode[] = [],
   ranking: MenuRanking | null = null,
+  ghosts: readonly MenuGhost[] = [],
+  named: string | null = null,
 ): MenuItem[] {
   const q = query.trim();
+  if (q === '' && named !== null) {
+    return KINDS.map((k) => createItem(locale, k, named, 'create'));
+  }
   if (q === '') {
     // Recent choices the kinds below do not show already: none while every
     // recent choice is a kind (review 2026-10-24: «Недавние» repeated them all).
@@ -169,8 +196,11 @@ export function menuItems(
     const k = ranking.head === null ? undefined : KINDS[ranking.head];
     if (k && name !== '') return [createItem(locale, k, name, 'create')];
   }
-  // A query that names a kind or a template asks for it, not for a note so named.
-  const exact = [...ranking.kinds, ...ranking.templates].some((r) => r.score >= 1000);
+  // A query that names a kind, a template or a ghost asks for it, not for a
+  // note so named.
+  const exact = [...ranking.kinds, ...ranking.templates, ...ranking.ghosts].some(
+    (r) => r.score >= 1000,
+  );
   const create: MenuItem[] = exact
     ? []
     : [
@@ -195,6 +225,20 @@ export function menuItems(
     const n = templates[r.index];
     return n ? [templateItem(locale, n)] : [];
   });
+  const theirs = ranking.ghosts.flatMap((r): MenuItem[] => {
+    const g = ghosts[r.index];
+    if (!g) return [];
+    return [
+      {
+        id: `ghost:${g.id}`,
+        group: 'ghosts',
+        label: g.name,
+        detail: g.from,
+        kind: 'note',
+        choice: { t: 'ghost', id: g.id },
+      },
+    ];
+  });
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const insert = ranking.nodes.flatMap((id): MenuItem[] => {
     const n = byId.get(id);
@@ -210,7 +254,7 @@ export function menuItems(
       },
     ];
   });
-  return [...create, ...ours, ...insert].slice(0, MAX_ROWS);
+  return [...create, ...ours, ...theirs, ...insert].slice(0, MAX_ROWS);
 }
 
 /** Recent choices, the last 8, kept on this device (06 §5.2). */

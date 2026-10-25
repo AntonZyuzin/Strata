@@ -7,6 +7,7 @@ import {
   type Flag,
   flagsOf,
   followFolds,
+  followGhosts,
   followPreviews,
   followWires,
   type Graph,
@@ -49,7 +50,7 @@ import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapNav, type MapState } from '../proto/map3d';
-import { type MenuItem, type MenuNode, remember } from '../proto/menu';
+import { type MenuGhost, type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { TabMenu } from '../proto/TabMenu';
@@ -180,7 +181,12 @@ export function WorkspaceScreen(props: {
   );
   const toastId = useRef(0);
   const [net, setNet] = useState<NetworkView | null>(null);
-  const [menu, setMenu] = useState<{ sx: number; sy: number; query: string } | null>(null);
+  const [menu, setMenu] = useState<{
+    sx: number;
+    sy: number;
+    query: string;
+    named?: string;
+  } | null>(null);
   const [name, setName] = useState<{ id: string; sx: number; sy: number; name: string } | null>(
     null,
   );
@@ -361,7 +367,8 @@ export function WorkspaceScreen(props: {
         const g = graph.current;
         const v = viewRef.current;
         if (!g || !v) return;
-        const chosen = ids ?? [...g.nodes.keys()];
+        // Ghosts stand by their notes (06 §14): `L` moves the notes.
+        const chosen = ids ?? [...g.nodes.values()].filter((n) => !n.ghostOf).map((n) => n.id);
         layouter.current ??= new Layouter();
         layouter.current
           .layout(g, v, chosen, 'layered', (a, b) => textWires.current.has(pair(a, b)))
@@ -453,6 +460,13 @@ export function WorkspaceScreen(props: {
       const path = await core.view(netRef.current).then((v) => v.path);
       const parent = path.at(-2);
       if (parent) await loadRef.current(parent[0]);
+    };
+
+    /** The graph's text wires and ghosts as the core has them, outside undo (05 §8.2, §8.5). */
+    const followLinks = (g: Graph, nv: NetworkView) => {
+      textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
+      followWires(g, nv);
+      followGhosts(g, nv, viewRef.current?.iconFor('note') ?? 0);
     };
 
     /** Shows network `id`: a fresh graph from the core, the camera it had. */
@@ -608,14 +622,18 @@ export function WorkspaceScreen(props: {
           if (!cancelled) setTree(items);
         })
         .catch(() => undefined);
-      // Progress arcs that a tick, a subtask or a wire changed (05 §6.4).
+      // Progress arcs that a tick, a subtask or a wire changed (05 §6.4);
+      // the text wires and ghosts that a name changed (05 §8.5): a new node
+      // with the name resolves its ghosts, a renamed one may leave one.
       const g = graph.current;
+      const at = g?.version;
       void (sync.current?.settled() ?? Promise.resolve())
         .then(() => core.view(netRef.current))
         .then((nv) => {
-          if (!cancelled && graph.current === g && g && nv.net === netRef.current) {
-            followFolds(g, nv);
-          }
+          if (cancelled || graph.current !== g || !g || nv.net !== netRef.current) return;
+          followFolds(g, nv);
+          // A step made since the question is not in the answer yet.
+          if (g.version === at) followLinks(g, nv);
         })
         .catch(() => undefined);
       const ed = editor.current;
@@ -646,14 +664,11 @@ export function WorkspaceScreen(props: {
       new CoreDocs(
         core,
         () => {
-          // The core rewired a note's links: its wires follow, outside undo.
+          // The core rewired a note's links: its wires and ghosts follow, outside undo.
           void core.view(netRef.current).then((nv) => {
             const g = graph.current;
             if (!g || cancelled || nv.net !== netRef.current) return;
-            textWires.current = new Set(
-              nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)),
-            );
-            followWires(g, nv);
+            followLinks(g, nv);
           });
         },
         refused,
@@ -1323,8 +1338,18 @@ export function WorkspaceScreen(props: {
     [tree],
   );
   const nodes: MenuNode[] = g
-    ? [...g.nodes.values()].map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
+    ? [...g.nodes.values()]
+        .filter((n) => !n.ghostOf)
+        .map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
     : [];
+  // This network's ghosts as the menu opens: the engine ranks them once per query.
+  const ghosts = useMemo((): MenuGhost[] => {
+    const now = graph.current;
+    if (!menu || !now) return [];
+    return [...now.nodes.values()].flatMap((n) =>
+      n.ghostOf ? [{ id: n.id, name: n.name, from: now.nodes.get(n.ghostOf)?.name ?? '' }] : [],
+    );
+  }, [menu]);
   const canUndo = Boolean(g?.canUndo || history.undo);
   const canRedo = Boolean(g?.canRedo || history.redo);
   const lastStep = canUndo
@@ -1342,7 +1367,7 @@ export function WorkspaceScreen(props: {
       className="proto workspace"
       data-net={net?.net ?? ''}
       data-depth={path.length}
-      data-nodes={g?.nodes.size ?? 0}
+      data-nodes={nodes.length}
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
     >
@@ -1512,7 +1537,9 @@ export function WorkspaceScreen(props: {
           y={menu.sy}
           bounds={host.current?.getBoundingClientRect()}
           initialQuery={menu.query}
+          named={menu.named}
           nodes={nodes}
+          ghosts={ghosts}
           recent={recent}
           templates={templates}
           search={searchClient()}

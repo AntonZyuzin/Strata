@@ -123,7 +123,7 @@ primaryNet: LoroMap<NodeId, NodeId>           // сеть основного р�
 createdAt:  LoroMap<NodeId, Ts>               // и createdBy
 trashedAt:  LoroMap<NodeId, Ts>               // и trashedBy, trashBatch (ID набора изменений, §10.3)
 placement:  LoroMap<`${NetId}/${NodeId}`, { at: Ts; by: PersonId }>   // в шарде ноды
-edge:       LoroMap<EdgeId, { from: NodeId; to: NodeId | null; ghost?: string; at: Ts; by: PersonId }>  // в шарде from; ghost — имя X призрака (05 §8.5)
+edge:       LoroMap<EdgeId, { from: NodeId; to: NodeId | null; ghost?: string; at: Ts; by: PersonId }>  // в шарде from; у нити к призраку нет to, ghost — имя X (05 §8.5)
 edgeLabel:  LoroMap<EdgeId, string>
 edgeOrigin: LoroMap<`${EdgeId}|${'manual' | 'text' | 'import'}`, { at: Ts }>
 // нить жива, пока есть хотя бы один ключ edgeOrigin (05 §8.1 origins)

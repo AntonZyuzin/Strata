@@ -11,6 +11,8 @@ authors.workspace = true
 [dependencies]
 pulldown-cmark = { version = "0.13.5", default-features = false }
 saphyr = "0.2.2"
+caseless = "0.2.2"
+unicode-normalization = "0.1.26"
 
 [lints]
 workspace = true

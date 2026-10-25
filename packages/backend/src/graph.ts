@@ -54,6 +54,11 @@ export interface GraphNode {
   template: boolean;
   /** `[[X]]` without a node yet (05 §8.5). */
   ghost: boolean;
+  /**
+   * The note whose `[[X]]` this ghost is: the ghost stands beside it and
+   * follows it (06 §14). Null for a node and for the prototype's ghost.
+   */
+  ghostOf: string | null;
   /** This placement is not the node's primary one (05 §5). */
   appearance: boolean;
   /** Wires to nodes not placed in this network (05 §8.3). */
@@ -71,6 +76,37 @@ export interface GraphNode {
   attrs: NodeAttrs;
 }
 
+/** Ids of ghosts on the canvas: the wire's key after `?`, never a node's (05 §4.1). */
+export function ghostId(edge: string): string {
+  return `?${edge}`;
+}
+
+export function isGhostId(id: string): boolean {
+  return id.startsWith('?');
+}
+
+/** World units from a note to its ghosts (06 §14). */
+export const GHOST_DISTANCE = 88;
+
+/**
+ * Where a ghost stands (06 §14): beside its note, at an angle by the hash of
+ * its name, so the same `[[X]]` stands in the same place. Not stored; a
+ * ghost is not dragged.
+ */
+export function ghostSpot(
+  source: { x: number; y: number },
+  name: string,
+): { x: number; y: number } {
+  // FNV-1a over UTF-16 units: stable across sessions and engines.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const a = ((h >>> 0) / 0x1_0000_0000) * 2 * Math.PI;
+  return { x: source.x + GHOST_DISTANCE * Math.cos(a), y: source.y + GHOST_DISTANCE * Math.sin(a) };
+}
+
 /** A plain node: open, no deadline, no flags. */
 export function newNode(
   base: Pick<GraphNode, 'id' | 'name' | 'kind' | 'icon' | 'x' | 'y'> & Partial<GraphNode>,
@@ -82,6 +118,7 @@ export function newNode(
     pause: false,
     template: false,
     ghost: false,
+    ghostOf: null,
     appearance: false,
     external: 0,
     assignees: [],
@@ -248,9 +285,18 @@ export class Graph {
   kindColors = false;
   /** How this network draws its wires (05 §9.2, 06 §6.2); null — Bézier. Set through `Tx`. */
   private shape: WireShape | null = null;
+  private stamp = 0;
 
   get wireShape(): WireShape {
     return this.shape ?? 'bezier';
+  }
+
+  /**
+   * Grows with every change: an answer of the core asked for before the
+   * latest one may be behind the graph, and must not overwrite it.
+   */
+  get version(): number {
+    return this.stamp;
   }
 
   subscribe(fn: (e: GraphEvent) => void): () => void {
@@ -326,10 +372,13 @@ export class Graph {
         run({ t: 'add', node: { ...node } });
       },
       remove: (id) => {
+        // A note's ghosts go with it (05 §8.5), and come back with it.
+        const ghosts = this.outputs(id).filter((o) => this.nodes.get(o)?.ghostOf === id);
         // Wires go first, each as its own operation, so undo restores them.
         for (const to of this.outputs(id)) run({ t: 'disconnect', from: id, to });
         for (const from of this.inputs(id)) run({ t: 'disconnect', from, to: id });
         run({ t: 'remove', id });
+        for (const g of ghosts) run({ t: 'remove', id: g });
       },
       move: (id, x, y) => {
         run({ t: 'move', id, x, y });
@@ -445,6 +494,7 @@ export class Graph {
   }
 
   private emit(e: GraphEvent) {
+    this.stamp++;
     for (const fn of this.listeners) fn(e);
   }
 
@@ -487,10 +537,16 @@ export class Graph {
       }
       case 'move': {
         const node = this.nodes.get(op.id);
-        if (!node || (node.x === op.x && node.y === op.y)) return null;
+        // A ghost stands where its note puts it (06 §14).
+        if (!node || node.ghostOf !== null || (node.x === op.x && node.y === op.y)) return null;
         const back: Op = { t: 'move', id: op.id, x: node.x, y: node.y };
         node.x = op.x;
         node.y = op.y;
+        // Its ghosts stand beside it (06 §14): derived, no operation of their own.
+        for (const o of this.outs.get(op.id) ?? []) {
+          const g = this.nodes.get(o);
+          if (g?.ghostOf === op.id) Object.assign(g, ghostSpot(node, g.name));
+        }
         return [back];
       }
       case 'rename': {
@@ -498,6 +554,9 @@ export class Graph {
         if (!node || node.name === op.name) return null;
         const back: Op = { t: 'rename', id: op.id, name: node.name };
         node.name = op.name;
+        // A ghost's place is by its name (06 §14).
+        const source = node.ghostOf === null ? undefined : this.nodes.get(node.ghostOf);
+        if (source) Object.assign(node, ghostSpot(source, node.name));
         return [back];
       }
       case 'attr': {
@@ -535,7 +594,11 @@ export class Graph {
       }
       case 'connect': {
         if (op.from === op.to) return null; // 05 §8.2 rule 2: no self-loop
-        if (!this.nodes.has(op.from) || !this.nodes.has(op.to)) return null;
+        const a = this.nodes.get(op.from);
+        const b = this.nodes.get(op.to);
+        if (!a || !b) return null;
+        // A ghost has one wire, from its note (05 §8.5).
+        if (a.ghostOf !== null || (b.ghostOf !== null && b.ghostOf !== op.from)) return null;
         if (this.hasEdge(op.from, op.to)) return null; // one wire per ordered pair
         set(this.outs, op.from).add(op.to);
         set(this.ins, op.to).add(op.from);
@@ -608,7 +671,8 @@ export interface ShakeResult {
  */
 export function shake(graph: Graph, tx: Tx, x: string): ShakeResult {
   const ins = graph.inputs(x);
-  const outs = graph.outputs(x);
+  // A ghost's wire is its `[[link]]`: the text keeps it (05 §8.2 rule 5).
+  const outs = graph.outputs(x).filter((o) => graph.nodes.get(o)?.ghostOf !== x);
   for (const p of ins) tx.disconnect(p, x);
   for (const o of outs) tx.disconnect(x, o);
   const p = ins.length === 1 ? ins[0] : undefined;
@@ -634,7 +698,7 @@ export function extract(graph: Graph, tx: Tx, ids: readonly string[]): ShakeResu
       }
     }
     for (const o of graph.outputs(id)) {
-      if (!inSet.has(o)) {
+      if (!inSet.has(o) && graph.nodes.get(o)?.ghostOf !== id) {
         targets.add(o);
         cut.push([id, o]);
       }

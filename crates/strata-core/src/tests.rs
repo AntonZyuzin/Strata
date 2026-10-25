@@ -1692,3 +1692,247 @@ fn people_take_the_palette_in_the_order_they_come() {
         "07 §2.2: in order, the ninth the first's again; a chosen colour stays"
     );
 }
+
+fn rename(w: &mut Workspace<MemoryStore>, id: &str, name: &str) {
+    w.apply(
+        &[Op::Rename {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        }],
+        Label::new("t.rename"),
+    )
+    .expect("rename");
+}
+
+/// `(from, to)` of the text wires and `(from, name)` of the ghosts in `net`.
+#[allow(clippy::type_complexity)]
+fn links(
+    w: &mut Workspace<MemoryStore>,
+    net: &str,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let v = w.network_view(net).expect("view");
+    (
+        v.edges
+            .into_iter()
+            .filter(|e| e.text)
+            .map(|e| (e.from, e.to))
+            .collect(),
+        v.ghosts.into_iter().map(|g| (g.from, g.name)).collect(),
+    )
+}
+
+#[test]
+fn a_link_to_no_node_is_a_ghost_until_a_node_answers_it() {
+    // 05 §8.5: the wire of `[[X]]` with no node X leads to a ghost; its key
+    // is `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5); a node named X resolves it.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "Позже: [[Идея Й]], ещё раз [[идея й]]"));
+    let v = w.network_view(&root).expect("view");
+    assert!(v.edges.is_empty());
+    assert_eq!(v.ghosts.len(), 1, "one ghost for one link key");
+    let g = &v.ghosts[0];
+    let from = NodeId::parse(&note).expect("id");
+    assert_eq!(
+        (g.from.as_str(), g.name.as_str(), g.edge.clone()),
+        (
+            note.as_str(),
+            "Идея Й",
+            strata_model::EdgeKey::to_ghost(from, &strata_markdown::link_key("Идея Й")).to_text()
+        )
+    );
+
+    // The name as the text spells it now.
+    assert!(ed.type_text(&mut w, &note, "Позже: [[идея й]]"));
+    assert_eq!(
+        links(&mut w, &root).1,
+        vec![(note.clone(), "идея й".to_owned())]
+    );
+
+    // A node with the name, in another case and in NFD as macOS gives it.
+    let idea = create(&mut w, &root, NodeKind::Note, "ИДЕЯ \u{438}\u{306}");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(note.clone(), idea.clone())], vec![]),
+        "the ghost resolved into a wire with the origin text"
+    );
+    assert_eq!(
+        w.history().undo,
+        Some(Label::new("t.create")),
+        "resolving is the system's: the step is the creation alone"
+    );
+
+    // Undo takes the node away and the ghost comes back; redo resolves again.
+    w.undo().expect("undo").expect("a step");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note.clone(), "идея й".to_owned())])
+    );
+    w.redo().expect("redo").expect("a step");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(note.clone(), idea.clone())], vec![])
+    );
+
+    // A link gone from the text takes its wire or its ghost with it.
+    assert!(ed.type_text(&mut w, &note, "[[Нигде]]"));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note.clone(), "Нигде".to_owned())])
+    );
+    assert!(ed.type_text(&mut w, &note, "Пусто"));
+    assert_eq!(links(&mut w, &root), (vec![], vec![]));
+}
+
+#[test]
+fn a_wire_keeps_its_node_while_the_node_answers_its_link() {
+    // 13 §3.5, sticking: a new node with the name takes no link over; a
+    // renamed node gives its links to another answer, or to a ghost.
+    let mut w = ws();
+    let root = w.root();
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[Цель]]"));
+    let other = create(&mut w, &root, NodeKind::Note, "цель");
+    assert_eq!(links(&mut w, &root).0, vec![(note.clone(), goal.clone())]);
+    // Typing again keeps it too.
+    assert!(!ed.type_text(&mut w, &note, "[[Цель]]"));
+
+    rename(&mut w, &goal, "Главная цель");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(note.clone(), other.clone())], vec![])
+    );
+    rename(&mut w, &other, "Средство");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note.clone(), "Цель".to_owned())])
+    );
+    // Undo of the rename: the node answers again.
+    w.undo().expect("undo").expect("a step");
+    assert_eq!(links(&mut w, &root), (vec![(note.clone(), other)], vec![]));
+}
+
+#[test]
+fn a_name_of_several_nodes_goes_to_the_nearest_and_a_path_names_its_node() {
+    // 13 §3.5: a path from the root, then from the note's folder; else the
+    // nearest by the tree, then the shorter path, then the older.
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "Проекты");
+    let b = create(&mut w, &root, NodeKind::Network, "Архив");
+    let far = create(&mut w, &root, NodeKind::Note, "План");
+    let near = create(&mut w, &a, NodeKind::Note, "План");
+    let old = create(&mut w, &b, NodeKind::Note, "План");
+    let note = create(&mut w, &a, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[План]]"));
+    assert_eq!(links(&mut w, &a).0, vec![(note.clone(), near.clone())]);
+
+    // A path from the root.
+    assert!(ed.type_text(&mut w, &note, "[[Архив/План.md]]"));
+    let v = w.network_view(&a).expect("view");
+    assert!(
+        v.edges.is_empty() && v.ghosts.is_empty(),
+        "the wire leads out of this network"
+    );
+    let d = w.node_details(&note).expect("details");
+    assert_eq!(
+        d.outputs.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+        vec![old.clone()]
+    );
+
+    // The tail of a path, and a path no node answers.
+    let other = create(&mut w, &root, NodeKind::Network, "Прочее");
+    let elsewhere = create(&mut w, &other, NodeKind::Note, "Где-то");
+    let mut ed2 = Editor::open(&mut w, &elsewhere);
+    assert!(ed2.type_text(&mut w, &elsewhere, "[[проекты/план]] и [[Нет/План]]"));
+    let out = |w: &mut Workspace<MemoryStore>, n: &str| -> Vec<String> {
+        let d = w.node_details(n).expect("details");
+        d.outputs.into_iter().map(|l| l.id).collect()
+    };
+    assert_eq!(out(&mut w, &elsewhere), vec![near.clone()]);
+    assert_eq!(
+        links(&mut w, &other).1,
+        vec![(elsewhere.clone(), "Нет/План".to_owned())],
+        "a path no node answers is a ghost"
+    );
+    assert!(ed.type_text(&mut w, &note, "[[Корень/План]]"));
+    assert_eq!(
+        links(&mut w, &a).1,
+        vec![(note.clone(), "Корень/План".to_owned())],
+        "the root's name is no part of a path (05 §9.3)"
+    );
+
+    // No folder nearer: the shorter path; the same length: the older. A
+    // note with a wire to an answer keeps it (sticking), so fresh notes.
+    let third = create(&mut w, &other, NodeKind::Note, "Третья");
+    let mut ed3 = Editor::open(&mut w, &third);
+    assert!(ed3.type_text(&mut w, &third, "[[План]]"));
+    assert_eq!(out(&mut w, &third), vec![far.clone()]);
+    rename(&mut w, &far, "Бывший план");
+    assert_eq!(
+        out(&mut w, &third),
+        vec![near.clone()],
+        "made before the one in «Архив»"
+    );
+    assert!(ed2.type_text(&mut w, &elsewhere, "[[План]]"));
+    assert_eq!(out(&mut w, &elsewhere), vec![near], "its wire sticks");
+    let _ = old;
+}
+
+#[test]
+fn a_wire_to_a_node_in_the_trash_stays_and_a_new_link_to_it_is_a_ghost() {
+    // 05 §14 rule 6: while an end is in the trash, the wire is hidden, not
+    // gone. A link to a name only the trash holds is a ghost; «Вернуть»
+    // resolves it.
+    let mut w = ws();
+    let root = w.root();
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let a = create(&mut w, &root, NodeKind::Note, "А");
+    let b = create(&mut w, &root, NodeKind::Note, "Б");
+    let mut ea = Editor::open(&mut w, &a);
+    let mut eb = Editor::open(&mut w, &b);
+    assert!(ea.type_text(&mut w, &a, "[[Цель]]"));
+    w.apply(
+        &[Op::Trash {
+            ids: vec![goal.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    assert!(
+        !ea.type_text(&mut w, &a, "[[Цель]] "),
+        "the wire stays, hidden"
+    );
+    assert!(eb.type_text(&mut w, &b, "[[Цель]]"));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(b.clone(), "Цель".to_owned())])
+    );
+    w.apply(
+        &[Op::Restore {
+            ids: vec![goal.clone()],
+        }],
+        Label::new("t.restore"),
+    )
+    .expect("restore");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(a.clone(), goal.clone()), (b.clone(), goal)], vec![])
+    );
+}
+
+#[test]
+fn a_note_linking_itself_has_no_wire_and_no_ghost() {
+    // 05 §8.2 rule 2: no wire from a node to itself.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Сама");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(!ed.type_text(&mut w, &note, "См. [[сама]]"));
+    assert_eq!(links(&mut w, &root), (vec![], vec![]));
+}

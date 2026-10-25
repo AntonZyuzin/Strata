@@ -18,14 +18,20 @@ export function searchClient(): SearchClient {
 
 /** A canvas's nodes as the engine reads them; `net` is their network. */
 export function netItems(nodes: Iterable<GraphNode>, net: string): SearchItem[] {
-  return [...nodes].map((n) => ({
-    id: n.id,
-    name: n.name,
-    kind: n.kind,
-    parent: net,
-    status: n.attrs.status,
-    flags: flagsOf(n),
-  }));
+  const out: SearchItem[] = [];
+  for (const n of nodes) {
+    // A ghost is not a node (05 §8.5): the Tab menu offers it on its own.
+    if (n.ghostOf) continue;
+    out.push({
+      id: n.id,
+      name: n.name,
+      kind: n.kind,
+      parent: net,
+      status: n.attrs.status,
+      flags: flagsOf(n),
+    });
+  }
+  return out;
 }
 
 /**

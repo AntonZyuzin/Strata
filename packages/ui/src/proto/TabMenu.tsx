@@ -3,6 +3,7 @@ import { type Locale, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   type Group,
+  type MenuGhost,
   type MenuItem,
   type MenuNode,
   type MenuRanking,
@@ -31,12 +32,16 @@ export function TabMenu(props: {
   recent: readonly string[];
   /** Nodes with the flag «Шаблон» (05 §7), from the whole workspace. */
   templates?: readonly MenuNode[] | undefined;
+  /** This network's ghosts (05 §8.5). */
+  ghosts?: readonly MenuGhost[] | undefined;
+  /** A ghost's name, clicked with Shift: the kinds for it (06 §14). */
+  named?: string | undefined;
   /** The search engine (09 §2): it ranks what a query matches. */
   search: MenuSearch;
   onChoose: (item: MenuItem) => void;
   onCancel: () => void;
 }) {
-  const { locale, search, templates } = props;
+  const { locale, search, templates, ghosts, named } = props;
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
   // The engine answers in its worker: the rows stay those of the last
@@ -46,17 +51,27 @@ export function TabMenu(props: {
   useEffect(() => {
     if (query.trim() === '') return;
     let live = true;
-    void rankMenu(search, query, templates ?? []).then((r) => {
+    void rankMenu(search, query, templates ?? [], ghosts ?? []).then((r) => {
       if (live) setRanking(r);
     });
     return () => {
       live = false;
     };
-  }, [search, query, templates]);
+  }, [search, query, templates, ghosts]);
   const shown = query.trim() === '' ? query : (ranking?.query ?? query);
   const items = useMemo(
-    () => menuItems(locale, shown, props.nodes, props.recent, templates, ranking),
-    [locale, shown, props.nodes, props.recent, templates, ranking],
+    () =>
+      menuItems(
+        locale,
+        shown,
+        props.nodes,
+        props.recent,
+        templates,
+        ranking,
+        ghosts,
+        named ?? null,
+      ),
+    [locale, shown, props.nodes, props.recent, templates, ranking, ghosts, named],
   );
   const ready = query.trim() === '' || ranking?.query === query;
   const input = useRef<HTMLInputElement>(null);

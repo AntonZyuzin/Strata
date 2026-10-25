@@ -18,6 +18,10 @@ interface Node {
   key: boolean;
   pause: boolean;
   template: boolean;
+  /** The note whose `[[X]]` this ghost is (05 §8.5); null for a node. */
+  ghostOf: string | null;
+  x: number;
+  y: number;
 }
 
 interface WsHook {
@@ -1673,6 +1677,78 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Мельница');
     await filter.press('Escape');
     await expect(rows).toHaveText(['Уровни', 'Мельница', 'Река']);
+  });
+
+  test('a [[link]] to no node is a ghost: a click makes the note, Shift+click its kind (05 §8.5, 06 §14)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Призраки');
+    await createNode(page, 500, 360, 'Дневник');
+    const ghosts = () =>
+      page.evaluate(() =>
+        [...(window.__strataWs?.graph()?.nodes.values() ?? [])]
+          .filter((n) => n.ghostOf)
+          .map((n) => n.name)
+          .sort(),
+      );
+    await select(page, 'Дневник');
+    await page.keyboard.press('Enter');
+    const editor = page.locator('.note-window .cm-content');
+    await expect(editor).toBeVisible();
+    await editor.click();
+    await page.keyboard.type('Позже: [[Идея]]', { delay: 30 });
+    await expect.poll(ghosts).toEqual(['Идея']);
+    await page.locator('.note-window .window-close').click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    expect((await graphNow(page)).edges).toEqual(['Дневник→Идея']);
+
+    // A ghost is not dragged: it stands by its note (06 §14).
+    const id = await idOf(page, 'Идея');
+    const spot = () =>
+      page.evaluate((id) => {
+        const n = window.__strataWs?.graph()?.nodes.get(id);
+        return n ? [Math.round(n.x), Math.round(n.y)] : null;
+      }, id);
+    const before = await spot();
+    const g = await at(page, 'Идея');
+    await page.mouse.move(g.x, g.y);
+    await page.mouse.down();
+    await page.mouse.move(g.x + 60, g.y + 40, { steps: 5 });
+    await page.mouse.up();
+    expect(await spot()).toEqual(before);
+    await expect.poll(ghosts).toEqual(['Идея']);
+
+    // A click: the note in its place, the ghost's wire now the note's; undo brings it back.
+    await page.mouse.click(g.x, g.y);
+    await expect.poll(ghosts).toEqual([]);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
+    await settled(page);
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Идея']);
+    const made = await idOf(page, 'Идея');
+    expect(await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.kind, made)).toBe(
+      'note',
+    );
+    await page.keyboard.press('Control+z');
+    await expect.poll(ghosts).toEqual(['Идея']);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    await settled(page);
+    await expect.poll(ghosts).toEqual(['Идея']);
+
+    // Shift+click: the Tab menu with the kinds for its name.
+    const q = await at(page, 'Идея');
+    await page.keyboard.down('Shift');
+    await page.mouse.click(q.x, q.y);
+    await page.keyboard.up('Shift');
+    await expect(page.locator('.tab-menu-row')).toHaveCount(7);
+    await page.locator('.tab-menu-row', { hasText: 'Задача: Идея' }).click();
+    await expect.poll(ghosts).toEqual([]);
+    await settled(page);
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Идея']);
+    const task = await idOf(page, 'Идея');
+    expect(await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.kind, task)).toBe(
+      'task',
+    );
   });
 
   test('a near deadline is a dot in «Ноды» with its word (Q-07-22)', async ({ page }) => {

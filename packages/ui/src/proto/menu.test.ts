@@ -93,6 +93,34 @@ describe('Tab menu items (06 §5.2)', () => {
     expect(items[0]?.choice).toMatchObject({ t: 'create', kind: 'board', rename: true });
   });
 
+  it("offers this network's ghosts by a query, and the kinds for a ghost's name (05 §8.5, 06 §14)", async () => {
+    const ghosts = [
+      { id: '?1', name: 'Звуковая карта', from: 'Заметка' },
+      { id: '?2', name: 'Идея', from: 'Дневник' },
+    ];
+    const ranking = await rankMenu(engine(nodes), 'звуковая', [], ghosts);
+    const items = menuItems('ru', 'звуковая', nodes, [], [], ranking, ghosts);
+    const ghost = items.filter((i) => i.group === 'ghosts');
+    expect(ghost.map((i) => [i.label, i.detail, i.choice])).toEqual([
+      ['Звуковая карта', 'Заметка', { t: 'ghost', id: '?1' }],
+    ]);
+    expect(items.indexOf(ghost[0] as (typeof items)[number])).toBeLessThan(
+      items.findIndex((i) => i.group === 'insert'),
+    );
+    // The query names a ghost: no second note of that name above it.
+    const exact = await rankMenu(engine(nodes), 'Идея', [], ghosts);
+    const rowsOf = menuItems('ru', 'Идея', nodes, [], [], exact, ghosts);
+    expect(rowsOf.some((i) => i.group === 'create' && i.kind === 'note')).toBe(false);
+
+    const named = menuItems('en', '', nodes, [], [], null, ghosts, 'Идея');
+    expect(named.map((i) => i.label)).toEqual(
+      ['Folder', 'Project', 'Task', 'Note', 'Board', 'List', 'Asset'].map((k) => `${k}: Идея`),
+    );
+    expect(
+      named.every((i) => i.choice.t === 'create' && i.choice.name === 'Идея' && !i.choice.rename),
+    ).toBe(true);
+  });
+
   it('has no rows for a query the engine has not answered yet', () => {
     expect(menuItems('ru', 'звук', nodes, [])).toEqual([]);
   });

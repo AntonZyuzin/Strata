@@ -6,6 +6,7 @@ import {
   flagsOf,
   type Graph,
   type GraphNode,
+  ghostSpot,
   insertIntoWire,
   type NodeKind,
   newId,
@@ -60,7 +61,22 @@ const ACTIVE_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false };
 const RUNNING_WIRE: WireStyle = { ...ACTIVE_WIRE, dot: true };
 const CANDIDATE_WIRE: WireStyle = { color: ATTENTION, alpha: 1, width: 2.5, dot: false };
 /** Crossed by the scissors: dashed, not red — red is only for overdue (06 §6.7). */
-const CUT_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false, dash: CUT_DASH };
+const CUT_WIRE: WireStyle = {
+  color: PAPER,
+  alpha: 1,
+  width: 2,
+  dot: false,
+  dash: CUT_DASH,
+  serifs: true,
+};
+/** To a ghost (07 §5): dashed 4u / 4u at 50 % (05 §8.5). */
+const GHOST_WIRE: WireStyle = {
+  color: PAPER,
+  alpha: fog.scene.ghostAlpha,
+  width: fog.scene.edgeWidth,
+  dot: false,
+  dash: 4,
+};
 
 export type WheelMode = 'mouse' | 'trackpad';
 
@@ -74,11 +90,16 @@ export type HintKey =
   | 'proto.hint.dragInsert'
   | 'proto.hint.wireDrag'
   | 'proto.hint.marquee'
-  | 'proto.hint.cut';
+  | 'proto.hint.cut'
+  | 'proto.hint.ghost';
 
 export interface EditorEvents {
-  /** Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5). */
-  tabMenu(e: { sx: number; sy: number; query: string }): void;
+  /**
+   * Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5).
+   * `named` — the menu offers the kinds for a node of this name: a ghost
+   * clicked with Shift (06 §14).
+   */
+  tabMenu(e: { sx: number; sy: number; query: string; named?: string }): void;
   /** Show or hide the inline name input over a node's label slot. */
   nameInput(e: { id: string; sx: number; sy: number; name: string } | null): void;
   toast(e: { key: string; params?: Record<string, string | number> }): void;
@@ -126,7 +147,9 @@ export type MenuChoice =
     }
   | { t: 'existing'; id: string }
   /** A node with the flag «Шаблон»: its copy (05 §7). */
-  | { t: 'template'; id: string; kind: NodeKind; name: string };
+  | { t: 'template'; id: string; kind: NodeKind; name: string }
+  /** A ghost of this network: a note with its name, which resolves it (05 §8.5). */
+  | { t: 'ghost'; id: string };
 
 /** The flags with a key on the canvas (06 §8); «Скрыть от AI» and «Замок» come with MCP. */
 const FLAG_KEYS: Partial<Record<string, Flag>> = {
@@ -137,6 +160,8 @@ const FLAG_KEYS: Partial<Record<string, Flag>> = {
 
 type Hit =
   | { t: 'node'; id: string }
+  /** A ghost (05 §8.5): no ports, no drag; a click makes its node. */
+  | { t: 'ghost'; id: string }
   | { t: 'port'; id: string; angle: number }
   | { t: 'wire'; from: string; to: string }
   | { t: 'empty' };
@@ -209,6 +234,8 @@ type Mode =
       sources: string[];
       sibling: string | null;
       atAnchor: boolean;
+      /** The ghost the node made here resolves (06 §14). */
+      ghost?: string;
     }
   | { t: 'name'; id: string; created: boolean };
 
@@ -513,7 +540,10 @@ export class Editor {
       this.select([choice.id]);
       return;
     }
-    const r = radiusOf({ kind: choice.kind, key: false });
+    const ghost = choice.t === 'ghost' ? this.graph.nodes.get(choice.id) : undefined;
+    if (choice.t === 'ghost' && !ghost?.ghostOf) return;
+    const kind = choice.t === 'ghost' ? 'note' : choice.kind;
+    const r = radiusOf({ kind, key: false });
     const place = this.placeNew(m, r);
     const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
     if (choice.t === 'template') {
@@ -521,21 +551,65 @@ export class Editor {
       this.events.template?.({ id, name, x: place.x, y: place.y, inputs: [...inputs] });
       return;
     }
+    const name = ghost ? ghost.name : choice.t === 'create' ? choice.name : '';
+    // From a ghost with Shift: a kind for its name resolves it; another name does not.
+    const asked = m.ghost && this.graph.nodes.get(m.ghost)?.name === name ? m.ghost : null;
+    const id = this.createNode(kind, name, place, inputs, ghost?.id ?? asked);
+    if (choice.t === 'create' && choice.rename) this.openName(id, true);
+  }
+
+  /**
+   * A node of `kind` named `name` at `place`, wired from `inputs`; one step
+   * of undo. With `ghost` the node is the one its `[[link]]` waits for: the
+   * ghost goes in the same step, and its wire turns into the note's, which
+   * the core makes from the text (05 §8.5, 06 §14).
+   */
+  private createNode(
+    kind: NodeKind,
+    name: string,
+    place: { x: number; y: number },
+    inputs: readonly string[],
+    ghost: string | null,
+  ): string {
     const node = newNode({
       id: newId(),
-      name: choice.name,
-      kind: choice.kind,
-      icon: this.view.iconFor(choice.kind),
+      name,
+      kind,
+      icon: this.view.iconFor(kind),
       x: place.x,
       y: place.y,
     });
+    const from = ghost ? this.graph.nodes.get(ghost)?.ghostOf : null;
     this.graph.transaction({ key: 'proto.change.create', params: { name: node.name } }, (tx) => {
       tx.add(node);
       for (const s of inputs) tx.connect(s, node.id);
+      if (ghost && from) tx.remove(ghost);
     });
+    if (from) this.graph.derive({ key: 'core.change.links' }, (tx) => tx.connect(from, node.id));
     this.select([node.id]);
     this.follow(node.id);
-    if (choice.rename) this.openName(node.id, true);
+    return node.id;
+  }
+
+  /**
+   * A ghost clicked (06 §14): a note with its name in its place; with
+   * `named`, the Tab menu first, to choose the kind.
+   */
+  private resolveGhost(id: string, named: boolean): void {
+    const g = this.graph.nodes.get(id);
+    if (!g?.ghostOf) return;
+    if (named) {
+      const s = this.view.camera.toScreen(g.x, g.y);
+      this.openMenu(
+        s.x,
+        s.y,
+        { ax: g.x, ay: g.y, sources: [], sibling: null, atAnchor: true, ghost: id },
+        '',
+        g.name,
+      );
+      return;
+    }
+    this.createNode('note', g.name, { x: g.x, y: g.y }, [], id);
   }
 
   menuCancel(): void {
@@ -822,6 +896,10 @@ export class Editor {
       now - this.lastClick.time < DOUBLE_CLICK_MS &&
       Math.hypot(sx - this.lastClick.sx, sy - this.lastClick.sy) <= DRAG_PX;
     this.lastClick = { time: now, sx, sy };
+    if (hit.t === 'ghost') {
+      this.resolveGhost(hit.id, e.shiftKey);
+      return;
+    }
     if (hit.t === 'port') {
       // A click on the port without moving: the wire is "in hand" (06 §6.1, two-click mode).
       const w = this.view.camera.toWorld(sx, sy);
@@ -878,6 +956,11 @@ export class Editor {
 
   private startDrag(m: Extract<Mode, { t: 'press' }>, sx: number, sy: number, e: PointerEvent) {
     const hit = m.hit;
+    // A ghost stands where its note puts it (06 §14).
+    if (hit.t === 'ghost') {
+      this.mode = { t: 'idle' };
+      return;
+    }
     if (hit.t === 'port') {
       const w = this.view.camera.toWorld(sx, sy);
       this.mode = {
@@ -959,7 +1042,16 @@ export class Editor {
     const w = this.view.camera.toWorld(sx, sy);
     const dx = w.x - m.grabX;
     const dy = w.y - m.grabY;
-    for (const [id, o] of m.origin) this.view.place(id, o.x + dx, o.y + dy);
+    for (const [id, o] of m.origin) {
+      this.view.place(id, o.x + dx, o.y + dy);
+      // Its ghosts stand beside it on the way (06 §14).
+      for (const g of this.graph.outputs(id)) {
+        const ghost = this.graph.nodes.get(g);
+        if (ghost?.ghostOf !== id) continue;
+        const at = ghostSpot({ x: o.x + dx, y: o.y + dy }, ghost.name);
+        this.view.place(g, at.x, at.y);
+      }
+    }
     const single = m.ids.length === 1 ? m.ids[0] : undefined;
     if (single === undefined) return;
     // Shake: the node comes out of its chains, still on the cursor (06 §6.7).
@@ -1129,7 +1221,8 @@ export class Editor {
     this.refreshIndex();
     const hits = this.nodeIndex
       .search({ minX: a.x, minY: a.y, maxX: b.x, maxY: b.y })
-      .map((h) => h.id);
+      .map((h) => h.id)
+      .filter((id) => !this.graph.nodes.get(id)?.ghostOf);
     if (m.mode === 'set') this.selection.clear();
     for (const id of hits) {
       if (m.mode === 'sub') this.selection.delete(id);
@@ -1376,9 +1469,15 @@ export class Editor {
     return { sx: this.seen() / 2, sy: this.view.height / 2 };
   }
 
-  private openMenu(sx: number, sy: number, m: Omit<Extract<Mode, { t: 'menu' }>, 't'>, query = '') {
+  private openMenu(
+    sx: number,
+    sy: number,
+    m: Omit<Extract<Mode, { t: 'menu' }>, 't'>,
+    query = '',
+    named?: string,
+  ) {
     this.mode = { t: 'menu', ...m };
-    this.events.tabMenu({ sx, sy, query });
+    this.events.tabMenu(named === undefined ? { sx, sy, query } : { sx, sy, query, named });
     this.view.invalidate();
   }
 
@@ -1470,9 +1569,11 @@ export class Editor {
   }
 
   private select(ids: string[]) {
+    // A ghost is not a node (05 §8.5): no selection, no gestures.
+    const nodes = ids.filter((id) => !this.graph.nodes.get(id)?.ghostOf);
     this.selection.clear();
-    for (const id of ids) this.selection.add(id);
-    this.current = ids.at(-1) ?? null;
+    for (const id of nodes) this.selection.add(id);
+    this.current = nodes.at(-1) ?? null;
     this.selectedWire = null;
     this.events.change();
     this.view.invalidate();
@@ -1592,6 +1693,8 @@ export class Editor {
     this.nodeIndex = new RBush<NodeBox>().load(nodes);
     const wires: WireBox[] = [];
     for (const [from, to] of this.graph.edges()) {
+      // A ghost's wire is its note's text: not picked, cut or branched.
+      if (this.graph.nodes.get(to)?.ghostOf) continue;
       const b = wireBounds(this.wireEnds(from, to));
       wires.push({ ...b, id: from, to });
     }
@@ -1637,8 +1740,10 @@ export class Editor {
     if (best) {
       const rs = best.r * zoom;
       const hitR = Math.max(rs * HEX_IN, MIN_HIT_PX);
-      if (best.d <= hitR) return { t: 'node', id: best.id };
-      if (best.d <= hitR + PORT_RING(rs)) {
+      // A ghost has no ports: nothing is wired to it by hand (05 §8.5).
+      const ghost = !!this.graph.nodes.get(best.id)?.ghostOf;
+      if (best.d <= hitR) return { t: ghost ? 'ghost' : 'node', id: best.id };
+      if (!ghost && best.d <= hitR + PORT_RING(rs)) {
         const p = this.view.nodeAt(best.id);
         return { t: 'port', id: best.id, angle: Math.atan2(w.y - (p?.y ?? 0), w.x - (p?.x ?? 0)) };
       }
@@ -1661,6 +1766,7 @@ export class Editor {
   // ── Drawing (07 §4.5, §5) ─────────────────────────────────────────
 
   private styleOf(from: string, to: string): WireStyle {
+    if (this.graph.nodes.get(to)?.ghostOf) return GHOST_WIRE;
     const m = this.mode;
     if (m.t === 'cut') return m.crossed.has(wireKey(from, to)) ? CUT_WIRE : NORMAL_WIRE;
     if (m.t === 'drag' && m.candidate && m.candidate.from === from && m.candidate.to === to) {
@@ -1819,7 +1925,8 @@ function dashed(g: CanvasView['overlay'], pts: readonly { x: number; y: number }
 
 function sameHit(a: Hit, b: Hit): boolean {
   if (a.t !== b.t) return false;
-  if (a.t === 'node' && b.t === 'node') return a.id === b.id;
+  if ((a.t === 'node' && b.t === 'node') || (a.t === 'ghost' && b.t === 'ghost'))
+    return a.id === b.id;
   if (a.t === 'port' && b.t === 'port') return a.id === b.id && Math.abs(a.angle - b.angle) < 0.05;
   if (a.t === 'wire' && b.t === 'wire') return a.from === b.from && a.to === b.to;
   return true;
@@ -1833,6 +1940,8 @@ function hintOf(hit: Hit): HintKey {
       return 'proto.hint.port';
     case 'wire':
       return 'proto.hint.wire';
+    case 'ghost':
+      return 'proto.hint.ghost';
     default:
       return 'proto.hint.empty';
   }

@@ -8,6 +8,7 @@ import { BackgroundLayer } from './background';
 import { Camera } from './camera';
 import { controls } from './curve';
 import { Decor, type DecorNode, type Interaction } from './decor';
+import { hexPath } from './hex';
 import {
   createIconAtlas,
   createPixelIcons,
@@ -242,8 +243,9 @@ export class CanvasView {
   }
 
   /**
-   * A media node's picture inside its circle (owner, 2026-10-24): cut round
-   * once into a texture and drawn where the icon goes; null takes it away.
+   * A media node's picture inside its body (owner, 2026-10-24): cut to the
+   * hexagon (ADR-0011) once into a texture and drawn where the icon goes;
+   * null takes it away.
    */
   setPicture(
     id: string,
@@ -258,9 +260,7 @@ export class CanvasView {
       c.height = side;
       const g = c.getContext('2d');
       if (g) {
-        g.beginPath();
-        g.arc(side / 2, side / 2, side / 2, 0, Math.PI * 2);
-        g.clip();
+        hexPath(g, side / 2, side / 2, side / 2).clip();
         const k = Math.max(side / image.width, side / image.height);
         const w = image.width * k;
         const h = image.height * k;
@@ -437,7 +437,6 @@ export class CanvasView {
     const straight = shape === 'straight';
     // «Меньше движения»: a kinetic network draws Bézier wires (06 §6.2).
     const kinetic = shape === 'kinetic' && !this.motionReduced;
-    this.decor.straight = straight;
     if (kinetic) {
       this.kinetics.frame(now);
       this.jitterSelected();
@@ -452,10 +451,16 @@ export class CanvasView {
       const a = this.views.get(from);
       const b = this.views.get(to);
       if (!a || !b) continue;
-      // Both ends run into their sockets on the rim (07 §5); same as editor.wireEnds.
-      const ends = { ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight };
-      this.wires.set(i, ends);
-      this.wires.setKick(i, kinetic ? this.kinetics.follow(i, controls(ends), zoom) : null);
+      // Both ends sit on their corners (ADR-0011); the same curve as editor.wireEnds.
+      const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight });
+      const k = kinetic ? this.kinetics.follow(i, c, zoom) : null;
+      if (k) {
+        c[2] += k[0] ?? 0;
+        c[3] += k[1] ?? 0;
+        c[4] += k[2] ?? 0;
+        c[5] += k[3] ?? 0;
+      }
+      this.wires.set(i, c);
       const style = this.wireStyle(from, to);
       this.wires.setStyle(i, far && style === NORMAL_WIRE ? FAR_WIRE : style);
     }

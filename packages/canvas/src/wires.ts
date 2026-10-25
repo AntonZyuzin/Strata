@@ -1,28 +1,26 @@
 import { Buffer, BufferUsage, Geometry, Mesh, Shader, UniformGroup } from 'pixi.js';
-import { BEND, SEGMENTS } from './curve';
+import { SEGMENTS } from './curve';
 
 /**
- * Instanced Bézier wires (ADR-0005, 15 §4.1 rule 3): one triangle strip of
- * SEGMENTS quads, instanced once per wire, one draw call for all. The vertex
- * shader bends the strip into the curve of 06 §6.2 (curve.ts is the same maths
- * on the CPU) and keeps the stroke width constant in screen pixels. A straight
- * wire is the same cubic with its control points on the segment; a kinetic
- * wire's control points lag by an offset the view springs back (06 §6.8).
+ * Instanced wires (ADR-0005, 15 §4.1 rule 3): one triangle strip of SEGMENTS
+ * quads, instanced once per wire, one draw call for all. Each wire comes with
+ * its four control points from curve.ts — the corners of ADR-0011, a straight
+ * or a Bézier wire, a kinetic wire's lag (06 §6.2, §6.8) — so the CPU's hit
+ * test and the drawn curve are one curve. The vertex shader bends the strip
+ * along the cubic and keeps the stroke width constant in screen pixels.
  *
  * Each wire has its own colour, alpha, width, running dot and dashes (07 §5,
  * 06 §6.3, §6.7): normal wires are paper at 60 %, active ones (hovered,
  * selected, being made) full and wider, a drop candidate yellow, a wire the
- * scissors cross dashed. Measured as one layer in spike 1.
+ * scissors cross dashed with serifs. Measured as one layer in spike 1.
  */
 
 const vertex = /* glsl */ `
 in vec2 aPosition;   // x: t in [0, 1], y: side -1 / +1
-in vec4 aEnds;       // per wire: centres of the two bubbles, ax, ay, bx, by (world units)
-in vec2 aRadii;      // per wire: radii of the two bubbles
-in float aBend;      // per wire: control point distance, share of the length
+in vec4 aHead;       // per wire: the first two control points, world units
+in vec4 aTail;       // per wire: the last two control points, world units
 in vec4 aColor;      // per wire: premultiplied later; rgb and alpha
-in vec4 aStyle;      // per wire: x stroke width in CSS px, y running dot 0 or 1, z dash in u (0 solid), w straight 0 or 1
-in vec4 aKick;       // per wire: offsets of the two control points, world units (kinetic, 06 6.8)
+in vec4 aStyle;      // per wire: x stroke width in CSS px, y running dot 0 or 1, z dash in u (0 solid)
 
 uniform mat3 uProjectionMatrix;
 uniform mat3 uWorldTransformMatrix;
@@ -31,7 +29,7 @@ uniform float uZoom;    // world -> screen scale of the parent container
 uniform float uTime;    // seconds; read here, in highp, not in the mediump fragment
 uniform float uUnit;    // CSS px per pixel unit u (07 2.3)
 
-out float vPx;     // distance from the centre line, CSS px
+out float vPx;      // distance from the centre line, CSS px
 out float vHalfWidth;
 out float vT;
 out float vHead;
@@ -39,9 +37,6 @@ out float vDash;    // dash and gap, CSS px; 0 solid
 out float vRun;     // CSS px along the wire, for the dashes
 out float vSerif;   // half-length of the serifs across a dashed wire, CSS px
 out vec4 vColor;
-
-const float MAX_BEND = 240.0;
-const float MIN_BEND = 16.0;
 
 vec2 bezier(vec2 p0, vec2 p1, vec2 p2, vec2 p3, float t) {
   float u = 1.0 - t;
@@ -54,35 +49,15 @@ vec2 tangent(vec2 p0, vec2 p1, vec2 p2, vec2 p3, float t) {
 }
 
 void main() {
-  vec2 d = aEnds.zw - aEnds.xy;
-  vec2 a;
-  vec2 b;
-  vec2 c1;
-  vec2 c2;
-  if (aStyle.w > 0.5) {
-    // Straight (curve.ts controls): the rims on the line of centres, control points at the thirds.
-    vec2 u = d / max(length(d), 1e-4);
-    a = aEnds.xy + u * aRadii.x;
-    b = aEnds.zw - u * aRadii.y;
-    c1 = mix(a, b, 1.0 / 3.0);
-    c2 = mix(a, b, 2.0 / 3.0);
-  } else {
-    // The axis of curve.ts axisOf: side by side along x, else along y.
-    vec2 axis = abs(d.x) >= abs(d.y)
-      ? vec2(d.x >= 0.0 ? 1.0 : -1.0, 0.0)
-      : vec2(0.0, d.y >= 0.0 ? 1.0 : -1.0);
-    a = aEnds.xy + axis * aRadii.x;
-    b = aEnds.zw - axis * aRadii.y;
-    float along = abs(dot(d, axis)) - aRadii.x - aRadii.y;
-    float h = clamp(aBend * max(along, 0.0), MIN_BEND, MAX_BEND);
-    c1 = a + axis * h;
-    c2 = b - axis * h;
-  }
-  c1 += aKick.xy;
-  c2 += aKick.zw;
+  vec2 a = aHead.xy;
+  vec2 c1 = aHead.zw;
+  vec2 c2 = aTail.xy;
+  vec2 b = aTail.zw;
   float t = aPosition.x;
   vec2 p = bezier(a, c1, c2, b, t);
   vec2 tg = tangent(a, c1, c2, b, t);
+  // A straight wire's tangent vanishes nowhere; a degenerate one falls back to the chord.
+  if (dot(tg, tg) < 1e-12) tg = b - a;
   vec2 normal = normalize(vec2(-tg.y, tg.x) + vec2(1e-6, 0.0));
   float width = aStyle.x;
   // A dashed wire carries serifs 3u to each side (07 5): the strip is that wide.
@@ -144,13 +119,11 @@ export interface WireStyle {
 export class WireLayer {
   readonly mesh: Mesh<Geometry, Shader>;
   private capacity: number;
-  private ends: Float32Array;
-  private radii: Float32Array;
-  private bend: Float32Array;
+  private head: Float32Array;
+  private tail: Float32Array;
   private color: Float32Array;
   private style: Float32Array;
-  private kick: Float32Array;
-  private readonly buffers: Record<'ends' | 'radii' | 'bend' | 'color' | 'style' | 'kick', Buffer>;
+  private readonly buffers: Record<'head' | 'tail' | 'color' | 'style', Buffer>;
   private readonly geometry: Geometry;
   private readonly uniforms: UniformGroup;
   private readonly shader: Shader;
@@ -158,34 +131,28 @@ export class WireLayer {
 
   constructor(capacity = 256) {
     this.capacity = capacity;
-    this.ends = new Float32Array(capacity * 4);
-    this.radii = new Float32Array(capacity * 2);
-    this.bend = new Float32Array(capacity).fill(BEND);
+    this.head = new Float32Array(capacity * 4);
+    this.tail = new Float32Array(capacity * 4);
     this.color = new Float32Array(capacity * 4);
     this.style = new Float32Array(capacity * 4);
-    this.kick = new Float32Array(capacity * 4);
     const strip = new Float32Array((SEGMENTS + 1) * 4);
     for (let i = 0; i <= SEGMENTS; i++) strip.set([i / SEGMENTS, -1, i / SEGMENTS, 1], i * 4);
     const usage = BufferUsage.VERTEX | BufferUsage.COPY_DST;
     this.buffers = {
-      ends: new Buffer({ data: this.ends, usage }),
-      radii: new Buffer({ data: this.radii, usage }),
-      bend: new Buffer({ data: this.bend, usage }),
+      head: new Buffer({ data: this.head, usage }),
+      tail: new Buffer({ data: this.tail, usage }),
       color: new Buffer({ data: this.color, usage }),
       style: new Buffer({ data: this.style, usage }),
-      kick: new Buffer({ data: this.kick, usage }),
     };
     this.geometry = new Geometry({
       topology: 'triangle-strip',
       instanceCount: 0,
       attributes: {
         aPosition: { buffer: strip, format: 'float32x2' },
-        aEnds: { buffer: this.buffers.ends, format: 'float32x4', instance: true },
-        aRadii: { buffer: this.buffers.radii, format: 'float32x2', instance: true },
-        aBend: { buffer: this.buffers.bend, format: 'float32', instance: true },
+        aHead: { buffer: this.buffers.head, format: 'float32x4', instance: true },
+        aTail: { buffer: this.buffers.tail, format: 'float32x4', instance: true },
         aColor: { buffer: this.buffers.color, format: 'float32x4', instance: true },
         aStyle: { buffer: this.buffers.style, format: 'float32x4', instance: true },
-        aKick: { buffer: this.buffers.kick, format: 'float32x4', instance: true },
       },
     });
     this.uniforms = new UniformGroup({
@@ -211,26 +178,18 @@ export class WireLayer {
     this.geometry.instanceCount = n;
   }
 
-  set(
-    i: number,
-    w: {
-      ax: number;
-      ay: number;
-      bx: number;
-      by: number;
-      ra: number;
-      rb: number;
-      straight?: boolean;
-    },
-  ): void {
-    const e = this.ends;
-    e[i * 4] = w.ax;
-    e[i * 4 + 1] = w.ay;
-    e[i * 4 + 2] = w.bx;
-    e[i * 4 + 3] = w.by;
-    this.radii[i * 2] = w.ra;
-    this.radii[i * 2 + 1] = w.rb;
-    this.style[i * 4 + 3] = w.straight ? 1 : 0;
+  /** The wire's four control points, world units (curve.ts `controls`). */
+  set(i: number, c: ArrayLike<number>): void {
+    const h = this.head;
+    const t = this.tail;
+    h[i * 4] = c[0] ?? 0;
+    h[i * 4 + 1] = c[1] ?? 0;
+    h[i * 4 + 2] = c[2] ?? 0;
+    h[i * 4 + 3] = c[3] ?? 0;
+    t[i * 4] = c[4] ?? 0;
+    t[i * 4 + 1] = c[5] ?? 0;
+    t[i * 4 + 2] = c[6] ?? 0;
+    t[i * 4 + 3] = c[7] ?? 0;
   }
 
   setStyle(i: number, s: WireStyle): void {
@@ -244,23 +203,13 @@ export class WireLayer {
     this.style[i * 4 + 2] = s.dash ?? 0;
   }
 
-  /** Offsets of the wire's control points, world units: a kinetic wire's lag (06 §6.8). */
-  setKick(i: number, k: ArrayLike<number> | null): void {
-    const o = this.kick;
-    o[i * 4] = k ? (k[0] ?? 0) : 0;
-    o[i * 4 + 1] = k ? (k[1] ?? 0) : 0;
-    o[i * 4 + 2] = k ? (k[2] ?? 0) : 0;
-    o[i * 4 + 3] = k ? (k[3] ?? 0) : 0;
-  }
-
   /** Sends the arrays to the GPU; only the used part (15 §4.1 rule 4). */
   upload(): void {
     const n = this.count;
-    this.buffers.ends.update(n * 16);
-    this.buffers.radii.update(n * 8);
+    this.buffers.head.update(n * 16);
+    this.buffers.tail.update(n * 16);
     this.buffers.color.update(n * 16);
     this.buffers.style.update(n * 16);
-    this.buffers.kick.update(n * 16);
   }
 
   setZoom(zoom: number): void {
@@ -283,23 +232,19 @@ export class WireLayer {
   }
 
   private grow(capacity: number) {
-    const copy = (old: Float32Array, per: number, fill = 0) => {
-      const next = new Float32Array(capacity * per).fill(fill);
+    const copy = (old: Float32Array, per: number) => {
+      const next = new Float32Array(capacity * per);
       next.set(old);
       return next;
     };
-    this.ends = copy(this.ends, 4);
-    this.radii = copy(this.radii, 2);
-    this.bend = copy(this.bend, 1, BEND);
+    this.head = copy(this.head, 4);
+    this.tail = copy(this.tail, 4);
     this.color = copy(this.color, 4);
     this.style = copy(this.style, 4);
-    this.kick = copy(this.kick, 4);
-    this.buffers.ends.data = this.ends;
-    this.buffers.radii.data = this.radii;
-    this.buffers.bend.data = this.bend;
+    this.buffers.head.data = this.head;
+    this.buffers.tail.data = this.tail;
     this.buffers.color.data = this.color;
     this.buffers.style.data = this.style;
-    this.buffers.kick.data = this.kick;
     this.capacity = capacity;
   }
 }

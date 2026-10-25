@@ -239,7 +239,8 @@ export function WorkspaceScreen(props: {
           y - radius > bounds.height
         )
           continue;
-        surfaces.push({ id, x, y, radius });
+        // Nodes are hexagons (ADR-0011): the gecko walks their sides.
+        surfaces.push({ id, x, y, radius, hexagon: true });
       }
       gecko.current?.setNodes(surfaces);
     };

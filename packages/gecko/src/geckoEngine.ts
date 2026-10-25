@@ -19,12 +19,34 @@ export type GeckoMode =
   | 'rope'
   | 'node';
 
-/** Visible circular node, in the companion container's local CSS pixels. */
+/** Visible node, in the companion container's local CSS pixels. */
 export interface GeckoNode {
   readonly id: string;
   readonly x: number;
   readonly y: number;
+  /** Circumradius: the circle's radius, or the hexagon's corner (Strata's ADR-0011). */
   readonly radius: number;
+  /** A hexagon with a point up: the gecko walks its sides. A circle by default. */
+  readonly hexagon?: boolean;
+}
+
+const HEX_IN = Math.sqrt(3) / 2;
+
+/** Distance from the centre to the outline along `angle`, for circumradius 1. */
+function outlineAt(node: GeckoNode, angle: number): number {
+  if (!node.hexagon) return 1;
+  const x = Math.cos(angle);
+  const y = Math.sin(angle);
+  // The hexagonal distance of Strata's canvas (hex.ts): normals (1, 0), (½, ±√3/2).
+  return (
+    HEX_IN / Math.max(Math.abs(x), Math.abs(0.5 * x + HEX_IN * y), Math.abs(0.5 * x - HEX_IN * y))
+  );
+}
+
+/** The walk from the top of the outline down its right side to the bottom. */
+function halfOutline(node: GeckoNode): number {
+  // Three sides of the circumradius each, or half the circle.
+  return node.hexagon ? 3 * node.radius : Math.PI * node.radius;
 }
 
 export type GeckoNodePhase = 'approach' | 'crawl' | 'hang' | 'recover';
@@ -692,7 +714,7 @@ export class GeckoEngine {
           continue;
         }
         if (this.node.phase === 'crawl') {
-          const duration = (Math.PI * node.radius * 1000) / this.speed;
+          const duration = (halfOutline(node) * 1000) / this.speed;
           const step = Math.min(remaining, duration - this.node.elapsedMs);
           this.node.elapsedMs += step;
           this.node.crawlProgress = clamp(this.node.elapsedMs / duration, 0, 1);
@@ -830,9 +852,10 @@ export class GeckoEngine {
 
   private nodePoint(node: GeckoNode, progress: number): Point {
     const angle = -Math.PI / 2 + progress * Math.PI;
+    const r = node.radius * outlineAt(node, angle);
     return {
-      x: node.x + Math.cos(angle) * node.radius - this.spriteWidth / 2,
-      y: node.y + Math.sin(angle) * node.radius - this.spriteHeight / 2,
+      x: node.x + Math.cos(angle) * r - this.spriteWidth / 2,
+      y: node.y + Math.sin(angle) * r - this.spriteHeight / 2,
     };
   }
 
@@ -844,7 +867,7 @@ export class GeckoEngine {
       return;
     }
     if (this.node.phase === 'crawl')
-      this.node.elapsedMs = (this.node.crawlProgress * Math.PI * node.radius * 1000) / this.speed;
+      this.node.elapsedMs = (this.node.crawlProgress * halfOutline(node) * 1000) / this.speed;
     if (this.node.phase !== 'approach')
       this.position = this.nodePoint(node, this.node.crawlProgress);
   }

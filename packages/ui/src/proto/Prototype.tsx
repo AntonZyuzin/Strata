@@ -8,6 +8,7 @@ import {
 import {
   BACKDROP_SIDE,
   CanvasView,
+  controls,
   Editor,
   type EditorEvents,
   fitSize,
@@ -312,6 +313,13 @@ export function Prototype(props: {
         view: v,
         graph: g,
         layoutMs: () => layouter.current?.lastMs ?? null,
+        // The wire's control points as the canvas draws them (curve.ts), world units.
+        wireCurve: (from: string, to: string, straight: boolean) => {
+          const a = v.nodeAt(from);
+          const b = v.nodeAt(to);
+          if (!a || !b) return null;
+          return controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight });
+        },
       };
       setWheel(ed.wheelMode);
       ed.fitAll();

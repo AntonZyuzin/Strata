@@ -1,77 +1,60 @@
+import { cornerToward } from './hex';
+
 /**
- * The wire curve of 06 §6.2 on the CPU, the same maths as the vertex shader in
- * wires.ts: hit tests, drop candidates and the knife must test exactly the
- * curve that is drawn (06 §1.3).
+ * The wire curve of 06 §6.2 on the CPU. The wire layer draws these control
+ * points as they are (wires.ts), so hit tests, drop candidates, the scissors
+ * and the sockets test exactly the curve that is drawn (06 §1.3).
  */
 
 /** Cap of the control point distance; a stand-in until spike 9 tunes the curve (S1). */
 export const MAX_BEND = 240;
-/** The least control point distance: a wire leaves a bubble square to its rim. */
+/** The least control point distance: a wire leaves its corner along it before it bends. */
 export const MIN_BEND = 16;
 /** Control points at half the gap along the flow: an even S (owner, 2026-10-24). */
 export const BEND = 0.5;
 /** Segments of the polyline, the same as the triangle strip of the shader: no visible kinks. */
 export const SEGMENTS = 48;
 
-/**
- * The axis a wire runs along between two bubbles (owner, 2026-10-24): side
- * by side it leaves the side, one above the other — the bottom or the top.
- * A unit vector from the first centre towards the second along that axis.
- */
-export function axisOf(dx: number, dy: number): { x: number; y: number } {
-  if (Math.abs(dx) >= Math.abs(dy)) return { x: dx >= 0 ? 1 : -1, y: 0 };
-  return { x: 0, y: dy >= 0 ? 1 : -1 };
-}
-
 export interface WireEnds {
   ax: number;
   ay: number;
   bx: number;
   by: number;
-  /** Radii of the source and target bubbles. */
+  /** Circumradii of the source and target hexagons (ADR-0011). */
   ra: number;
   rb: number;
   bend?: number;
-  /** The network's style is «Прямая» (06 §6.2): a segment on the line of centres. */
+  /** The network's style is «Прямая» (06 §6.2): a segment from corner to corner. */
   straight?: boolean;
 }
 
-/** Where a wire leaves a bubble towards (dx, dy): its axis, or the line of centres when straight. */
-export function sideOf(dx: number, dy: number, straight = false): { x: number; y: number } {
-  if (!straight) return axisOf(dx, dy);
-  const len = Math.hypot(dx, dy);
-  return len > 0 ? { x: dx / len, y: dy / len } : { x: 1, y: 0 };
-}
+/** The control points of a wire: [x0, y0, x1, y1, x2, y2, x3, y3], world units. */
+export type Controls = [number, number, number, number, number, number, number, number];
 
 /**
- * Control points: the ends where the axis meets the rims, the tangents along
- * the axis — square to the rim at both ends, an S between them. A straight
- * wire is the segment between the rims on the line of centres, its control
- * points at the thirds: the same cubic maths draws, hits and cuts both.
+ * Control points (ADR-0011): each end sits on the corner of its hexagon that
+ * faces the other node; a Bézier wire leaves and enters along those corners,
+ * its control points at half the gap between them — an S. A straight wire
+ * is the segment between the corners, its control points at the thirds: the
+ * same cubic maths draws, hits and cuts both.
  */
-export function controls(
-  w: WireEnds,
-): [number, number, number, number, number, number, number, number] {
+export function controls(w: WireEnds): Controls {
   const dx = w.bx - w.ax;
   const dy = w.by - w.ay;
+  const ua = cornerToward(dx, dy);
+  const ub = cornerToward(-dx, -dy);
+  const a0 = w.ax + ua.x * w.ra;
+  const a1 = w.ay + ua.y * w.ra;
+  const b0 = w.bx + ub.x * w.rb;
+  const b1 = w.by + ub.y * w.rb;
   if (w.straight) {
-    const u = sideOf(dx, dy, true);
-    const a0 = w.ax + u.x * w.ra;
-    const a1 = w.ay + u.y * w.ra;
-    const b0 = w.bx - u.x * w.rb;
-    const b1 = w.by - u.y * w.rb;
     const tx = (b0 - a0) / 3;
     const ty = (b1 - a1) / 3;
     return [a0, a1, a0 + tx, a1 + ty, b0 - tx, b1 - ty, b0, b1];
   }
-  const u = axisOf(dx, dy);
-  const a0 = w.ax + u.x * w.ra;
-  const a1 = w.ay + u.y * w.ra;
-  const b0 = w.bx - u.x * w.rb;
-  const b1 = w.by - u.y * w.rb;
-  const along = Math.abs(dx * u.x + dy * u.y) - w.ra - w.rb;
-  const h = Math.min(Math.max((w.bend ?? BEND) * Math.max(along, 0), MIN_BEND), MAX_BEND);
-  return [a0, a1, a0 + u.x * h, a1 + u.y * h, b0 - u.x * h, b1 - u.y * h, b0, b1];
+  const gap = Math.hypot(b0 - a0, b1 - a1);
+  const h = Math.min(Math.max((w.bend ?? BEND) * gap, MIN_BEND), MAX_BEND);
+  return [a0, a1, a0 + ua.x * h, a1 + ua.y * h, b0 + ub.x * h, b1 + ub.y * h, b0, b1];
 }
 
 /** Point of the cubic at t, written into `out`. */

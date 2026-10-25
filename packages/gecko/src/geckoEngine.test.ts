@@ -707,6 +707,21 @@ test('a node excursion approaches continuously, crawls down the rim, catches wit
   assert.equal(engine.snapshot.y, home.y);
 });
 
+test('on a hexagon the gecko walks its sides, corner to corner (ADR-0011)', () => {
+  const engine = makeEngine();
+  const hexNode = { ...roundNode, hexagon: true };
+  engine.setNodes([hexNode]);
+  assert.equal(engine.climbNode('task-node'), true);
+  reachNodePhase(engine, 'crawl');
+  // From the top corner down the right side: never farther out than the flat side.
+  let widest = 0;
+  while ((engine.snapshot.nodePhase as GeckoNodePhase | null) === 'crawl') {
+    widest = Math.max(widest, engine.snapshot.renderX + 48 - hexNode.x);
+    engine.tick(4);
+  }
+  assert.ok(Math.abs(widest - (hexNode.radius * Math.sqrt(3)) / 2) < 1.5);
+});
+
 test('node movement preserves contact and deleting an occupied node preserves the visible body position', () => {
   const engine = makeEngine();
   engine.setNodes([roundNode]);

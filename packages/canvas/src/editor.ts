@@ -14,6 +14,7 @@ import {
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
+import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
 import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
 import type { WireStyle } from './wires';
@@ -1428,7 +1429,10 @@ export class Editor {
     };
   }
 
-  /** Bubble body over port ring over wire over empty (06 §1.3). */
+  /**
+   * Bubble body over port ring over wire over empty (06 §1.3). Body and port
+   * are hexagons (ADR-0011): the hexagonal distance against the inradius.
+   */
   private hitTest(sx: number, sy: number): Hit {
     this.refreshIndex();
     const zoom = this.view.camera.zoom;
@@ -1443,12 +1447,12 @@ export class Editor {
     })) {
       const p = this.view.nodeAt(b.id);
       if (!p) continue;
-      const d = Math.hypot(w.x - p.x, w.y - p.y) * zoom;
+      const d = hexDist(w.x - p.x, w.y - p.y) * zoom;
       if (!best || d < best.d) best = { id: b.id, d, r: p.r };
     }
     if (best) {
       const rs = best.r * zoom;
-      const hitR = Math.max(rs, MIN_HIT_PX);
+      const hitR = Math.max(rs * HEX_IN, MIN_HIT_PX);
       if (best.d <= hitR) return { t: 'node', id: best.id };
       if (best.d <= hitR + PORT_RING(rs)) {
         const p = this.view.nodeAt(best.id);
@@ -1502,8 +1506,9 @@ export class Editor {
     if (this.mode.t === 'idle' && h.t === 'port') {
       const s = screen(h.id);
       if (s) {
-        const px = s.x + Math.cos(h.angle) * (s.r + 1);
-        const py = s.y + Math.sin(h.angle) * (s.r + 1);
+        const out = s.r * rimAt(h.angle) + 1;
+        const px = s.x + Math.cos(h.angle) * out;
+        const py = s.y + Math.sin(h.angle) * out;
         g.circle(px, py, 4).fill(PAPER).stroke({ color: INK, width: 1 });
       }
     }
@@ -1541,7 +1546,8 @@ export class Editor {
       }
       if (m.target) {
         const s = screen(m.target);
-        if (s) g.circle(s.x, s.y, s.r + 10).stroke({ color: PAPER, width: 2 });
+        // 10 px out across the sides, as the selection's ring (ADR-0011).
+        if (s) g.poly(hexCorners(s.x, s.y, s.r + 10 / HEX_IN)).stroke({ color: PAPER, width: 2 });
       } else {
         g.circle(end.x, end.y, 3).fill(PAPER);
       }
@@ -1574,7 +1580,11 @@ export class Editor {
               p.x + ((b.x - a.x) / len) * shift,
               p.y + ((b.y - a.y) / len) * shift,
             );
-            g.circle(s.x, s.y, p.r * zoom).stroke({ color: ATTENTION, width: 1, alpha: 0.4 });
+            g.poly(hexCorners(s.x, s.y, p.r * zoom)).stroke({
+              color: ATTENTION,
+              width: 1,
+              alpha: 0.4,
+            });
           }
         }
       } else {

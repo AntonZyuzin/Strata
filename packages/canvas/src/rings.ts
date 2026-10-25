@@ -3,13 +3,17 @@ import { Buffer, BufferUsage, Geometry, Mesh, Shader, UniformGroup } from 'pixi.
 /**
  * Rims and rings of bubbles in one instanced draw (07 §4.1: one pass per
  * layer; §10.3: rings ≤ 1 ms). Each instance is an annulus strip of SEGMENTS
- * quads around the circle, just wider than the ring, so fragments exist only
- * where the ring is; the fragment shader cuts the exact ring of a given radius
- * and width with one device pixel of antialiasing, optionally dashed (pause,
- * ghost, marching ants). An arc (roll-up progress) is cut in the vertex shader
- * by spanning only its sweep. A ring as wide as its diameter is a filled dot
- * (assignees). This replaces per-frame Graphics: tessellating hundreds of thin
- * circles, and later full-disc quads, cost more than the whole scene in spike 9.
+ * quads around the ring, just wider than it, so fragments exist only where
+ * the ring is; the fragment shader cuts the exact ring of a given radius and
+ * width with one device pixel of antialiasing, optionally dashed (pause,
+ * ghost, marching ants). A ring is round or a hexagon with a point up
+ * (ADR-0011): its radius is then the inradius of the band's centre line, the
+ * distance the hexagonal one of hex.ts, so the band is as wide across every
+ * side, and dashes run along the outline. An arc (roll-up progress) is cut in
+ * the vertex shader by spanning only its sweep. A round ring as wide as its
+ * diameter is a filled dot (assignees, sockets). This replaces per-frame
+ * Graphics: tessellating hundreds of thin circles, and later full-disc quads,
+ * cost more than the whole scene in spike 9.
  */
 
 const SEGMENTS = 12;
@@ -18,7 +22,7 @@ const vertex = /* glsl */ `
 in vec2 aPosition;   // x: t in [0, 1] around the sweep, y: -1 inner edge, +1 outer edge
 in vec4 aRing;       // centre x, y, radius, width; CSS px of the screen
 in vec4 aColor;      // rgb, alpha
-in vec4 aDash;       // dash, gap, offset (CSS px along the ring); dash 0 is solid
+in vec4 aDash;       // dash, gap, offset (CSS px along the ring), dash 0 is solid; w: 1 a hexagon
 in vec2 aArc;        // start angle from 12 o'clock clockwise, sweep
 
 uniform mat3 uProjectionMatrix;
@@ -33,15 +37,18 @@ out highp vec4 vDash;
 
 const float SEGS = ${SEGMENTS}.0;
 const float PI = 3.14159265359;
+const float HEX_IN = 0.86602540378;
 
 void main() {
   float angle = aArc.x + aPosition.x * aArc.y;
   vec2 dir = vec2(sin(angle), -cos(angle));
   float pad = aRing.w * 0.5 + 2.0;
-  // The outer edge circumscribes the circle, so straight segments never cut it.
+  // The outer edge circumscribes the circle, or the hexagon's corners, so
+  // straight segments never cut the ring.
+  float outer = aDash.w > 0.5 ? (aRing.z + pad) / HEX_IN : aRing.z + pad;
   float radius = aPosition.y < 0.0
     ? max(aRing.z - pad, 0.0)
-    : (aRing.z + pad) / cos(PI * aArc.y / (2.0 * PI * SEGS));
+    : outer / cos(PI * aArc.y / (2.0 * PI * SEGS));
   vec2 local = dir * radius;
   mat3 mvp = uProjectionMatrix * uWorldTransformMatrix * uTransformMatrix;
   gl_Position = vec4((mvp * vec3(aRing.xy + local, 1.0)).xy, 0.0, 1.0);
@@ -62,16 +69,34 @@ in highp vec4 vDash;
 
 uniform float uDeviceRatio;
 
+const highp float PI = 3.14159265359;
+const highp float SIXTH = 1.0471975512;
+const highp float HEX_IN = 0.86602540378;
+
 void main() {
-  highp float dist = length(vLocal);
+  bool hexagon = vDash.w > 0.5;
+  // The hexagonal distance of hex.ts: normals (1, 0) and (1/2, +-sqrt(3)/2), a point up.
+  highp float hx = 0.5 * vLocal.x;
+  highp float hy = HEX_IN * vLocal.y;
+  highp float dist = hexagon
+    ? max(abs(vLocal.x), max(abs(hx + hy), abs(hx - hy)))
+    : length(vLocal);
   highp float halfW = vRing.w * 0.5;
   // One device pixel of ramp centred on the nominal edges.
   highp float aa = 0.5 / uDeviceRatio;
   highp float cover = 1.0 - smoothstep(halfW - aa, halfW + aa, abs(dist - vRing.z));
   if (vDash.x > 0.0) {
-    highp float along = vAngle * vRing.z - vDash.z;
+    highp float along = vAngle * vRing.z;
+    if (hexagon) {
+      // Along the outline from the top corner: side k from k x 60 deg, its normal half a side on.
+      // The true polar angle from 12 o'clock: the strip's interpolated one bends at its quads.
+      highp float a = mod(atan(vLocal.x, -vLocal.y), 2.0 * PI);
+      highp float k = floor(a / SIXTH);
+      highp float side = vRing.z / HEX_IN;
+      along = k * side + 0.5 * side + vRing.z * tan(a - (k + 0.5) * SIXTH);
+    }
     highp float period = vDash.x + vDash.y;
-    cover *= step(mod(along, period), vDash.x);
+    cover *= step(mod(along - vDash.z, period), vDash.x);
   }
   float alpha = vColor.a * cover;
   gl_FragColor = vec4(vColor.rgb * alpha, alpha);
@@ -89,6 +114,8 @@ export interface RingStyle {
   start?: number;
   /** Arc sweep, radians; whole ring by default. */
   sweep?: number;
+  /** A hexagon with a point up (ADR-0011): `radius` is the band's inradius. */
+  hex?: boolean;
 }
 
 const FULL = Math.PI * 2;
@@ -160,7 +187,7 @@ export class RingLayer {
       ],
       i * 4,
     );
-    this.dash.set([s.dash ?? 0, s.gap ?? 0, s.offset ?? 0, 0], i * 4);
+    this.dash.set([s.dash ?? 0, s.gap ?? 0, s.offset ?? 0, s.hex ? 1 : 0], i * 4);
     this.arc.set([s.start ?? 0, s.sweep ?? FULL], i * 2);
   }
 

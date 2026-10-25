@@ -49,6 +49,8 @@ interface Hook {
   };
   /** Time of the last `L` in the worker, ms. */
   layoutMs(): number | null;
+  /** The wire's control points as drawn (curve.ts), world units. */
+  wireCurve(from: string, to: string, straight: boolean): number[] | null;
   /** The open board's scene (BoardHandle). */
   board?: {
     elements(): { type: string; strokeColor?: string; backgroundColor?: string }[];
@@ -194,7 +196,8 @@ function freeWire(
   uy: number;
 }> {
   return page.evaluate((skip) => {
-    const { view, graph } = window.__strataProto as Hook;
+    const hook = window.__strataProto as Hook;
+    const { view, graph } = hook;
     const e = window.__e2e as Probe;
     const nodes = [...view.eachNode()];
     let best: { from: string; to: string; mx: number; my: number; len: number } | null = null;
@@ -203,17 +206,20 @@ function freeWire(
       const a = view.nodeAt(from);
       const b = view.nodeAt(to);
       if (!a || !b) continue;
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const len = Math.hypot(dx, dy);
-      const ux = dx / len;
-      const uy = dy / len;
-      // Middle of the S-curve of 06 §6.2: the middle of its ends, where its
-      // axis (the larger of dx, dy) meets the rims.
-      const ax = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
-      const ay = ax === 0 ? Math.sign(dy) : 0;
-      const mx = (a.x + ax * a.r + b.x - ax * b.r) / 2;
-      const my = (a.y + ay * a.r + b.y - ay * b.r) / 2;
+      const len = Math.hypot(b.x - a.x, b.y - a.y);
+      // The middle of the curve as drawn, and its direction there (curve.ts).
+      const c = hook.wireCurve(from, to, false) as number[];
+      const at = (t: number, i: number) =>
+        (1 - t) ** 3 * (c[i] ?? 0) +
+        3 * (1 - t) ** 2 * t * (c[i + 2] ?? 0) +
+        3 * (1 - t) * t * t * (c[i + 4] ?? 0) +
+        t ** 3 * (c[i + 6] ?? 0);
+      const mx = at(0.5, 0);
+      const my = at(0.5, 1);
+      const tx = at(0.51, 0) - at(0.49, 0);
+      const ty = at(0.51, 1) - at(0.49, 1);
+      const ux = tx / Math.hypot(tx, ty);
+      const uy = ty / Math.hypot(tx, ty);
       const s = e.screen(mx, my);
       if (!e.free(s.x, s.y, 40)) continue;
       const crowded = nodes.some(
@@ -516,13 +522,15 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
         const a = e.node(pick.from);
         const b = e.node(pick.to);
         if (!e.free(a.x, a.y) || !e.free(b.x, b.y)) throw new Error('ends under the Chrome');
-        // A wire meets the rims along its axis (curve.ts axisOf).
-        const axis = (p: Pt, q: Pt) =>
-          Math.abs(q.x - p.x) >= Math.abs(q.y - p.y)
-            ? { x: q.x >= p.x ? 1 : -1, y: 0 }
-            : { x: 0, y: q.y >= p.y ? 1 : -1 };
-        const ua = axis(a, b);
-        const ub = axis(b, a);
+        // A wire meets each hexagon at the corner facing the other end (hex.ts, ADR-0011).
+        const corner = (p: Pt, q: Pt) => {
+          const th = Math.atan2(q.y - p.y, q.x - p.x) + 1e-4;
+          const k = Math.round((th - Math.PI / 6) / (Math.PI / 3));
+          const t = Math.PI / 6 + (k * Math.PI) / 3;
+          return { x: Math.cos(t), y: Math.sin(t) };
+        };
+        const ua = corner(a, b);
+        const ub = corner(b, a);
         // Bright pixels outside the target's rim within 12 px of where the wire enters.
         const jx = b.x + ub.x * b.r;
         const jy = b.y + ub.y * b.r;
@@ -542,7 +550,7 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
           return m;
         };
         return {
-          // The centres of the sockets, on the rims.
+          // The centres of the sockets, on the corners.
           source: peak(a.x + ua.x * a.r, a.y + ua.y * a.r),
           target: peak(b.x + ub.x * b.r, b.y + ub.y * b.r),
           // Across the wire, 5.5 px from the source socket's centre: its dark disc.
@@ -1067,41 +1075,33 @@ test.describe('gestures', () => {
     expect(await shape()).toBe('kinetic');
     await expect(page.locator('.proto-status .last-step')).toContainText('Нити: кинетические');
     // Closer, so wires are long on screen.
-    for (let i = 0; i < 4; i++) await page.keyboard.press('Equal');
-    // A third of the way along the wire whose segment runs farthest from its
-    // S-curve (curve.ts: the axis, control points at half the gap, 16…240).
+    for (let i = 0; i < 7; i++) await page.keyboard.press('Equal');
+    // A third of the way along the wire whose straight segment runs farthest
+    // from its S-curve, both as the canvas draws them (curve.ts).
     const q = await page.evaluate(() => {
-      const { view, graph } = window.__strataProto as Hook;
+      const hook = window.__strataProto as Hook;
+      const { view, graph } = hook;
       const e = window.__e2e as Probe;
       const nodes = [...view.eachNode()];
       const zoom = view.camera.zoom;
+      const at = (c: number[], t: number, i: number) =>
+        (1 - t) ** 3 * (c[i] ?? 0) +
+        3 * (1 - t) ** 2 * t * (c[i + 2] ?? 0) +
+        3 * (1 - t) * t * t * (c[i + 4] ?? 0) +
+        t ** 3 * (c[i + 6] ?? 0);
       let best: { x: number; y: number; off: number } | null = null;
       for (const [from, to] of graph.edges()) {
-        const a = view.nodeAt(from);
-        const b = view.nodeAt(to);
-        if (!a || !b) continue;
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const len = Math.hypot(dx, dy);
-        const x = a.x + (dx / len) * a.r + (dx - (dx / len) * (a.r + b.r)) / 3;
-        const y = a.y + (dy / len) * a.r + (dy - (dy / len) * (a.r + b.r)) / 3;
-        const ux = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : 0;
-        const uy = ux === 0 ? Math.sign(dy) : 0;
-        const p0 = [a.x + ux * a.r, a.y + uy * a.r];
-        const p3 = [b.x - ux * b.r, b.y - uy * b.r];
-        const along = Math.abs(dx * ux + dy * uy) - a.r - b.r;
-        const h = Math.min(Math.max(0.5 * Math.max(along, 0), 16), 240);
-        const p1 = [(p0[0] ?? 0) + ux * h, (p0[1] ?? 0) + uy * h];
-        const p2 = [(p3[0] ?? 0) - ux * h, (p3[1] ?? 0) - uy * h];
-        // The S-curve's nearest point to (x, y), sampled.
+        const line = hook.wireCurve(from, to, true);
+        const curve = hook.wireCurve(from, to, false);
+        if (!line || !curve) continue;
+        const x = at(line, 1 / 3, 0);
+        const y = at(line, 1 / 3, 1);
         let off = Number.POSITIVE_INFINITY;
         for (let i = 0; i <= 96; i++) {
-          const t = i / 96;
-          const k = [(1 - t) ** 3, 3 * (1 - t) ** 2 * t, 3 * (1 - t) * t * t, t ** 3];
-          const pts = [p0, p1, p2, p3];
-          const cx = pts.reduce((sum, p, j) => sum + (k[j] ?? 0) * (p[0] ?? 0), 0);
-          const cy = pts.reduce((sum, p, j) => sum + (k[j] ?? 0) * (p[1] ?? 0), 0);
-          off = Math.min(off, Math.hypot(cx - x, cy - y) * zoom);
+          off = Math.min(
+            off,
+            Math.hypot(at(curve, i / 96, 0) - x, at(curve, i / 96, 1) - y) * zoom,
+          );
         }
         const s = e.screen(x, y);
         if (!e.free(s.x, s.y, 10)) continue;

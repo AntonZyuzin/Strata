@@ -1,10 +1,11 @@
 import { fog, GLYPHS, type GlyphName, palette } from '@strata/design-tokens';
 import { BitmapFont, CanvasSource, Texture } from 'pixi.js';
+import { hexPath } from './hex';
 
 /** Bubble diameters S, M, L, XL in world units (07 §4.2, 06 §4.2). */
 export const SIZE = { s: 32, m: 48, l: 72, xl: 108 } as const;
 
-/** Body texture radius: drawn once, large, with mips for every zoom. */
+/** Body texture circumradius: drawn once, large, with mips for every zoom. */
 const BODY_R = 128;
 
 function canvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContext2D] {
@@ -16,13 +17,14 @@ function canvas(w: number, h: number): [HTMLCanvasElement, CanvasRenderingContex
   return [c, ctx];
 }
 
-/** White disc for bubble bodies (tinted paper or grey by state) and a soft halo. */
+/**
+ * A white hexagon with a point up for bubble bodies (ADR-0011; tinted paper
+ * or grey by state), its corners on the old circle, and a soft halo.
+ */
 export function createBodyTextures(): { body: Texture; halo: Texture; destroy(): void } {
   const [bc, b] = canvas(2 * BODY_R + 4, 2 * BODY_R + 4);
   b.fillStyle = '#ffffff';
-  b.beginPath();
-  b.arc(BODY_R + 2, BODY_R + 2, BODY_R, 0, Math.PI * 2);
-  b.fill();
+  hexPath(b, BODY_R + 2, BODY_R + 2, BODY_R).fill();
   const body = new Texture({
     source: new CanvasSource({ resource: bc, autoGenerateMipmaps: true, scaleMode: 'linear' }),
   });
@@ -47,7 +49,7 @@ export function createBodyTextures(): { body: Texture; halo: Texture; destroy():
   };
 }
 
-/** Diameter of the body texture's disc, for sprite scaling. */
+/** Corner to corner of the body texture's hexagon, for sprite scaling. */
 export const BODY_DIAMETER = 2 * BODY_R;
 export const BODY_TEXTURE = 2 * BODY_R + 4;
 

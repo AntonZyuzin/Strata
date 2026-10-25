@@ -4,6 +4,7 @@ import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
 import { controls } from './curve';
+import { chordOf, HEX_IN, perimeterAngle, rimAt } from './hex';
 import {
   arrowOn,
   isClosed,
@@ -16,7 +17,7 @@ import {
   statusGlyph,
   type WireEndStyle,
 } from './looks';
-import { RingLayer } from './rings';
+import { RingLayer, type RingStyle } from './rings';
 import { GlyphTextures, labelFont, type Plate } from './textures';
 
 /**
@@ -113,14 +114,12 @@ export class Decor {
    * «сегодня», «−3 дн.»; 07 §4.6, Q-07-22); none for the rest.
    */
   dueWord: (n: GraphNode) => string | null = () => null;
-  /** The network's wires are straight (06 §6.2): sockets sit on the line of centres. */
-  straight = false;
   /**
    * World control points of the wire `a → b` as the wire layer draws it, a
    * kinetic wire's lag included (06 §6.8): arrowheads ride the drawn curve.
    */
   curveOf: (a: DecorNode, b: DecorNode) => readonly number[] = (a, b) =>
-    controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight: this.straight });
+    controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r });
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -182,6 +181,10 @@ export class Decor {
     for (const v of nodes) {
       const s = cam.toScreen(v.x, v.y);
       const R = v.r * cam.zoom;
+      // A node's rims and rings are hexagons (ADR-0011): offsets go square to the sides.
+      const Rin = R * HEX_IN;
+      const rim = (offset: number, width: number, style: RingStyle) =>
+        rings.add(s.x, s.y, Rin + offset, width, { ...style, hex: true });
       const margin = R + 40 * U;
       if (s.x < -margin || s.x > w + margin || s.y < -margin || s.y > h + margin) continue;
       const lv = levelOf(2 * R);
@@ -197,28 +200,28 @@ export class Decor {
       const coloured = n.color !== null && !n.ghost;
       const tint = hex(people[n.color ?? 0] ?? palette.paper);
       if (coloured) {
-        rings.add(s.x, s.y, R - U, 6 * U, { color: tint, alpha: a });
+        rim(-U, 6 * U, { color: tint, alpha: a });
       }
       if (n.ghost) {
-        rings.add(s.x, s.y, R - 0.5 * U, U, { color: PAPER, alpha: a, dash: 3 * U, gap: 3 * U });
+        rim(-0.5 * U, U, { color: PAPER, alpha: a, dash: 3 * U, gap: 3 * U });
       } else if (n.pause) {
-        rings.add(s.x, s.y, R - 0.5 * U, U, {
+        rim(-0.5 * U, U, {
           color: INK,
           alpha: RIM * a,
           dash: 3 * U,
           gap: 2 * U,
         });
-        hatch(this.hatching, s.x, s.y, R - U, 4 * U);
+        hatch(this.hatching, s.x, s.y, Rin - U, 4 * U);
         hatched = true;
       } else if (!coloured) {
-        rings.add(s.x, s.y, R - 0.5 * U, U, { color: INK, alpha: RIM * a });
+        rim(-0.5 * U, U, { color: INK, alpha: RIM * a });
       }
       // Folders and projects: the second ring of the «stack» (07 §4.4).
       if ((n.kind === 'network' || n.kind === 'project') && R > 10 * U) {
-        rings.add(s.x, s.y, R - 6.5 * U, U, { color: INK, alpha: RIM * a });
+        rim(-6.5 * U, U, { color: INK, alpha: RIM * a });
       }
       // Key: a paper contour outside the rim makes the double rim (07 §4.5).
-      if (n.key) rings.add(s.x, s.y, R + 2.5 * U, U, { color: PAPER, alpha: a });
+      if (n.key) rim(2.5 * U, U, { color: PAPER, alpha: a });
 
       // Wire ends (07 §5, ✅ S9 2026-10-23) from the icon level up, over the rim
       // and under the assignees and glyphs: a solid socket where a wire leaves,
@@ -237,13 +240,13 @@ export class Decor {
       };
       if (lv !== 'glyph') {
         for (const dst of v.outputs) {
-          const p = socketAt(v, dst, this.straight);
+          const p = socketAt(v, dst);
           if (!p) continue;
           taken.push({ angle: Math.atan2(p.dy, p.dx), reach: SOCKET * U });
           socket(s.x + p.dx * R, s.y + p.dy * R);
         }
         for (const src of v.inputs) {
-          const p = socketAt(v, src, this.straight);
+          const p = socketAt(v, src);
           if (!p) continue;
           // An arrowhead touches the rim with its tip only.
           const reach = this.ends === 'arrow' ? (ARROW.half / 2) * U : SOCKET * U;
@@ -276,28 +279,29 @@ export class Decor {
             animating = true;
           }
         }
-        rings.add(s.x, s.y, R + 5 * U, 2 * U, { color: YELLOW, alpha });
+        rim(5 * U, 2 * U, { color: YELLOW, alpha });
       } else if (due === 'overdue') {
         // Red against the fog is 1.6:1, so a paper contour carries the contrast (07 §2.2).
-        rings.add(s.x, s.y, R + 5 * U, 2 * U, { color: RED });
-        rings.add(s.x, s.y, R + 6.5 * U, U, { color: PAPER });
+        rim(5 * U, 2 * U, { color: RED });
+        rim(6.5 * U, U, { color: PAPER });
       } else if (due === 'soon') {
         // A thin yellow ring (Q-07-22): the glow did not show at 100 %.
-        rings.add(s.x, s.y, R + 5 * U, U, { color: YELLOW });
+        rim(5 * U, U, { color: YELLOW });
       } else if (n.fold && n.fold.total > 0 && lv !== 'glyph') {
         const burning = n.fold.burning;
         if (burning) {
-          rings.add(s.x, s.y, R + 5 * U, U, { color: burning === 'overdue' ? RED : YELLOW });
+          rim(5 * U, U, { color: burning === 'overdue' ? RED : YELLOW });
         } else {
-          rings.add(s.x, s.y, R + 5 * U, 2 * U, { color: PAPER, alpha: 0.3 * a });
+          rim(5 * U, 2 * U, { color: PAPER, alpha: 0.3 * a });
         }
         const share = Math.min(1, n.fold.done / n.fold.total);
         if (share > 0) {
-          rings.add(s.x, s.y, R + 5 * U, 2 * U, {
+          rim(5 * U, 2 * U, {
             color: PAPER,
             alpha: a,
             start: 0,
-            sweep: share * Math.PI * 2,
+            // A share of the outline from the top corner, not of the angle.
+            sweep: perimeterAngle(share),
           });
         }
       }
@@ -308,14 +312,14 @@ export class Decor {
           const t = now - this.antsStart;
           const running = !this.reducedMotion && t < ANTS_MS;
           if (running) animating = true;
-          rings.add(s.x, s.y, R + 10 * U, 2 * U, {
+          rim(10 * U, 2 * U, {
             color: ACCENT,
             dash: 3 * U,
             gap: 3 * U,
             offset: running ? (t / 50) * U : 0,
           });
         } else {
-          rings.add(s.x, s.y, R + 10 * U, 2 * U, { color: ACCENT });
+          rim(10 * U, 2 * U, { color: ACCENT });
         }
         const k = R + 12 * U;
         const arm = 4 * U;
@@ -328,7 +332,7 @@ export class Decor {
         }
         corners = true;
       } else if (hovered) {
-        rings.add(s.x, s.y, R + 10 * U, U, { color: ACCENT });
+        rim(10 * U, U, { color: ACCENT });
       }
 
       // Assignees: dots 8u with an ink outline at 12 o'clock, up to 3 and «+N» (07 §4.5).
@@ -540,22 +544,26 @@ function at(s: { x: number; y: number }, R: number, h: number): [number, number]
   return onRim(s, R, hour(h));
 }
 
+/** The point of the hexagon's outline (circumradius R) along `angle` (ADR-0011). */
 function onRim(s: { x: number; y: number }, R: number, angle: number): [number, number] {
-  return [s.x + Math.cos(angle) * R, s.y + Math.sin(angle) * R];
+  const r = R * rimAt(angle);
+  return [s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r];
 }
 
 function kindGlyph(n: GraphNode, big: boolean): GlyphName {
   return big ? n.kind : `${n.kind}-8`;
 }
 
-/** 45° hatching inside a circle, lines `step` apart (07 §4.5, «Пауза»). */
-function hatch(g: Graphics, cx: number, cy: number, r: number, step: number): void {
+/** 45° hatching inside the hexagon of inradius `rin`, lines `step` apart (07 §4.5, «Пауза»). */
+function hatch(g: Graphics, cx: number, cy: number, rin: number, step: number): void {
   const k = Math.SQRT1_2;
+  const r = rin / HEX_IN;
   for (let t = -r + step / 2; t < r; t += step) {
-    const half = Math.sqrt(r * r - t * t);
-    // Normal (k, -k), direction (k, k).
-    const mx = cx + k * t;
-    const my = cy - k * t;
-    g.moveTo(mx - k * half, my - k * half).lineTo(mx + k * half, my + k * half);
+    // Through (cx, cy) + t·(k, -k), along (k, k).
+    const px = cx + k * t;
+    const py = cy - k * t;
+    const chord = chordOf(cx, cy, r, px, py, k, k);
+    if (!chord) continue;
+    g.moveTo(px + k * chord[0], py + k * chord[0]).lineTo(px + k * chord[1], py + k * chord[1]);
   }
 }

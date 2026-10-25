@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "pnpm --filter @strata/ui dev",
-    "wasm": "pnpm --filter @strata/layout --filter @strata/backend build",
+    "wasm": "pnpm --filter @strata/layout --filter @strata/backend --filter @strata/search build",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test",

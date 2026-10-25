@@ -14,14 +14,14 @@
 //! and turns a note's `[[links]]` into its text wires.
 
 use crate::changeset::{Changeset, KeyWrite, Label, RevertReport};
-use crate::ops::{Flag, Op, WireStyle};
+use crate::ops::{Op, WireStyle};
 use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use strata_model::{
-    ChangesetId, ChangesetOrigin, EdgeKey, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
+    ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
 
 /// Version of the documents' layout (10 §13).

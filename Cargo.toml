@@ -8,6 +8,8 @@ members = [
     "crates/strata-layout",
     "crates/strata-layout-wasm",
     "crates/strata-markdown",
+    "crates/strata-search",
+    "crates/strata-search-wasm",
     "crates/strata-desktop",
     "spikes/loro-index",
 ]
@@ -20,6 +22,7 @@ default-members = [
     "crates/strata-cli",
     "crates/strata-layout",
     "crates/strata-markdown",
+    "crates/strata-search",
 ]
 
 [workspace.package]
@@ -35,6 +38,7 @@ strata-model = { path = "crates/strata-model" }
 strata-core = { path = "crates/strata-core" }
 strata-layout = { path = "crates/strata-layout" }
 strata-markdown = { path = "crates/strata-markdown" }
+strata-search = { path = "crates/strata-search" }
 
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

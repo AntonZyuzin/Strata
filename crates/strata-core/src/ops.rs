@@ -5,7 +5,7 @@
 
 use crate::value::Val;
 use serde::{Deserialize, Serialize};
-use strata_model::NodeKind;
+use strata_model::{Flag, NodeKind};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase")]
@@ -99,40 +99,6 @@ pub enum Op {
         #[serde(default)]
         style: Option<WireStyle>,
     },
-}
-
-/// The flags of 05 §7, Houdini's rethought: `R` key, `Q` pause, `E`
-/// template; «Скрыть от AI» and «Замок» are in the model from the MVP, their
-/// interface comes with MCP (16 §4.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum Flag {
-    Key,
-    Pause,
-    Template,
-    HideAi,
-    Lock,
-}
-
-impl Flag {
-    pub const ALL: [Flag; 5] = [
-        Flag::Key,
-        Flag::Pause,
-        Flag::Template,
-        Flag::HideAi,
-        Flag::Lock,
-    ];
-
-    /// The name in the documents (10 §2.3, `flag` map).
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Key => "key",
-            Self::Pause => "pause",
-            Self::Template => "template",
-            Self::HideAi => "hideAi",
-            Self::Lock => "lock",
-        }
-    }
 }
 
 /// How a network draws its wires (06 §6.2): a segment, an S-curve, an

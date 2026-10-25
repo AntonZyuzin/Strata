@@ -29,9 +29,10 @@ pub mod value;
 pub mod workspace;
 
 pub use changeset::{Changeset, KeyWrite, Label, RevertReport};
-pub use ops::{Flag, Op, WireStyle};
+pub use ops::{Op, WireStyle};
 pub use store::{MemoryStore, Store, StoreError, StoredDoc};
 pub use strata_model as model;
+pub use strata_model::Flag;
 pub use workspace::{
     Attrs, CoreError, Fold, History, Linked, NetworkView, NodeDetails, Person, TrashItem, TreeItem,
     ViewEdge, ViewNode, WireEnds, Workspace,

@@ -71,7 +71,7 @@ import type { CommandContext } from './commands';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
 import { ExternalList } from './ExternalList';
-import { FindBar } from './FindBar';
+import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
@@ -101,6 +101,8 @@ interface Camera {
 }
 
 const RECENT_KEY = 'strata.tabmenu.recent';
+/** «Перейти к ноде» ranks the whole workspace (09 §3.4). */
+const ALL: Scope = { t: 'all' };
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
@@ -259,13 +261,12 @@ export function WorkspaceScreen(props: {
   const [boardFocus, setBoardFocus] = useState(false);
   const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
-  /**
-   * «Перейти к ноде» (09 §3.4): `Ctrl+O` on the canvas; on the star map
-   * `Ctrl+O` and `Ctrl+F`, `within` the cluster in focus (08 §10).
-   */
-  const [finder, setFinder] = useState<{ map: boolean; within: string | null } | null>(null);
-  /** `Ctrl+F` on the canvas (09 §3.3). */
+  /** «Перейти к ноде» (09 §3.4): `Ctrl+O` on the canvas and on the star map (08 §10). */
+  const [finder, setFinder] = useState<{ map: boolean } | null>(null);
+  /** `Ctrl+F` on the canvas (09 §3.3) and on the star map (08 §6.1). */
   const [finding, setFinding] = useState(false);
+  /** Who hears «the cluster in focus or the selected star changed» on the map. */
+  const mapChanged = useRef(new Set<() => void>());
   /** The command palette, `Ctrl+P` (09 §3.5). */
   const [palette, setPalette] = useState(false);
   /** The list behind a node's «↗N» (06 §14), by the mark at (x, y); `wires` null until the core answers. */
@@ -560,6 +561,9 @@ export function WorkspaceScreen(props: {
         };
       },
       network: () => netRef.current,
+      change: () => {
+        for (const fn of mapChanged.current) fn();
+      },
       go: (net, node) => {
         const show = () => {
           if (node) editor.current?.focusNode(node);
@@ -968,7 +972,7 @@ export function WorkspaceScreen(props: {
         e.preventDefault();
         if (e.code === 'KeyO') {
           setFinding(false);
-          setFinder({ map: false, within: null });
+          setFinder({ map: false });
         } else {
           setFinding(true);
         }
@@ -976,8 +980,13 @@ export function WorkspaceScreen(props: {
       }
       if (search) {
         e.preventDefault();
-        const within = e.code === 'KeyF' ? (map3d.current?.focusId() ?? null) : null;
-        setFinder({ map: true, within });
+        if (e.code === 'KeyF') {
+          setFinder(null);
+          setFinding(true);
+        } else {
+          setFinding(false);
+          setFinder({ map: true });
+        }
         return;
       }
       if (e.code === 'KeyM' && !mod && !e.altKey) {
@@ -993,7 +1002,7 @@ export function WorkspaceScreen(props: {
   // A search of one view closes with it (2D ↔ 3D).
   useEffect(() => {
     setFinder((f) => (f && f.map !== (view3d === '3d') ? null : f));
-    if (view3d !== '2d') setFinding(false);
+    setFinding(false);
   }, [view3d]);
 
   // The history's place in 2D, once the star map has gone (09 §6.1).
@@ -1436,6 +1445,36 @@ export function WorkspaceScreen(props: {
 
   const g = graph.current;
   const ed = editor.current;
+  const treeRef = useRef(tree);
+  treeRef.current = tree;
+  /**
+   * What `Ctrl+F` searches (09 §3.3, 08 §6.1), made when the bar opens: it
+   * keeps the choice of that moment for `Esc`. The network on the canvas,
+   * or the cluster in focus on the star map.
+   */
+  const findTarget = useMemo<FindTarget | null>(() => {
+    if (!finding) return null;
+    const map = map3d.current;
+    if (view3d === '3d' && map) {
+      return mapFind({
+        map,
+        tree: () => treeRef.current,
+        onChange: (fn) => {
+          mapChanged.current.add(fn);
+          return () => mapChanged.current.delete(fn);
+        },
+      });
+    }
+    if (view3d !== '2d' || !g || !ed) return null;
+    return canvasFind({
+      search: searchClient(),
+      graph: g,
+      editor: ed,
+      view: viewRef.current,
+      net: netRef.current,
+      tree: () => treeRef.current,
+    });
+  }, [finding, view3d, g, ed]);
   const field = (key: AttrKey) => t(locale, `ins.${key}` as MessageKey);
   const actions: InspectorActions | null =
     details && g
@@ -1634,10 +1673,7 @@ export function WorkspaceScreen(props: {
   };
 
   // What «Перейти к ноде» ranks with, taken when it opens.
-  const finderScope = useMemo<Scope>(
-    () => (finder?.within ? { t: 'under', net: finder.within } : { t: 'all' }),
-    [finder],
-  );
+  const finderScope = ALL;
   const finderVisits = useMemo(
     () => (finder ? visits(openedRef.current.workspace.id) : {}),
     [finder],
@@ -1679,11 +1715,11 @@ export function WorkspaceScreen(props: {
     act: (action) => editor.current?.act(action),
     goTo: () => {
       setFinding(false);
-      setFinder({ map: view3d !== '2d', within: null });
+      setFinder({ map: view3d !== '2d' });
     },
     find: () => {
-      if (view3d === '2d') setFinding(true);
-      else setFinder({ map: true, within: map3d.current?.focusId() ?? null });
+      setFinder(null);
+      setFinding(true);
     },
     walk,
     setMark,
@@ -1831,10 +1867,7 @@ export function WorkspaceScreen(props: {
       {finder && (view3d === '3d') === finder.map ? (
         <NodeSearch
           locale={locale}
-          label={t(
-            locale,
-            finder.map ? (finder.within ? 'map.findHere' : 'map.find') : 'search.goTo',
-          )}
+          label={t(locale, finder.map ? 'map.find' : 'search.goTo')}
           className={finder.map ? 'map-search' : 'goto'}
           search={searchClient()}
           items={tree}
@@ -1908,18 +1941,14 @@ export function WorkspaceScreen(props: {
           }}
         />
       ) : null}
-      {finding && view3d === '2d' && g && ed ? (
+      {finding && findTarget ? (
         <FindBar
           locale={locale}
           search={searchClient()}
-          graph={g}
-          editor={ed}
-          view={viewRef.current}
-          net={netRef.current}
-          tree={tree}
+          target={findTarget}
           onClose={() => {
             setFinding(false);
-            focusCanvas();
+            if (view3d === '2d') focusCanvas();
           }}
         />
       ) : null}

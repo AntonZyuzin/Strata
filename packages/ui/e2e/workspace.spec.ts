@@ -55,6 +55,7 @@ interface WsHook {
     focusId(): string | null;
     idNamed(name: string): string | null;
     screenOf(id: string): { x: number; y: number } | null;
+    lensIds(): string[] | null;
   } | null;
 }
 
@@ -713,16 +714,32 @@ for (const deviceScaleFactor of [1, 2]) {
       await bar.locator('input').fill('мельнциа');
       await expect(bar.locator('.find-fuzzy')).toBeVisible();
       expect(await overflowing(page, '.find-bar'), `${locale} the bar must fit`).toEqual([]);
+      const bar2d = await box(page, '.find-bar');
+      const input2d = await box(page, '.find-bar input');
+      // The same bar on the star map (08 §6.1), with no «поддерево».
+      await bar.locator('input').press('Escape');
+      await expect(bar).toHaveCount(0);
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('KeyM');
+      await expect(page.locator('.workspace')).toHaveAttribute('data-view', '3d', {
+        timeout: 30_000,
+      });
+      await page.keyboard.press('Control+f');
+      await bar.locator('input').fill('мельнциа');
+      await expect(bar.locator('.find-fuzzy')).toBeVisible();
+      expect(await overflowing(page, '.find-bar'), `${locale} the map's bar must fit`).toEqual([]);
       boxes.push({
         goto: gotoBox,
         row,
-        bar: await box(page, '.find-bar'),
-        input: await box(page, '.find-bar input'),
+        bar: bar2d,
+        input: input2d,
+        bar3d: await box(page, '.find-bar'),
+        input3d: await box(page, '.find-bar input'),
       });
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['goto', 'row', 'bar', 'input'] as const) {
+    for (const part of ['goto', 'row', 'bar', 'input', 'bar3d', 'input3d'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2223,6 +2240,63 @@ test.describe('a workspace on the core', () => {
       timeout: 10_000,
     });
     await expect(map).toHaveAttribute('aria-pressed', 'false');
+  });
+
+  test('Ctrl+F on the star map lights the matches in the cluster in focus (08 §6.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Линза');
+    const ws = page.locator('.workspace');
+    await createNode(page, 480, 300, 'Эскиз леса');
+    await createNode(page, 760, 300, 'Эскиз реки');
+    await createNode(page, 620, 500, 'Идея');
+    await settled(page);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyM');
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    const map = () =>
+      page.evaluate(() => {
+        const m = window.__strataWs?.map();
+        return {
+          lens: m?.lensIds()?.sort() ?? null,
+          selected: m?.selectedId() ?? null,
+          forest: m?.idNamed('Эскиз леса') ?? null,
+          river: m?.idNamed('Эскиз реки') ?? null,
+        };
+      });
+    const { forest, river } = await map();
+    await page.keyboard.press('Control+f');
+    const bar = page.locator('.find-bar');
+    const input = bar.locator('input');
+    await expect(input).toBeFocused();
+    // The map shows every depth: «Aa» only, no «поддерево».
+    await expect(bar.locator('.find-toggle')).toHaveCount(1);
+    await input.fill('эскиз');
+    await expect(bar.locator('.find-count')).toHaveText('0 из 2');
+    await expect.poll(async () => (await map()).lens).toEqual([forest, river].sort());
+    // Ctrl+G flies to one and selects it, again — to the other.
+    await input.press('Control+g');
+    await expect(bar.locator('.find-count')).toHaveText('1 из 2');
+    await expect.poll(async () => (await map()).selected).not.toBeNull();
+    const first = (await map()).selected;
+    await input.press('Control+g');
+    await expect.poll(async () => (await map()).selected).not.toBe(first);
+    expect([forest, river]).toContain((await map()).selected);
+    // Esc: the lens goes, the choice of before comes back.
+    await input.press('Escape');
+    await expect(bar).toHaveCount(0);
+    expect(await map()).toMatchObject({ lens: null, selected: null });
+    // Enter keeps the star found, the map in 3D.
+    await page.keyboard.press('Control+f');
+    await input.fill('реки');
+    await expect(bar.locator('.find-count')).toHaveText('0 из 1');
+    await input.press('Enter');
+    await expect(bar).toHaveCount(0);
+    await expect.poll(async () => (await map()).selected).toBe(river);
+    expect((await map()).lens).toBeNull();
+    await expect(ws).toHaveAttribute('data-view', '3d');
   });
 
   test('another tab opened under the star map comes in 2D, and M opens its own map (08 §7)', async ({

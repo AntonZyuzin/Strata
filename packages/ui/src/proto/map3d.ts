@@ -106,6 +106,8 @@ export class Map3D {
   /** The selected star and the cluster in focus, as bodies (08 §5.1). */
   private selected: number | null = null;
   private focus = 0;
+  /** `Ctrl+F`'s matches (08 §6.1): lit over the cluster's dimming while the bar is open. */
+  private lit: Uint8Array | null = null;
   private readonly resize: ResizeObserver;
 
   constructor(
@@ -242,6 +244,44 @@ export class Map3D {
       return true;
     }
     return false;
+  }
+
+  /**
+   * `Ctrl+F` on the map (08 §6.1): the matches stay bright and the rest dims
+   * as outside the cluster in focus; `null` gives the cluster's dimming back.
+   */
+  lens(ids: readonly string[] | null): void {
+    const space = this.space;
+    if (!space) return;
+    if (ids) {
+      const lit = new Uint8Array(space.x.count);
+      for (const id of ids) {
+        const b = space.body.get(id);
+        if (b !== undefined) lit[b] = 1;
+      }
+      this.lit = lit;
+    } else {
+      this.lit = null;
+    }
+    // Mid-bridge the bridge's own focus stays (08 §7).
+    if (this.state !== '3d') return;
+    this.showFocus();
+    this.draw();
+  }
+
+  /** The nodes `Ctrl+F` lights now, or null with no lens; for tests. */
+  lensIds(): string[] | null {
+    const { lit, space } = this;
+    if (!lit || !space) return null;
+    return space.ids.filter((_, b) => lit[b] === 1);
+  }
+
+  /** Node `id`'s star selected where it is, with no flight; null — none. */
+  selectId(id: string | null): void {
+    const b = id === null ? null : (this.space?.body.get(id) ?? null);
+    if (this.state !== '3d') return;
+    this.select(b);
+    this.draw();
   }
 
   /** A search's choice (08 §6.1): fly to node `id`'s star and select it. */
@@ -450,6 +490,11 @@ export class Map3D {
   private showFocus(): void {
     const { map, space } = this;
     if (!map || !space) return;
+    if (this.lit) {
+      map.setFocus(this.lit);
+      map.setFade(0.3, 0.15, 1);
+      return;
+    }
     if (this.focus === 0) {
       map.setFocus(null);
       map.setFade(1, 1, 1);

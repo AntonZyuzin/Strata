@@ -253,6 +253,12 @@ export class CanvasView {
     this.invalidate();
   }
 
+  /** CSS px of one pixel unit (07 §2.3) at this screen's DPR. */
+  get unit(): number {
+    const dpr = this.app.renderer.resolution;
+    return pixelUnit(dpr) / dpr;
+  }
+
   /** Shows a processed background picture (07 §7) and redraws; returns its p95 luminance. */
   setBackground(px: Pixels): number {
     const p95 = this.background.setPicture(px);

@@ -1,9 +1,10 @@
-import type { GraphNode } from '@strata/backend';
+import type { Flag, GraphNode } from '@strata/backend';
 import { fog, type GlyphName, hex, palette, people } from '@strata/design-tokens';
 import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
 import { controls } from './curve';
+import { RING_DELAY_MS, ringSlots, SLOT_U } from './flagring';
 import { chordOf, HEX_IN, perimeterAngle, rimAt } from './hex';
 import {
   arrowOn,
@@ -36,6 +37,11 @@ export interface Interaction {
   current: string | null;
   /** The nodes a search matched; the rest are dimmed (07 §4.5). */
   lens?: ReadonlySet<string> | null;
+  /**
+   * The flag ring (06 §8): the bubble the cursor rests on since `since`, and
+   * the slot under it; hidden while `Ctrl` is held.
+   */
+  ring?: { id: string; since: number; slot: Flag | null } | null;
 }
 
 export interface DecorNode {
@@ -180,9 +186,11 @@ export class Decor {
       this.antsFor = ia.current;
       this.antsStart = now;
     }
+    let ringAt: { x: number; y: number; R: number; n: GraphNode } | null = null;
     for (const v of nodes) {
       const s = cam.toScreen(v.x, v.y);
       const R = v.r * cam.zoom;
+      if (ia.ring?.id === v.id) ringAt = { x: s.x, y: s.y, R, n: v.node };
       // A node's rims and rings are hexagons (ADR-0011): offsets go square to the sides.
       const Rin = R * HEX_IN;
       const rim = (offset: number, width: number, style: RingStyle) =>
@@ -409,6 +417,41 @@ export class Decor {
         }
       }
     }
+    // The flag ring over everything of its bubble, once the cursor has rested (06 §8).
+    const ring = ia.ring;
+    if (ring && ringAt) {
+      if (now - ring.since < RING_DELAY_MS) {
+        animating = true;
+      } else {
+        const on: Record<Flag, boolean> = {
+          key: ringAt.n.key,
+          pause: ringAt.n.pause,
+          template: ringAt.n.template,
+          hideAi: false,
+          lock: false,
+        };
+        // A 16u slot: the 8u glyph with a 4u margin; a flag that is on inverts it.
+        const pad = (SLOT_U - 8) / 2;
+        for (const slot of ringSlots(ringAt.x, ringAt.y, ringAt.R, U)) {
+          const flag = slot.flag;
+          this.badge(
+            RING_GLYPH[flag],
+            on[flag] ? 'paper' : 'ink',
+            slot.x,
+            slot.y,
+            1,
+            1,
+            !on[flag],
+            pad,
+          );
+          if (ring.slot === flag) {
+            const half = (SLOT_U / 2 + 1) * U;
+            g.rect(slot.x - half, slot.y - half, 2 * half, 2 * half);
+            corners = true;
+          }
+        }
+      }
+    }
     if (corners) g.stroke({ width: U, color: ACCENT });
     if (hatched) this.hatching.stroke({ width: U, color: INK, alpha: 0.5 * fog.scene.pauseAlpha });
     rings.upload();
@@ -438,6 +481,7 @@ export class Decor {
     scale = 1,
     alpha = 1,
     paper = plate === 'ink',
+    pad = 2,
   ): void {
     let sprite = this.badgePool[this.badgeUsed];
     if (!sprite) {
@@ -446,7 +490,7 @@ export class Decor {
       this.badges.addChild(sprite);
     }
     this.badgeUsed++;
-    const tex = this.glyphs.get(name, plate, scale, paper);
+    const tex = this.glyphs.get(name, plate, scale, paper, pad);
     sprite.texture = tex;
     sprite.position.set(this.snap(cx - tex.width / 2), this.snap(cy - tex.height / 2));
     sprite.alpha = alpha;
@@ -552,6 +596,13 @@ function onRim(s: { x: number; y: number }, R: number, angle: number): [number, 
   const r = R * rimAt(angle);
   return [s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r];
 }
+
+/** The ring's slots (07 §4.8): ★ key, ‖ pause, the stencil of a template. */
+const RING_GLYPH: Record<'key' | 'pause' | 'template', GlyphName> = {
+  key: 'star',
+  pause: 'pause',
+  template: 'template',
+};
 
 function kindGlyph(n: GraphNode, big: boolean): GlyphName {
   return big ? n.kind : `${n.kind}-8`;

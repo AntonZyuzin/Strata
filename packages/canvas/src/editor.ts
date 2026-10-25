@@ -18,6 +18,7 @@ import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
 import { Camera } from './camera';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
+import { RING_DELAY_MS, type RingSlot, ringSlots, SLOT_U, slotAt } from './flagring';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
 import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
@@ -240,6 +241,14 @@ export class Editor {
   textWire: (from: string, to: string) => boolean = () => false;
   private mode: Mode = { t: 'idle' };
   private hover: Hit = { t: 'empty' };
+  /** The flag ring (06 §8): the bubble the cursor rests on, since when; the slot under it. */
+  private ring: { id: string; since: number } | null = null;
+  /**
+   * When the ring shows (06 §8, «Настройки»): always; from afar — on a
+   * bubble under 32 px on screen, its flags' glyphs too small (07 §4.9); never.
+   */
+  ringMode: 'always' | 'far' | 'never' = 'always';
+  private ringSlot: Flag | null = null;
   private selectedWire: [string, string] | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
@@ -261,7 +270,9 @@ export class Editor {
     view.interaction = () => {
       const h = this.hover;
       const hover = this.mode.t === 'idle' && (h.t === 'node' || h.t === 'port') ? h.id : null;
-      return { hover, selection: this.selection, current: this.current };
+      // The decor waits out the ring's delay itself, drawing frames until it shows.
+      const ring = this.ringOn() && this.ring ? { ...this.ring, slot: this.ringSlot } : null;
+      return { hover, selection: this.selection, current: this.current, ring };
     };
     this.detach.push(
       view.setGraph(graph),
@@ -414,6 +425,48 @@ export class Editor {
     this.view.invalidate();
   }
 
+  /** Whether the ring's mode lets it show on this bubble. */
+  private ringFor(id: string): boolean {
+    if (this.ringMode === 'never') return false;
+    if (this.ringMode === 'always') return true;
+    const p = this.view.nodeAt(id);
+    return !!p && 2 * p.r * this.view.camera.zoom < 32;
+  }
+
+  /** A ring may be up: a bubble under the cursor, `Ctrl` not held, no gesture running. */
+  private ringOn(): boolean {
+    const ctrl = this.held.has('ControlLeft') || this.held.has('ControlRight');
+    return this.ring !== null && this.mode.t === 'idle' && !ctrl;
+  }
+
+  /** The ring is up: and the cursor has rested its delay. */
+  private ringShown(): boolean {
+    return this.ringOn() && performance.now() - (this.ring?.since ?? 0) >= RING_DELAY_MS;
+  }
+
+  /** The ring's slots on screen, when it is up. */
+  ringSlots(): RingSlot[] {
+    if (!this.ringShown() || !this.ring) return [];
+    const p = this.view.nodeAt(this.ring.id);
+    if (!p) return [];
+    const s = this.view.camera.toScreen(p.x, p.y);
+    return ringSlots(s.x, s.y, p.r * this.view.camera.zoom, this.view.unit);
+  }
+
+  /** Within the ring that is up: its circle and the slots' half beyond. */
+  private insideRing(sx: number, sy: number): boolean {
+    const [slot] = this.ringSlots();
+    const p = this.ring ? this.view.nodeAt(this.ring.id) : null;
+    if (!slot || !p) return false;
+    const c = this.view.camera.toScreen(p.x, p.y);
+    const radius = Math.hypot(slot.x - c.x, slot.y - c.y);
+    return Math.hypot(sx - c.x, sy - c.y) <= radius + (SLOT_U / 2) * this.view.unit;
+  }
+
+  private slotUnder(sx: number, sy: number): RingSlot | null {
+    return slotAt(this.ringSlots(), sx, sy, this.view.unit);
+  }
+
   private hoverNode(): string | null {
     const h = this.hover;
     return this.pointer.inside && (h.t === 'node' || h.t === 'port') ? h.id : null;
@@ -561,6 +614,9 @@ export class Editor {
     on(el, 'pointercancel', () => this.cancelGesture());
     on(el, 'pointerleave', () => {
       this.pointer.inside = false;
+      this.ring = null;
+      this.ringSlot = null;
+      this.view.invalidate();
     });
     on(el, 'contextmenu', (e) => {
       e.preventDefault();
@@ -607,6 +663,8 @@ export class Editor {
     on(window, 'keydown', (e) => this.onKey(e), { capture: true });
     on(window, 'keyup', (e) => {
       this.held.delete(e.code);
+      // `Ctrl` let go: the flag ring comes back.
+      if (e.code === 'ControlLeft' || e.code === 'ControlRight') this.view.invalidate();
       if (e.code === 'Digit8') this.view.invalidate();
       if (e.code === 'KeyY') this.scissorsCursor();
     });
@@ -646,6 +704,13 @@ export class Editor {
       return;
     }
     if (e.button !== 0) return;
+    // A slot of the flag ring switches its flag (06 §8), on the selection
+    // when the bubble is in it; no press, no drag.
+    const slot = this.slotUnder(sx, sy);
+    if (slot && this.ring) {
+      this.switchFlag(slot.flag, this.flagTargets(this.ring.id));
+      return;
+    }
     this.mode = {
       t: 'press',
       hit: this.hitTest(sx, sy),
@@ -663,10 +728,23 @@ export class Editor {
     const m = this.mode;
     switch (m.t) {
       case 'idle': {
+        // Over the flag ring the bubble keeps its hover and its ring.
+        const slot = this.slotUnder(sx, sy);
+        this.ringSlot = slot?.flag ?? null;
+        if (slot) {
+          this.view.invalidate();
+          return;
+        }
         const hit = this.hitTest(sx, sy);
         if (!sameHit(hit, this.hover)) {
           this.hover = hit;
           this.events.hint(hintOf(hit));
+        }
+        const id = hit.t === 'node' || hit.t === 'port' ? hit.id : null;
+        // On the way from the bubble to its ring the ring stays.
+        const kept = !id && this.insideRing(sx, sy);
+        if (id !== this.ring?.id && !kept) {
+          this.ring = id && this.ringFor(id) ? { id, since: performance.now() } : null;
         }
         this.view.invalidate();
         return;
@@ -1129,6 +1207,8 @@ export class Editor {
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     const mod = e.metaKey || e.ctrlKey;
     if (!e.repeat) this.held.add(e.code);
+    // `Ctrl` held hides the flag ring over a neighbour (06 §8).
+    if (e.code === 'ControlLeft' || e.code === 'ControlRight') this.view.invalidate();
     const cam = this.view.camera;
     switch (e.code) {
       case 'Tab': {

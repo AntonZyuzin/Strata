@@ -29,7 +29,10 @@ interface WsHook {
     canvas: HTMLCanvasElement;
     lens: ReadonlySet<string> | null;
   };
-  editor(): { selected: string[] } | null;
+  editor(): {
+    selected: string[];
+    ringSlots(): { flag: string; x: number; y: number }[];
+  } | null;
   graph(): {
     nodes: Map<string, Node>;
     wireShape: 'straight' | 'bezier' | 'kinetic';
@@ -1498,6 +1501,56 @@ test.describe('a workspace on the core', () => {
     await settled(page);
     await page.keyboard.press('Control+z');
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
+  });
+
+  test('the flag ring: rest on a bubble, click a slot; Ctrl hides it (06 §8)', async ({ page }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Кольцо');
+    await createNode(page, 600, 400, 'Узел');
+    const look = () =>
+      page.evaluate(() => {
+        const n = [...(window.__strataWs?.graph()?.nodes.values() ?? [])][0];
+        return n ? [n.key, n.pause, n.template].map((f) => (f ? 1 : 0)).join('') : '';
+      });
+    const slots = () =>
+      page.evaluate(() => {
+        const ws = window.__strataWs;
+        const r = ws?.view.canvas.getBoundingClientRect();
+        return (ws?.editor()?.ringSlots() ?? []).map((s) => ({
+          flag: s.flag,
+          x: s.x + (r?.left ?? 0),
+          y: s.y + (r?.top ?? 0),
+        }));
+      });
+    const p = await at(page, 'Узел');
+    await page.mouse.move(p.x, p.y);
+    // It comes after the cursor has rested (07 §4.5): ★ ‖ and the stencil.
+    await expect
+      .poll(async () => (await slots()).map((s) => s.flag))
+      .toEqual(['key', 'pause', 'template']);
+    const pause = (await slots()).find((s) => s.flag === 'pause');
+    if (!pause) throw new Error('no pause slot');
+    await page.mouse.move(pause.x, pause.y, { steps: 4 });
+    await page.mouse.click(pause.x, pause.y);
+    expect(await look()).toBe('010');
+    // The ring stays on its way back to the bubble; a second click clears it.
+    await page.mouse.click(pause.x, pause.y);
+    expect(await look()).toBe('000');
+    await page.keyboard.down('Control');
+    await expect.poll(async () => (await slots()).length).toBe(0);
+    await page.keyboard.up('Control');
+    await expect.poll(async () => (await slots()).length).toBe(3);
+    // Away from the bubble and its ring: gone.
+    await page.mouse.move(p.x + 300, p.y + 200, { steps: 4 });
+    await expect.poll(async () => (await slots()).length).toBe(0);
+    // «Настройки»: never.
+    await page.locator('.tabbar-settings').click();
+    await page.locator('.settings').getByLabel('Кольцо флагов').selectOption('never');
+    await page.locator('.tab', { hasText: 'Кольцо' }).first().click();
+    await expect(page.locator('.settings')).toHaveCount(0);
+    await page.mouse.move(p.x, p.y, { steps: 4 });
+    await page.waitForTimeout(400);
+    expect(await slots()).toEqual([]);
   });
 
   test('Ctrl+O goes to a node anywhere with a flight; Shift+Enter opens; the trash gives back (09 §3.4)', async ({

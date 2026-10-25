@@ -2,7 +2,7 @@ import type { HomeBackend } from '@strata/backend';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
-import { CLOCKS, DATE_FORMATS, type Prefs } from '../prefs';
+import { CLOCKS, DATE_FORMATS, type Prefs, RING_MODES } from '../prefs';
 
 /**
  * «Настройки» (✅ Q-06-23, owner 2026-10-24): a tab of the bar, like a
@@ -111,6 +111,28 @@ export function SettingsScreen(props: {
                 {CLOCKS.map((c) => (
                   <option key={c} value={c}>
                     {t(locale, `settings.clock.${c}` as MessageKey)}
+                  </option>
+                ))}
+              </select>
+            </dd>
+          </dl>
+        </section>
+        <section className="ins-section">
+          <h2 className="ins-heading">{t(locale, 'settings.canvas')}</h2>
+          <dl className="ins-fields">
+            <dt className="ins-label">{t(locale, 'settings.ring')}</dt>
+            <dd className="ins-value">
+              <select
+                className="field"
+                aria-label={t(locale, 'settings.ring')}
+                value={prefs.ring}
+                onChange={(e) =>
+                  onPrefs({ ...prefs, ring: e.currentTarget.value as Prefs['ring'] })
+                }
+              >
+                {RING_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(locale, `settings.ring.${m}` as MessageKey)}
                   </option>
                 ))}
               </select>

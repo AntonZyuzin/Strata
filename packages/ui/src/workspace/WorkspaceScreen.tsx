@@ -163,6 +163,8 @@ export function WorkspaceScreen(props: {
   const openedRef = useRef(opened);
   const cameras = useRef(new Map<string, Camera>());
   const textWires = useRef(new Set<string>());
+  /** When the flag ring shows (06 §8): «Настройки» set it, every new canvas takes it. */
+  const ringModeRef = useRef(props.prefs.ring);
   /** Shows a network (the current one when none is given), after what is queued. */
   const loadRef = useRef<(net?: string) => Promise<void>>(async () => {});
   /** Loads and undo through the core, one after another (they replace the graph). */
@@ -519,6 +521,7 @@ export function WorkspaceScreen(props: {
         ed.selection.size === 1
           ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
           : 0;
+      ed.ringMode = ringModeRef.current;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d, mapNav);
@@ -731,6 +734,11 @@ export function WorkspaceScreen(props: {
         covered,
     );
   }, [menu, name, finder, view3d, boardFocus, viewerFocus, covered]);
+
+  useEffect(() => {
+    ringModeRef.current = props.prefs.ring;
+    if (editor.current) editor.current.ringMode = props.prefs.ring;
+  }, [props.prefs.ring]);
 
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
   useEffect(() => searchClient().set('space', tree), [tree]);

@@ -43,11 +43,43 @@ pub enum Op {
         from: String,
         to: String,
     },
-    /// Soft delete (05 §11): `trashedAt` is set, placements and wires stay hidden.
+    /// «Разместить здесь» (05 §5): an appearance of node `id` in `net` at
+    /// (x, y). Not where it lies already (rule 3), not a network in itself
+    /// or in a network inside it (rule 4).
+    Place {
+        id: String,
+        net: String,
+        x: f64,
+        y: f64,
+    },
+    /// «Убрать отсюда» (05 §5): the placement of `id` in `net` goes. The
+    /// primary falls to the oldest placement left; the last one sends the
+    /// node to the trash.
+    Unplace {
+        id: String,
+        net: String,
+    },
+    /// «Сделать основным» (05 §5): `net` becomes the primary placement.
+    SetPrimary {
+        id: String,
+        net: String,
+    },
+    /// «Перенести» (05 §5): the placement of `id` moves from `from` to `to`
+    /// at (x, y); a primary stays primary. Where the node lies already, the
+    /// moved placement goes and the one there keeps its place.
+    Relocate {
+        id: String,
+        from: String,
+        to: String,
+        x: f64,
+        y: f64,
+    },
+    /// Soft delete (05 §11): `trashedAt` is set, placements and wires stay
+    /// hidden. A network takes along what lives only inside it (05 §5).
     Trash {
         ids: Vec<String>,
     },
-    /// Back from the trash, to where they were.
+    /// Back from the trash, to where they were, with what went in the same batch.
     Restore {
         ids: Vec<String>,
     },

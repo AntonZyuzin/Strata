@@ -2183,3 +2183,430 @@ fn wires_that_leave_a_network_are_counted_and_rolled_up_to_its_bubbles() {
         .collect();
     assert_eq!(names, ["В", "Б"]);
 }
+
+// ── Placements (05 §5, ADR-0002) ─────────────────────────────────────
+
+/// A clock that moves a millisecond with every step: «the oldest placement».
+fn ticking() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static T: AtomicI64 = AtomicI64::new(1_760_000_000_000);
+    T.fetch_add(1, Ordering::Relaxed)
+}
+
+fn op(w: &mut Workspace<MemoryStore>, op: Op) -> crate::workspace::Result<crate::Changeset> {
+    w.apply(&[op], Label::new("t.place"))
+}
+
+fn place(
+    w: &mut Workspace<MemoryStore>,
+    id: &str,
+    net: &str,
+) -> crate::workspace::Result<crate::Changeset> {
+    op(
+        w,
+        Op::Place {
+            id: id.to_owned(),
+            net: net.to_owned(),
+            x: 5.0,
+            y: 6.0,
+        },
+    )
+}
+
+fn shown(w: &mut Workspace<MemoryStore>, net: &str, id: &str) -> Option<(bool, u32)> {
+    w.network_view(net)
+        .expect("view")
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .map(|n| (n.appearance, n.places))
+}
+
+fn primary(w: &Workspace<MemoryStore>, id: &str) -> Option<String> {
+    w.node_details(id).expect("node").parent
+}
+
+#[test]
+fn a_node_appears_in_several_networks_with_one_primary() {
+    let mut w = ws();
+    w.set_clock(ticking);
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Network, "Игра");
+    let film = create(&mut w, &root, NodeKind::Network, "Фильм");
+    let refs = create(&mut w, &game, NodeKind::Note, "Референсы");
+    place(&mut w, &refs, &film).expect("«Разместить здесь»");
+    // One node, two placements: the primary at home, an appearance with «×2».
+    assert_eq!(shown(&mut w, &game, &refs), Some((false, 2)));
+    assert_eq!(shown(&mut w, &film, &refs), Some((true, 2)));
+    assert_eq!(primary(&w, &refs), Some(game.clone()));
+    let places = w.node_details(&refs).expect("node").places;
+    let nets: Vec<(&str, bool)> = places.iter().map(|p| (p.net.as_str(), p.primary)).collect();
+    assert_eq!(nets, [(game.as_str(), true), (film.as_str(), false)]);
+    assert_eq!(
+        places[1]
+            .path
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["Корень", "Фильм"]
+    );
+    // Rule 3: once in a network.
+    assert!(place(&mut w, &refs, &film).is_err());
+    assert!(place(&mut w, &refs, &game).is_err());
+    // The tree keeps the node once, under its primary network.
+    let items: Vec<_> = w.tree().into_iter().filter(|i| i.id == refs).collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].parent.as_deref(), Some(game.as_str()));
+}
+
+#[test]
+fn networks_nest_without_cycles() {
+    // Rule 4: not a network in itself or in a network inside it.
+    let mut w = ws();
+    let root = w.root();
+    let outer = create(&mut w, &root, NodeKind::Network, "Внешняя");
+    let inner = create(&mut w, &outer, NodeKind::Project, "Внутренняя");
+    let deep = create(&mut w, &inner, NodeKind::Network, "Глубокая");
+    assert!(place(&mut w, &outer, &outer).is_err());
+    assert!(place(&mut w, &outer, &inner).is_err());
+    assert!(place(&mut w, &outer, &deep).is_err(), "inside at any depth");
+    assert!(
+        place(&mut w, &root, &outer).is_err(),
+        "the root lies nowhere"
+    );
+    // An appearance makes a way down too: «Глубокая» in «Соседняя» puts
+    // «Соседняя» out of reach of «Глубокая».
+    let side = create(&mut w, &root, NodeKind::Network, "Соседняя");
+    place(&mut w, &deep, &side).expect("an appearance");
+    place(&mut w, &inner, &side).expect("a project in a folder beside");
+    assert!(place(&mut w, &side, &deep).is_err());
+    // A note takes no part in cycles.
+    let note = create(&mut w, &deep, NodeKind::Note, "Заметка");
+    place(&mut w, &note, &outer).expect("a note anywhere");
+}
+
+#[test]
+fn a_placement_goes_and_the_primary_falls_to_the_oldest_left() {
+    let mut w = ws();
+    w.set_clock(ticking);
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let c = create(&mut w, &root, NodeKind::Network, "В");
+    let n = create(&mut w, &a, NodeKind::Note, "Нода");
+    place(&mut w, &n, &c).expect("in В first");
+    place(&mut w, &n, &b).expect("in Б then");
+    // «Убрать отсюда» an appearance: the primary stays.
+    let unplace = |net: &str| Op::Unplace {
+        id: n.clone(),
+        net: net.to_owned(),
+    };
+    op(&mut w, unplace(&b)).expect("out of Б");
+    assert_eq!(shown(&mut w, &b, &n), None);
+    assert_eq!(primary(&w, &n), Some(a.clone()));
+    assert_eq!(shown(&mut w, &a, &n), Some((false, 2)));
+    // Out of its primary: the oldest placement left is the primary now.
+    place(&mut w, &n, &b).expect("in Б again, younger than В");
+    op(&mut w, unplace(&a)).expect("out of А");
+    assert_eq!(primary(&w, &n), Some(c.clone()));
+    assert_eq!(shown(&mut w, &c, &n), Some((false, 2)));
+    assert!(
+        op(&mut w, unplace(&a)).is_err(),
+        "not placed there any more"
+    );
+    // Undo brings the placement and the primary back.
+    w.undo().expect("undo");
+    assert_eq!(primary(&w, &n), Some(a.clone()));
+    assert_eq!(shown(&mut w, &a, &n), Some((false, 3)));
+}
+
+#[test]
+fn the_last_placement_out_sends_the_node_to_the_trash_and_back_there() {
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let n = create(&mut w, &folder, NodeKind::Task, "Задача");
+    op(
+        &mut w,
+        Op::Unplace {
+            id: n.clone(),
+            net: folder.clone(),
+        },
+    )
+    .expect("the last placement");
+    assert_eq!(shown(&mut w, &folder, &n), None);
+    assert_eq!(
+        w.trash().into_iter().map(|t| t.id).collect::<Vec<_>>(),
+        std::slice::from_ref(&n)
+    );
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![n.clone()],
+        },
+    )
+    .expect("restore");
+    assert_eq!(shown(&mut w, &folder, &n), Some((false, 1)));
+    // A locked node does not go by its last placement (05 §7).
+    flag(&mut w, &n, crate::Flag::Lock, true).expect("lock");
+    assert!(
+        op(
+            &mut w,
+            Op::Unplace {
+                id: n.clone(),
+                net: folder.clone()
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn make_primary_changes_the_path_not_the_node() {
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Network, "Игра");
+    let film = create(&mut w, &root, NodeKind::Network, "Фильм");
+    let refs = create(&mut w, &game, NodeKind::Network, "Референсы");
+    let inside = create(&mut w, &refs, NodeKind::Note, "Палитра");
+    place(&mut w, &refs, &film).expect("appear in Фильм");
+    let path = |w: &mut Workspace<MemoryStore>| -> Vec<String> {
+        w.network_view(&refs)
+            .expect("view")
+            .path
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect()
+    };
+    assert_eq!(path(&mut w), ["Корень", "Игра", "Референсы"]);
+    op(
+        &mut w,
+        Op::SetPrimary {
+            id: refs.clone(),
+            net: film.clone(),
+        },
+    )
+    .expect("«Сделать основным»");
+    assert_eq!(primary(&w, &refs), Some(film.clone()));
+    assert_eq!(path(&mut w), ["Корень", "Фильм", "Референсы"]);
+    assert_eq!(shown(&mut w, &game, &refs), Some((true, 2)));
+    assert_eq!(
+        shown(&mut w, &refs, &inside),
+        Some((false, 1)),
+        "the content stays"
+    );
+    // Only where it lies.
+    let away = create(&mut w, &root, NodeKind::Network, "В стороне");
+    assert!(
+        op(
+            &mut w,
+            Op::SetPrimary {
+                id: refs.clone(),
+                net: away.clone()
+            }
+        )
+        .is_err()
+    );
+    w.undo().expect("undo");
+    w.undo().expect("undo");
+    assert_eq!(primary(&w, &refs), Some(game.clone()));
+}
+
+#[test]
+fn relocate_moves_the_placement_and_keeps_the_primary() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let n = create(&mut w, &a, NodeKind::Note, "Нода");
+    let relocate = |from: &str, to: &str| Op::Relocate {
+        id: n.clone(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+        x: 7.0,
+        y: 8.0,
+    };
+    op(&mut w, relocate(&a, &b)).expect("«Перенести»");
+    assert_eq!(shown(&mut w, &a, &n), None);
+    assert_eq!(shown(&mut w, &b, &n), Some((false, 1)));
+    assert_eq!(primary(&w, &n), Some(b.clone()));
+    let at = w.network_view(&b).expect("view").nodes;
+    assert_eq!((at[0].x, at[0].y), (7.0, 8.0));
+    // Where it lies already: the moved placement goes, the one there stays put.
+    place(&mut w, &n, &a).expect("an appearance in А");
+    op(
+        &mut w,
+        Op::Move {
+            net: a.clone(),
+            id: n.clone(),
+            x: 100.0,
+            y: 200.0,
+        },
+    )
+    .expect("move it there");
+    op(&mut w, relocate(&b, &a)).expect("relocate onto itself");
+    assert_eq!(shown(&mut w, &b, &n), None);
+    assert_eq!(
+        shown(&mut w, &a, &n),
+        Some((false, 1)),
+        "the primary went with it"
+    );
+    let at = w.network_view(&a).expect("view").nodes;
+    assert_eq!((at[0].x, at[0].y), (100.0, 200.0));
+    // No cycle by relocating either.
+    let inner = create(&mut w, &a, NodeKind::Network, "Внутри");
+    assert!(
+        op(
+            &mut w,
+            Op::Relocate {
+                id: a.clone(),
+                from: root.clone(),
+                to: inner.clone(),
+                x: 0.0,
+                y: 0.0
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn wrap_into_a_network_is_one_step() {
+    // 05 §4.2 «Обернуть в сеть»: a new network, the placements move inside.
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Note, "А");
+    let b = create(&mut w, &root, NodeKind::Note, "Б");
+    let net = NodeId::new().to_text();
+    let mv = |id: &str| Op::Relocate {
+        id: id.to_owned(),
+        from: root.clone(),
+        to: net.clone(),
+        x: 0.0,
+        y: 0.0,
+    };
+    w.apply(
+        &[
+            Op::CreateNode {
+                id: Some(net.clone()),
+                kind: NodeKind::Network,
+                name: "Сеть".to_owned(),
+                net: root.clone(),
+                x: 0.0,
+                y: 0.0,
+            },
+            mv(&a),
+            mv(&b),
+        ],
+        Label::new("t.wrap"),
+    )
+    .expect("wrap");
+    assert_eq!(names(&mut w, &root), ["Сеть"]);
+    assert_eq!(names(&mut w, &net), ["А", "Б"]);
+    assert_eq!(primary(&w, &a), Some(net.clone()));
+    w.undo().expect("one step");
+    assert_eq!(names(&mut w, &root), ["А", "Б"]);
+}
+
+#[test]
+fn a_network_in_the_trash_takes_what_lives_only_inside_it() {
+    // 05 §5, ☑ Q-05-6: what lives nowhere else goes with it; a node placed
+    // elsewhere too only loses its placement inside.
+    let mut w = ws();
+    w.set_clock(ticking);
+    let root = w.root();
+    let sprint = create(&mut w, &root, NodeKind::Project, "Спринт");
+    let inner = create(&mut w, &sprint, NodeKind::Network, "Внутри");
+    let only = create(&mut w, &inner, NodeKind::Task, "Только здесь");
+    let shared = create(&mut w, &sprint, NodeKind::Note, "Общая");
+    let archive = create(&mut w, &root, NodeKind::Network, "Архив");
+    place(&mut w, &shared, &archive).expect("also in Архив");
+    op(
+        &mut w,
+        Op::Trash {
+            ids: vec![sprint.clone()],
+        },
+    )
+    .expect("trash the sprint");
+    // One item in the trash: the rest comes back with it.
+    assert_eq!(
+        w.trash().into_iter().map(|t| t.name).collect::<Vec<_>>(),
+        ["Спринт"]
+    );
+    let live: Vec<String> = w.tree().into_iter().map(|i| i.name).collect();
+    assert!(!live.contains(&"Только здесь".to_owned()));
+    assert!(!live.contains(&"Внутри".to_owned()));
+    // The shared node stays in Архив, its primary now.
+    assert_eq!(primary(&w, &shared), Some(archive.clone()));
+    assert_eq!(shown(&mut w, &archive, &shared), Some((false, 1)));
+    // Back from the trash: the whole batch, the shared one stays where it is.
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![sprint.clone()],
+        },
+    )
+    .expect("restore");
+    assert_eq!(names(&mut w, &inner), ["Только здесь"]);
+    assert_eq!(shown(&mut w, &sprint, &shared), None);
+    // Undo gives everything back as it was.
+    w.undo().expect("undo the restore");
+    w.undo().expect("undo the trash");
+    assert_eq!(shown(&mut w, &sprint, &shared), Some((false, 2)));
+    assert_eq!(primary(&w, &shared), Some(sprint.clone()));
+    // A locked node inside keeps the network out of the trash (05 §7).
+    flag(&mut w, &only, crate::Flag::Lock, true).expect("lock");
+    assert!(
+        op(
+            &mut w,
+            Op::Trash {
+                ids: vec![sprint.clone()]
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_template_copies_its_appearances_as_appearances() {
+    // 05 §5: a network copied deep — what lives inside is copied, an
+    // appearance stays an appearance of the same node; one that would make
+    // a cycle is left out.
+    let mut w = ws();
+    let root = w.root();
+    let tpl = create(&mut w, &root, NodeKind::Project, "Шаблон");
+    let own = create(&mut w, &tpl, NodeKind::Task, "Своя");
+    let lib = create(&mut w, &root, NodeKind::Network, "Библиотека");
+    let guide = create(&mut w, &lib, NodeKind::Note, "Гайд");
+    place(&mut w, &guide, &tpl).expect("an appearance in the template");
+    connect(&mut w, &guide, &own);
+    let copy = w
+        .copy_node(&tpl, &root, (300.0, 0.0), &[], Label::new("t.copy"))
+        .expect("copy");
+    let v = w.network_view(&copy).expect("view");
+    let inside: Vec<(String, bool)> = v
+        .nodes
+        .iter()
+        .map(|n| (n.name.clone(), n.appearance))
+        .collect();
+    assert!(
+        inside.contains(&("Гайд".to_owned(), true)),
+        "the same node: {inside:?}"
+    );
+    assert!(inside.contains(&("Своя".to_owned(), false)));
+    assert!(v.nodes.iter().any(|n| n.id == guide));
+    assert_eq!(v.edges.len(), 1, "its wire to the copy comes too");
+    // The library placed inside the template would be a cycle in a copy put in the library.
+    place(&mut w, &lib, &tpl).expect("the library in the template");
+    let inner = w
+        .copy_node(&tpl, &lib, (0.0, 0.0), &[], Label::new("t.copy"))
+        .expect("a copy in the library");
+    let names: Vec<String> = w
+        .network_view(&inner)
+        .expect("view")
+        .nodes
+        .into_iter()
+        .map(|n| n.name)
+        .collect();
+    assert!(!names.contains(&"Библиотека".to_owned()), "{names:?}");
+}

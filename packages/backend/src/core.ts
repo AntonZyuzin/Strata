@@ -136,6 +136,14 @@ export type CoreOp =
   | { op: 'move'; net: string; id: string; x: number; y: number }
   | { op: 'connect'; from: string; to: string }
   | { op: 'disconnect'; from: string; to: string }
+  /** «Разместить здесь» (05 §5): an appearance in `net`. */
+  | { op: 'place'; id: string; net: string; x: number; y: number }
+  /** «Убрать отсюда» (05 §5); the last placement sends the node to the trash. */
+  | { op: 'unplace'; id: string; net: string }
+  /** «Сделать основным» (05 §5). */
+  | { op: 'setPrimary'; id: string; net: string }
+  /** «Перенести» (05 §5): the placement moves; a primary stays primary. */
+  | { op: 'relocate'; id: string; from: string; to: string; x: number; y: number }
   | { op: 'trash'; ids: string[] }
   | { op: 'restore'; ids: string[] }
   /** «Сделать проектом / задачей / папкой» (05 §4.2). */
@@ -167,6 +175,7 @@ export type CoreRequest =
   | { call: 'cancel' }
   | { call: 'history' }
   | { call: 'trash' }
+  | { call: 'trashPreview'; ids: string[] }
   | { call: 'openDoc'; doc: string }
   | { call: 'pushDoc'; doc: string; update: string }
   | { call: 'pullDoc'; doc: string; since: string }
@@ -189,6 +198,10 @@ export interface ViewNode extends NodeAttrs {
   fold?: CoreFold;
   /** Its wires whose other end is not placed in this network: «↗N» (05 §8.3). */
   external?: number;
+  /** This placement is not its primary one: an appearance (05 §5). */
+  appearance?: boolean;
+  /** The networks it is placed in, this one among them: «×N» (06 §12.2). */
+  places?: number;
 }
 
 /** A row of the checklist preview of a task's or project's hierarchy (05 §4.3). */
@@ -230,6 +243,26 @@ export interface NodeDetails extends NodeAttrs {
   /** For tasks and projects: the checklist preview of the hierarchy. */
   subtasks: TaskRow[];
   fold?: CoreFold;
+  /** Where it is placed (05 §5): the primary first, then the oldest. */
+  places: Place[];
+}
+
+/**
+ * What a step to the trash would take (05 §5, 06 §12.3), for its dialog:
+ * the nodes that go, and those inside that stay elsewhere, with the path of
+ * the network they stay in.
+ */
+export interface TrashPreview {
+  trashed: Linked[];
+  staying: (Linked & { path: [string, string][] })[];
+}
+
+/** One placement of a node, for «Где размещена» (06 §12.2). */
+export interface Place {
+  net: string;
+  /** From the root to that network, both included: `[id, name]`. */
+  path: [string, string][];
+  primary: boolean;
 }
 
 /** A node in the «Слои» panel, under its primary network; the root has no parent. */
@@ -356,6 +389,7 @@ type CoreResponse =
   | { type: 'reverted'; report: unknown; history: History }
   | { type: 'history'; history: History }
   | { type: 'trash'; items: TrashItem[] }
+  | { type: 'trashPreview'; preview: TrashPreview }
   | { type: 'doc'; doc: string; snapshot: string }
   | { type: 'pushed'; wires: boolean }
   | { type: 'updates'; doc: string; update: string }
@@ -470,6 +504,11 @@ export class Core {
 
   async trash(): Promise<TrashItem[]> {
     return expect(await this.call({ call: 'trash' }), 'trash').items;
+  }
+
+  /** What trashing `ids` would take, without taking it (06 §12.3). */
+  async trashPreview(ids: string[]): Promise<TrashPreview> {
+    return expect(await this.call({ call: 'trashPreview', ids }), 'trashPreview').preview;
   }
 
   /** A content document's snapshot for an editor (`content/<id>`). */

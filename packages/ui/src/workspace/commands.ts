@@ -80,7 +80,22 @@ export const COMMANDS: readonly Command[] = [
   canvas('redo', 'redo', 'Ctrl+Shift+Z', ['повтор', 'redo'], (c) => c.canRedo),
   canvas('open', 'open', 'Enter', ['открыть', 'войти', 'open', 'enter', 'dive'], one, 'node'),
   canvas('rename', 'rename', 'F2', ['имя', 'переименовать', 'rename', 'name'], one, 'node'),
-  canvas('delete', 'delete', 'Del', ['удалить', 'корзина', 'delete', 'trash'], chosen, 'node'),
+  canvas(
+    'delete',
+    'delete',
+    'Del',
+    ['убрать', 'удалить', 'отсюда', 'remove', 'delete', 'here'],
+    chosen,
+    'node',
+  ),
+  canvas(
+    'deleteEverywhere',
+    'deleteEverywhere',
+    'Shift+Del',
+    ['удалить', 'везде', 'корзина', 'delete', 'everywhere', 'trash'],
+    chosen,
+    'node',
+  ),
   canvas(
     'extract',
     'extract',

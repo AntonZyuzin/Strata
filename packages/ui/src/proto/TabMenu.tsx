@@ -22,6 +22,19 @@ import {
 
 const MARGIN = 8;
 
+let openings = 0;
+
+/**
+ * A serial for each opening of the menu, its React `key`. A choice made once
+ * the engine answers closes the menu in a later render, and a `Tab` typed
+ * before that render opens the next one in the same batch: without a key of
+ * its own the new menu would be the old one, its query and all.
+ */
+export function menuOpening(): number {
+  openings += 1;
+  return openings;
+}
+
 export function TabMenu(props: {
   locale: Locale;
   x: number;
@@ -30,6 +43,8 @@ export function TabMenu(props: {
   bounds?: { right: number; bottom: number } | undefined;
   initialQuery: string;
   nodes: readonly MenuNode[];
+  /** The workspace's nodes: another network's one is placed here (05 §5). */
+  space?: readonly MenuNode[] | undefined;
   recent: readonly string[];
   /** Nodes with the flag «Шаблон» (05 §7), from the whole workspace. */
   templates?: readonly MenuNode[] | undefined;
@@ -42,14 +57,15 @@ export function TabMenu(props: {
   onChoose: (item: MenuItem) => void;
   onCancel: () => void;
 }) {
-  const { locale, search, templates, ghosts, named } = props;
+  const { locale, search, templates, ghosts, named, space } = props;
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
   const [moved] = useState(pointerMoved);
   // The engine answers in its worker: the rows stay those of the last
   // answer until the next one comes, and `Enter` waits for the query's own.
   const [ranking, setRanking] = useState<MenuRanking | null>(null);
-  const [waiting, setWaiting] = useState(false);
+  /** `Enter` (the current row) or `Alt+Enter` (the best existing node) typed before the answer. */
+  const [waiting, setWaiting] = useState<'current' | 'insert' | null>(null);
   useEffect(() => {
     if (query.trim() === '') return;
     let live = true;
@@ -72,8 +88,9 @@ export function TabMenu(props: {
         ranking,
         ghosts,
         named ?? null,
+        space,
       ),
-    [locale, shown, props.nodes, props.recent, templates, ranking, ghosts, named],
+    [locale, shown, props.nodes, props.recent, templates, ranking, ghosts, named, space],
   );
   const ready = query.trim() === '' || ranking?.query === query;
   const input = useRef<HTMLInputElement>(null);
@@ -102,11 +119,23 @@ export function TabMenu(props: {
   const { onChoose } = props;
   useEffect(() => {
     if (!waiting || !ready) return;
-    setWaiting(false);
+    const how = waiting;
+    setWaiting(null);
+    if (how === 'insert') {
+      const best = items.find((i) => i.group === 'insert');
+      if (best) onChoose(best);
+      return;
+    }
     if (current) onChoose(current);
-  }, [waiting, ready, current, onChoose]);
+  }, [waiting, ready, current, items, onChoose]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // `Enter` chose the query as it was: what is typed until the answer
+    // comes would change a choice already made; only `Esc` takes it back.
+    if (waiting && e.key !== 'Escape') {
+      e.preventDefault();
+      return;
+    }
     const n = items.length;
     switch (e.key) {
       case 'ArrowDown':
@@ -126,11 +155,18 @@ export function TabMenu(props: {
         e.preventDefault();
         setIndex((i) => Math.max(0, i - 5));
         return;
-      case 'Enter':
+      case 'Enter': {
         e.preventDefault();
-        if (!ready) setWaiting(true);
-        else if (current) props.onChoose(current);
+        // `Alt+Enter` — an appearance of the best existing match (06 §5.3).
+        const how = e.altKey ? 'insert' : 'current';
+        if (!ready) {
+          setWaiting(how);
+          return;
+        }
+        const pick = how === 'insert' ? items.find((i) => i.group === 'insert') : current;
+        if (pick) props.onChoose(pick);
         return;
+      }
       case 'Escape':
         e.preventDefault();
         props.onCancel();
@@ -161,6 +197,8 @@ export function TabMenu(props: {
             title={t(locale, 'menu.footer')}
             spellCheck={false}
             autoComplete="off"
+            readOnly={waiting !== null}
+            aria-busy={waiting !== null}
             onChange={(e) => {
               setQuery(e.target.value);
               setIndex(0);

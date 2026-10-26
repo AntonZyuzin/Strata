@@ -279,12 +279,15 @@ describe('the canvas and the core in step', () => {
     expect(ghost()?.ghostOf).toBe(A);
     expect(g.edges()).toEqual([[A, id]]);
 
-    // The note to the trash takes its ghost along; undo brings both back.
+    // The note out of its only network takes its ghost along; undo brings
+    // both back. «Убрать отсюда» is the core's `unplace`: the last
+    // placement out sends the note to the trash (05 §5).
+    const none = { id: 0, label: { key: '' }, source: 'user' as const, ops: [], inverse: [] };
     const trashed = g.transaction({ key: 't.delete' }, (tx) => tx.remove(A));
     expect(ghost()).toBeUndefined();
-    expect(
-      opsOf(trashed ?? { id: 0, label: { key: '' }, source: 'user', ops: [], inverse: [] }, root),
-    ).toEqual([{ op: 'trash', ids: [A] }]);
+    expect(opsOf(trashed ?? none, root)).toEqual([{ op: 'unplace', id: A, net: root }]);
+    await sync.settled();
+    expect((await home.core.trash()).map((t) => t.id)).toEqual([A]);
     g.undo();
     expect(ghost()?.ghostOf).toBe(A);
     expect(g.edges()).toEqual([[A, id]]);
@@ -373,6 +376,32 @@ describe('fields of a node (05 §6.1)', () => {
     expect(list.map((w) => [w.name, w.incoming, w.manual, w.path.map(([, n]) => n)])).toEqual([
       ['Эскиз', false, true, ['Тест', 'Папка']],
     ]);
+  });
+
+  it('an appearance is marked; «Удалить везде» is the trash, «Убрать отсюда» is not (05 §5)', async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Референсы'));
+      tx.add(newNode({ id: B, name: 'Фильм', kind: 'network', icon: 0, x: 300, y: 0 }));
+    });
+    await sync.settled();
+    await home.core.apply([{ op: 'place', id: A, net: B, x: 0, y: 0 }], { key: 't' });
+    expect(graphOf(await home.core.view(B), () => 0).nodes.get(A)).toMatchObject({
+      appearance: true,
+      places: 2,
+    });
+    followExternal(g, await home.core.view(root));
+    expect(g.nodes.get(A)).toMatchObject({ appearance: false, places: 2 });
+    // Out of here: it stays in «Фильм», its primary now.
+    const none = { id: 0, label: { key: '' }, source: 'user' as const, ops: [], inverse: [] };
+    g.transaction({ key: 't.delete' }, (tx) => tx.remove(A));
+    await sync.settled();
+    expect((await home.core.node(A)).parent).toBe(B);
+    expect(await home.core.trash()).toEqual([]);
+    // Everywhere: to the trash.
+    const film = graphOf(await home.core.view(B), () => 0);
+    const gone = film.transaction({ key: 't.delete' }, (tx) => tx.remove(A, true));
+    expect(opsOf(gone ?? none, B)).toEqual([{ op: 'trash', ids: [A] }]);
   });
 
   it("a tick follows into the parent's progress arc on the canvas, outside undo", async () => {

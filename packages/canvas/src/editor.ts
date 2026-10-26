@@ -138,6 +138,23 @@ export interface EditorEvents {
    * that leave the network, by the mark at (sx, sy). The node is chosen.
    */
   external?(e: { id: string; sx: number; sy: number }): void;
+  /**
+   * A click on the shortcut of an appearance (06 §12.2): the Chrome shows
+   * «Где размещена». The node is chosen.
+   */
+  places?(e: { id: string; sx: number; sy: number }): void;
+  /**
+   * «Убрать отсюда» or, with `everywhere`, «Удалить везде» (05 §5, 06
+   * §12.3): true when the Chrome asks first — a dialog — and removes the
+   * nodes itself with `removeNodes`; false or none — they go at once.
+   */
+  deleting?(e: { ids: string[]; everywhere: boolean }): boolean;
+  /**
+   * An existing node of another network chosen in the Tab menu (05 §5
+   * «Разместить здесь»): its appearance goes at (x, y), wired from `inputs`.
+   * The core places it; the graph has no such node yet.
+   */
+  place?(e: { id: string; x: number; y: number; inputs: string[] }): void;
 }
 
 /** The canvas's actions by name (06 §1 rule 6): its keys and the palette's commands. */
@@ -148,6 +165,7 @@ export type CanvasAction =
   | 'extract'
   | 'selectAll'
   | 'delete'
+  | 'deleteEverywhere'
   | 'rename'
   | 'fitAll'
   | 'frame'
@@ -178,7 +196,8 @@ export type MenuChoice =
       /** Open the name input after creating (the kind's name was used as a placeholder). */
       rename: boolean;
     }
-  | { t: 'existing'; id: string }
+  /** An existing node: on this canvas — wired or framed; elsewhere — its appearance here (05 §5). */
+  | { t: 'existing'; id: string; kind: NodeKind }
   /** A node with the flag «Шаблон»: its copy (05 §7). */
   | { t: 'template'; id: string; kind: NodeKind; name: string }
   /** A ghost of this network: a note with its name, which resolves it (05 §8.5). */
@@ -422,8 +441,8 @@ export class Editor {
   }
 
   /** The menu's «Удалить»: the selection, or the selected wire (Delete). */
-  deleteSelected(): void {
-    this.deleteSelection();
+  deleteSelected(everywhere = false): void {
+    this.deleteSelection(everywhere);
   }
 
   /** Nothing selected: the panel's × closes it so (06, «P»). */
@@ -579,7 +598,10 @@ export class Editor {
         this.select([...this.graph.nodes.keys()]);
         return;
       case 'delete':
-        this.deleteSelection();
+        this.deleteSelection(false);
+        return;
+      case 'deleteEverywhere':
+        this.deleteSelection(true);
         return;
       case 'rename':
         if (this.current) this.openName(this.current, false);
@@ -654,7 +676,13 @@ export class Editor {
     this.mode = { t: 'idle' };
     if (choice.t === 'existing') {
       const node = this.graph.nodes.get(choice.id);
-      if (!node) return;
+      if (!node) {
+        // Another network's node: «Разместить здесь» (05 §5), where a new one would go.
+        const place = this.placeNew(m, radiusOf({ kind: choice.kind, key: false }));
+        const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
+        this.events.place?.({ id: choice.id, x: place.x, y: place.y, inputs: [...inputs] });
+        return;
+      }
       const sources = m.sources.filter((s) => s !== choice.id);
       if (sources.length > 0) {
         this.graph.transaction(
@@ -914,13 +942,15 @@ export class Editor {
       this.switchFlag(slot.flag, this.flagTargets(this.ring.id));
       return;
     }
-    // «↗N» on the rim (06 §14): its list, not a press on the bubble.
-    const external = this.events.external ? this.view.externalAt(sx, sy) : null;
-    if (external) {
-      // No mousedown after it: the list keeps the focus it takes.
+    // A mark on the rim: «↗N» opens its list (06 §14), the shortcut of an
+    // appearance «Где размещена» (06 §12.2); not a press on the bubble.
+    const mark = this.view.markAt(sx, sy);
+    const open = mark && (mark.mark === 'external' ? this.events.external : this.events.places);
+    if (mark && open) {
+      // No mousedown after it: what opens keeps the focus it takes.
       e.preventDefault();
-      this.select([external]);
-      this.events.external?.({ id: external, sx, sy });
+      this.select([mark.id]);
+      open({ id: mark.id, sx, sy });
       return;
     }
     this.mode = {
@@ -1474,7 +1504,8 @@ export class Editor {
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
-        this.act('delete');
+        // `Shift` — «Удалить везде», else «Убрать отсюда» (06 §12.3).
+        this.act(e.shiftKey ? 'deleteEverywhere' : 'delete');
         return;
       case 'F2':
         this.act('rename');
@@ -1686,7 +1717,7 @@ export class Editor {
   }
 
   /** `Delete` with healing (06 §6.7, §12.3): extract, then remove; undo brings it back. */
-  private deleteSelection() {
+  private deleteSelection(everywhere: boolean) {
     const ids = [...this.selection];
     if (ids.length === 0) {
       const w = this.selectedWire;
@@ -1695,11 +1726,33 @@ export class Editor {
       this.selectedWire = null;
       return;
     }
-    this.graph.transaction({ key: 'proto.change.delete', params: { n: ids.length } }, (tx) => {
-      extract(this.graph, tx, ids);
-      for (const id of ids) tx.remove(id);
+    if (this.events.deleting?.({ ids, everywhere })) return;
+    this.removeNodes(ids, everywhere);
+  }
+
+  /**
+   * The nodes out of this network, one step of undo (05 §5, 06 §12.3): the
+   * chains through them heal (§6.7); a node placed nowhere else, or all of
+   * them with `everywhere`, goes to the trash.
+   */
+  removeNodes(ids: readonly string[], everywhere: boolean): void {
+    const here = ids.filter((id) => this.graph.nodes.has(id));
+    if (here.length === 0) return;
+    // Placed elsewhere too: they leave only this network.
+    const stay = !everywhere && here.some((id) => (this.graph.nodes.get(id)?.places ?? 1) > 1);
+    const n = here.length;
+    this.graph.transaction(
+      { key: stay ? 'proto.change.unplace' : 'proto.change.delete', params: { n } },
+      (tx) => {
+        extract(this.graph, tx, here);
+        for (const id of here) tx.remove(id, everywhere);
+      },
+    );
+    for (const id of here) this.selection.delete(id);
+    this.events.toast({
+      key: stay ? 'proto.toast.unplaced' : 'proto.toast.deleted',
+      params: { n },
     });
-    this.events.toast({ key: 'proto.toast.deleted', params: { n: ids.length } });
   }
 
   private copyNodes(ids: string[]): string[] {

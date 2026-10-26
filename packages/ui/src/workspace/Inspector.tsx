@@ -18,9 +18,10 @@ import type { LoroDoc } from 'loro-crdt';
 import { type CSSProperties, useEffect, useRef, useState } from 'react';
 import { ASSET_ICONS, Icon, nodeIcon } from '../icons/Icon';
 import type { Clock, DateFormat } from '../prefs';
-import { IconButton } from '../TabBar';
+import { Glyph, IconButton } from '../TabBar';
 import { viewable } from './AssetWindow';
 import { ListItems } from './ListItems';
+import { pathLabel } from './paths';
 import { WhenField } from './WhenField';
 
 /**
@@ -58,6 +59,14 @@ export interface InspectorActions {
   subtask(name: string): void;
   /** A subtask ticked or not in the preview; `name` is its own, for the step. */
   done(id: string, name: string, done: boolean): void;
+  /** The network on the canvas: «Где размещена» marks it (06 §12.2). */
+  net: string;
+  /** To the node in network `net` (06 §12.2 «Перейти»). */
+  goPlace(net: string): void;
+  /** «Сделать основным» (05 §5). */
+  makePrimary(net: string): void;
+  /** «Убрать оттуда» (05 §5): its placement in another network goes. */
+  unplace(net: string): void;
 }
 
 function field(locale: Locale, key: AttrKey): string {
@@ -225,6 +234,77 @@ function Rows(props: {
   );
 }
 
+/**
+ * «Где размещена» (05 §5, 06 §12.2): every network the node lies in, the
+ * primary first with ⌂, the appearances with the shortcut. A row goes
+ * there; the one on the canvas is marked and stays; «Сделать основным» for
+ * an appearance, «Убрать оттуда» for another network's placement. A click
+ * on the shortcut on the bubble brings the keyboard here, once.
+ */
+function Places(props: {
+  locale: Locale;
+  node: NodeDetails;
+  actions: InspectorActions;
+  focus: boolean;
+  onFocused: () => void;
+}) {
+  const { locale, node: n, actions: a } = props;
+  const list = useRef<HTMLUListElement>(null);
+  const focused = useRef(props.onFocused);
+  focused.current = props.onFocused;
+  useEffect(() => {
+    if (!props.focus) return;
+    const ul = list.current;
+    ul?.scrollIntoView({ block: 'nearest' });
+    ul?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus();
+    focused.current();
+  }, [props.focus]);
+  return (
+    <ul ref={list} className="ins-links ins-places">
+      {n.places.map((p) => {
+        const here = p.net === a.net;
+        const path = pathLabel(p.path);
+        const role = t(locale, p.primary ? 'ins.placePrimary' : 'ins.placeAppearance');
+        return (
+          <li key={p.net} className={here ? 'is-here' : undefined}>
+            <span className="place-mark" title={role} role="img" aria-label={role}>
+              <Glyph name={p.primary ? 'home' : 'shortcut'} />
+            </span>
+            <button
+              type="button"
+              className="ins-link"
+              aria-current={here ? 'location' : undefined}
+              title={here ? t(locale, 'ins.placeHere', { path }) : path}
+              disabled={here}
+              onClick={() => a.goPlace(p.net)}
+            >
+              {path}
+            </button>
+            {p.primary ? null : (
+              <button
+                type="button"
+                className="icon-button"
+                aria-label={t(locale, 'ins.makePrimary', { path })}
+                title={t(locale, 'ins.makePrimary', { path })}
+                onClick={() => a.makePrimary(p.net)}
+              >
+                <Glyph name="home" />
+              </button>
+            )}
+            {here ? null : (
+              <IconButton
+                icon="close"
+                label={t(locale, 'ins.unplace', { path })}
+                onClick={() => a.unplace(p.net)}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /** Wired nodes as rows: the icon, the name to go to, maybe a cross to unlink. */
 function Links(props: {
   locale: Locale;
@@ -266,6 +346,8 @@ export function Inspector(props: {
   actions: InspectorActions;
   /** A list was opened: the keyboard goes to its new item, once. */
   focusList: boolean;
+  /** The shortcut on the bubble was clicked: the keyboard goes to «Где размещена», once. */
+  focusPlaces: boolean;
   /** The note is open in its window: its text is there, not here a second time. */
   noteOpen: boolean;
   /** The asset is open in its viewer: the large picture or player is there only. */
@@ -273,6 +355,7 @@ export function Inspector(props: {
   /** How dates and times read (✅ Q-06-23). */
   when: { date: DateFormat; clock: Clock };
   onListFocused: () => void;
+  onPlacesFocused: () => void;
 }) {
   const { locale, node: n, people, actions: a } = props;
   const [adding, setAdding] = useState(false);
@@ -650,6 +733,19 @@ export function Inspector(props: {
           <section className="ins-section">
             <h3 className="ins-heading">{t(locale, 'ins.partOf')}</h3>
             <Links locale={locale} links={parents} onFocus={a.focus} />
+          </section>
+        ) : null}
+        {/* One place is the path in the canvas's corner already: no section for it. */}
+        {n.places.length > 1 ? (
+          <section className="ins-section">
+            <h3 className="ins-heading">{t(locale, 'ins.places')}</h3>
+            <Places
+              locale={locale}
+              node={n}
+              actions={a}
+              focus={props.focusPlaces}
+              onFocused={props.onPlacesFocused}
+            />
           </section>
         ) : null}
       </div>

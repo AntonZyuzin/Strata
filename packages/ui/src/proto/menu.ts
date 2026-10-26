@@ -47,6 +47,8 @@ export interface MenuNode {
   id: string;
   name: string;
   kind: NodeKind;
+  /** The network it lies in, by name: where an appearance would come from (05 §5). */
+  where?: string;
 }
 
 /** A ghost of the network (05 §8.5): its name and the note it is in. */
@@ -74,7 +76,10 @@ export interface MenuRanking {
   templates: Ranked[];
   /** Rows of the ghosts' names, best first. */
   ghosts: Ranked[];
-  /** Ids of the canvas's nodes (collection `net`), best first. */
+  /**
+   * Ids of existing nodes, best first: the workspace's (collection
+   * `space`), then the canvas's not yet in it (`net`).
+   */
   nodes: string[];
 }
 
@@ -98,7 +103,7 @@ export async function rankMenu(
   const colon = q.indexOf(':');
   const head = colon > 0 ? q.slice(0, colon) : '';
   const names = templates.map((n) => n.name);
-  const [kinds, heads, tpls, ghostRows, nodes] = await Promise.all([
+  const [kinds, heads, tpls, ghostRows, net, space] = await Promise.all([
     search.rank(q, NAMES, NAMES.length),
     head ? search.rank(head, NAMES, 1) : Promise.resolve([]),
     search.rank(q, names, MAX_ROWS),
@@ -110,6 +115,7 @@ export async function rankMenu(
         )
       : Promise.resolve([]),
     search.query('net', q, { limit: MAX_ROWS }),
+    search.query('space', q, { limit: MAX_ROWS }),
   ]);
   const top = heads[0];
   return {
@@ -118,7 +124,8 @@ export async function rankMenu(
     head: top ? (KIND_NAMES[top.index]?.at ?? null) : null,
     templates: tpls,
     ghosts: ghostRows,
-    nodes,
+    // A node just made is on the canvas before the workspace's index has it.
+    nodes: [...space, ...net.filter((id) => !space.includes(id))],
   };
 }
 
@@ -165,6 +172,8 @@ export function menuItems(
   ranking: MenuRanking | null = null,
   ghosts: readonly MenuGhost[] = [],
   named: string | null = null,
+  /** The workspace's other nodes, for «Разместить здесь» (05 §5). */
+  space: readonly MenuNode[] = [],
 ): MenuItem[] {
   const q = query.trim();
   if (q === '' && named !== null) {
@@ -239,7 +248,10 @@ export function menuItems(
       },
     ];
   });
-  const byId = new Map(nodes.map((n) => [n.id, n]));
+  // On this canvas — «уже здесь», a choice wires or frames it; elsewhere —
+  // the network it lies in, a choice places it here (05 §5).
+  const here = new Set(nodes.map((n) => n.id));
+  const byId = new Map([...space, ...nodes].map((n) => [n.id, n]));
   const insert = ranking.nodes.flatMap((id): MenuItem[] => {
     const n = byId.get(id);
     if (!n) return [];
@@ -248,9 +260,9 @@ export function menuItems(
         id: `insert:${n.id}`,
         group: 'insert',
         label: n.name,
-        detail: t(locale, `kind.${n.kind}` as const),
+        detail: here.has(n.id) ? t(locale, 'menu.here') : (n.where ?? ''),
         kind: n.kind,
-        choice: { t: 'existing', id: n.id },
+        choice: { t: 'existing', id: n.id, kind: n.kind },
       },
     ];
   });

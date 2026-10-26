@@ -22,6 +22,10 @@ interface Node {
   ghostOf: string | null;
   /** Its wires to nodes not placed here, «↗N» (05 §8.3). */
   external: number;
+  /** This placement is not its primary one (05 §5). */
+  appearance: boolean;
+  /** The networks it lies in. */
+  places: number;
   x: number;
   y: number;
 }
@@ -32,7 +36,7 @@ interface WsHook {
     iconOf(id: string): 'picture' | 'kind' | 'preset' | null;
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
-    externalOf(id: string): { x: number; y: number } | null;
+    markOf(id: string, mark: 'external' | 'places'): { x: number; y: number } | null;
     canvas: HTMLCanvasElement;
     lens: ReadonlySet<string> | null;
   };
@@ -247,21 +251,66 @@ async function linkedAway(page: Page) {
   return idea;
 }
 
-/** Opens the list behind node `id`'s «↗N» by a click on the mark. */
-async function openExternal(page: Page, id: string) {
-  await page.keyboard.press('Escape');
+/**
+ * «Игра», a folder with «Референсы» inside, and an appearance of
+ * «Референсы» at the root by the Tab menu's `Alt+Enter` (05 §5, 06 §5.3).
+ */
+async function appearing(page: Page) {
+  const ws = page.locator('.workspace');
+  await page.mouse.move(420, 300);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('папка');
+  const kind = page.locator('.tab-menu-label', { hasText: /^(Папка|Folder)$/ });
+  await page.locator('.tab-menu-row', { has: kind }).first().click();
+  await page.keyboard.type('Игра');
+  await page.keyboard.press('Enter');
+  await settled(page);
+  await page.keyboard.press('Enter');
+  await expect(ws).toHaveAttribute('data-depth', '2');
+  await createNode(page, 640, 400, 'Референсы');
+  await page.keyboard.press('KeyU');
+  await expect(ws).toHaveAttribute('data-depth', '1');
+  // The workspace's tree knows it: the menu searches the whole workspace.
+  await expect(page.locator('.layer-row', { hasText: 'Референсы' })).toBeVisible();
+  await page.mouse.move(760, 480);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('Референсы');
+  await page.keyboard.press('Alt+Enter');
+  await expect(ws).toHaveAttribute('data-nodes', '2');
+  const id = await idOf(page, 'Референсы');
+  await expect.poll(() => placement(page, id)).toEqual({ appearance: true, places: 2 });
+  return id;
+}
+
+const placement = (page: Page, id: string) =>
+  page.evaluate((id) => {
+    const n = window.__strataWs?.graph()?.nodes.get(id);
+    return n ? { appearance: n.appearance, places: n.places } : null;
+  }, id);
+
+/** Clicks node `id`'s mark on the rim: «↗N» or the shortcut of an appearance. */
+async function clickMark(page: Page, id: string, which: 'external' | 'places') {
   const markOf = () =>
-    page.evaluate((id) => {
-      const ws = window.__strataWs as WsHook;
-      const m = ws.view.externalOf(id);
-      const r = ws.view.canvas.getBoundingClientRect();
-      return m ? { x: r.left + m.x, y: r.top + m.y } : null;
-    }, id);
+    page.evaluate(
+      ([id, which]) => {
+        const ws = window.__strataWs as WsHook;
+        const m = ws.view.markOf(id, which);
+        const r = ws.view.canvas.getBoundingClientRect();
+        return m ? { x: r.left + m.x, y: r.top + m.y } : null;
+      },
+      [id, which] as const,
+    );
   // The mark is where the last frame drew it: the count comes before the frame.
   await expect.poll(markOf).not.toBeNull();
   const mark = await markOf();
-  if (!mark) throw new Error('no «↗N» drawn');
+  if (!mark) throw new Error(`no ${which} mark drawn`);
   await page.mouse.click(mark.x, mark.y);
+}
+
+/** Opens the list behind node `id`'s «↗N» by a click on the mark. */
+async function openExternal(page: Page, id: string) {
+  await page.keyboard.press('Escape');
+  await clickMark(page, id, 'external');
   await expect(page.locator('.ext-list .tab-menu-row')).toHaveCount(1);
 }
 
@@ -744,6 +793,54 @@ for (const deviceScaleFactor of [1, 2]) {
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['goto', 'row', 'bar', 'input', 'bar3d', 'input3d'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`«Где размещена» and «Удалить везде?» keep their size in RU and EN @${deviceScaleFactor}x (06 §12.2–12.3)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Появления');
+      await appearing(page);
+      await select(page, 'Референсы');
+      const places = page.locator('.ws-inspector .ins-places');
+      await expect(places.locator('li')).toHaveCount(2);
+      expect(await overflowing(page, '.ws-inspector'), `${locale} the panel must fit`).toEqual([]);
+      const section = await box(page, '.ws-inspector .ins-places');
+      const row = await box(page, '.ws-inspector .ins-places li:last-child');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Shift+Delete');
+      const dialog = page.locator('.delete-dialog');
+      await expect(dialog).toBeVisible();
+      expect(await overflowing(page, '.delete-dialog'), `${locale} the dialog must fit`).toEqual(
+        [],
+      );
+      boxes.push({
+        section,
+        row,
+        dialog: await box(page, '.delete-dialog'),
+        list: await box(page, '.delete-dialog .delete-list'),
+      });
+      await page.keyboard.press('Escape');
+      await expect(dialog).toHaveCount(0);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['section', 'row', 'dialog', 'list'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2391,7 +2488,92 @@ test.describe('a workspace on the core', () => {
       .toBe(1);
     await openExternal(page, sketch);
     await expect(list.locator('.ext-way')).toHaveAttribute('title', 'Нить входит в «Эскиз»');
-    await expect(list.locator('.ext-path')).toHaveText('');
+    // At the root: the root by its name.
+    await expect(list.locator('.ext-path')).toHaveText('Связи');
+  });
+
+  test('an appearance: Tab places a node of another network, the panel says where it lies (05 §5, 06 §12.2)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    const ws = page.locator('.workspace');
+    const refs = await appearing(page);
+    // A click on the shortcut on the bubble: «Где размещена» with the keyboard.
+    await page.keyboard.press('Escape');
+    await clickMark(page, refs, 'places');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Референсы');
+    await expect(page.locator('.ws-inspector .ins-places .ins-link').first()).toBeFocused();
+    const rows = page.locator('.ws-inspector .ins-places li');
+    // ⌂ «Игра» first, the root — here, going nowhere.
+    await expect(rows.locator('.ins-link')).toHaveText(['Игра', 'Карта']);
+    await expect(rows.nth(0).locator('[role="img"]')).toHaveAttribute(
+      'aria-label',
+      'Основное размещение',
+    );
+    await expect(rows.nth(1).locator('.ins-link')).toBeDisabled();
+    // «Сделать основным»: the root is its home now, «Игра» an appearance.
+    await rows.nth(1).getByRole('button', { name: 'Сделать основным: Карта' }).click();
+    await expect(page.locator('.toast', { hasText: 'Основным стало Карта' })).toBeVisible();
+    await expect.poll(() => placement(page, refs)).toEqual({ appearance: false, places: 2 });
+    await expect(rows.locator('.ins-link')).toHaveText(['Карта', 'Игра']);
+    // «Убрать отсюда» (Delete): it stays in «Игра», its primary again.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Delete');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    await expect(page.locator('.toast', { hasText: 'Убрано отсюда: 1 нода' })).toBeVisible();
+    await select(page, 'Игра');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await expect.poll(() => placement(page, refs)).toEqual({ appearance: false, places: 1 });
+    // One place: no section, the path in the corner says it.
+    await select(page, 'Референсы');
+    await expect(page.locator('.ws-inspector .ins-places')).toHaveCount(0);
+  });
+
+  test('removing asks first when it takes more than one sees (05 §5, 06 §12.3)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    const ws = page.locator('.workspace');
+    const refs = await appearing(page);
+    const dialog = page.locator('.delete-dialog');
+    // «Удалить везде» of a node placed twice: both places, ⌂ the primary.
+    await select(page, 'Референсы');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Shift+Delete');
+    await expect(dialog.locator('h2')).toHaveText('Удалить везде?');
+    await expect(dialog.locator('.dialog-text').first()).toHaveText(
+      '«Референсы» размещена в 2 сетях:',
+    );
+    await expect(dialog.locator('.delete-row')).toHaveText(['Игра', 'Карта']);
+    await dialog.getByRole('button', { name: 'Отмена' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    // A folder to the trash: what lies elsewhere too stays there.
+    await select(page, 'Игра');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Delete');
+    await expect(dialog.locator('h2')).toHaveText('В корзину?');
+    await expect(dialog.locator('.dialog-text')).toHaveText([
+      '1 нода внутри размещена ещё где-то и останется там:',
+    ]);
+    await expect(dialog.locator('.delete-row')).toHaveText(['Референсы · Карта']);
+    await dialog.getByRole('button', { name: 'В корзину' }).click();
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    await expect.poll(() => placement(page, refs)).toEqual({ appearance: false, places: 1 });
+    // One place left: «Удалить везде» asks nothing.
+    await select(page, 'Референсы');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Shift+Delete');
+    await expect(ws).toHaveAttribute('data-nodes', '0');
+    await expect(dialog).toHaveCount(0);
+    // «Игра» went alone, «Референсы» after it: one node each.
+    await expect(page.locator('.toast', { hasText: 'В корзине: 1 нода' })).toHaveCount(2);
   });
 
   test('the profile and the language are kept on this device, in «Настройки»', async ({ page }) => {

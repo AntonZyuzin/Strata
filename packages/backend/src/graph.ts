@@ -61,6 +61,8 @@ export interface GraphNode {
   ghostOf: string | null;
   /** This placement is not the node's primary one (05 §5). */
   appearance: boolean;
+  /** The networks it is placed in, this one among them: «×N» (06 §12.2). */
+  places: number;
   /** Wires to nodes not placed in this network (05 §8.3). */
   external: number;
   /** Assignees as indices into the people palette (07 §2.2). */
@@ -120,6 +122,7 @@ export function newNode(
     ghost: false,
     ghostOf: null,
     appearance: false,
+    places: 1,
     external: 0,
     assignees: [],
     color: null,
@@ -207,7 +210,11 @@ export function flagsOf(node: GraphNode): Flag[] {
 
 export type Op =
   | { t: 'add'; node: GraphNode }
-  | { t: 'remove'; id: string }
+  /**
+   * The node leaves this network (05 §5): «Убрать отсюда», its placement
+   * here goes; `everywhere` — «Удалить везде», the node goes to the trash.
+   */
+  | { t: 'remove'; id: string; everywhere?: boolean }
   | { t: 'move'; id: string; x: number; y: number }
   | { t: 'connect'; from: string; to: string }
   | { t: 'disconnect'; from: string; to: string }
@@ -271,7 +278,8 @@ export const UNDO_DEPTH = 200;
 /** Collects operations of one gesture; every call applies at once and records its inverse. */
 export interface Tx {
   add(node: GraphNode): void;
-  remove(id: string): void;
+  /** Out of this network (05 §5); `everywhere` — to the trash, from every network. */
+  remove(id: string, everywhere?: boolean): void;
   move(id: string, x: number, y: number): void;
   /** 05 §8.2 rule 2: no self-loop, at most one wire per ordered pair. False when skipped. */
   connect(from: string, to: string): boolean;
@@ -392,13 +400,13 @@ export class Graph {
       add: (node) => {
         run({ t: 'add', node: { ...node } });
       },
-      remove: (id) => {
+      remove: (id, everywhere) => {
         // A note's ghosts go with it (05 §8.5), and come back with it.
         const ghosts = this.outputs(id).filter((o) => this.nodes.get(o)?.ghostOf === id);
         // Wires go first, each as its own operation, so undo restores them.
         for (const to of this.outputs(id)) run({ t: 'disconnect', from: id, to });
         for (const from of this.inputs(id)) run({ t: 'disconnect', from, to: id });
-        run({ t: 'remove', id });
+        run(everywhere ? { t: 'remove', id, everywhere } : { t: 'remove', id });
         for (const g of ghosts) run({ t: 'remove', id: g });
       },
       move: (id, x, y) => {
@@ -516,6 +524,19 @@ export class Graph {
     const n = this.nodes.get(id);
     if (!n || n.external === count) return;
     n.external = count;
+    this.emit({ type: 'look', id });
+  }
+
+  /**
+   * Whether this placement is an appearance and in how many networks the
+   * node lies (05 §5, 06 §12.2), as the core says after a step; derived
+   * state, as `setExternal`.
+   */
+  setPlacement(id: string, appearance: boolean, places: number): void {
+    const n = this.nodes.get(id);
+    if (!n || (n.appearance === appearance && n.places === places)) return;
+    n.appearance = appearance;
+    n.places = places;
     this.emit({ type: 'look', id });
   }
 

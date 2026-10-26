@@ -7,7 +7,7 @@ import type { Pixels } from './backdrop';
 import { BackgroundLayer } from './background';
 import { between, Camera, FLIGHT_MS, type View } from './camera';
 import { controls, pointAt } from './curve';
-import { Decor, type DecorNode, type Interaction } from './decor';
+import { Decor, type DecorNode, type Interaction, type RimTarget } from './decor';
 import { hexPath } from './hex';
 import {
   createIconAtlas,
@@ -387,14 +387,14 @@ export class CanvasView {
     return Math.max(0, this.icons.ids.indexOf(defaultIcon(kind)));
   }
 
-  /** The node whose «↗N» is under (sx, sy), CSS px, as last drawn (06 §14). */
-  externalAt(sx: number, sy: number): string | null {
-    return this.decor.externalAt(sx, sy);
+  /** The rim mark under (sx, sy), CSS px, as last drawn: «↗N» or a shortcut. */
+  markAt(sx: number, sy: number): { id: string; mark: RimTarget } | null {
+    return this.decor.markAt(sx, sy);
   }
 
-  /** The middle of node `id`'s «↗N» as last drawn, CSS px of the canvas; for tests. */
-  externalOf(id: string): { x: number; y: number } | null {
-    return this.decor.externalOf(id);
+  /** The middle of node `id`'s mark as last drawn, CSS px of the canvas; for tests. */
+  markOf(id: string, mark: RimTarget): { x: number; y: number } | null {
+    return this.decor.markOf(id, mark);
   }
 
   /** Rendered position and radius of a node. */

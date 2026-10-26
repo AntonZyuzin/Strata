@@ -68,7 +68,7 @@ export function graphOf(
   g.kindColors = true;
   g.derive({ key: 'core.change.load' }, (tx) => {
     for (const n of view.nodes) {
-      const { id, kind, name, x, y, fold, external, ...attrs } = n;
+      const { id, kind, name, x, y, fold, external, appearance, places, ...attrs } = n;
       const node = newNode({
         id,
         name,
@@ -81,6 +81,8 @@ export function graphOf(
       Object.assign(node, lookOf(node, day(), personColor));
       if (fold) node.fold = foldOf(fold, day());
       node.external = external ?? 0;
+      node.appearance = appearance ?? false;
+      node.places = places ?? 1;
       tx.add(node);
     }
     for (const e of view.edges) tx.connect(e.from, e.to);
@@ -162,7 +164,8 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       };
     }
     case 'remove':
-      return { op: 'trash', ids: [op.id] };
+      // «Убрать отсюда»: the core sends the last placement's node to the trash (05 §5).
+      return op.everywhere ? { op: 'trash', ids: [op.id] } : { op: 'unplace', id: op.id, net };
     case 'move':
       return { op: 'move', net, id: op.id, x: op.x, y: op.y };
     case 'rename':
@@ -264,12 +267,17 @@ export function followFolds(graph: Graph, view: NetworkView, day: string = graph
 }
 
 /**
- * Brings «↗N» and the roll-up wires to what the core says (05 §8.3, 06
- * §13.3): a wire, a placement or the trash elsewhere changes them, which
- * only the core sees. Derived state, outside undo.
+ * Brings «↗N», the roll-up wires and the appearances' marks to what the
+ * core says (05 §5, §8.3, 06 §12.2, §13.3): a wire, a placement or the
+ * trash elsewhere changes them, which only the core sees. Derived state,
+ * outside undo.
  */
 export function followExternal(graph: Graph, view: NetworkView): void {
-  for (const n of view.nodes) graph.setExternal(n.id, n.external ?? 0);
+  for (const n of view.nodes) {
+    graph.setExternal(n.id, n.external ?? 0);
+    // A placement made or taken away elsewhere: the shortcut and «×N» (05 §5).
+    graph.setPlacement(n.id, n.appearance ?? false, n.places ?? 1);
+  }
   // Bubbles the graph no longer has (a step since the question) draw nothing.
   graph.setRollups(view.rollups.filter((r) => graph.nodes.has(r.a) && graph.nodes.has(r.b)));
 }

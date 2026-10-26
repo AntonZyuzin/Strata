@@ -11,7 +11,7 @@ export {
 } from './backdrop';
 export { Camera } from './camera';
 export * from './curve';
-export type { Interaction } from './decor';
+export type { Interaction, RimTarget } from './decor';
 export {
   type CanvasAction,
   Editor,

@@ -27,6 +27,7 @@ import {
   type Person,
   sniffMime,
   type TrashItem,
+  type TrashPreview,
   type TreeItem,
 } from '@strata/backend';
 import {
@@ -63,11 +64,12 @@ import { Map3D, type MapNav, type MapState } from '../proto/map3d';
 import { type MenuGhost, type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
-import { TabMenu } from '../proto/TabMenu';
+import { menuOpening, TabMenu } from '../proto/TabMenu';
 import { netItems, searchClient, visited, visits } from '../search';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { CommandPalette } from './CommandPalette';
 import type { CommandContext } from './commands';
+import { DeleteDialog } from './DeleteDialog';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
 import { ExternalList } from './ExternalList';
@@ -78,6 +80,7 @@ import { Layers } from './Layers';
 import { NodeSearch } from './NodeSearch';
 import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
 import { PathBar } from './PathBar';
+import { pathLabel } from './paths';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -238,6 +241,8 @@ export function WorkspaceScreen(props: {
     sy: number;
     query: string;
     named?: string;
+    /** Each opening is a menu of its own (see `menuOpening`). */
+    seq: number;
   } | null>(null);
   const [name, setName] = useState<{ id: string; sx: number; sy: number; name: string } | null>(
     null,
@@ -258,6 +263,8 @@ export function WorkspaceScreen(props: {
   } | null>(null);
   /** A list opened: its items are in the panel, the keyboard goes there once. */
   const [listFocus, setListFocus] = useState<string | null>(null);
+  /** The shortcut of an appearance clicked: «Где размещена» takes the keyboard once (06 §12.2). */
+  const [placesFocus, setPlacesFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
   const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
@@ -265,6 +272,14 @@ export function WorkspaceScreen(props: {
   const [finder, setFinder] = useState<{ map: boolean } | null>(null);
   /** `Ctrl+F` on the canvas (09 §3.3) and on the star map (08 §6.1). */
   const [finding, setFinding] = useState(false);
+  /** A removal that asks first (06 §12.3), and the question's data. */
+  const [removal, setRemoval] = useState<{
+    ids: string[];
+    everywhere: boolean;
+    placed: NodeDetails[];
+    preview: TrashPreview;
+  } | null>(null);
+  const askDeleteRef = useRef<(ids: string[], everywhere: boolean) => boolean>(() => false);
   /** Who hears «the cluster in focus or the selected star changed» on the map. */
   const mapChanged = useRef(new Set<() => void>());
   /** The command palette, `Ctrl+P` (09 §3.5). */
@@ -408,7 +423,7 @@ export function WorkspaceScreen(props: {
         // The menu ranks the canvas's nodes as they are now (09 §2.7).
         const g = graph.current;
         if (g) searchClient().set('net', netItems(g.nodes.values(), netRef.current));
-        setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top });
+        setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top, seq: menuOpening() });
       },
       nameInput: (e) =>
         setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
@@ -426,6 +441,25 @@ export function WorkspaceScreen(props: {
         const r = viewRef.current?.canvas.getBoundingClientRect();
         setCtx({ x: e.sx + (r?.left ?? 0), y: e.sy + (r?.top ?? 0), at: e.at });
       },
+      // «Разместить здесь» (05 §5): the core places it, the network is read again.
+      place: (e) => {
+        void queue(async () => {
+          await sync.current?.settled();
+          const name = treeRef.current.find((i) => i.id === e.id)?.name ?? '';
+          const net = netRef.current;
+          await core.apply(
+            [
+              { op: 'place', id: e.id, net, x: e.x, y: e.y },
+              ...e.inputs.map((from): CoreOp => ({ op: 'connect', from, to: e.id })),
+            ],
+            { key: 'ws.change.place', params: { name } },
+          );
+          await show(net);
+          editor.current?.reveal(e.id);
+        }).catch(refused);
+      },
+      // Removing asks first when it would take more than one would see (06 §12.3).
+      deleting: (e) => askDeleteRef.current(e.ids, e.everywhere),
       // «↗N» (06 §14): the list opens beside the mark at once, its top level
       // with it, clear of the label under the bubble; the rows come from the core.
       external: (e) => {
@@ -448,6 +482,9 @@ export function WorkspaceScreen(props: {
           })
           .catch(refused);
       },
+      // The shortcut of an appearance (06 §12.2): the node is chosen, its
+      // panel shows «Где размещена».
+      places: (e) => setPlacesFocus(e.id),
       map: () => map3d.current?.toggle(),
       minimap: (open) => {
         minimapRef.current = open;
@@ -1272,7 +1309,10 @@ export function WorkspaceScreen(props: {
   };
 
   // Another node in the panel: a list's open request no longer stands.
-  useEffect(() => setListFocus((f) => (f === details?.id ? f : null)), [details?.id]);
+  useEffect(() => {
+    setListFocus((f) => (f === details?.id ? f : null));
+    setPlacesFocus((f) => (f === details?.id ? f : null));
+  }, [details?.id]);
 
   /** An asset's file as an object URL, typed so the browser can show it; made once. */
   const urlOf = async (sha: string, mime: string) => {
@@ -1571,8 +1611,60 @@ export function WorkspaceScreen(props: {
               params,
             ).catch(failed);
           },
+          net: netRef.current,
+          goPlace: (net) => {
+            const id = details.id;
+            leaveRef.current();
+            void loadRef.current(net).then(() => editor.current?.focusNode(id));
+          },
+          makePrimary: (net) => {
+            const path = pathLabel(details.places.find((p) => p.net === net)?.path ?? []);
+            void coreStep([{ op: 'setPrimary', id: details.id, net }], 'ws.change.primary', {
+              name: details.name,
+              path,
+            })
+              .then(() => toast('ws.toast.primary', { path }))
+              .catch(failed);
+          },
+          unplace: (net) => {
+            const path = pathLabel(details.places.find((p) => p.net === net)?.path ?? []);
+            void coreStep([{ op: 'unplace', id: details.id, net }], 'ws.change.unplace', {
+              name: details.name,
+              path,
+            }).catch(failed);
+          },
         }
       : null;
+
+  /**
+   * Asks before a removal that takes more than one sees (06 §12.3): «Удалить
+   * везде» of a node placed elsewhere too, or a network that goes to the
+   * trash with what is inside. True — the dialog will remove them.
+   */
+  askDeleteRef.current = (ids, everywhere) => {
+    const now = graph.current;
+    if (!now) return false;
+    const nodes = ids.flatMap((id) => now.nodes.get(id) ?? []);
+    // To the trash: all with «везде», else those placed only here.
+    const going = nodes.filter((n) => everywhere || n.places <= 1);
+    const placed = everywhere ? nodes.filter((n) => n.places > 1) : [];
+    if (placed.length === 0 && !going.some((n) => hasCanvas(n.kind))) return false;
+    void (async () => {
+      await sync.current?.settled();
+      const preview =
+        going.length > 0
+          ? await core.trashPreview(going.map((n) => n.id))
+          : { trashed: [], staying: [] };
+      const nested = preview.trashed.length > going.length || preview.staying.length > 0;
+      if (placed.length === 0 && !nested) {
+        editor.current?.removeNodes(ids, everywhere);
+        return;
+      }
+      const details = await Promise.all(placed.map((n) => core.node(n.id)));
+      setRemoval({ ids, everywhere, placed: details, preview });
+    })().catch(failed);
+    return true;
+  };
 
   /** The right button's menu (06 §5): for a node, a wire, or the bare canvas. */
   const ctxItems = (at: MenuTarget): MenuEntry[] => {
@@ -1663,11 +1755,18 @@ export function WorkspaceScreen(props: {
       onSelect: () => ed.switchFlag(f, ed.flagTargets(n.id)),
     });
     items.push(flag('key', 'R', true), flag('pause', 'Q'), flag('template', 'E'));
+    // Two commands, not side by side (06 §12.3): «Убрать отсюда» and «Удалить везде».
     items.push({
       label: t(locale, 'ctx.delete'),
       hint: 'Del',
       separated: true,
       onSelect: () => ed.deleteSelected(),
+    });
+    items.push({
+      label: t(locale, 'ctx.deleteEverywhere'),
+      hint: 'Shift+Del',
+      separated: true,
+      onSelect: () => ed.deleteSelected(true),
     });
     return items;
   };
@@ -1687,6 +1786,18 @@ export function WorkspaceScreen(props: {
         .map((i) => ({ id: i.id, name: i.name, kind: i.kind })),
     [tree],
   );
+  // The workspace's nodes for «Вставить здесь» (05 §5): each by the network it lies in.
+  const space = useMemo((): MenuNode[] => {
+    const name = new Map(tree.map((i) => [i.id, i.name]));
+    return tree
+      .filter((i) => i.parent)
+      .map((i) => ({
+        id: i.id,
+        name: i.name,
+        kind: i.kind,
+        where: name.get(i.parent ?? '') ?? '',
+      }));
+  }, [tree]);
   const nodes: MenuNode[] = g
     ? [...g.nodes.values()]
         .filter((n) => !n.ghostOf)
@@ -1826,10 +1937,12 @@ export function WorkspaceScreen(props: {
           people={people}
           actions={actions}
           focusList={listFocus === details.id}
+          focusPlaces={placesFocus === details.id}
           noteOpen={note?.id === details.id}
           viewerOpen={viewer?.id === details.id}
           when={reading(props.prefs)}
           onListFocused={() => setListFocus(null)}
+          onPlacesFocused={() => setPlacesFocus(null)}
         />
       ) : null}
       {ctx ? (
@@ -1921,6 +2034,24 @@ export function WorkspaceScreen(props: {
           }}
         />
       ) : null}
+      {removal ? (
+        <DeleteDialog
+          locale={locale}
+          everywhere={removal.everywhere}
+          placed={removal.placed}
+          preview={removal.preview}
+          chosen={removal.ids.length}
+          onConfirm={(everywhere) => {
+            setRemoval(null);
+            focusCanvas();
+            editor.current?.removeNodes(removal.ids, everywhere);
+          }}
+          onCancel={() => {
+            setRemoval(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
       {palette ? (
         <CommandPalette
           locale={locale}
@@ -1954,6 +2085,7 @@ export function WorkspaceScreen(props: {
       ) : null}
       {menu ? (
         <TabMenu
+          key={menu.seq}
           locale={locale}
           x={menu.sx}
           y={menu.sy}
@@ -1964,6 +2096,7 @@ export function WorkspaceScreen(props: {
           ghosts={ghosts}
           recent={recent}
           templates={templates}
+          space={space}
           search={searchClient()}
           onChoose={choose}
           onCancel={() => {

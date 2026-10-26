@@ -84,6 +84,19 @@ const MID = { t: 0.6, length: 8, half: 4 };
 const GLYPH_REACH = 6;
 /** The least click target of a mark on the rim, CSS px (07 §4.10, WCAG 2.5.8). */
 const TARGET = 24;
+
+/** A rim mark one clicks: «↗N» (06 §14) or an appearance's shortcut (06 §12.2). */
+export type RimTarget = 'external' | 'places';
+
+interface RimTargetHit {
+  id: string;
+  mark: RimTarget;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 const CORNERS = [
   [-1, -1],
   [1, -1],
@@ -114,13 +127,12 @@ export class Decor {
   private badgeUsed = 0;
   private textUsed = 0;
   /**
-   * Where each «↗N» was drawn this frame, CSS px of the canvas: its click
-   * target (06 §14), at least 24 px (07 §4.10), only while it shows (d ≥ 32 px).
+   * Where each rim mark one clicks was drawn this frame, CSS px of the
+   * canvas, keyed `{mark}:{node}`: «↗N» (06 §14) and an appearance's
+   * shortcut (06 §12.2). Targets of at least 24 px (07 §4.10), only while
+   * the glyphs show (d ≥ 32 px).
    */
-  private readonly externals = new Map<
-    string,
-    { x0: number; y0: number; x1: number; y1: number }
-  >();
+  private readonly marks = new Map<string, RimTargetHit>();
   private antsFor: string | null = null;
   private antsStart = 0;
   reducedMotion = false;
@@ -180,7 +192,7 @@ export class Decor {
     counts: readonly { x: number; y: number; text: string }[] = [],
   ): boolean {
     const g = this.g;
-    this.externals.clear();
+    this.marks.clear();
     const rings = this.rings;
     g.clear();
     this.hatching.clear();
@@ -405,13 +417,40 @@ export class Decor {
           flagHour += 1;
         }
         if (n.template) this.badge('template', 'ink', ...slot(flagHour));
-        if (n.appearance) this.badge('shortcut', 'ink', ...slot(7.5));
+        // The shortcut of an appearance always, «×N» on hover (06 §12.2);
+        // the hour is taken only when something stands on it.
+        const counted = hovered && n.places > 1;
+        const [px, py] = n.appearance || counted ? slot(7.5) : [0, 0];
+        if (n.appearance) this.badge('shortcut', 'ink', px, py);
+        const half = Math.max(TARGET / 2, GLYPH_REACH * U);
+        let x0 = px - half;
+        if (counted) {
+          const label = `×${n.places}`;
+          const t = this.text(label, px, py - this.uiCss / 2);
+          // Left of the mark: the 7–8 o'clock side is the bubble's outer one.
+          const left = this.snap(px - (n.appearance ? GLYPH_REACH * U + U : 0) - t.width);
+          t.position.x = left;
+          this.plate(left - U, t.position.y - U, t.width + 2 * U, this.uiCss + 2 * U);
+          x0 = Math.min(x0, left - U);
+        }
+        // A click on it opens «Где размещена» (06 §12.2).
+        if (n.appearance || counted) {
+          this.marks.set(`places:${v.id}`, {
+            id: v.id,
+            mark: 'places',
+            x0,
+            y0: py - half,
+            x1: px + half,
+            y1: py + half,
+          });
+        }
         if (n.external > 0) {
           const [ex, ey] = slot(1.5);
           this.badge('external', 'ink', ex, ey);
           const count = this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
-          const half = Math.max(TARGET / 2, GLYPH_REACH * U);
-          this.externals.set(v.id, {
+          this.marks.set(`external:${v.id}`, {
+            id: v.id,
+            mark: 'external',
             x0: ex - half,
             y0: ey - half,
             x1: Math.max(ex + half, ex + 7 * U + count.width + U),
@@ -541,26 +580,26 @@ export class Decor {
   }
 
   /**
-   * The node whose «↗N» is at (x, y), CSS px of the canvas, as drawn in the
-   * last frame; of two, the one whose mark's centre is nearer.
+   * The rim mark at (x, y), CSS px of the canvas, as drawn in the last
+   * frame; of two, the one whose centre is nearer.
    */
-  externalAt(x: number, y: number): string | null {
-    let best: string | null = null;
+  markAt(x: number, y: number): { id: string; mark: RimTarget } | null {
+    let best: RimTargetHit | null = null;
     let near = Number.POSITIVE_INFINITY;
-    for (const [id, r] of this.externals) {
+    for (const r of this.marks.values()) {
       if (x < r.x0 || x > r.x1 || y < r.y0 || y > r.y1) continue;
       const d = Math.hypot(x - (r.x0 + r.x1) / 2, y - (r.y0 + r.y1) / 2);
       if (d < near) {
         near = d;
-        best = id;
+        best = r;
       }
     }
-    return best;
+    return best ? { id: best.id, mark: best.mark } : null;
   }
 
-  /** The middle of node `id`'s «↗N» as drawn in the last frame, CSS px; for tests. */
-  externalOf(id: string): { x: number; y: number } | null {
-    const r = this.externals.get(id);
+  /** The middle of node `id`'s mark as drawn in the last frame, CSS px; for tests. */
+  markOf(id: string, mark: RimTarget): { x: number; y: number } | null {
+    const r = this.marks.get(`${mark}:${id}`);
     return r ? { x: (r.x0 + r.x1) / 2, y: (r.y0 + r.y1) / 2 } : null;
   }
 

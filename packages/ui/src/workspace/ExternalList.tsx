@@ -4,17 +4,10 @@ import { type Locale, t } from '@strata/i18n';
 import { type CSSProperties, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Icon } from '../icons/Icon';
 import { pointerMoved } from '../pointer';
+import { pathLabel } from './paths';
 
 /** CSS px between the window and the canvas's edges. */
 const MARGIN = 8;
-
-/** Names from under the root to the other end's network, as «Перейти к ноде» shows them. */
-function pathOf(w: ExternalWire): string {
-  return w.path
-    .slice(1)
-    .map(([, name]) => name)
-    .join(' / ');
-}
 
 /**
  * The list behind «↗N» (05 §8.3, 06 §14): the node's wires whose other end
@@ -114,7 +107,7 @@ export function ExternalList(props: {
           ) : null}
           {rows.map((w, i) => {
             const name = w.name || t(locale, 'note.untitled');
-            const path = pathOf(w);
+            const path = pathLabel(w.path);
             const origin = t(locale, w.manual || !w.text ? 'ext.manual' : 'ext.text');
             return (
               <div

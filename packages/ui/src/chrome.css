@@ -1705,6 +1705,34 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin: 0;
 }
 
+/* What a removal asks first (06 §12.3): the places or the nodes that stay,
+   each on one row with an ellipsis and its whole text in the tooltip. */
+.delete-list {
+  display: grid;
+  gap: var(--u);
+  max-height: calc(8 * var(--st-size-row));
+  margin: calc(3 * var(--u)) 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.delete-list li {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  min-width: 0;
+  min-height: var(--st-size-row);
+}
+
+.delete-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -2860,6 +2888,21 @@ button.ws-path-step:active:not(:disabled) {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
+}
+
+/* ⌂ the primary placement or the shortcut mark of an appearance (05 §5):
+   «Где размещена» in the panel and the rows of «Удалить везде?». */
+.place-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* «Где размещена» (06 §12.2): the canvas's own network is plain text, not a
+   way to go; the path in the canvas's corner already says it is here. */
+.ins-places .is-here .ins-link:disabled {
+  color: var(--st-color-text);
+  background: transparent;
+  border-color: transparent;
 }
 
 .ins-link.is-done {

@@ -248,6 +248,24 @@ fn is_false(b: &bool) -> bool {
     !*b
 }
 
+/// What a step to the trash would take (05 §5, 06 §12.3), for its dialog:
+/// the nodes that go, those asked for among them, and the nodes that stay
+/// elsewhere with the path of the network they stay in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrashPreview {
+    pub trashed: Vec<Linked>,
+    pub staying: Vec<Staying>,
+}
+
+/// A node inside a network going to the trash that is placed elsewhere too.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Staying {
+    #[serde(flatten)]
+    pub node: Linked,
+    /// From the root to the network that will be its primary.
+    pub path: Vec<(String, String)>,
+}
+
 /// One placement of a node, for «Где размещена» (06 §12.2).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Place {
@@ -1915,6 +1933,44 @@ impl<S: Store> Workspace<S> {
             subtasks,
             fold: self.fold_of(n, kind, &all, &wires),
             places: self.places(n),
+        })
+    }
+
+    /// What trashing `ids` would take (05 §5, 06 §12.3), without taking it.
+    pub fn trash_preview(&self, ids: &[String]) -> Result<TrashPreview> {
+        let roots = ids
+            .iter()
+            .map(|id| self.live(id))
+            .collect::<Result<Vec<_>>>()?;
+        let c = self.cascade(&roots)?;
+        let mut staying: Vec<Staying> = Vec::new();
+        for &(n, _) in &c.unplaced {
+            if staying.iter().any(|s| s.node.id == n.to_text()) {
+                continue;
+            }
+            let gone: HashSet<NodeId> = c.trashed.iter().copied().collect();
+            let home = c
+                .primaries
+                .iter()
+                .find(|(m, _)| *m == n)
+                .map(|&(_, p)| p)
+                .or_else(|| self.primary_of(n).filter(|p| !gone.contains(p)));
+            let Some(home) = home else { continue };
+            let mut path: Vec<(String, String)> = self
+                .ancestors(home)
+                .into_iter()
+                .rev()
+                .map(|a| (a.to_text(), self.name(a)))
+                .collect();
+            path.push((home.to_text(), self.name(home)));
+            staying.push(Staying {
+                node: self.linked(n),
+                path,
+            });
+        }
+        Ok(TrashPreview {
+            trashed: c.trashed.iter().map(|&n| self.linked(n)).collect(),
+            staying,
         })
     }
 

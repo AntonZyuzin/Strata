@@ -2521,6 +2521,23 @@ fn a_network_in_the_trash_takes_what_lives_only_inside_it() {
     let shared = create(&mut w, &sprint, NodeKind::Note, "Общая");
     let archive = create(&mut w, &root, NodeKind::Network, "Архив");
     place(&mut w, &shared, &archive).expect("also in Архив");
+    // The dialog's preview (06 §12.3) takes nothing.
+    let p = w
+        .trash_preview(std::slice::from_ref(&sprint))
+        .expect("preview");
+    let mut gone: Vec<&str> = p.trashed.iter().map(|l| l.name.as_str()).collect();
+    gone.sort_unstable();
+    assert_eq!(gone, ["Внутри", "Спринт", "Только здесь"]);
+    let stays: Vec<(&str, Vec<&str>)> = p
+        .staying
+        .iter()
+        .map(|s| {
+            let path = s.path.iter().map(|(_, n)| n.as_str()).collect();
+            (s.node.name.as_str(), path)
+        })
+        .collect();
+    assert_eq!(stays, [("Общая", vec!["Корень", "Архив"])]);
+    assert!(w.trash().is_empty());
     op(
         &mut w,
         Op::Trash {

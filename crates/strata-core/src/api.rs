@@ -6,8 +6,8 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::workspace::{
-    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds,
-    Workspace,
+    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, TrashItem, TrashPreview,
+    TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -48,6 +48,10 @@ pub enum Request {
     Cancel,
     History,
     Trash,
+    /// What trashing `ids` would take, without taking it (06 §12.3).
+    TrashPreview {
+        ids: Vec<String>,
+    },
     /// A content document for an editor (`content/<id>`).
     OpenDoc {
         doc: String,
@@ -122,6 +126,9 @@ pub enum Response {
     },
     Trash {
         items: Vec<TrashItem>,
+    },
+    TrashPreview {
+        preview: TrashPreview,
     },
     /// A content document as a Loro snapshot in base64.
     Doc {
@@ -259,6 +266,9 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             history: ws.history(),
         }),
         Request::Trash => Ok(Response::Trash { items: ws.trash() }),
+        Request::TrashPreview { ids } => ws
+            .trash_preview(&ids)
+            .map(|preview| Response::TrashPreview { preview }),
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, crate::CoreError::Invalid(_)),

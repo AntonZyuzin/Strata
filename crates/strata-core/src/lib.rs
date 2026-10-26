@@ -35,7 +35,8 @@ pub use strata_model as model;
 pub use strata_model::Flag;
 pub use workspace::{
     Attrs, CoreError, Edited, ExternalWire, Fold, History, Linked, NetworkView, NodeDetails,
-    Person, Place, TrashItem, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
+    Person, Place, Staying, TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode,
+    WireEnds, Workspace,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

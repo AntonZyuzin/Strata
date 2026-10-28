@@ -146,6 +146,24 @@ impl<S: Store> Workspace<S> {
         Ok(())
     }
 
+    /// Which of `ids` network `net` may not hold (rule 4) and which lie in it
+    /// already (rule 3), for a gesture to show «⊘» before it lands (06 §12.1).
+    /// A node gone since — the trash, an unknown id — is in neither list.
+    pub fn placeable(&self, net: &str, ids: &[String]) -> Result<super::Placeable> {
+        let target = self.network(net)?;
+        let mut out = super::Placeable::default();
+        for id in ids {
+            let Ok(n) = self.live(id) else { continue };
+            if self.may_hold(target, n, &HashMap::new()).is_err() {
+                out.cycle.push(id.clone());
+            }
+            if self.placed_since(target, n).is_some() {
+                out.here.push(id.clone());
+            }
+        }
+        Ok(out)
+    }
+
     /// What the trash takes with `ids` (05 §5, ☑ Q-05-6): a node inside the
     /// networks that go, whose every placement is in them, goes too; a node
     /// placed elsewhere as well only loses its placements in them, and its

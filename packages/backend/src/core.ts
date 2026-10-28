@@ -170,6 +170,13 @@ export type CoreRequest =
       inputs: string[];
       label: ChangeLabel;
     }
+  | {
+      call: 'copyNodes';
+      nodes: { id: string; x: number; y: number }[];
+      net: string;
+      label: ChangeLabel;
+    }
+  | { call: 'placeable'; net: string; ids: string[] }
   | { call: 'undo' }
   | { call: 'redo' }
   | { call: 'cancel' }
@@ -255,6 +262,16 @@ export interface NodeDetails extends NodeAttrs {
 export interface TrashPreview {
   trashed: Linked[];
   staying: (Linked & { path: [string, string][] })[];
+}
+
+/**
+ * What a network may take (05 §5), asked before a drop or a paste lands
+ * (06 §12.1): `cycle` — it may not hold them (rule 4, «⊘»); `here` — they
+ * lie in it already (rule 3: «Перенести» merges, an appearance is refused).
+ */
+export interface Placeable {
+  cycle: string[];
+  here: string[];
 }
 
 /** One placement of a node, for «Где размещена» (06 §12.2). */
@@ -386,6 +403,8 @@ type CoreResponse =
   | { type: 'view'; view: NetworkView }
   | { type: 'applied'; changeset: string | null; history: History }
   | { type: 'copied'; id: string; history: History }
+  | { type: 'copiedMany'; ids: string[]; history: History }
+  | { type: 'placeable'; placeable: Placeable }
   | { type: 'reverted'; report: unknown; history: History }
   | { type: 'history'; history: History }
   | { type: 'trash'; items: TrashItem[] }
@@ -484,6 +503,24 @@ export class Core {
     const request: CoreRequest = { call: 'copyNode', from, net, x, y, inputs, label };
     const r = expect(await this.call(request), 'copied');
     return { id: r.id, history: r.history };
+  }
+
+  /**
+   * Copies of nodes in `net`, each at its point, everything inside them too:
+   * `Ctrl+C` → `Ctrl+V` (06 §12.1). One step of undo; the copies' ids back.
+   */
+  async copyNodes(
+    nodes: { id: string; x: number; y: number }[],
+    net: string,
+    label: ChangeLabel,
+  ): Promise<{ ids: string[]; history: History }> {
+    const r = expect(await this.call({ call: 'copyNodes', nodes, net, label }), 'copiedMany');
+    return { ids: r.ids, history: r.history };
+  }
+
+  /** What network `net` may not hold of `ids`, and what lies in it already (05 §5). */
+  async placeable(net: string, ids: string[]): Promise<Placeable> {
+    return expect(await this.call({ call: 'placeable', net, ids }), 'placeable').placeable;
   }
 
   async undo(): Promise<History> {

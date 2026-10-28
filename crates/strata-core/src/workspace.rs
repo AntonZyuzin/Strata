@@ -257,6 +257,16 @@ pub struct TrashPreview {
     pub staying: Vec<Staying>,
 }
 
+/// Whether a network may take nodes (05 §5), asked before a gesture lands:
+/// those it may not hold — itself or a network it lies in (rule 4) — and
+/// those placed in it already (rule 3: «Перенести» merges them there,
+/// «Разместить здесь» is refused).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Placeable {
+    pub cycle: Vec<String>,
+    pub here: Vec<String>,
+}
+
 /// A node inside a network going to the trash that is placed elsewhere too.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Staying {
@@ -2034,16 +2044,40 @@ impl<S: Store> Workspace<S> {
         inputs: &[String],
         label: Label,
     ) -> Result<String> {
-        let source = self.live(from)?;
+        let tops = self.copy_nodes(&[(from.to_owned(), x, y)], net, inputs, label)?;
+        Ok(tops.into_iter().next().unwrap_or_default())
+    }
+
+    /// Copies of nodes, each at its point in `net`, as [`Self::copy_node`]
+    /// makes one: `Ctrl+C` → `Ctrl+V` (05 §5 «Копировать», 06 §12.1). The
+    /// hand-drawn wires between them come along; `inputs` wire into each.
+    /// One step of undo; the copies' ids back, in the order of `from`.
+    pub fn copy_nodes(
+        &mut self,
+        from: &[(String, f64, f64)],
+        net: &str,
+        inputs: &[String],
+        label: Label,
+    ) -> Result<Vec<String>> {
         let target = self.network(net)?;
         let children = self.children();
         // Source, copy, the copy's network and position; parents before children.
-        let top = NodeId::new();
-        let mut copies: Vec<(NodeId, NodeId, String, f64, f64)> =
-            vec![(source, top, net.to_owned(), x, y)];
+        let mut copies: Vec<(NodeId, NodeId, String, f64, f64)> = Vec::new();
+        let mut stack = Vec::new();
+        let mut sources = Vec::new();
+        for (id, x, y) in from {
+            let source = self.live(id)?;
+            if sources.contains(&source) {
+                continue;
+            }
+            let top = NodeId::new();
+            copies.push((source, top, net.to_owned(), *x, *y));
+            stack.push((source, top));
+            sources.push(source);
+        }
+        let tops: Vec<NodeId> = copies.iter().map(|c| c.1).collect();
         // Appearances inside stay appearances of the same nodes (05 §5): (node, copy's network, x, y).
         let mut appear: Vec<(NodeId, NodeId, f64, f64)> = Vec::new();
-        let mut stack = vec![(source, top)];
         while let Some((s, d)) = stack.pop() {
             if !self.kind(s).is_some_and(NodeKind::has_canvas) {
                 continue;
@@ -2130,7 +2164,7 @@ impl<S: Store> Workspace<S> {
             for flag in a
                 .flags
                 .into_iter()
-                .filter(|f| !(*s == source && *f == Flag::Template))
+                .filter(|f| !(sources.contains(s) && *f == Flag::Template))
             {
                 ops.push(Op::SetFlag {
                     id: id.clone(),
@@ -2192,11 +2226,13 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
-        for input in inputs {
-            ops.push(Op::Connect {
-                from: input.clone(),
-                to: top.to_text(),
-            });
+        for top in &tops {
+            for input in inputs {
+                ops.push(Op::Connect {
+                    from: input.clone(),
+                    to: top.to_text(),
+                });
+            }
         }
         self.apply(&ops, label)?;
         // Content documents as the editors' pushes are: outside the step.
@@ -2212,7 +2248,7 @@ impl<S: Store> Workspace<S> {
             notes.insert(*d);
         }
         self.relink(&notes)?;
-        Ok(top.to_text())
+        Ok(tops.iter().map(NodeId::to_text).collect())
     }
 
     /// The link asset's URL, for its preview to be fetched (✅ Q-13-16).

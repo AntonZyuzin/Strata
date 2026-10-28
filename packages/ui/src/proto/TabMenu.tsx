@@ -20,8 +20,6 @@ export function TabMenu(props: {
   bounds?: { right: number; bottom: number } | undefined;
   initialQuery: string;
   nodes: readonly MenuNode[];
-  /** Nodes of other networks, to place here (05 §5). */
-  elsewhere?: readonly MenuNode[];
   recent: readonly string[];
   onChoose: (item: MenuItem) => void;
   onCancel: () => void;
@@ -30,8 +28,8 @@ export function TabMenu(props: {
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
   const items = useMemo(
-    () => menuItems(locale, query, props.nodes, props.recent, props.elsewhere),
-    [locale, query, props.nodes, props.recent, props.elsewhere],
+    () => menuItems(locale, query, props.nodes, props.recent),
+    [locale, query, props.nodes, props.recent],
   );
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);

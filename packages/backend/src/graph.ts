@@ -56,9 +56,6 @@ export interface GraphNode {
   ghost: boolean;
   /** This placement is not the node's primary one (05 §5). */
   appearance: boolean;
-  /** In how many networks the node is placed (05 §5): more than one, and
-   *  deleting it here takes this placement only («Убрать отсюда»). */
-  places: number;
   /** Wires to nodes not placed in this network (05 §8.3). */
   external: number;
   /** Assignees as indices into the people palette (07 §2.2). */
@@ -86,7 +83,6 @@ export function newNode(
     template: false,
     ghost: false,
     appearance: false,
-    places: 1,
     external: 0,
     assignees: [],
     color: null,

@@ -32,7 +32,6 @@ import {
   type MenuTarget,
   type Pixels,
   processBackdrop,
-  WIRE_SHAPES,
 } from '@strata/canvas';
 import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
@@ -320,8 +319,6 @@ export function WorkspaceScreen(props: {
       },
       map: () => map3d.current?.toggle(),
       up: () => void up(),
-      place: (id, x, y) => placingRef.current.place(id, x, y),
-      trashEverywhere: (ids) => placingRef.current.trashEverywhere(ids),
       historyEmpty: (which) => {
         // Steps of other networks, or of this one before it was read again:
         // the core reverts them, and the network is read again.
@@ -827,50 +824,6 @@ export function WorkspaceScreen(props: {
     toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
 
   /**
-   * Appearances (05 §5): steps of the core's across networks; the network is
-   * read again after each, so the canvas shows where the node is now.
-   */
-  const placing = {
-    place: (id: string, x: number, y: number) => {
-      const name = tree.find((i) => i.id === id)?.name ?? '';
-      void coreStep([{ op: 'place', id, net: netRef.current, x, y }], 'change.place', { name })
-        .then(() => loadRef.current())
-        .then(() => editor.current?.focusNode(id))
-        .catch(failed);
-    },
-    unplace: (id: string, net: string) => {
-      const name = tree.find((i) => i.id === id)?.name ?? '';
-      const from = tree.find((i) => i.id === net)?.name ?? '';
-      // Read again either way: taken out of here, it leaves the canvas; out
-      // of its home, this placement may become the home and lose its badge.
-      void coreStep([{ op: 'unplace', id, net }], 'change.unplace', { name, net: from })
-        .then(() => loadRef.current())
-        .then(() => (net === netRef.current ? undefined : editor.current?.focusNode(id)))
-        .catch(failed);
-    },
-    makeHome: (id: string, net: string) => {
-      const name = tree.find((i) => i.id === id)?.name ?? '';
-      const home = tree.find((i) => i.id === net)?.name ?? '';
-      void coreStep([{ op: 'setPrimary', id, net }], 'change.primary', { name, net: home })
-        .then(() => loadRef.current())
-        .then(() => editor.current?.focusNode(id))
-        .catch(failed);
-    },
-    /** `Shift+Delete`: «Удалить везде» — to the trash with every placement (06 §12.3). */
-    trashEverywhere: (ids: string[]) => {
-      void coreStep([{ op: 'trash', ids }], 'change.trashEverywhere', { n: ids.length })
-        .then(() => loadRef.current())
-        .catch(failed);
-    },
-    goTo: (id: string, net: string) => {
-      const go = net === netRef.current ? Promise.resolve() : loadRef.current(net);
-      void go.then(() => editor.current?.focusNode(id)).catch(failed);
-    },
-  };
-  const placingRef = useRef(placing);
-  placingRef.current = placing;
-
-  /**
    * A new subtask of `parent` (05 §4.3, ADR-0010): a task wired from it,
    * beside it on its canvas; in a project, a task inside. One step of undo.
    */
@@ -1152,9 +1105,6 @@ export function WorkspaceScreen(props: {
           },
           candidates: [...g.nodes.values()].map((n) => ({ id: n.id, kind: n.kind, name: n.name })),
           subtask: (name) => addSubtask(details, name),
-          goTo: (net) => placing.goTo(details.id, net),
-          makeHome: (net) => placing.makeHome(details.id, net),
-          unplace: (net) => placing.unplace(details.id, net),
           done: (id, name, done) => {
             const status = done ? 'done' : 'todo';
             const params = { name, field: t(locale, 'ins.status') };
@@ -1181,17 +1131,13 @@ export function WorkspaceScreen(props: {
       return [
         { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => ed.createAt(sx, sy) },
         { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => ed.fitAll() },
-        // The network's wire styles (06 §6.2): the one they have is ticked,
-        // `Shift+S` stands by the one it turns them to.
-        ...WIRE_SHAPES.map(
-          (shape, i): MenuEntry => ({
-            label: t(locale, `ctx.wires.${shape}` as const),
-            ...(shape === ed.nextWireShape ? { hint: 'Shift+S' } : {}),
-            checked: shape === g.wireShape,
-            separated: i === 0,
-            onSelect: () => ed.setWireShape(shape),
-          }),
-        ),
+        // The style the network's wires go to next (06 §6.2).
+        {
+          label: t(locale, `proto.change.wires.${ed.nextWireShape}` as MessageKey),
+          hint: 'Shift+S',
+          separated: true,
+          onSelect: () => ed.cycleWireShape(),
+        },
       ];
     }
     if (at.t === 'wire') {
@@ -1254,25 +1200,6 @@ export function WorkspaceScreen(props: {
     if (n.kind === 'project') {
       items.push(makeInto('task', 'ctx.makeTask'), makeInto('network', 'ctx.makeFolder'));
     }
-    if (n.places > 1) {
-      // Placed elsewhere too (05 §5): `Delete` takes this placement only, and
-      // «Удалить везде» stands apart from it (07 §8: never side by side).
-      items.push(
-        {
-          label: t(locale, 'ctx.unplace'),
-          hint: 'Del',
-          separated: true,
-          onSelect: () => ed.deleteSelected(),
-        },
-        {
-          label: t(locale, 'ctx.trashEverywhere'),
-          hint: 'Shift+Del',
-          separated: true,
-          onSelect: () => placing.trashEverywhere([n.id]),
-        },
-      );
-      return items;
-    }
     items.push({
       label: t(locale, 'ctx.delete'),
       hint: 'Del',
@@ -1285,12 +1212,6 @@ export function WorkspaceScreen(props: {
   const nodes: MenuNode[] = g
     ? [...g.nodes.values()].map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
     : [];
-  // Nodes of other networks the Tab menu places here (05 §5): not those
-  // already here, nor this network and the ones above it (invariant 4).
-  const here = new Set([...(g?.nodes.keys() ?? []), ...(net?.path.map(([id]) => id) ?? [])]);
-  const elsewhere: MenuNode[] = tree
-    .filter((i) => i.parent && !here.has(i.id))
-    .map((i) => ({ id: i.id, name: i.name, kind: i.kind }));
   const canUndo = Boolean(g?.canUndo || history.undo);
   const canRedo = Boolean(g?.canRedo || history.redo);
   const lastStep = canUndo
@@ -1439,7 +1360,6 @@ export function WorkspaceScreen(props: {
           bounds={host.current?.getBoundingClientRect()}
           initialQuery={menu.query}
           nodes={nodes}
-          elsewhere={elsewhere}
           recent={recent}
           onChoose={choose}
           onCancel={() => {

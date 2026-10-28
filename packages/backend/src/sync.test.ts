@@ -139,33 +139,6 @@ describe('the canvas and the core in step', () => {
     expect(v.edges.map((e) => `${e.from}→${e.to}`).sort()).toEqual([`${A}→${B}`, `${B}→${C}`]);
   });
 
-  it('deletes an appearance from here only: the node lives on elsewhere (05 §5)', async () => {
-    const { home, root } = await start();
-    await home.core.apply(
-      [
-        { op: 'createNode', id: A, kind: 'network', name: 'Папка', net: root, x: 0, y: 0 },
-        { op: 'createNode', id: B, kind: 'note', name: 'Нота', net: root, x: 50, y: 0 },
-        { op: 'connect', from: A, to: B },
-      ],
-      { key: 't' },
-    );
-    await home.core.apply([{ op: 'place', id: B, net: A, x: 9, y: 9 }], { key: 't.place' });
-    const g = graphOf(await home.core.view(root), () => 0);
-    expect(g.nodes.get(B)?.places).toBe(2);
-    expect((await home.core.view(A)).nodes[0]?.appearance).toBe(true);
-    const sync = new CoreSync(home.core, g, root, (e) => {
-      throw e;
-    });
-    g.transaction({ key: 't.delete' }, (tx) => tx.remove(B));
-    await sync.settled();
-    expect(await home.core.trash()).toEqual([]);
-    const inside = (await home.core.view(A)).nodes[0];
-    // Its home moved with it, and its wire stays.
-    expect([inside?.id, inside?.appearance, inside?.places]).toEqual([B, undefined, undefined]);
-    expect((await home.core.view(root)).edges).toHaveLength(0);
-    expect((await home.core.node(B)).inputs.map((l) => l.id)).toEqual([A]);
-  });
-
   it('keeps the workspace across a restart', async () => {
     const shelf = memoryShelf();
     const { home, root, g, sync } = await start(shelf);

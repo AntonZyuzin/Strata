@@ -1,13 +1,10 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Glyph } from './TabBar';
 
 /**
  * A context menu (07 §8.2: `surface-raised`, 1u frame, `shadow-menu`, rows
  * ≥ 24 px, the key on the right in `text-muted`): the right button on a
  * card, a bubble or the bare canvas (06 §5). Arrows move, `Enter` chooses,
- * `Esc` or a click outside closes. It stays inside the window. Entries of a
- * choice are ticked as in Windows' menus: then every row keeps a column for
- * the tick, so the labels stand on one line.
+ * `Esc` or a click outside closes. It stays inside the window.
  */
 
 export interface MenuEntry {
@@ -17,8 +14,6 @@ export interface MenuEntry {
   disabled?: boolean | undefined;
   /** A line above this entry. */
   separated?: boolean;
-  /** One of a choice: whether it is the one chosen (a tick on the left). */
-  checked?: boolean;
   onSelect: () => void;
 }
 
@@ -33,7 +28,6 @@ export function ContextMenu(props: {
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: props.x, y: props.y });
   const [current, setCurrent] = useState(() => items.findIndex((i) => !i.disabled));
-  const ticks = items.some((i) => i.checked !== undefined);
 
   // Inside the window: flip left or up when the menu would leave it.
   useLayoutEffect(() => {
@@ -91,51 +85,30 @@ export function ContextMenu(props: {
         e.preventDefault();
       }}
     >
-      {items.map((item, i) => {
-        const row = {
-          'aria-disabled': item.disabled || undefined,
-          className: [
+      {items.map((item, i) => (
+        <div
+          key={item.label}
+          role="menuitem"
+          tabIndex={-1}
+          aria-disabled={item.disabled || undefined}
+          className={[
             'context-menu-row',
             i === current ? 'is-current' : '',
             item.separated ? 'is-separated' : '',
             item.disabled ? 'is-disabled' : '',
           ]
             .filter(Boolean)
-            .join(' '),
-          onPointerEnter: () => !item.disabled && setCurrent(i),
-          onClick: () => choose(i),
-          onKeyDown: () => undefined,
-        };
-        const content = (
-          <>
-            {ticks ? (
-              <span className="context-menu-tick">
-                {item.checked ? <Glyph name="check" /> : null}
-              </span>
-            ) : null}
-            <span className="context-menu-label" title={item.label}>
-              {item.label}
-            </span>
-            {item.hint ? <span className="context-menu-hint">{item.hint}</span> : null}
-          </>
-        );
-        // One of a choice is a radio item with its state; the rest are plain.
-        return item.checked === undefined ? (
-          <div key={item.label} role="menuitem" tabIndex={-1} {...row}>
-            {content}
-          </div>
-        ) : (
-          <div
-            key={item.label}
-            role="menuitemradio"
-            aria-checked={item.checked}
-            tabIndex={-1}
-            {...row}
-          >
-            {content}
-          </div>
-        );
-      })}
+            .join(' ')}
+          onPointerEnter={() => !item.disabled && setCurrent(i)}
+          onClick={() => choose(i)}
+          onKeyDown={() => undefined}
+        >
+          <span className="context-menu-label" title={item.label}>
+            {item.label}
+          </span>
+          {item.hint ? <span className="context-menu-hint">{item.hint}</span> : null}
+        </div>
+      ))}
     </div>
   );
 }

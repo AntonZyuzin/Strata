@@ -19,7 +19,7 @@ use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use strata_model::{
     ChangesetId, ChangesetOrigin, EdgeKey, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
@@ -223,23 +223,6 @@ pub struct ViewNode {
     /// list, of its items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
-    /// In how many networks the node is placed, when more than one (05 §5).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub places: Option<u32>,
-    /// This placement is an appearance: the node's home is elsewhere (06 §12.2).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub appearance: bool,
-}
-
-/// One network a node is placed in, for «Где размещена» (06 §12.2).
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Place {
-    pub net: String,
-    pub name: String,
-    /// A folder, a project or the workspace: its icon in the row.
-    pub kind: NodeKind,
-    /// The primary placement: the node's home and canonical path (05 §5).
-    pub primary: bool,
 }
 
 /// A row of the checklist preview in a task's or project's panel (05 §4.3):
@@ -297,8 +280,6 @@ pub struct NodeDetails {
     pub subtasks: Vec<TaskRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
-    /// Every network it is placed in, the primary first, then by age (05 §5).
-    pub places: Vec<Place>,
 }
 
 /// A wire's ends, for the star map's whole space (08 §10).
@@ -775,9 +756,7 @@ impl<S: Store> Workspace<S> {
             match op {
                 Op::CreateNode { net, .. }
                 | Op::Move { net, .. }
-                | Op::SetWireStyle { net, .. }
-                | Op::Place { net, .. }
-                | Op::Unplace { net, .. } => {
+                | Op::SetWireStyle { net, .. } => {
                     self.ensure_doc(&format!("net/{net}"))?;
                 }
                 _ => {}
@@ -931,83 +910,6 @@ impl<S: Store> Workspace<S> {
                         "pos",
                         &n.to_text(),
                         Some(Val::List(vec![Val::Float(*x), Val::Float(*y)])),
-                    );
-                }
-                Op::Place { id, net, x, y } => {
-                    let n = self.live(id)?;
-                    let parent = self.network(net)?;
-                    if n == self.root {
-                        return Err(invalid("the root network is placed nowhere (05 §5)"));
-                    }
-                    if self.placed(parent, n) {
-                        return Err(invalid(format!(
-                            "node {id} is already placed in {net} (05 §5, invariant 3)"
-                        )));
-                    }
-                    if self.inside(parent, n) {
-                        return Err(invalid(
-                            "a network cannot be placed inside itself or its own (05 §5, invariant 4)",
-                        ));
-                    }
-                    put(
-                        &self.index_doc(n),
-                        "placement",
-                        &PlacementKey::new(parent, n).to_text(),
-                        Some(Val::map([("at", Val::Int(ts))])),
-                    );
-                    put(
-                        &format!("net/{net}"),
-                        "pos",
-                        &n.to_text(),
-                        Some(Val::List(vec![Val::Float(*x), Val::Float(*y)])),
-                    );
-                }
-                Op::Unplace { id, net } => {
-                    let n = self.live(id)?;
-                    let parent = self.parse(net)?;
-                    let places = self.placements(n);
-                    if !places.iter().any(|(p, _)| *p == parent) {
-                        return Err(invalid(format!("node {id} is not placed in {net}")));
-                    }
-                    let index = self.index_doc(n);
-                    let key = n.to_text();
-                    if places.len() == 1 {
-                        // The last placement: the node goes to the trash, which keeps it.
-                        if n == self.root {
-                            return Err(invalid("the root network cannot go to the trash"));
-                        }
-                        put(&index, "trashedAt", &key, Some(Val::Int(ts)));
-                        put(&index, "trashBatch", &key, Some(Val::str(batch.clone())));
-                        continue;
-                    }
-                    put(
-                        &index,
-                        "placement",
-                        &PlacementKey::new(parent, n).to_text(),
-                        None,
-                    );
-                    put(&format!("net/{net}"), "pos", &key, None);
-                    if self.text_field(n, "primaryNet").as_deref() == Some(net.as_str()) {
-                        // The oldest of the others (05 §5, invariant 2).
-                        let oldest = places
-                            .iter()
-                            .filter(|(p, _)| *p != parent)
-                            .min_by_key(|(p, at)| (*at, p.to_text()))
-                            .map(|(p, _)| p.to_text());
-                        put(&index, "primaryNet", &key, oldest.map(Val::str));
-                    }
-                }
-                Op::SetPrimary { id, net } => {
-                    let n = self.live(id)?;
-                    let parent = self.parse(net)?;
-                    if !self.placed(parent, n) {
-                        return Err(invalid(format!("node {id} is not placed in {net}")));
-                    }
-                    put(
-                        &self.index_doc(n),
-                        "primaryNet",
-                        &n.to_text(),
-                        Some(Val::str(net.clone())),
                     );
                 }
                 Op::Connect { from, to } => {
@@ -1209,45 +1111,6 @@ impl<S: Store> Workspace<S> {
         self.docs
             .get(&self.index_doc(node))
             .is_some_and(|d| read(d, "placement", &key).is_some())
-    }
-
-    /// The networks `node` is placed in, with when each placement was made (05 §5).
-    fn placements(&self, node: NodeId) -> Vec<(NodeId, i64)> {
-        let suffix = format!("/{}", node.to_text());
-        let Some(doc) = self.docs.get(&self.index_doc(node)) else {
-            return Vec::new();
-        };
-        let LoroValue::Map(m) = doc.get_map("placement").get_value() else {
-            return Vec::new();
-        };
-        let mut out: Vec<(NodeId, i64)> = m
-            .iter()
-            .filter_map(|(k, v)| {
-                let net = NodeId::parse(k.strip_suffix(&suffix)?).ok()?;
-                let at = Val::from_loro(v)
-                    .and_then(|v| v.get("at").and_then(Val::as_i64))
-                    .unwrap_or(0);
-                Some((net, at))
-            })
-            .collect();
-        out.sort_by_key(|(net, at)| (*at, net.to_text()));
-        out
-    }
-
-    /// Whether `net` is `node` or lies inside it by any placement (05 §5,
-    /// invariant 4): placing `node` in `net` would close a loop.
-    fn inside(&self, net: NodeId, node: NodeId) -> bool {
-        let mut seen = HashSet::new();
-        let mut todo = vec![net];
-        while let Some(at) = todo.pop() {
-            if at == node {
-                return true;
-            }
-            if seen.insert(at) {
-                todo.extend(self.placements(at).into_iter().map(|(p, _)| p));
-            }
-        }
-        false
     }
 
     /// Writes the old value back where a key still holds the new one (05 §11).
@@ -1785,32 +1648,17 @@ impl<S: Store> Workspace<S> {
         } else {
             Vec::new()
         };
-        let home = self.text_field(n, "primaryNet");
-        let mut places: Vec<Place> = self
-            .placements(n)
-            .into_iter()
-            .filter(|(p, _)| self.alive(*p))
-            .map(|(p, _)| Place {
-                net: p.to_text(),
-                name: self.name(p),
-                kind: self.kind(p).unwrap_or(NodeKind::Network),
-                primary: home.as_deref() == Some(p.to_text().as_str()),
-            })
-            .collect();
-        // Stable: the primary first, the others keep their age order.
-        places.sort_by_key(|p| !p.primary);
         Ok(NodeDetails {
             id: id.to_owned(),
             kind,
             name: self.name(n),
             attrs: self.attrs(n),
-            parent: home,
+            parent: self.text_field(n, "primaryNet"),
             inputs,
             outputs,
             children,
             subtasks,
             fold: self.fold_of(n, kind, &all, &wires),
-            places,
         })
     }
 
@@ -2013,11 +1861,6 @@ impl<S: Store> Workspace<S> {
                 _ => (0.0, 0.0),
             };
             let kind = self.kind(node).unwrap_or(NodeKind::Note);
-            let places = self
-                .placements(node)
-                .iter()
-                .filter(|(p, _)| self.alive(*p))
-                .count() as u32;
             nodes.push(ViewNode {
                 id: id.clone(),
                 kind,
@@ -2026,8 +1869,6 @@ impl<S: Store> Workspace<S> {
                 y,
                 attrs: self.attrs(node),
                 fold: self.fold_of(node, kind, &children, &wires),
-                places: (places > 1).then_some(places),
-                appearance: self.text_field(node, "primaryNet").as_deref() != Some(net),
             });
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();

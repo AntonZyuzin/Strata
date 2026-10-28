@@ -46,7 +46,7 @@ const CUT_DASH = 4;
 /** Mod of the gestures (06 §17): Cmd on macOS, Ctrl elsewhere. */
 const MAC = /Mac/.test(navigator.platform);
 /** `Shift+S` goes through the styles of 06 §6.2 in the order of its table. */
-export const WIRE_SHAPES: readonly WireShape[] = ['straight', 'bezier', 'kinetic'];
+const WIRE_SHAPES: WireShape[] = ['straight', 'bezier', 'kinetic'];
 
 const PAPER = 0xf2efe6;
 const INK = 0x0b0c0e;
@@ -98,16 +98,6 @@ export interface EditorEvents {
    * canvas at a screen point; the Chrome shows its menu there.
    */
   contextMenu?(e: { sx: number; sy: number; at: MenuTarget }): void;
-  /**
-   * «Разместить здесь» (05 §5): a node of another network chosen in the Tab
-   * menu appears in this one at (x, y), world units; the core places it.
-   */
-  place?(id: string, x: number, y: number): void;
-  /**
-   * `Shift+Delete` (06 §12.3): «Удалить везде» — the selection to the trash
-   * with every placement, where plain `Delete` takes this placement only.
-   */
-  trashEverywhere?(ids: string[]): void;
 }
 
 /** What the right button was pressed on. */
@@ -124,9 +114,7 @@ export type MenuChoice =
       /** Open the name input after creating (the kind's name was used as a placeholder). */
       rename: boolean;
     }
-  | { t: 'existing'; id: string }
-  /** A node placed in other networks only: an appearance of it here (05 §5). */
-  | { t: 'place'; id: string; kind: NodeKind };
+  | { t: 'existing'; id: string };
 
 type Hit =
   | { t: 'node'; id: string }
@@ -353,14 +341,10 @@ export class Editor {
 
   /** `Shift+S`: the network's wires in the next style, one step of undo (06 §6.2, 05 §9.2). */
   cycleWireShape(): void {
-    this.setWireShape(this.nextWireShape);
-  }
-
-  /** The network's wires in `shape` (the canvas's menu), one step of undo; none if they are. */
-  setWireShape(shape: WireShape): void {
-    if (this.mode.t !== 'idle' || shape === this.graph.wireShape) return;
-    const label = { key: `proto.change.wires.${shape}` };
-    this.graph.transaction(label, (tx) => tx.wireShape(shape));
+    if (this.mode.t !== 'idle') return;
+    const next = this.nextWireShape;
+    const label = { key: `proto.change.wires.${next}` };
+    this.graph.transaction(label, (tx) => tx.wireShape(next));
     this.events.toast(label);
     this.indexDirty = true;
     this.view.invalidate();
@@ -373,11 +357,6 @@ export class Editor {
     const m = this.mode;
     if (m.t !== 'menu') return;
     this.mode = { t: 'idle' };
-    if (choice.t === 'place') {
-      const at = this.placeNew(m, radiusOf({ kind: choice.kind, key: false }));
-      this.events.place?.(choice.id, at.x, at.y);
-      return;
-    }
     if (choice.t === 'existing') {
       const node = this.graph.nodes.get(choice.id);
       if (!node) return;
@@ -1092,10 +1071,6 @@ export class Editor {
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
-        if (e.shiftKey && this.events.trashEverywhere && this.selection.size > 0) {
-          this.events.trashEverywhere([...this.selection]);
-          return;
-        }
         this.deleteSelection();
         return;
       case 'F2':

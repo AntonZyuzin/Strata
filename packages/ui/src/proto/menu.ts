@@ -6,8 +6,7 @@ import { norm, rank, score } from './search';
 /**
  * Items of the Tab menu (06 §5.2): with an empty query — the kinds, and
  * recent choices that are not among them; with a query — «Создать» (a note named by the query first, then
- * matching kinds), «Вставить здесь» (nodes of this network) and «Разместить
- * здесь» (nodes of other networks: an appearance, 05 §5). ADR-0010: no classes.
+ * matching kinds) and «Вставить здесь» (existing nodes). ADR-0010: no classes.
  */
 
 export interface Template {
@@ -27,7 +26,7 @@ export const KINDS: Template[] = [
 
 const TEMPLATES = KINDS;
 
-export type Group = 'recent' | 'kinds' | 'create' | 'insert' | 'place';
+export type Group = 'recent' | 'kinds' | 'create' | 'insert';
 
 export interface MenuItem {
   id: string;
@@ -72,7 +71,6 @@ export function menuItems(
   query: string,
   nodes: readonly MenuNode[],
   recent: readonly string[],
-  elsewhere: readonly MenuNode[] = [],
 ): MenuItem[] {
   const q = query.trim();
   if (q === '') {
@@ -137,17 +135,7 @@ export function menuItems(
       choice: { t: 'existing', id: n.id },
     }),
   );
-  const place = rank(q, elsewhere, (n) => n.name, MAX_ROWS).map(
-    (n): MenuItem => ({
-      id: `place:${n.id}`,
-      group: 'place',
-      label: n.name,
-      detail: t(locale, `kind.${n.kind}` as const),
-      kind: n.kind,
-      choice: { t: 'place', id: n.id, kind: n.kind },
-    }),
-  );
-  return [...create, ...insert, ...place].slice(0, MAX_ROWS);
+  return [...create, ...insert].slice(0, MAX_ROWS);
 }
 
 /** Recent choices, the last 8, kept on this device (06 §5.2). */

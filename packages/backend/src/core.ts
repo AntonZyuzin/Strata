@@ -128,10 +128,6 @@ export type CoreOp =
     }
   | { op: 'rename'; id: string; name: string }
   | { op: 'move'; net: string; id: string; x: number; y: number }
-  /** «Разместить здесь», «Убрать отсюда», «Сделать основным» (05 §5). */
-  | { op: 'place'; id: string; net: string; x: number; y: number }
-  | { op: 'unplace'; id: string; net: string }
-  | { op: 'setPrimary'; id: string; net: string }
   | { op: 'connect'; from: string; to: string }
   | { op: 'disconnect'; from: string; to: string }
   | { op: 'trash'; ids: string[] }
@@ -171,20 +167,6 @@ export interface ViewNode extends NodeAttrs {
   y: number;
   /** For folders, projects and tasks: the roll-up of their tasks. */
   fold?: CoreFold;
-  /** In how many networks the node is placed, when more than one (05 §5). */
-  places?: number;
-  /** This placement is an appearance: the node's home is elsewhere (06 §12.2). */
-  appearance?: boolean;
-}
-
-/** One network a node is placed in, for «Где размещена» (06 §12.2). */
-export interface Place {
-  net: string;
-  name: string;
-  /** A folder, a project or the workspace: the row's icon. */
-  kind: NodeKind;
-  /** The node's home: its canonical path (05 §5). */
-  primary: boolean;
 }
 
 /** A row of the checklist preview of a task's or project's hierarchy (05 §4.3). */
@@ -226,8 +208,6 @@ export interface NodeDetails extends NodeAttrs {
   /** For tasks and projects: the checklist preview of the hierarchy. */
   subtasks: TaskRow[];
   fold?: CoreFold;
-  /** Every network it is placed in, the primary first (05 §5). */
-  places: Place[];
 }
 
 /** A node in the «Слои» panel, under its primary network; the root has no parent. */

@@ -1688,6 +1688,15 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   cursor: default;
 }
 
+/* The tick of a choice (06 §6.2: the wires' style), its column in every row. */
+.context-menu-tick {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+}
+
 .context-menu-row.is-separated {
   margin-top: calc(3 * var(--u));
   background-image: repeating-linear-gradient(
@@ -2658,6 +2667,16 @@ button.ws-path-step:active:not(:disabled) {
   align-items: center;
   gap: calc(2 * var(--u));
   min-width: 0;
+}
+
+/* The home in «Где размещена»: a house where the others have their buttons. */
+.ins-home {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: var(--st-size-control);
+  height: var(--st-size-control);
+  color: var(--st-color-text-muted);
 }
 
 .ins-link {

@@ -315,8 +315,11 @@ export class CanvasView {
 
   /** Shows `graph` and follows its changes. */
   setGraph(graph: Graph): () => void {
+    // Another network: a node met in the last one too (an appearance, 05 §5)
+    // stands where this one has it, not gliding over from there.
+    const fresh = graph !== this.graph;
     this.graph = graph;
-    this.sync();
+    this.sync(fresh);
     return graph.subscribe(() => this.sync());
   }
 
@@ -523,7 +526,7 @@ export class CanvasView {
   }
 
   /** Creates, updates and removes sprites to match the graph. */
-  private sync() {
+  private sync(jump = false) {
     const graph = this.graph;
     if (!graph) return;
     for (const [id, v] of this.views) {
@@ -570,7 +573,18 @@ export class CanvasView {
       a.outputs.push(b);
       b.inputs.push(a);
     }
-    this.settle(moved);
+    if (jump) {
+      for (const id of moved) {
+        const v = this.views.get(id);
+        const node = graph.nodes.get(id);
+        if (!v || !node) continue;
+        this.tweens = this.tweens.filter((t) => t.id !== id);
+        this.setPosition(v, node.x, node.y);
+      }
+      this.invalidate();
+    } else {
+      this.settle(moved);
+    }
     this.invalidate();
   }
 

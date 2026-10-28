@@ -1275,3 +1275,192 @@ fn a_link_preview_is_the_systems_step_and_names_only_an_unnamed_link() {
         .expect("v6 preview");
     assert_eq!(w.node_details(&bare).expect("details").name, "Локально");
 }
+
+fn place(w: &mut Workspace<MemoryStore>, id: &str, net: &str) -> crate::workspace::Result<()> {
+    w.apply(
+        &[Op::Place {
+            id: id.to_owned(),
+            net: net.to_owned(),
+            x: 300.0,
+            y: 40.0,
+        }],
+        Label::new("t.place"),
+    )
+    .map(|_| ())
+}
+
+fn unplace(w: &mut Workspace<MemoryStore>, id: &str, net: &str) {
+    w.apply(
+        &[Op::Unplace {
+            id: id.to_owned(),
+            net: net.to_owned(),
+        }],
+        Label::new("t.unplace"),
+    )
+    .expect("unplace");
+}
+
+fn places(w: &Workspace<MemoryStore>, id: &str) -> Vec<(String, bool)> {
+    w.node_details(id)
+        .expect("details")
+        .places
+        .into_iter()
+        .map(|p| (p.name, p.primary))
+        .collect()
+}
+
+#[test]
+fn a_node_appears_in_another_network_with_its_own_place() {
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Network, "Игра");
+    let film = create(&mut w, &root, NodeKind::Project, "Фильм");
+    let refs = create(&mut w, &game, NodeKind::Note, "Референсы");
+    place(&mut w, &refs, &film).expect("place");
+    let here = |w: &mut Workspace<MemoryStore>, net: &str| {
+        w.network_view(net)
+            .expect("view")
+            .nodes
+            .into_iter()
+            .find(|n| n.id == refs)
+            .expect("placed there")
+    };
+    let (a, b) = (here(&mut w, &game), here(&mut w, &film));
+    // One node, a position in each network (05 §5): the layout is the network's.
+    assert_eq!(
+        (a.x, a.y, a.places, a.appearance),
+        (10.0, 20.0, Some(2), false)
+    );
+    assert_eq!(
+        (b.x, b.y, b.places, b.appearance),
+        (300.0, 40.0, Some(2), true)
+    );
+    assert_eq!(
+        places(&w, &refs),
+        vec![("Игра".to_owned(), true), ("Фильм".to_owned(), false)]
+    );
+    // Each row knows its network's kind, for its icon: a folder, a project.
+    let kinds: Vec<NodeKind> = w
+        .node_details(&refs)
+        .expect("details")
+        .places
+        .into_iter()
+        .map(|p| p.kind)
+        .collect();
+    assert_eq!(kinds, vec![NodeKind::Network, NodeKind::Project]);
+    // The same node: renamed once, renamed everywhere.
+    w.apply(
+        &[Op::Rename {
+            id: refs.clone(),
+            name: "Мудборд".to_owned(),
+        }],
+        Label::new("t.rename"),
+    )
+    .expect("rename");
+    assert_eq!(names(&mut w, &film), vec!["Мудборд"]);
+    w.undo().expect("undo rename");
+    w.undo().expect("undo place");
+    assert!(
+        names(&mut w, &film).is_empty(),
+        "one step of undo takes it back"
+    );
+    assert_eq!(here(&mut w, &game).places, None);
+}
+
+#[test]
+fn a_node_is_placed_in_a_network_once_and_never_inside_itself() {
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Network, "Игра");
+    let level = create(&mut w, &game, NodeKind::Project, "Уровень");
+    let note = create(&mut w, &game, NodeKind::Note, "Заметка");
+    // Invariant 3: once per network.
+    assert!(place(&mut w, &note, &game).is_err());
+    // Invariant 4: not inside itself, not inside its own.
+    assert!(place(&mut w, &game, &game).is_err());
+    assert!(place(&mut w, &game, &level).is_err());
+    // Not in a note; the root nowhere; nothing from the trash.
+    assert!(place(&mut w, &level, &note).is_err());
+    assert!(place(&mut w, &root, &level).is_err());
+    w.apply(
+        &[Op::Trash {
+            ids: vec![note.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    assert!(place(&mut w, &note, &level).is_err());
+    // A sibling network may hold it.
+    place(&mut w, &level, &root).expect("a project in the root as well");
+}
+
+#[test]
+fn unplacing_keeps_the_node_elsewhere_and_the_last_one_trashes_it() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let c = create(&mut w, &root, NodeKind::Network, "В");
+    w.set_clock(|| 1_760_000_000_100);
+    let n = create(&mut w, &a, NodeKind::Note, "Нода");
+    w.set_clock(|| 1_760_000_000_200);
+    place(&mut w, &n, &c).expect("place in В");
+    w.set_clock(|| 1_760_000_000_300);
+    place(&mut w, &n, &b).expect("place in Б");
+    // The primary placement gone, the oldest of the others is the home (05 §5).
+    unplace(&mut w, &n, &a);
+    assert!(names(&mut w, &a).is_empty());
+    assert_eq!(
+        places(&w, &n),
+        vec![("В".to_owned(), true), ("Б".to_owned(), false)]
+    );
+    unplace(&mut w, &n, &b);
+    assert_eq!(places(&w, &n), vec![("В".to_owned(), true)]);
+    // The last placement: into the trash, from where it comes back whole.
+    unplace(&mut w, &n, &c);
+    assert!(names(&mut w, &c).is_empty());
+    assert_eq!(w.trash().len(), 1);
+    w.undo().expect("undo");
+    assert_eq!(names(&mut w, &c), vec!["Нода"]);
+    assert!(w.trash().is_empty());
+    // Only where it is placed.
+    assert!(
+        w.apply(
+            &[Op::Unplace {
+                id: n.clone(),
+                net: a.clone(),
+            }],
+            Label::new("t"),
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn the_primary_placement_moves_by_hand() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let n = create(&mut w, &a, NodeKind::Task, "Задача");
+    place(&mut w, &n, &b).expect("place");
+    let primary = |w: &mut Workspace<MemoryStore>, net: &str| {
+        w.apply(
+            &[Op::SetPrimary {
+                id: n.clone(),
+                net: net.to_owned(),
+            }],
+            Label::new("t.primary"),
+        )
+    };
+    primary(&mut w, &b).expect("make Б the home");
+    assert_eq!(w.node_details(&n).expect("details").parent, Some(b.clone()));
+    let appears = |w: &mut Workspace<MemoryStore>, net: &str| {
+        w.network_view(net).expect("view").nodes[0].appearance
+    };
+    assert!(appears(&mut w, &a) && !appears(&mut w, &b));
+    // Only where it is placed; one step of undo.
+    assert!(primary(&mut w, &root).is_err());
+    w.undo().expect("undo");
+    assert_eq!(w.node_details(&n).expect("details").parent, Some(a.clone()));
+}

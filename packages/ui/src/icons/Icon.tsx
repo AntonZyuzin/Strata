@@ -1,6 +1,7 @@
 import { type AssetType, assetType, type NodeAttrs, type NodeKind } from '@strata/backend';
 import type { CSSProperties } from 'react';
 import board from './board.png';
+import home from './home.png';
 import hourglass from './hourglass.png';
 import calendar from './serenity/app-calendar.png';
 import sound from './serenity/app-sound-player.png';
@@ -41,6 +42,7 @@ const FILES = {
   // SerenityOS's crayons stood out of the set as a board).
   hourglass,
   board,
+  home,
   'app-calendar': calendar,
   'app-sound-player': sound,
   'app-starfield': starfield,
@@ -120,12 +122,12 @@ export const ASSET_ICONS: readonly IconFile[] = [
 ];
 
 /** Strata's own icons among the files. */
-const OWN: readonly IconFile[] = ['hourglass', 'board'];
+const OWN: readonly IconFile[] = ['hourglass', 'board', 'home'];
 
 /** SerenityOS's files that ship, for «Благодарности»: all but Strata's own. */
 export const ICON_FILES = Object.keys(FILES).length - OWN.length;
 
-const MONO: ReadonlySet<IconFile> = new Set(['undo', 'redo', 'plus', 'window-close']);
+const MONO: ReadonlySet<IconFile> = new Set(['undo', 'redo', 'plus', 'window-close', 'home']);
 
 function fileOf(name: IconName): IconFile {
   return name in NAMED ? NAMED[name as keyof typeof NAMED] : (name as IconFile);

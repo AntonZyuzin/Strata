@@ -14,6 +14,10 @@ interface Node {
   attrs: Record<string, unknown>;
   color: number | null;
   fold: { done: number; total: number } | null;
+  /** This placement is not the node's home (05 §5). */
+  appearance: boolean;
+  /** In how many networks the node is placed (05 §5). */
+  places: number;
 }
 
 interface WsHook {
@@ -105,7 +109,19 @@ async function createNode(page: Page, x: number, y: number, name: string) {
 }
 
 async function select(page: Page, name: string) {
-  const p = await at(page, name);
+  // A bubble still gliding (undo, a layout) is clicked where it stops.
+  let p = await at(page, name);
+  await expect
+    .poll(
+      async () => {
+        const q = await at(page, name);
+        const still = q.x === p.x && q.y === p.y;
+        p = q;
+        return still;
+      },
+      { intervals: [100] },
+    )
+    .toBe(true);
   await page.mouse.click(p.x, p.y);
   // The panel follows the selection from the core: until it names the node,
   // its fields may still be the previous one's (CI, slow WebKit).
@@ -334,6 +350,66 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       'layersTitle',
       'layer',
     ] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
+  test(`«Где размещена» keeps its size in RU and EN, its icons in two columns, at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x (06 §12.2)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const [locale, folder] of [
+      ['ru-RU', 'Папка'],
+      ['en-US', 'Folder'],
+    ] as const) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Появления');
+      await createNode(page, viewport.width * 0.35, viewport.height * 0.4, 'Референсы');
+      await diveInto(page, folder, 'Очень длинное название папки для проверки обрезки');
+      const c = await box(page, '.proto-canvas');
+      await page.mouse.move(c.x + c.width * 0.5, c.y + c.height * 0.5);
+      await page.keyboard.press('Tab');
+      await page.keyboard.type('Реф');
+      await page.locator('.tab-menu-row', { hasText: 'Референсы' }).click();
+      await expect.poll(async () => (await graphNow(page)).names).toEqual(['Референсы']);
+      await settled(page);
+      await select(page, 'Референсы');
+      const rows = page.locator('.ws-inspector .ins-places li');
+      await expect(rows).toHaveCount(2);
+      // A long network's name may be cut: its tooltip has it whole.
+      expect(await overflowing(page, '.ws-inspector'), `${locale} text must fit`).toEqual([]);
+      // Each row: the network's icon, its name, the house, the ×.
+      const cell = (row: number, i: number) =>
+        box(page, `.ws-inspector .ins-places li:nth-child(${row}) > :nth-child(${i})`);
+      const home = await cell(1, 3);
+      const make = await cell(2, 3);
+      const out1 = await cell(1, 4);
+      const out2 = await cell(2, 4);
+      await expect(
+        page.locator('.ws-inspector .ins-places li:nth-child(1) > .ins-home'),
+      ).toBeVisible();
+      // The house and the × stand on one vertical each (owner, 2026-10-24).
+      expect(Math.abs(home.x - make.x), `${locale} houses`).toBeLessThanOrEqual(0.5);
+      expect(Math.abs(out1.x - out2.x), `${locale} crosses`).toBeLessThanOrEqual(0.5);
+      boxes.push({
+        panel: await box(page, '.ws-inspector'),
+        list: await box(page, '.ws-inspector .ins-places'),
+        first: await box(page, '.ws-inspector .ins-places li:nth-child(1)'),
+        second: await box(page, '.ws-inspector .ins-places li:nth-child(2)'),
+        home,
+        make,
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['panel', 'list', 'first', 'second', 'home', 'make'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -1075,6 +1151,97 @@ test.describe('a workspace on the core', () => {
     await expect(panel).toHaveCount(0);
   });
 
+  test('a node appears in a second network: placed, its home moved, taken out here only (05 §5)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Появления');
+    const ws = page.locator('.workspace');
+    const panel = page.locator('.ws-inspector');
+    await createNode(page, 500, 300, 'Референсы');
+    await page.mouse.move(800, 400);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('папка');
+    await page.locator('.tab-menu-row', { hasText: 'Папка' }).first().click();
+    await page.keyboard.type('Игра');
+    await page.keyboard.press('Enter');
+    await settled(page);
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    // The Tab menu finds a node of another network and places it here.
+    await page.mouse.move(640, 400);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('Реф');
+    await expect(page.locator('.tab-menu-header', { hasText: 'Разместить здесь' })).toBeVisible();
+    await page.locator('.tab-menu-row', { hasText: 'Референсы' }).click();
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Референсы']);
+    const id = await idOf(page, 'Референсы');
+    const look = () =>
+      page.evaluate((id) => {
+        const n = window.__strataWs?.graph()?.nodes.get(id);
+        return n ? { appearance: n.appearance, places: n.places } : null;
+      }, id);
+    await expect.poll(look).toEqual({ appearance: true, places: 2 });
+    // «Где размещена»: the home first, with its house; here may become it.
+    await expect(panel.locator('.ins-title-name')).toHaveText('Референсы');
+    const rows = panel.locator('.ins-places li');
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0).locator('.ins-link')).toHaveText('Появления');
+    await expect(rows.nth(0).locator('.ins-home')).toBeVisible();
+    await rows.nth(1).getByRole('button', { name: 'Сделать «Игра» основным' }).click();
+    await expect.poll(look).toEqual({ appearance: false, places: 2 });
+    await expect(rows.nth(0).locator('.ins-link')).toHaveText('Игра');
+    // Up: in the root it is the appearance now; Delete takes it out of here only.
+    await page.keyboard.press('KeyU');
+    await expect(ws).toHaveAttribute('data-depth', '1');
+    await expect.poll(look).toEqual({ appearance: true, places: 2 });
+    await settled(page);
+    await select(page, 'Референсы');
+    await page.keyboard.press('Delete');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Игра']);
+    await settled(page);
+    await expect(page.locator('.layers-trash')).toHaveCount(0);
+    // Undo brings this placement back; Shift+Delete sends the node away everywhere.
+    await page.keyboard.press('ControlOrMeta+z');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Игра', 'Референсы']);
+    await settled(page);
+    // Its menu names what Delete does here, «Удалить везде» apart (07 §8).
+    const p = await at(page, 'Референсы');
+    await page.mouse.click(p.x, p.y, { button: 'right' });
+    const menu = page.locator('.context-menu');
+    await expect(menu.locator('.context-menu-label')).toHaveText([
+      'Открыть',
+      'Переименовать',
+      'Убрать отсюда',
+      'Удалить везде',
+    ]);
+    await expect(menu.locator('.context-menu-hint')).toHaveText([
+      'Enter',
+      'F2',
+      'Del',
+      'Shift+Del',
+    ]);
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    // Out of its home by the home's ×: here is the home now, the only placement.
+    await page.mouse.click(400, 650);
+    await select(page, 'Референсы');
+    await rows.nth(0).getByRole('button', { name: 'Убрать из «Игра»' }).click();
+    await expect.poll(look).toEqual({ appearance: false, places: 1 });
+    await expect(panel.locator('.ins-places')).toHaveCount(0);
+    await settled(page);
+    // Elsewhere first: two quick clicks on one spot are a double click in WebKit, which opens.
+    await page.mouse.click(400, 650);
+    await select(page, 'Референсы');
+    await page.keyboard.press('Shift+Delete');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Игра']);
+    await select(page, 'Игра');
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual([]);
+    await expect(page.locator('.toast', { hasText: 'Ядро не приняло' })).toHaveCount(0);
+  });
+
   test('a link dropped on the canvas is a link asset; a link typed with no scheme is kept', async ({
     page,
   }) => {
@@ -1367,9 +1534,14 @@ test.describe('a workspace on the core', () => {
     await page.mouse.move(640, 400);
     await page.keyboard.press('Shift+S');
     expect(await shape()).toBe('kinetic');
-    // The right button on the bare canvas offers the style after it.
+    // The right button on the bare canvas: the three styles, the one the
+    // wires have ticked, Shift+S by the one after it.
     await page.mouse.click(640, 400, { button: 'right' });
-    await page.getByRole('menuitem', { name: 'Нити: прямые' }).click();
+    const style = (name: string) => page.getByRole('menuitemradio', { name });
+    await expect(style('Кинетические нити')).toHaveAttribute('aria-checked', 'true');
+    await expect(style('Нити Безье')).toHaveAttribute('aria-checked', 'false');
+    await expect(style('Прямые нити')).toContainText('Shift+S');
+    await style('Прямые нити').click();
     expect(await shape()).toBe('straight');
     // One step of undo each.
     await page.keyboard.press('Control+z');

@@ -31,7 +31,9 @@ import {
  *
  * Deleting is the trash (05 §11): the core puts the node there and keeps its
  * wires hidden, so «Вернуть из корзины» brings them back too. The graph takes
- * the wires off first, as steps of its own; they are not sent.
+ * the wires off first, as steps of its own; they are not sent. A node placed
+ * in other networks too loses only this placement (05 §5, «Убрать отсюда»),
+ * its wires untouched.
  *
  * Fields of a node (05 §6.1) are graph operations too, so the properties
  * panel and the canvas share one undo.
@@ -63,7 +65,7 @@ export function graphOf(
   g.kindColors = true;
   g.derive({ key: 'core.change.load' }, (tx) => {
     for (const n of view.nodes) {
-      const { id, kind, name, x, y, fold, ...attrs } = n;
+      const { id, kind, name, x, y, fold, places, appearance, ...attrs } = n;
       const node = newNode({
         id,
         name,
@@ -72,6 +74,8 @@ export function graphOf(
         x,
         y,
         attrs: attrs as NodeAttrs,
+        places: places ?? 1,
+        appearance: appearance ?? false,
       });
       Object.assign(node, lookOf(node, day(), personColor));
       if (fold) node.fold = foldOf(fold, day());
@@ -92,15 +96,24 @@ export function finished(n: GraphNode): boolean {
 /** Core operations for the graph's operations of one step in network `net`. */
 export function opsOf(changeset: Changeset, net: string): CoreOp[] {
   const removed = new Set(changeset.ops.flatMap((op) => (op.t === 'remove' ? [op.id] : [])));
+  // A removed node as it was: its inverse brings it back whole.
+  const was = new Map(
+    changeset.inverse.flatMap((op) => (op.t === 'add' ? [[op.node.id, op.node] as const] : [])),
+  );
   const out: CoreOp[] = [];
   for (const op of changeset.ops) {
-    const core = opOf(op, net, removed);
+    const core = opOf(op, net, removed, was);
     if (core) out.push(core);
   }
   return out;
 }
 
-function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
+function opOf(
+  op: Op,
+  net: string,
+  removed: Set<string>,
+  was: ReadonlyMap<string, GraphNode>,
+): CoreOp | null {
   switch (op.t) {
     case 'add': {
       const n: GraphNode = op.node;
@@ -115,6 +128,8 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       };
     }
     case 'remove':
+      // Placed elsewhere too: «Убрать отсюда», the node lives on there (05 §5).
+      if ((was.get(op.id)?.places ?? 1) > 1) return { op: 'unplace', id: op.id, net };
       return { op: 'trash', ids: [op.id] };
     case 'move':
       return { op: 'move', net, id: op.id, x: op.x, y: op.y };

@@ -7,6 +7,7 @@ import {
   linkOf,
   type NodeDetails,
   type Person,
+  type Place,
   PRIORITIES,
   STATUSES,
   type TaskRow,
@@ -58,6 +59,12 @@ export interface InspectorActions {
   subtask(name: string): void;
   /** A subtask ticked or not in the preview; `name` is its own, for the step. */
   done(id: string, name: string, done: boolean): void;
+  /** «Где размещена» (06 §12.2): to that network, the node selected there. */
+  goTo(net: string): void;
+  /** «Сделать основным» (05 §5). */
+  makeHome(net: string): void;
+  /** «Убрать оттуда» (05 §5): that placement only. */
+  unplace(net: string): void;
 }
 
 function field(locale: Locale, key: AttrKey): string {
@@ -253,6 +260,60 @@ function Links(props: {
               onClick={() => props.onUnlink?.(l)}
             />
           ) : null}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/**
+ * «Где размещена» (06 §12.2): every network the node is placed in. The home
+ * first, marked with a house where the others have the button that makes them
+ * it; each lets the node go (out of its home, the oldest of the others becomes
+ * it, 05 §5). Two columns of icons, the same in every row.
+ */
+function Places(props: {
+  locale: Locale;
+  places: Place[];
+  onGo: (net: string) => void;
+  onHome: (net: string) => void;
+  onUnplace: (net: string) => void;
+}) {
+  const { locale } = props;
+  return (
+    <ul className="ins-links ins-places">
+      {props.places.map((p) => (
+        <li key={p.net}>
+          <Icon name={nodeIcon(p.kind, {})} />
+          <button
+            type="button"
+            className="ins-link"
+            title={p.name}
+            onClick={() => props.onGo(p.net)}
+          >
+            {p.name || t(locale, 'note.untitled')}
+          </button>
+          {p.primary ? (
+            <span
+              className="ins-home"
+              role="img"
+              aria-label={t(locale, 'ins.home')}
+              title={t(locale, 'ins.home')}
+            >
+              <Icon name="home" />
+            </span>
+          ) : (
+            <IconButton
+              icon="home"
+              label={t(locale, 'ins.makeHome', { net: p.name })}
+              onClick={() => props.onHome(p.net)}
+            />
+          )}
+          <IconButton
+            icon="close"
+            label={t(locale, 'ins.unplace', { net: p.name })}
+            onClick={() => props.onUnplace(p.net)}
+          />
         </li>
       ))}
     </ul>
@@ -601,16 +662,19 @@ export function Inspector(props: {
                 </span>
               ) : null}
             </h3>
-            <Rows
-              locale={locale}
-              rows={n.subtasks}
-              ticked={ticked}
-              onTick={(r, on) => {
-                setMade({ on: n.subtasks, ticks: { ...ticks, [r.id]: on } });
-                a.done(r.id, r.name, on);
-              }}
-              onFocus={a.focus}
-            />
+            {/* As «Материалы»: no empty list doubling the gap under the heading. */}
+            {n.subtasks.length > 0 ? (
+              <Rows
+                locale={locale}
+                rows={n.subtasks}
+                ticked={ticked}
+                onTick={(r, on) => {
+                  setMade({ on: n.subtasks, ticks: { ...ticks, [r.id]: on } });
+                  a.done(r.id, r.name, on);
+                }}
+                onFocus={a.focus}
+              />
+            ) : null}
             <Commit
               value=""
               label={t(locale, project ? 'ins.newTask' : 'ins.newSubtask')}
@@ -623,12 +687,15 @@ export function Inspector(props: {
         {task ? (
           <section className="ins-section">
             <h3 className="ins-heading">{t(locale, 'ins.materials')}</h3>
-            <Links
-              locale={locale}
-              links={materials}
-              onFocus={a.focus}
-              onUnlink={(l) => a.unlink(n.id, l.id)}
-            />
+            {/* No list while there is nothing in it: its gap would double the heading's. */}
+            {materials.length > 0 ? (
+              <Links
+                locale={locale}
+                links={materials}
+                onFocus={a.focus}
+                onUnlink={(l) => a.unlink(n.id, l.id)}
+              />
+            ) : null}
             {linkable.length > 0 ? (
               <select
                 className="field ins-add"
@@ -650,6 +717,18 @@ export function Inspector(props: {
           <section className="ins-section">
             <h3 className="ins-heading">{t(locale, 'ins.partOf')}</h3>
             <Links locale={locale} links={parents} onFocus={a.focus} />
+          </section>
+        ) : null}
+        {n.places.length > 1 ? (
+          <section className="ins-section">
+            <h3 className="ins-heading">{t(locale, 'ins.places')}</h3>
+            <Places
+              locale={locale}
+              places={n.places}
+              onGo={a.goTo}
+              onHome={a.makeHome}
+              onUnplace={a.unplace}
+            />
           </section>
         ) : null}
       </div>

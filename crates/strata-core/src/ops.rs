@@ -25,6 +25,27 @@ pub enum Op {
         id: String,
         name: String,
     },
+    /// «Разместить здесь» (05 §5): an appearance of an existing node in
+    /// another network, at (x, y) there. A node is placed in a network once
+    /// (invariant 3) and never inside itself (invariant 4).
+    Place {
+        id: String,
+        net: String,
+        x: f64,
+        y: f64,
+    },
+    /// «Убрать отсюда» (05 §5): this placement only. The primary one gone,
+    /// the oldest left becomes primary; the last one gone, the node goes to
+    /// the trash.
+    Unplace {
+        id: String,
+        net: String,
+    },
+    /// «Сделать основным» (05 §5): the canonical path moves, the ID stays.
+    SetPrimary {
+        id: String,
+        net: String,
+    },
     /// The node's position in network `net` (10 §2.4).
     Move {
         net: String,

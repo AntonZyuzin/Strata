@@ -117,6 +117,12 @@ export class Bridge {
   pose3d: Pose;
   /** 3D positions of all bodies, moved so the network's cluster sits on its plane. */
   readonly space: Float32Array;
+  /**
+   * How far the space was moved: drawn = laid out + offset. A live star's
+   * place from the physics is drawn here; another bridge over the same
+   * space moves the camera by the difference, and the screen stays.
+   */
+  readonly offset: [number, number, number];
   private readonly start: Float32Array;
   private readonly delay: Float32Array;
   private readonly work: Float32Array;
@@ -147,6 +153,7 @@ export class Bridge {
     const dx = cx - sx / m;
     const dy = cy - sy / m;
     const dz = -sz / m;
+    this.offset = [dx, dy, dz];
     this.space = new Float32Array(count * 3);
     for (let i = 0; i < count; i++) {
       this.space[i * 3] = (input.space[i * 3] ?? 0) + dx;
@@ -211,6 +218,15 @@ export class Bridge {
     map.setFade(others, others, 1 - snapshot);
     return map.render();
   }
+}
+
+/** The pose moved by `d`: with the whole space moved by as much, the frame stays. */
+export function shiftPose(p: Pose, d: readonly [number, number, number]): Pose {
+  return {
+    ...p,
+    position: [p.position[0] + d[0], p.position[1] + d[1], p.position[2] + d[2]],
+    target: [p.target[0] + d[0], p.target[1] + d[1], p.target[2] + d[2]],
+  };
 }
 
 /** Points the map's camera by a pose. */

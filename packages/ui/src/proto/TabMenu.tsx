@@ -52,6 +52,8 @@ export function TabMenu(props: {
   ghosts?: readonly MenuGhost[] | undefined;
   /** A ghost's name, clicked with Shift: the kinds for it (06 §14). */
   named?: string | undefined;
+  /** Where the node goes when that is not on the screen (08 §6.4: the star map): `→ path · от «P»`. */
+  target?: string | undefined;
   /** The search engine (09 §2): it ranks what a query matches. */
   search: MenuSearch;
   onChoose: (item: MenuItem) => void;
@@ -206,6 +208,11 @@ export function TabMenu(props: {
             onKeyDown={onKey}
           />
         </div>
+        {props.target ? (
+          <div className="tab-menu-target" title={props.target}>
+            {props.target}
+          </div>
+        ) : null}
         <div className="tab-menu-list" role="listbox" aria-label={t(locale, 'menu.query')}>
           {items.length === 0 && ready ? (
             <div className="tab-menu-empty">{t(locale, 'menu.nothing', { q: query })}</div>

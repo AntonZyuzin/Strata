@@ -295,6 +295,40 @@ impl Force3d {
         }
     }
 
+    /// Fixes every body whose `mask` entry is not 0 and frees the rest: the
+    /// live physics of the star map moves only the bodies near a touched star
+    /// (08 §3.1 p. 4) and keeps the pinned ones (08 §3.6).
+    ///
+    /// # Panics
+    ///
+    /// When `mask` is not one entry per body.
+    pub fn set_frozen(&mut self, mask: &[u8]) {
+        assert_eq!(mask.len(), self.len(), "one entry per body");
+        for (i, &m) in mask.iter().enumerate() {
+            self.set_fixed(i, m != 0);
+        }
+    }
+
+    /// Gives body `i` a velocity, world units per tick: a star thrown (08 §3.6).
+    ///
+    /// # Panics
+    ///
+    /// When `i` is not a body.
+    pub fn set_velocity(&mut self, i: usize, v: [f32; 3]) {
+        self.vel[i * 3..i * 3 + 3].copy_from_slice(&v);
+    }
+
+    /// The fastest free body's speed, world units per tick: the live physics
+    /// stops once it stays small (08 §3.6, «Затухание»).
+    pub fn max_speed(&self) -> f32 {
+        self.vel
+            .chunks_exact(3)
+            .zip(&self.fixed)
+            .filter(|&(_, &f)| !f)
+            .map(|(v, _)| (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt())
+            .fold(0.0, f32::max)
+    }
+
     /// One tick at cooling `alpha`; a full layout cools 1 → 0.001 (08 §3.3).
     pub fn tick(&mut self, alpha: f32) {
         if self.is_empty() {
@@ -669,6 +703,35 @@ mod tests {
         }
         let p = sim.positions();
         assert!((p[3] - p[0] - 60.0).abs() < 0.5, "length {}", p[3] - p[0]);
+    }
+
+    #[test]
+    fn a_thrown_body_slows_down_and_frozen_ones_stay() {
+        // 08 §3.6: a star thrown among frozen ones flies, slows by the decay
+        // and is pulled back; the frozen ones do not move.
+        let springs = Springs {
+            a: vec![0],
+            b: vec![1],
+            length: vec![60.0],
+            k: vec![0.08],
+        };
+        let start = vec![0.0, 0.0, 0.0, 60.0, 0.0, 0.0, 0.0, 300.0, 0.0];
+        let mut sim = Force3d::new(start.clone(), vec![1.0; 3], springs, MODEL);
+        sim.set_frozen(&[1, 0, 1]);
+        sim.set_velocity(1, [20.0, 0.0, 0.0]);
+        assert!((sim.max_speed() - 20.0).abs() < 1e-4);
+        sim.tick(1.0);
+        let p = sim.positions();
+        assert!(p[3] > 70.0, "thrown on {}", p[3]);
+        for _ in 0..300 {
+            sim.tick(1.0);
+        }
+        let p = sim.positions();
+        assert_eq!(&p[0..3], &start[0..3]);
+        assert_eq!(&p[6..9], &start[6..9]);
+        assert!(sim.max_speed() < 0.01, "still at {}", sim.max_speed());
+        // Back near the spring's rest length, pushed off a little by repulsion.
+        assert!((p[3] - 60.0).abs() < 20.0, "settled at {}", p[3]);
     }
 
     #[test]

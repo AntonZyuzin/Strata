@@ -24,6 +24,9 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   walk: () => undefined,
   setMark: () => undefined,
   goMark: () => undefined,
+  mapAct: () => undefined,
+  quality: 'auto',
+  setQuality: () => undefined,
   ...over,
 });
 
@@ -64,6 +67,11 @@ describe('the command palette (09 §3.5)', () => {
     expect(can('canvas.paste', ctx())).toBe(false);
     expect(can('canvas.pasteAppearance', ctx({ clip: true }))).toBe(true);
     expect(can('canvas.paste', ctx({ clip: true, view: '3d' }))).toBe(false);
+    // The map's steps while the map is shown (08 §5.2); its quality anywhere (08 §8.4).
+    expect(can('map.pin', ctx())).toBe(false);
+    expect(can('map.pin', ctx({ view: '3d' }))).toBe(true);
+    expect(can('map.quality.off', ctx())).toBe(true);
+    expect(can('map.quality.auto', ctx())).toBe(false);
   });
 
   it('finds the moves of 06 §12.1 and the wrap of §13.3 in both languages', () => {

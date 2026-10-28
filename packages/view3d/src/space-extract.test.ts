@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { KIND, STATE } from './extract';
+import { FLAG, KIND, STATE } from './extract';
 import { bridgeExtract, spaceExtract } from './space-extract';
 
 describe('the extract of a real workspace (08 §10)', () => {
@@ -25,6 +25,24 @@ describe('the extract of a real workspace (08 §10)', () => {
     expect(s.x.kind[at('03')]).toBe(KIND.project);
     expect(s.x.state[at('04')]).toBe(STATE.closed);
     expect(s.x.subtreeSize[0]).toBe(6);
+  });
+
+  it('gives stars their flags and the state of a near deadline, closed first (08 §4.3)', () => {
+    const s = spaceExtract(
+      [
+        { id: '01', kind: 'network' },
+        { id: '02', kind: 'task', parent: '01', due: 'overdue', flags: FLAG.key },
+        { id: '03', kind: 'task', parent: '01', due: 'today', status: 'done' },
+        { id: '04', kind: 'note', parent: '01', flags: FLAG.pause | FLAG.template },
+      ],
+      [],
+    );
+    const at = (id: string) => s.body.get(id) ?? -1;
+    expect(s.x.state[at('02')]).toBe(STATE.overdue);
+    expect(s.x.flags[at('02')]).toBe(FLAG.key);
+    expect(s.x.state[at('03')]).toBe(STATE.closed);
+    expect(s.x.flags[at('04')]).toBe(FLAG.pause | FLAG.template);
+    expect(s.x.state[at('04')]).toBe(STATE.plain);
   });
 
   it('keeps the wires between known nodes only', () => {

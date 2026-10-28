@@ -1783,9 +1783,17 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(() => page.evaluate(() => window.__strataWs?.map()?.selectedId()))
       .toBe(known.sketch);
-    await expect(page.locator('.proto-map-label')).toHaveText('Эскиз');
-    // Enter: back in 2D, in «Арт», with «Эскиз» selected.
+    // The flight's target has its full card (08 §6.2): its name is said there, not twice.
+    await expect(page.locator('.map-card.is-full .map-card-name')).toHaveText('Эскиз');
+    await expect(page.locator('.proto-map-label:not(.is-hover)')).toBeHidden();
+    // Enter on a note: its window over the map, the map stays (08 §6.3).
     await page.keyboard.press('Enter');
+    await expect(page.locator('.note-window h2')).toHaveText('Эскиз');
+    await expect(ws).toHaveAttribute('data-view', '3d');
+    await page.locator('.note-window .window-close').click();
+    await expect(page.locator('.note-window')).toHaveCount(0);
+    // M with the star selected: back in 2D, in «Арт», with «Эскиз» selected.
+    await page.keyboard.press('KeyM');
     await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
     await expect(ws).toHaveAttribute('data-depth', '2');
     await expect(page.locator('.ins-title-name')).toHaveText('Эскиз');

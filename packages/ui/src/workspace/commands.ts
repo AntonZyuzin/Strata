@@ -1,6 +1,8 @@
 import type { CanvasAction } from '@strata/canvas';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { Ranked } from '@strata/search';
+import type { Quality } from '@strata/view3d/map';
+import type { MapAction } from '../proto/map3d';
 
 /**
  * The palette's commands (09 §3.5): every action of the canvas and of the
@@ -34,6 +36,11 @@ export interface CommandContext {
   goMark(slot: number): void;
   /** The report of this workspace's import (13 §3.6), when there is one. */
   importReport?: (() => void) | undefined;
+  /** A step on the star map (08 §5.2): what its keys do. */
+  mapAct(action: MapAction): void;
+  /** The star map's quality chosen by hand, or `auto` (08 §8.4). */
+  quality: Quality | 'auto';
+  setQuality(q: Quality | 'auto'): void;
 }
 
 export interface Command {
@@ -49,6 +56,7 @@ export interface Command {
 }
 
 const flat = (c: CommandContext) => c.view === '2d';
+const spatial = (c: CommandContext) => c.view === '3d';
 const chosen = (c: CommandContext) => c.view === '2d' && c.selected > 0;
 const one = (c: CommandContext) => c.view === '2d' && c.current !== null;
 const clipped = (c: CommandContext) => c.view === '2d' && c.clip;
@@ -68,6 +76,33 @@ const canvas = (
   key,
   when,
   run: (c) => c.act(action),
+});
+
+/** A step of the star map (08 §5.2), shown while the map is. */
+const mapped = (
+  id: string,
+  action: MapAction,
+  key: string,
+  aliases: readonly string[],
+  group: CommandGroup = 'node',
+): Command => ({
+  id: `map.${id}`,
+  title: `cmd.map.${id}` as MessageKey,
+  aliases: ['карта', 'звезда', 'map', 'star', ...aliases],
+  group,
+  key,
+  when: spatial,
+  run: (c) => c.mapAct(action),
+});
+
+/** A preset of the map's quality (08 §8.4): on the canvas too — «off» is turned on here. */
+const preset = (q: Quality | 'auto', aliases: readonly string[]): Command => ({
+  id: `map.quality.${q}`,
+  title: `cmd.map.quality.${q}` as MessageKey,
+  aliases: ['качество', 'карта', 'графика', 'quality', 'map', 'graphics', ...aliases],
+  group: 'nav',
+  when: (c) => c.quality !== q,
+  run: (c) => c.setQuality(q),
 });
 
 export const COMMANDS: readonly Command[] = [
@@ -197,6 +232,29 @@ export const COMMANDS: readonly Command[] = [
     when: (c) => c.importReport !== undefined,
     run: (c) => c.importReport?.(),
   },
+  mapped('create', 'create', 'Tab', ['создать', 'нода', 'create', 'node']),
+  mapped('open', 'open', 'Enter', ['войти', 'открыть', 'open', 'enter']),
+  mapped('into', 'into', 'I', ['скопление', 'внутрь', 'cluster', 'into'], 'nav'),
+  mapped('up', 'up', 'U', ['наверх', 'выше', 'up', 'parent'], 'nav'),
+  mapped('overview', 'overview', 'H', ['обзор', 'всё', 'overview', 'all'], 'nav'),
+  mapped('frame', 'frame', 'F', ['перелёт', 'лететь', 'fly', 'frame'], 'nav'),
+  mapped('card', 'card', 'Shift+I', ['справка', 'карточка', 'card', 'info']),
+  mapped('pin', 'pin', 'B', ['закрепить', 'булавка', 'pin', 'fix']),
+  mapped('flag.key', 'flag:key', 'R', ['флаг', 'ключевая', 'flag', 'key']),
+  mapped('flag.pause', 'flag:pause', 'Q', ['флаг', 'пауза', 'flag', 'pause']),
+  mapped('flag.template', 'flag:template', 'E', ['флаг', 'шаблон', 'flag', 'template']),
+  mapped('delete', 'delete', 'Del', ['убрать', 'удалить', 'remove', 'delete']),
+  mapped('deleteEverywhere', 'deleteEverywhere', 'Shift+Del', [
+    'удалить',
+    'везде',
+    'delete',
+    'trash',
+  ]),
+  preset('auto', ['само', 'авто', 'automatic', 'auto']),
+  preset('high', ['высокое', 'bloom', 'high']),
+  preset('medium', ['среднее', 'medium']),
+  preset('economy', ['экономия', 'слабая', 'economy', 'low']),
+  preset('off', ['выключить', 'выкл', 'off', 'disable']),
   ...[0, 1, 2, 3, 4].flatMap((i): Command[] => [
     {
       id: `nav.mark.set.${i + 1}`,

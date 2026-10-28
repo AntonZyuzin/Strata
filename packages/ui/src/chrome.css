@@ -1740,6 +1740,117 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin-top: calc(8 * var(--u));
 }
 
+/* The report of an import (13 §3.6): what came in as icons and numbers, the
+   sections with a line each; a line with a node goes to it. One line per
+   message with an ellipsis and its whole text in the tooltip; the window
+   keeps its width in ch and scrolls inside. */
+.import-report {
+  display: flex;
+  flex-direction: column;
+  width: min(74ch, calc(100vw - 32px));
+  max-height: calc(100vh - 32 * var(--u));
+}
+
+.import-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: calc(14 * var(--u)) calc(16 * var(--u));
+}
+
+.import-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(6 * var(--u)) calc(14 * var(--u));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-counts li {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  min-height: var(--st-size-row);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-none {
+  margin-top: calc(14 * var(--u));
+}
+
+.import-section {
+  margin-top: calc(14 * var(--u));
+}
+
+.import-section h3 {
+  display: flex;
+  align-items: baseline;
+  gap: calc(6 * var(--u));
+  margin: 0 0 calc(4 * var(--u));
+  font: inherit;
+  color: var(--st-color-text);
+}
+
+.import-n {
+  color: var(--st-color-text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-row {
+  display: grid;
+  grid-template-columns: calc(16 * var(--u)) minmax(0, 1fr) minmax(0, 22ch);
+  align-items: center;
+  gap: calc(6 * var(--u));
+  width: 100%;
+  min-height: var(--st-size-row);
+  padding: 0 calc(4 * var(--u));
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+}
+
+.import-row:not(:disabled) {
+  cursor: pointer;
+}
+
+.import-row:hover:not(:disabled),
+.import-row:focus-visible {
+  background: var(--st-color-surface-raised);
+}
+
+.import-row:disabled {
+  color: inherit;
+  opacity: 1;
+  cursor: default;
+}
+
+.import-severity {
+  display: grid;
+  place-items: center;
+}
+
+.import-text,
+.import-path {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.import-path {
+  color: var(--st-color-text-muted);
+  text-align: right;
+}
+
 /* Icon buttons: a square of one control with a 16u glyph (07 §6.2). */
 .icon-button {
   display: inline-grid;
@@ -1857,6 +1968,13 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* «Импорт из Obsidian» (13 §3): an icon as high as the text buttons beside it. */
+.home-vault.icon-button {
+  width: calc(28 * var(--u));
+  min-width: calc(28 * var(--u));
+  height: calc(28 * var(--u));
 }
 
 /* A card's actions: icons over the top-right corner of its picture. */

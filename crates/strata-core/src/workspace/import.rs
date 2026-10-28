@@ -451,6 +451,15 @@ impl<S: Store> Workspace<S> {
             report.add("skipped", "info", link, "symlink", String::new());
             report.counts.skipped += 1;
         }
+        // No config folder: a vault never opened in Obsidian, or a browser
+        // that leaves dot folders out of a picked folder (Safari).
+        if !vault
+            .files
+            .iter()
+            .any(|f| f.path == format!("{}/app.json", cfg.dir))
+        {
+            report.add("skipped", "info", &cfg.dir, "noConfig", String::new());
+        }
         let types = self.types(&vault.files, &cfg);
         let mut entries = self.read_entries(vault, &cfg, options, target, &mut report);
         if entries.is_empty() && vault.files.is_empty() {
@@ -488,7 +497,15 @@ impl<S: Store> Workspace<S> {
             }
             if e.layout {
                 // The canvas is its folder's layout: it makes no network of its own.
-                e.id = nets[&e.folder];
+                let (was, now) = (e.id.to_text(), nets[&e.folder]);
+                for item in report
+                    .items
+                    .iter_mut()
+                    .filter(|i| i.node.as_deref() == Some(&was))
+                {
+                    item.node = Some(now.to_text());
+                }
+                e.id = now;
             }
         }
         report.counts.folders = (folders.len() - 1) as u32;
@@ -770,6 +787,7 @@ impl<S: Store> Workspace<S> {
             }
             Ok(out)
         })?;
+        report.counts.ghosts += unresolved.len() as u32;
         for (from, target, path) in unresolved {
             report.at(
                 from,
@@ -943,13 +961,13 @@ impl<S: Store> Workspace<S> {
             };
             // Names (13 §3.4): NFC, edges trimmed, what breaks links.
             if nfc(stem) != stem {
-                report.add("renamed", "info", path, "nfc", e.name.clone());
+                report.at(e.id, "renamed", "info", path, "nfc", e.name.clone());
             }
             if clean(&nfc(stem)) != nfc(stem) {
-                report.add("renamed", "info", path, "trimmed", e.name.clone());
+                report.at(e.id, "renamed", "info", path, "trimmed", e.name.clone());
             }
             if UNLINKABLE.iter().any(|c| e.name.contains(c)) {
-                report.add("renamed", "warn", path, "unlinkable", e.name.clone());
+                report.at(e.id, "renamed", "warn", path, "unlinkable", e.name.clone());
             }
             if e.name.is_empty() {
                 e.name = clean(&nfc(file));
@@ -961,7 +979,7 @@ impl<S: Store> Workspace<S> {
                     Ok(s) => self.read_markdown(&mut e, s, options, report),
                     Err(_) => {
                         // Not UTF-8: the bytes as an asset, unedited (13 §2.1).
-                        report.add("skipped", "warn", path, "notUtf8", String::new());
+                        report.at(e.id, "skipped", "warn", path, "notUtf8", String::new());
                         e.role = Role::Asset;
                         e.name = clean(&nfc(file));
                     }
@@ -970,7 +988,14 @@ impl<S: Store> Workspace<S> {
                 match vault::excalidraw_json(&f.bytes) {
                     Some(d) => e.drawing = Some(d),
                     None => {
-                        report.add("unsupported", "warn", path, "drawingBroken", String::new());
+                        report.at(
+                            e.id,
+                            "unsupported",
+                            "warn",
+                            path,
+                            "drawingBroken",
+                            String::new(),
+                        );
                         e.role = Role::Asset;
                         e.name = clean(&nfc(file));
                     }
@@ -979,7 +1004,7 @@ impl<S: Store> Workspace<S> {
                 match Canvas::parse(&f.bytes) {
                     Some(c) => e.canvas = Some(c),
                     None => {
-                        report.add("canvas", "warn", path, "canvasBroken", String::new());
+                        report.at(e.id, "canvas", "warn", path, "canvasBroken", String::new());
                         e.role = Role::Asset;
                         e.name = clean(&nfc(file));
                     }
@@ -1009,7 +1034,8 @@ impl<S: Store> Workspace<S> {
         for e in &out {
             let key = (e.folder.clone(), link_key(&e.name));
             if let Some(other) = seen.get(&key) {
-                report.add(
+                report.at(
+                    e.id,
                     "renamed",
                     "warn",
                     &e.raw,
@@ -1050,7 +1076,14 @@ impl<S: Store> Workspace<S> {
                 }
                 None => {
                     // Broken YAML stays in the text: nothing is lost (13 §2.3).
-                    report.add("property", "warn", &e.raw, "brokenYaml", String::new());
+                    report.at(
+                        e.id,
+                        "property",
+                        "warn",
+                        &e.raw,
+                        "brokenYaml",
+                        String::new(),
+                    );
                 }
             }
         }
@@ -1059,7 +1092,8 @@ impl<S: Store> Workspace<S> {
             match vault::excalidraw_md(&text) {
                 Some(d) => {
                     if d.local_font > 0 {
-                        report.add(
+                        report.at(
+                            e.id,
                             "unsupported",
                             "info",
                             &e.raw,
@@ -1083,7 +1117,8 @@ impl<S: Store> Workspace<S> {
                     return;
                 }
                 None => {
-                    report.add(
+                    report.at(
+                        e.id,
                         "unsupported",
                         "warn",
                         &e.raw,
@@ -1095,10 +1130,10 @@ impl<S: Store> Workspace<S> {
             }
         }
         if has(&["kanban-plugin"]) {
-            report.add("unsupported", "info", &e.raw, "kanban", String::new());
+            report.at(e.id, "unsupported", "info", &e.raw, "kanban", String::new());
         }
         for code in unsupported(body) {
-            report.add("unsupported", "info", &e.raw, code, String::new());
+            report.at(e.id, "unsupported", "info", &e.raw, code, String::new());
         }
         let task_keys = [
             &STATUS[..],

@@ -399,7 +399,13 @@ mod tests {
         assert_eq!(answer["type"], "imported", "{answer}");
         assert_eq!(answer["report"]["counts"]["notes"], 2);
         assert_eq!(answer["report"]["counts"]["folders"], 1);
-        assert_eq!(answer["report"]["items"][0]["code"], "ghost");
+        let codes: Vec<&str> = answer["report"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter_map(|i| i["code"].as_str())
+            .collect();
+        assert_eq!(codes, vec!["noConfig", "ghost"]);
         assert_eq!(answer["history"]["undo"]["key"], "core.change.import");
         let bad = ask(
             &mut ws,

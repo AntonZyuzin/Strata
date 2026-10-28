@@ -153,7 +153,7 @@ function scene(link: string, fileId: string | null) {
 }
 
 const WARNING =
-  '==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu of this document. ⚠== You can decompress Drawing data with the command palette: \'Decompress current Excalidraw file\'. For more info check in plugin settings under \'Saving\'';
+  "==⚠  Switch to EXCALIDRAW VIEW in the MORE OPTIONS menu of this document. ⚠== You can decompress Drawing data with the command palette: 'Decompress current Excalidraw file'. For more info check in plugin settings under 'Saving'";
 
 /** The synthetic vault: deterministic, every rule of the import has its case. */
 export function vsynthVault(): VaultFile[] {
@@ -252,7 +252,10 @@ export function vsynthVault(): VaultFile[] {
     }),
     // Attachments in a shared folder go where the first note embedding them is (13 §2.6).
     { path: 'Вложения/схема.png', bytes: PNG },
-    { path: 'Вложения/фото.jpg', bytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46]) },
+    {
+      path: 'Вложения/фото.jpg',
+      bytes: Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10, 0x4a, 0x46]),
+    },
     { path: 'Вложения/лишний.pdf', bytes: enc.encode('%PDF-1.4\n%synthetic\n') },
     text('Вложения/данные.base', 'views:\n  - type: table\n'),
     // A canvas with all its cards (13 §2.7).
@@ -269,7 +272,16 @@ export function vsynthVault(): VaultFile[] {
           width: 1100,
           height: 400,
         },
-        { id: 'c1', type: 'file', file: 'Входящие.md', x: 0, y: 0, width: 400, height: 200, color: '5' },
+        {
+          id: 'c1',
+          type: 'file',
+          file: 'Входящие.md',
+          x: 0,
+          y: 0,
+          width: 400,
+          height: 200,
+          color: '5',
+        },
         {
           id: 'c2',
           type: 'file',
@@ -291,7 +303,15 @@ export function vsynthVault(): VaultFile[] {
           width: 400,
           height: 200,
         },
-        { id: 'c5', type: 'link', url: 'https://example.com/page', x: 1200, y: 600, width: 400, height: 200 },
+        {
+          id: 'c5',
+          type: 'link',
+          url: 'https://example.com/page',
+          x: 1200,
+          y: 600,
+          width: 400,
+          height: 200,
+        },
         { id: 'c6', type: 'file', file: 'Нет/такого.md', x: 600, y: 600, width: 400, height: 200 },
         { id: 'c7', type: 'file', file: 'Цикл.canvas', x: 1800, y: 0, width: 400, height: 200 },
         {

@@ -116,8 +116,10 @@ color:      LoroMap<NodeId, Color>
 shape:      LoroMap<NodeId, Shape>
 summary:    LoroMap<NodeId, string>           // ручная справка ≤ 280 символов
 status:     LoroMap<NodeId, StatusId>         // и так же deadline, start, priority, recurrence, remindAt (05 §6.1); только у задачи и проекта (ADR-0010)
-attr:       LoroMap<`${NodeId}|${Key}`, Value>          // одиночные пользовательские атрибуты (05 §6.2) и поля ассета asset, mime, url, icon (05 §4.4)
-set:        LoroMap<`${NodeId}|${Key}|${Value}`, 1>     // теги, ответственные, алиасы (aliases, 05 §6.1), множественный выбор
+attr:       LoroMap<`${NodeId}|${Key}`, Value>          // поля ассета asset, mime, url, icon, preview (05 §4.4)
+prop:       LoroMap<`${NodeId}|${Key}`, Value>          // пользовательские атрибуты (05 §6.2): свойства vault после импорта (13 §2.3); отдельно от attr, чтобы ключ url или icon заметки не стал полем ассета
+set:        LoroMap<`${NodeId}|${Key}|${Value}`, 1>     // теги (tags), ответственные (assignees), алиасы (aliases, 05 §6.1), множественный выбор
+itemsDue:   LoroMap<NodeId, Date>                       // производное: ближайший открытый срок пунктов-задач заметки (13 §2.9.1); пишет ядро после правки текста, вне отмены
 flag:       LoroMap<`${NodeId}|${Flag}`, 1>             // key | pause | template | hideAi | lock (05 §7)
 primaryNet: LoroMap<NodeId, NodeId>           // сеть основного размещения — поле primaryNetworkId (05 §4.1, §5)
 createdAt:  LoroMap<NodeId, Ts>               // и createdBy
@@ -152,9 +154,9 @@ settings:  LoroMap<string, unknown>                   // фон (07 §7), нап
 
 | Вид (05 §4.2) | `content/{nodeId}` | Подробности |
 |---|---|---|
-| Заметка | `text: LoroText` — Markdown-исходник; `meta: { schema }` | [ADR-0007](adr/0007-text-editor.md); CM6 + `loro-codemirror` ([R3](research/R3-crdt-sync.md) §8) |
+| Заметка | `text: LoroText` — Markdown-исходник; `meta: { schema, bom?, eol?, frontmatter? }` — у импортированной: BOM, переводы строк `lf` / `crlf` / `raw` и исходный блок frontmatter с разделителями (13 §2.3, §7.1) | [ADR-0007](adr/0007-text-editor.md); CM6 + `loro-codemirror` ([R3](research/R3-crdt-sync.md) §8) |
 | Доска | `meta`, `elements: LoroMap<elementId, JSON>`, `files: LoroMap<fileId, {sha256, mime, w, h}>`, `widgets` с `LoroText` и `LoroMovableList` | [ADR-0006](adr/0006-board-engine.md), [R5](research/R5-board-engine.md) |
-| Список | `items: LoroTree` пунктов (вложенность, 05 §4.2), узел — `{ text: LoroText, done }`; `text` создаётся как мерджимый контейнер (§2.6) | [R3](research/R3-crdt-sync.md) рек. §9; `packages/checklist` |
+| Список | `items: LoroTree` пунктов (вложенность, 05 §4.2), узел — `{ text: LoroText, done }`; `text` создаётся как мерджимый контейнер (§2.6); у импортированного `meta` — ещё маркер, единица отступа и буква «готово» (13 §2.2) | [R3](research/R3-crdt-sync.md) рек. §9; `packages/checklist` |
 | Задача | `text: LoroText` — описание на Markdown, как у заметки | [ADR-0010](adr/0010-kinds-not-classes.md) |
 | Папка, проект | `text: LoroText` — описание на Markdown; холст — `net/{nodeId}` | [ADR-0010](adr/0010-kinds-not-classes.md) |
 | Ассет | `text: LoroText` — описание на Markdown; файл и ссылка — в индексе: `asset` (SHA-256), `mime`, `url`, `icon` (05 §4.4) | Байты — ассет (§11) |

@@ -25,6 +25,7 @@ import {
   newNode,
   type Opened,
   type Person,
+  type Placeable,
   sniffMime,
   type TrashItem,
   type TrashPreview,
@@ -33,6 +34,7 @@ import {
 import {
   BACKDROP_SIDE,
   CanvasView,
+  type DropHow,
   Editor,
   type EditorEvents,
   generatePreset,
@@ -67,6 +69,7 @@ import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { menuOpening, TabMenu } from '../proto/TabMenu';
 import { netItems, searchClient, visited, visits } from '../search';
+import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { CommandPalette } from './CommandPalette';
 import type { CommandContext } from './commands';
@@ -102,6 +105,13 @@ interface Camera {
   x: number;
   y: number;
   zoom: number;
+}
+
+/** Nodes cut or copied for `Ctrl+V` (06 §12.1): the network they lay in, where each stood. */
+interface Clip {
+  cut: boolean;
+  net: string;
+  nodes: { id: string; name: string; x: number; y: number }[];
 }
 
 const RECENT_KEY = 'strata.tabmenu.recent';
@@ -249,6 +259,25 @@ export function WorkspaceScreen(props: {
     null,
   );
   const [toasts, setToasts] = useState<Toast[]>([]);
+  /** Nodes cut or copied (06 §12.1); a cut one is half seen in its network until the paste. */
+  const clipRef = useRef<Clip | null>(null);
+  const [clipped, setClipped] = useState(false);
+  /** «⊘ Нода уже здесь» beside the cursor (06 §12.1): its word; it follows the cursor by its ref. */
+  const [cursorNote, setCursorNote] = useState<{ x: number; y: number; key: string } | null>(null);
+  const noteEl = useRef<HTMLDivElement>(null);
+  /**
+   * The core's «may this network take them» (05 §5 rules 3–4) by network and
+   * nodes, asked while a drag rests on a folder; null — asked. A step clears it.
+   */
+  const verdicts = useRef(new Map<string, Placeable | null>());
+  /** A folder just wrapped whose name is being typed: the name joins the wrap's step (06 §13.3). */
+  const naming = useRef<{ id: string; n: number } | null>(null);
+  /** The steps of 06 §12.1 and §13.3 that the menus and «Ноды» start; set with the canvas. */
+  const moves = useRef({
+    paste: (_appearance: boolean, _at: { x: number; y: number }): void => undefined,
+    layers: (_ids: string[], _to: string): void => undefined,
+    named: (_id: string, _n: number, _name: string): void => undefined,
+  });
   const [note, setNote] = useState<{
     id: string;
     doc: LoroDoc;
@@ -298,6 +327,26 @@ export function WorkspaceScreen(props: {
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
   const [recent, setRecent] = useState<string[]>(loadRecent);
   const [, setVersion] = useState(0);
+  /**
+   * What network `net` may take of `ids` (05 §5 rules 3–4), from the core
+   * once per step: null until it answers, then the canvas and «Ноды» redraw.
+   */
+  const placeableRef = useRef((net: string, ids: readonly string[]): Placeable | null => {
+    const asked = verdicts.current;
+    const key = `${net}|${ids.join(',')}`;
+    if (asked.has(key)) return asked.get(key) ?? null;
+    asked.set(key, null);
+    void (sync.current?.settled() ?? Promise.resolve())
+      .then(() => core.placeable(net, [...ids]))
+      .then((p) => {
+        if (verdicts.current !== asked) return;
+        asked.set(key, p);
+        viewRef.current?.invalidate();
+        setVersion((v) => v + 1);
+      })
+      .catch(() => asked.delete(key));
+    return null;
+  });
   /** The selected node, read from the core for the properties panel. */
   const [details, setDetails] = useState<NodeDetails | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
@@ -432,6 +481,8 @@ export function WorkspaceScreen(props: {
       // No explanatory lines on screen: hints live in tooltips and menus.
       hint: () => undefined,
       change: () => {
+        // A step may have moved what a network holds: its verdicts are asked again.
+        verdicts.current = new Map();
         setVersion((v) => v + 1);
         if (trashTimer) clearTimeout(trashTimer);
         trashTimer = setTimeout(refreshTrash, 300);
@@ -461,6 +512,49 @@ export function WorkspaceScreen(props: {
       },
       // Removing asks first when it would take more than one would see (06 §12.3).
       deleting: (e) => askDeleteRef.current(e.ids, e.everywhere),
+      // `Ctrl+X` / `Ctrl+C` (06 §12.1): the nodes and where they stood; a cut is half seen.
+      clip: (e) => {
+        const g = graph.current;
+        if (!g) return;
+        const nodes = e.ids.flatMap((id) => {
+          const n = g.nodes.get(id);
+          return n && !n.ghostOf ? [{ id, name: n.name, x: n.x, y: n.y }] : [];
+        });
+        if (nodes.length === 0) return;
+        clipRef.current = { cut: e.cut, net: netRef.current, nodes };
+        setClipped(true);
+        viewRef.current?.setCut(e.cut ? nodes.map((n) => n.id) : []);
+      },
+      paste: (e) => {
+        if (!clipRef.current) return false;
+        void pasteNodes(e.appearance, e);
+        return true;
+      },
+      // `Esc` takes a cut back in the network it was made in (☑ Q-06-17).
+      uncut: () => {
+        const c = clipRef.current;
+        if (!c?.cut || c.net !== netRef.current) return;
+        clipRef.current = null;
+        setClipped(false);
+        viewRef.current?.setCut([]);
+      },
+      wrap: (e) => void wrap(e),
+      into: (e) => void dropInto(e),
+      // The word comes and goes with a render; it follows the cursor without one.
+      cursorNote: (e) => {
+        if (!e) {
+          setCursorNote(null);
+          return;
+        }
+        const r = el.getBoundingClientRect();
+        const x = e.sx + r.left;
+        const y = e.sy + r.top;
+        if (noteEl.current) {
+          noteEl.current.style.left = `${x}px`;
+          noteEl.current.style.top = `${y}px`;
+        }
+        setCursorNote((c) => (c?.key === e.key ? c : { x, y, key: e.key }));
+      },
       // «↗N» (06 §14): the list opens beside the mark at once, its top level
       // with it, clear of the label under the bubble; the rows come from the core.
       external: (e) => {
@@ -740,6 +834,13 @@ export function WorkspaceScreen(props: {
       const ed = new Editor(v, g, events);
       // Scissors leave wires from text alone (06 §6.7).
       ed.textWire = (a, b) => textWires.current.has(pair(a, b));
+      // A drag resting on a folder asks the core whether it may go in (06 §12.1).
+      ed.placeable = (to, ids) => placeableRef.current(to, ids);
+      verdicts.current = new Map();
+      setCursorNote(null);
+      // What was cut here stays half seen until the paste or `Esc` (☑ Q-06-17).
+      const c = clipRef.current;
+      v.setCut(c?.cut && c.net === id ? c.nodes.map((n) => n.id) : []);
       // The properties panel covers the canvas's right edge while one node is
       // chosen: framing keeps clear of it (review 2026-10-24).
       ed.coveredRight = () =>
@@ -759,6 +860,8 @@ export function WorkspaceScreen(props: {
       setMenu(null);
       setName(null);
       setExternal(null);
+      // A flight under way belongs to the network left (a paste framed there).
+      v.stopFlight();
       const cam = cameras.current.get(id);
       if (cam) {
         v.camera.x = cam.x;
@@ -772,6 +875,254 @@ export function WorkspaceScreen(props: {
       refreshTrash();
       setDetails(null);
       void pictures();
+    };
+
+    /** A node's or network's name, from the tree or the canvas. */
+    const nameOf = (id: string) =>
+      treeRef.current.find((i) => i.id === id)?.name ?? graph.current?.nodes.get(id)?.name ?? '';
+
+    /** Where nodes going into `net` stand (06 §12.1): right of what lies there, as they stood. */
+    const spotsIn = async (net: string, nodes: readonly { x: number; y: number }[]) => {
+      const there = (await core.view(net)).nodes;
+      const x0 = there.length > 0 ? Math.max(...there.map((n) => n.x)) + 200 : 0;
+      const y0 = there.length > 0 ? Math.min(...there.map((n) => n.y)) : 0;
+      const minX = Math.min(...nodes.map((n) => n.x));
+      const minY = Math.min(...nodes.map((n) => n.y));
+      return nodes.map((n) => ({ x: x0 + n.x - minX, y: y0 + n.y - minY }));
+    };
+
+    /** Folders that would lie in themselves (05 §5 rule 4) stay where they are; the toast names them. */
+    const looped = (nodes: readonly { name: string }[]) => {
+      if (nodes.length > 0) toast('ws.toast.cycle', { names: nodes.map((n) => n.name).join(', ') });
+    };
+
+    /** «Перенести» onto where a node lies already (05 §5): the one there stays, the toast says so. */
+    const wasHere = (n: number) => {
+      if (n > 0) toast(n === 1 ? 'ws.toast.wasHere' : 'ws.toast.wereHere', { n });
+    };
+
+    /** Nodes a step took out of `net` are no longer cut there. */
+    const leftClip = (net: string, ids: readonly string[]) => {
+      const c = clipRef.current;
+      if (!c?.cut || c.net !== net) return;
+      const nodes = c.nodes.filter((n) => !ids.includes(n.id));
+      clipRef.current = nodes.length > 0 ? { ...c, nodes } : null;
+      setClipped(nodes.length > 0);
+      if (netRef.current === net) viewRef.current?.setCut(nodes.map((n) => n.id));
+    };
+
+    /**
+     * `Ctrl+V` and `Ctrl+Shift+V` (06 §12.1) of what was cut or copied, at
+     * (x, y) as the nodes stood: a cut — «Перенести», a copy — the nodes with
+     * all inside them, an appearance — «Разместить здесь» (05 §5). One step.
+     */
+    const pasteNodes = (appearance: boolean, at: { x: number; y: number }) =>
+      queue(async () => {
+        const c = clipRef.current;
+        if (!c) return;
+        await sync.current?.settled();
+        const net = netRef.current;
+        const cx = c.nodes.reduce((a, n) => a + n.x, 0) / c.nodes.length;
+        const cy = c.nodes.reduce((a, n) => a + n.y, 0) / c.nodes.length;
+        const nodes = c.nodes.map((n) => ({ ...n, x: at.x + n.x - cx, y: at.y + n.y - cy }));
+        const ids = nodes.map((n) => n.id);
+        if (!c.cut && !appearance) {
+          const { ids: made } = await core.copyNodes(
+            nodes.map(({ id, x, y }) => ({ id, x, y })),
+            net,
+            { key: 'proto.change.copy', params: { n: nodes.length } },
+          );
+          await show(net);
+          editor.current?.selectNodes(made);
+          return;
+        }
+        const [from, here] = await Promise.all([
+          c.cut ? core.placeable(c.net, ids) : Promise.resolve(null),
+          core.placeable(net, ids),
+        ]);
+        // A cut node that left its network since (moved, in the trash) stays out of it.
+        const live = nodes.filter((n) => !from || from.here.includes(n.id));
+        looped(live.filter((n) => here.cycle.includes(n.id)));
+        const fit = live.filter((n) => !here.cycle.includes(n.id));
+        const to = nameOf(net);
+        if (appearance) {
+          // Where the node lies already it cannot appear (05 §5 rule 3): it is framed.
+          const already = fit.filter((n) => here.here.includes(n.id));
+          const go = fit.filter((n) => !here.here.includes(n.id));
+          if (already.length > 0) toast('canvas.isHere');
+          if (go.length > 0) {
+            await core.apply(
+              go.map((n): CoreOp => ({ op: 'place', id: n.id, net, x: n.x, y: n.y })),
+              { key: 'ws.change.placeIn', params: { n: go.length, to } },
+            );
+            await show(net);
+          }
+          editor.current?.flyTo([...go, ...already].map((n) => n.id));
+          return;
+        }
+        if (fit.length > 0) {
+          await core.apply(
+            fit.map(
+              (n): CoreOp => ({ op: 'relocate', id: n.id, from: c.net, to: net, x: n.x, y: n.y }),
+            ),
+            { key: 'ws.change.relocate', params: { n: fit.length, to } },
+          );
+        }
+        // The cut is done: what could not go stays whole where it was.
+        clipRef.current = null;
+        setClipped(false);
+        viewRef.current?.setCut([]);
+        if (c.net !== net) wasHere(fit.filter((n) => here.here.includes(n.id)).length);
+        await show(net);
+        editor.current?.selectNodes(fit.map((n) => n.id));
+      }).catch(refused);
+
+    /**
+     * A drag let go on a folder's or project's bubble after 500 ms (06 §12.1):
+     * the nodes go inside — moved, the copies just made, or as appearances.
+     * One step of undo with what the gesture wrote before (`amend`).
+     */
+    const dropInto = (e: { ids: string[]; into: string; how: DropHow; amend: boolean }) =>
+      queue(async () => {
+        await sync.current?.settled();
+        const net = netRef.current;
+        const g = graph.current;
+        const nodes = e.ids.flatMap((id) => {
+          const n = g?.nodes.get(id);
+          return n ? [{ id, name: n.name, x: n.x, y: n.y }] : [];
+        });
+        const p = await core.placeable(e.into, e.ids);
+        looped(nodes.filter((n) => p.cycle.includes(n.id)));
+        const go = nodes.filter(
+          (n) => !p.cycle.includes(n.id) && !(e.how === 'appear' && p.here.includes(n.id)),
+        );
+        if (go.length > 0) {
+          const spots = await spotsIn(e.into, go);
+          const to = nameOf(e.into);
+          const ops = go.map((n, i): CoreOp => {
+            const { x, y } = spots[i] ?? { x: 0, y: 0 };
+            return e.how === 'appear'
+              ? { op: 'place', id: n.id, net: e.into, x, y }
+              : { op: 'relocate', id: n.id, from: net, to: e.into, x, y };
+          });
+          const params = { n: go.length, to };
+          const label =
+            e.how === 'appear'
+              ? { key: 'ws.change.placeIn', params }
+              : e.how === 'copy'
+                ? { key: 'proto.change.copy', params }
+                : { key: 'ws.change.relocate', params };
+          await core.apply(ops, label, e.amend);
+          if (e.how !== 'appear') {
+            wasHere(go.filter((n) => p.here.includes(n.id)).length);
+            leftClip(
+              net,
+              go.map((n) => n.id),
+            );
+          }
+        }
+        await show(net);
+        editor.current?.selectNodes(e.how === 'appear' ? go.map((n) => n.id) : [e.into]);
+      }).catch(refused);
+
+    /**
+     * «Обернуть в папку» (06 §13.3, 05 §4.2): a folder at the nodes' middle,
+     * their placements inside as they stood, wires as they were; one step. One
+     * node names it; for several the name is typed next, into the same step.
+     */
+    const wrap = (e: { ids: string[]; x: number; y: number }) =>
+      queue(async () => {
+        await sync.current?.settled();
+        const net = netRef.current;
+        const nodes = e.ids.flatMap((id) => graph.current?.nodes.get(id) ?? []);
+        if (nodes.length === 0) return;
+        const id = newId();
+        const one = nodes.length === 1 ? nodes[0] : undefined;
+        const name = one?.name || t(localeRef.current, 'kind.network');
+        await core.apply(
+          [
+            { op: 'createNode', id, kind: 'network', name, net, x: e.x, y: e.y },
+            ...nodes.map(
+              (n): CoreOp => ({
+                op: 'relocate',
+                id: n.id,
+                from: net,
+                to: id,
+                x: n.x - e.x,
+                y: n.y - e.y,
+              }),
+            ),
+          ],
+          { key: 'ws.change.wrap', params: { n: nodes.length, name } },
+        );
+        leftClip(
+          net,
+          nodes.map((n) => n.id),
+        );
+        await show(net);
+        editor.current?.reveal(id);
+        if (!one) {
+          naming.current = { id, n: nodes.length };
+          editor.current?.rename(id);
+        }
+      }).catch(refused);
+
+    moves.current = {
+      paste: (appearance, at) => void pasteNodes(appearance, at),
+      // Rows of «Ноды» dropped on a folder or project (05 §5 «Перенести»): their
+      // primary placements move there, as they stood on the canvas; one step.
+      layers: (ids, to) =>
+        void queue(async () => {
+          await sync.current?.settled();
+          const g = graph.current;
+          const here = netRef.current;
+          const items = ids
+            .flatMap((id) => treeRef.current.find((i) => i.id === id) ?? [])
+            .filter((i) => i.parent !== undefined && i.parent !== to);
+          if (items.length === 0) return;
+          const p = await core.placeable(
+            to,
+            items.map((i) => i.id),
+          );
+          looped(items.filter((i) => p.cycle.includes(i.id)));
+          const go = items.filter((i) => !p.cycle.includes(i.id));
+          if (go.length === 0) return;
+          const spots = await spotsIn(
+            to,
+            go.map((i, k) => {
+              const n = i.parent === here ? g?.nodes.get(i.id) : undefined;
+              return n ? { x: n.x, y: n.y } : { x: k * 140, y: 0 };
+            }),
+          );
+          await core.apply(
+            go.map(
+              (i, k): CoreOp => ({
+                op: 'relocate',
+                id: i.id,
+                from: i.parent ?? '',
+                to,
+                x: spots[k]?.x ?? 0,
+                y: spots[k]?.y ?? 0,
+              }),
+            ),
+            { key: 'ws.change.relocate', params: { n: go.length, to: nameOf(to) } },
+          );
+          wasHere(go.filter((i) => p.here.includes(i.id)).length);
+          for (const i of go) leftClip(i.parent ?? '', [i.id]);
+          await show(here);
+        }).catch(refused),
+      // The wrapped folder's name joins the wrap's step (06 §13.3).
+      named: (id, n, name) =>
+        void queue(async () => {
+          await sync.current?.settled();
+          await core.apply(
+            [{ op: 'rename', id, name }],
+            { key: 'ws.change.wrap', params: { n, name } },
+            true,
+          );
+          await show(netRef.current);
+          editor.current?.reveal(id);
+        }).catch(refused),
     };
 
     /**
@@ -963,6 +1314,18 @@ export function WorkspaceScreen(props: {
       viewRef.current = null;
       view?.destroy();
     };
+  }, []);
+
+  // A copy waits for `Ctrl+V` while one stays here: away in another app, the
+  // clipboard may come to hold something else to paste (13 §3.9). A cut stays.
+  useEffect(() => {
+    const away = () => {
+      if (!clipRef.current || clipRef.current.cut) return;
+      clipRef.current = null;
+      setClipped(false);
+    };
+    window.addEventListener('blur', away);
+    return () => window.removeEventListener('blur', away);
   }, []);
 
   // The canvas's words follow the language: deadlines under labels (Q-07-22).
@@ -1232,6 +1595,9 @@ export function WorkspaceScreen(props: {
     setViewer(null);
     setViewerFocus(false);
     setTrash(null);
+    // Nodes cut or copied belong to the workspace they came from.
+    clipRef.current = null;
+    setClipped(false);
     navRef.current = NavHistory.load(readLocal(navKey(opened.workspace.id)));
     setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
     setMarks(loadMarks(readLocal(marksKey(opened.workspace.id))));
@@ -1286,6 +1652,7 @@ export function WorkspaceScreen(props: {
     await sync.current?.settled();
     const h = await core.apply(ops, { key: labelKey, ...(params ? { params } : {}) });
     graph.current?.clearHistory();
+    verdicts.current = new Map();
     setHistory(h);
     refreshRef.current();
     void core.tree().then(setTree);
@@ -1680,6 +2047,23 @@ export function WorkspaceScreen(props: {
     return true;
   };
 
+  /** «Вставить» and «Вставить как появление» while nodes wait for them (06 §12.1). */
+  const pasteItems = (at: () => { x: number; y: number }): MenuEntry[] =>
+    clipped
+      ? [
+          {
+            label: t(locale, 'ctx.paste'),
+            hint: 'Ctrl+V',
+            onSelect: () => moves.current.paste(false, at()),
+          },
+          {
+            label: t(locale, 'ctx.pasteAppearance'),
+            hint: 'Ctrl+Shift+V',
+            onSelect: () => moves.current.paste(true, at()),
+          },
+        ]
+      : [];
+
   /** The right button's menu (06 §5): for a node, a wire, or the bare canvas. */
   const ctxItems = (at: MenuTarget): MenuEntry[] => {
     if (!g || !ed) return [];
@@ -1687,9 +2071,12 @@ export function WorkspaceScreen(props: {
       const r = viewRef.current?.canvas.getBoundingClientRect();
       const sx = (ctx?.x ?? 0) - (r?.left ?? 0);
       const sy = (ctx?.y ?? 0) - (r?.top ?? 0);
+      const at = viewRef.current?.camera.toWorld(sx, sy) ?? { x: 0, y: 0 };
       return [
         { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => ed.createAt(sx, sy) },
         { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => ed.fitAll() },
+        // What was cut or copied goes where the menu was opened (06 §12.1).
+        ...pasteItems(() => at),
         // The network's wire styles (06 §6.2): the one they have is ticked,
         // `Shift+S` stands by the one it turns them to.
         ...WIRE_SHAPES.map(
@@ -1774,6 +2161,19 @@ export function WorkspaceScreen(props: {
       onSelect: () => ed.switchFlag(f, ed.flagTargets(n.id)),
     });
     items.push(flag('key', 'R', true), flag('pause', 'Q'), flag('template', 'E'));
+    // Moves of 06 §12.1 and the wrap of §13.3, on the selection.
+    items.push(
+      {
+        label: t(locale, 'ctx.cut'),
+        hint: 'Ctrl+X',
+        separated: true,
+        onSelect: () => ed.act('cut'),
+      },
+      { label: t(locale, 'ctx.copy'), hint: 'Ctrl+C', onSelect: () => ed.act('copy') },
+      // Beside the node the menu is for, not on it.
+      ...pasteItems(() => ({ x: n.x + 160, y: n.y })),
+      { label: t(locale, 'ctx.wrap'), hint: 'Shift+C', onSelect: () => ed.act('wrap') },
+    );
     // Two commands, not side by side (06 §12.3): «Убрать отсюда» and «Удалить везде».
     items.push({
       label: t(locale, 'ctx.delete'),
@@ -1842,6 +2242,7 @@ export function WorkspaceScreen(props: {
     canBack: navState.back,
     canForward: navState.forward,
     marks: marks.map((m) => m !== null),
+    clip: clipped,
     act: (action) => editor.current?.act(action),
     goTo: () => {
       setFinding(false);
@@ -1919,6 +2320,8 @@ export function WorkspaceScreen(props: {
           onSelect={(id) => void selectLayer(id, false)}
           onOpen={(id) => void selectLayer(id, true)}
           onRestore={(item) => void restore(item)}
+          onMove={(ids, to) => moves.current.layers(ids, to)}
+          placeable={(to, ids) => placeableRef.current(to, ids)}
           search={searchClient()}
         />
       ) : null}
@@ -1975,6 +2378,17 @@ export function WorkspaceScreen(props: {
             viewRef.current?.canvas.focus();
           }}
         />
+      ) : null}
+      {cursorNote ? (
+        <div
+          ref={noteEl}
+          className="ws-cursor-note"
+          role="status"
+          style={{ left: cursorNote.x, top: cursorNote.y }}
+        >
+          <Glyph name="forbid" />
+          <span>{t(locale, cursorNote.key as MessageKey)}</span>
+        </div>
       ) : null}
       <ul className="toasts" aria-live="polite">
         {toasts.map((x) => (
@@ -2182,11 +2596,20 @@ export function WorkspaceScreen(props: {
           initial={name.name}
           onCommit={(text) => {
             setName(null);
-            ed?.nameCommit(text);
+            const w = naming.current;
+            naming.current = null;
+            // A wrapped folder's name goes into the wrap's step (06 §13.3).
+            if (w?.id === name.id && text.trim()) {
+              ed?.nameCancel();
+              moves.current.named(w.id, w.n, text.trim());
+            } else {
+              ed?.nameCommit(text);
+            }
             focusCanvas();
           }}
           onCancel={() => {
             setName(null);
+            naming.current = null;
             ed?.nameCancel();
             focusCanvas();
           }}

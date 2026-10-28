@@ -7,6 +7,7 @@ import {
   type Graph,
   type GraphNode,
   ghostSpot,
+  hasCanvas,
   insertIntoWire,
   type NodeKind,
   newId,
@@ -41,6 +42,8 @@ const MIN_HIT_PX = 12; // a 24 × 24 target at least (07 §4.10, NFR-99)
 const WIRE_HIT_PX = 6;
 const DROP_PX = 6;
 const DROP_HOLD_MS = 200;
+/** A drag resting on the bubble of a folder or project this long goes inside (06 §12.1). */
+const INTO_HOLD_MS = 500;
 const DOUBLE_CLICK_MS = 400;
 const PORT_RING = (rs: number) => Math.max(8, 0.25 * rs);
 /** 06 §6.4: neighbours downstream shift by 2·r(X) + 24 along A → B. */
@@ -60,6 +63,8 @@ export const WIRE_SHAPES: readonly WireShape[] = ['straight', 'bezier', 'kinetic
 const PAPER = 0xf2efe6;
 const INK = 0x0b0c0e;
 const ATTENTION = Number.parseInt(fog.scene.attention.slice(1), 16);
+/** The one accent (07 §2.2): a bubble that will take the drop. */
+const ACCENT = Number.parseInt(fog.scene.accent.slice(1), 16);
 const ACTIVE_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false };
 const RUNNING_WIRE: WireStyle = { ...ACTIVE_WIRE, dot: true };
 const CANDIDATE_WIRE: WireStyle = { color: ATTENTION, alpha: 1, width: 2.5, dot: false };
@@ -82,6 +87,19 @@ const GHOST_WIRE: WireStyle = {
 };
 
 export type WheelMode = 'mouse' | 'trackpad';
+
+/**
+ * What a drop on a folder's or project's bubble does (06 §12.1): `move` —
+ * «Перенести» inside; `copy` (`Alt`) — the copies inside; `appear`
+ * (`Alt+Ctrl+Shift`) — appearances there.
+ */
+export type DropHow = 'move' | 'copy' | 'appear';
+
+/** What a network may take (05 §5 rules 3–4): it may not hold `cycle`; `here` lie in it already. */
+export interface Placeable {
+  cycle: readonly string[];
+  here: readonly string[];
+}
 
 /** What the cursor is over; the status bar shows a hint for it (06 §2.1). */
 export type HintKey =
@@ -156,6 +174,32 @@ export interface EditorEvents {
    * The core places it; the graph has no such node yet.
    */
   place?(e: { id: string; x: number; y: number; inputs: string[] }): void;
+  /**
+   * `Ctrl+X` or `Ctrl+C` with nodes chosen (06 §12.1): the Chrome keeps them
+   * for `Ctrl+V`; a cut one shows half seen until it is pasted (☑ Q-06-17).
+   */
+  clip?(e: { cut: boolean; ids: string[] }): void;
+  /**
+   * `Ctrl+V`, with `appearance` `Ctrl+Shift+V` (06 §12.1), at (x, y) in the
+   * world: true when the Chrome holds nodes and pastes them; false — the
+   * browser's paste goes on (a picture, a link, text: 13 §3.9).
+   */
+  paste?(e: { appearance: boolean; x: number; y: number }): boolean;
+  /** `Esc` with no gesture going on: a cut is taken back (☑ Q-06-17). */
+  uncut?(): void;
+  /** «Обернуть в папку», `Shift+C` (06 §13.3): the nodes into a new folder at (x, y). */
+  wrap?(e: { ids: string[]; x: number; y: number }): void;
+  /**
+   * A drag that rested 500 ms on the bubble of a folder or project and was
+   * let go there (06 §12.1). `amend` — the gesture wrote a step already (the
+   * copy, a shake): this one adds to it, one step of undo.
+   */
+  into?(e: { ids: string[]; into: string; how: DropHow; amend: boolean }): void;
+  /**
+   * A word beside the cursor while the gesture cannot land (06 §12.1: «⊘
+   * Нода уже здесь» for an appearance in its own network); null — none.
+   */
+  cursorNote?(e: { sx: number; sy: number; key: string } | null): void;
 }
 
 /** The canvas's actions by name (06 §1 rule 6): its keys and the palette's commands. */
@@ -181,7 +225,12 @@ export type CanvasAction =
   | 'open'
   | 'zoomIn'
   | 'zoomOut'
-  | 'zoomReset';
+  | 'zoomReset'
+  | 'cut'
+  | 'copy'
+  | 'paste'
+  | 'pasteAppearance'
+  | 'wrap';
 
 /** What the right button was pressed on. */
 export type MenuTarget =
@@ -248,6 +297,8 @@ type Mode =
       button: number;
       alt: boolean;
       shift: boolean;
+      /** `Ctrl`, `Cmd` on macOS (06 §17). */
+      mod: boolean;
     }
   | {
       t: 'drag';
@@ -259,6 +310,9 @@ type Mode =
       /** Steps already committed in this gesture: copy, shake. The release amends them. */
       committed: boolean;
       candidate: Candidate | null;
+      how: DropHow;
+      /** The folder's or project's bubble under the cursor, since when (06 §12.1). */
+      into: { id: string; since: number } | null;
     }
   | {
       t: 'wire';
@@ -329,7 +383,14 @@ export class Editor {
    * leave it alone, it lives while its link is in the text (06 §6.7).
    */
   textWire: (from: string, to: string) => boolean = () => false;
+  /**
+   * What network `net` may take of `ids` (05 §5 rules 3–4), asked while a
+   * drag rests on its bubble: null until the core has answered.
+   */
+  placeable: (net: string, ids: readonly string[]) => Placeable | null = () => null;
   private mode: Mode = { t: 'idle' };
+  /** The cursor's word is up (`cursorNote`). */
+  private noted = false;
   private hover: Hit = { t: 'empty' };
   /** The flag ring (06 §8): the bubble the cursor rests on, since when; the slot under it. */
   private ring: { id: string; since: number } | null = null;
@@ -648,6 +709,23 @@ export class Editor {
         return;
       case 'zoomReset':
         zoom(1 / cam.zoom);
+        return;
+      case 'cut':
+      case 'copy':
+        if (this.mode.t !== 'idle' || this.selection.size === 0) return;
+        this.events.clip?.({ cut: action === 'cut', ids: [...this.selection] });
+        return;
+      case 'paste':
+      case 'pasteAppearance': {
+        // At the cursor over the canvas, else beside the current node (06 §12.1).
+        if (this.mode.t !== 'idle') return;
+        const s = this.anchorScreen();
+        const at = this.view.camera.toWorld(s.sx, s.sy);
+        this.events.paste?.({ appearance: action === 'pasteAppearance', ...at });
+        return;
+      }
+      case 'wrap':
+        this.wrapSelection();
         return;
     }
   }
@@ -968,6 +1046,7 @@ export class Editor {
       button: e.button,
       alt: e.altKey,
       shift: e.shiftKey,
+      mod: e.metaKey || e.ctrlKey,
     };
   }
 
@@ -1179,7 +1258,9 @@ export class Editor {
       this.current = hit.id;
       let ids = [...this.selection];
       let committed = false;
-      if (m.alt) {
+      // `Alt+Ctrl+Shift`: appearances of the nodes, not copies (06 §12.1).
+      const appear = m.alt && m.mod && m.shift;
+      if (m.alt && !appear) {
         // Alt-drag: an independent copy of the selection follows the cursor (06 §12.1).
         ids = this.copyNodes(ids);
         committed = ids.length > 0;
@@ -1197,9 +1278,12 @@ export class Editor {
         grabX: grab.x,
         grabY: grab.y,
         origin,
-        shaker: ids.length === 1 ? new ShakeDetector(sx, sy, this.shakePx) : null,
+        // An appearance leaves the node's chains alone: no shake.
+        shaker: ids.length === 1 && !appear ? new ShakeDetector(sx, sy, this.shakePx) : null,
         committed,
         candidate: null,
+        how: appear ? 'appear' : m.alt ? 'copy' : 'move',
+        into: null,
       };
       this.events.hint('proto.hint.drag');
       this.dragTo(this.mode, sx, sy, e);
@@ -1232,6 +1316,7 @@ export class Editor {
         this.view.place(g, at.x, at.y);
       }
     }
+    this.updateInto(m, sx, sy);
     const single = m.ids.length === 1 ? m.ids[0] : undefined;
     if (single === undefined) return;
     // Shake: the node comes out of its chains, still on the cursor (06 §6.7).
@@ -1240,7 +1325,75 @@ export class Editor {
       const p = this.local(s);
       if (m.shaker?.feed(p.sx, p.sy, s.timeStamp)) this.shakeOut(m, single);
     }
-    this.updateCandidate(m, single);
+    // Over a folder's bubble the drag goes inside, not into a wire.
+    if (m.into || m.how === 'appear') m.candidate = null;
+    else this.updateCandidate(m, single);
+  }
+
+  /**
+   * The folder or project whose bubble is under the cursor (06 §12.1): the
+   * drop goes inside once it has rested there 500 ms. An appearance cannot
+   * be where the node is (05 §5 rule 3): away from such a bubble, and over
+   * one where it lies already, the cursor says «⊘ Нода уже здесь».
+   */
+  private updateInto(m: Extract<Mode, { t: 'drag' }>, sx: number, sy: number) {
+    const id = this.events.into ? this.bubbleUnder(sx, sy, m.ids) : null;
+    const n = id ? this.graph.nodes.get(id) : undefined;
+    const target = n && !n.ghostOf && hasCanvas(n.kind) ? n.id : null;
+    if (target !== (m.into?.id ?? null)) {
+      m.into = target ? { id: target, since: performance.now() } : null;
+      this.view.invalidate();
+    }
+    const said = m.how === 'appear' && (!m.into || this.verdict(m) === 'here');
+    this.noteAt(said ? { sx, sy, key: 'canvas.isHere' } : null);
+  }
+
+  /** What the bubble under a drag says to it (05 §5); null — the core has not answered yet. */
+  private verdict(m: Extract<Mode, { t: 'drag' }>): 'ok' | 'cycle' | 'here' | null {
+    if (!m.into) return null;
+    const p = this.placeable(m.into.id, m.ids);
+    if (!p) return null;
+    if (m.ids.some((id) => p.cycle.includes(id))) return 'cycle';
+    if (m.how === 'appear' && m.ids.some((id) => p.here.includes(id))) return 'here';
+    return 'ok';
+  }
+
+  /** The drag has rested on a bubble that takes it (06 §12.1). */
+  private intoReady(m: Extract<Mode, { t: 'drag' }>, now: number): boolean {
+    if (!m.into || now - m.into.since < INTO_HOLD_MS) return false;
+    const v = this.verdict(m);
+    return v !== 'cycle' && v !== 'here';
+  }
+
+  /** The word beside the cursor and the «⊘» cursor (06 §12.1); null takes both away. */
+  private noteAt(e: { sx: number; sy: number; key: string } | null) {
+    if (!e && !this.noted) return;
+    this.noted = e !== null;
+    this.view.canvas.style.cursor = e ? 'not-allowed' : '';
+    this.events.cursorNote?.(e);
+  }
+
+  /** The bubble under a screen point, `except` those (the dragged ones). */
+  private bubbleUnder(sx: number, sy: number, except: readonly string[]): string | null {
+    // The bubbles that stay put are where the index has them; the dragged ones are left out.
+    if (this.indexDirty) this.refreshIndex();
+    const zoom = this.view.camera.zoom;
+    const w = this.view.camera.toWorld(sx, sy);
+    const reach = MIN_HIT_PX / zoom;
+    let best: { id: string; d: number } | null = null;
+    for (const b of this.nodeIndex.search({
+      minX: w.x - reach,
+      minY: w.y - reach,
+      maxX: w.x + reach,
+      maxY: w.y + reach,
+    })) {
+      if (except.includes(b.id)) continue;
+      const p = this.view.nodeAt(b.id);
+      if (!p) continue;
+      const d = hexDist(w.x - p.x, w.y - p.y);
+      if (d <= Math.max(p.r * HEX_IN, reach) && (!best || d < best.d)) best = { id: b.id, d };
+    }
+    return best?.id ?? null;
   }
 
   private shakeOut(m: Extract<Mode, { t: 'drag' }>, id: string) {
@@ -1310,6 +1463,15 @@ export class Editor {
 
   private dropDrag(m: Extract<Mode, { t: 'drag' }>) {
     this.mode = { t: 'idle' };
+    this.noteAt(null);
+    if (m.into && this.intoReady(m, performance.now())) {
+      // An appearance leaves the nodes where they were; moved or copied, the
+      // network read again takes them away.
+      if (m.how === 'appear') this.view.settle(m.origin.keys());
+      this.events.into?.({ ids: m.ids, into: m.into.id, how: m.how, amend: m.committed });
+      this.afterGesture();
+      return;
+    }
     const single = m.ids.length === 1 ? m.ids[0] : undefined;
     const c = m.candidate;
     const positions = m.ids.map((id) => ({ id, p: this.view.nodeAt(id) }));
@@ -1492,6 +1654,8 @@ export class Editor {
       case 'Escape':
         if (this.mode.t !== 'idle') this.cancelGesture();
         else {
+          // A cut is taken back (☑ Q-06-17), the selection cleared.
+          this.events.uncut?.();
           this.selection.clear();
           this.selectedWire = null;
           this.events.change();
@@ -1504,10 +1668,30 @@ export class Editor {
         this.act(e.shiftKey ? 'redo' : 'undo');
         return;
       case 'KeyX':
-        if (!(mod && e.shiftKey)) return;
+        // `Ctrl+X` — cut (06 §12.1), `Ctrl+Shift+X` — out of the chain.
+        if (!mod || e.altKey) return;
         e.preventDefault();
-        this.act('extract');
+        this.act(e.shiftKey ? 'extract' : 'cut');
         return;
+      case 'KeyC':
+        if (e.altKey) return;
+        if (mod && !e.shiftKey) {
+          // Nothing chosen: the browser copies what it would.
+          if (this.selection.size === 0) return;
+          e.preventDefault();
+          this.act('copy');
+        } else if (!mod && e.shiftKey) {
+          e.preventDefault();
+          this.act('wrap');
+        }
+        return;
+      case 'KeyV': {
+        // Nodes cut or copied paste here; anything else is the browser's paste (13 §3.9).
+        if (!mod || e.altKey || this.mode.t !== 'idle') return;
+        const at = this.pasteSpot();
+        if (at && this.events.paste?.({ appearance: e.shiftKey, ...at })) e.preventDefault();
+        return;
+      }
       case 'KeyA':
         if (!mod) return;
         e.preventDefault();
@@ -1697,6 +1881,7 @@ export class Editor {
   private cancelGesture() {
     const m = this.mode;
     this.mode = { t: 'idle' };
+    this.noteAt(null);
     if (m.t === 'drag') {
       // Esc during a drag: positions back, steps of this gesture reverted (06 §1.2).
       if (m.committed) this.graph.revertLast();
@@ -1716,6 +1901,17 @@ export class Editor {
   }
 
   // ── Commands ──────────────────────────────────────────────────────
+
+  /** «Обернуть в папку» (06 §13.3): the chosen nodes into a new folder at their middle. */
+  private wrapSelection() {
+    const nodes = [...this.selection].flatMap((id) => this.graph.nodes.get(id) ?? []);
+    if (this.mode.t !== 'idle' || nodes.length === 0) return;
+    this.events.wrap?.({
+      ids: nodes.map((n) => n.id),
+      x: nodes.reduce((a, n) => a + n.x, 0) / nodes.length,
+      y: nodes.reduce((a, n) => a + n.y, 0) / nodes.length,
+    });
+  }
 
   private extractSelection() {
     const ids = [...this.selection];
@@ -2087,6 +2283,45 @@ export class Editor {
       g.rect(x, y, Math.abs(m.sx1 - m.sx0), Math.abs(m.sy1 - m.sy0))
         .fill({ color: PAPER, alpha: 0.06 })
         .stroke({ color: PAPER, width: 1, alpha: 0.8 });
+    }
+    // Cut nodes (06 §12.1): a dashed hexagon round each until the paste or `Esc`.
+    for (const id of this.view.cut) {
+      const s = screen(id);
+      if (!s) continue;
+      const c = hexCorners(s.x, s.y, s.r + 6 / HEX_IN);
+      const pts: { x: number; y: number }[] = [];
+      for (let k = 0; k <= 6; k++) pts.push({ x: c[(k % 6) * 2] ?? 0, y: c[(k % 6) * 2 + 1] ?? 0 });
+      dashed(g, pts, STROKE_DASH);
+      g.stroke({ color: PAPER, width: 1, alpha: 0.9 });
+    }
+    if (m.t === 'drag' && m.into) {
+      const s = screen(m.into.id);
+      const v = this.verdict(m);
+      const u = this.view.unit;
+      if (s && (v === 'cycle' || v === 'here')) {
+        // «⊘» (06 §12.1): this network may not take them.
+        const r = Math.max(8 * u, 0.5 * s.r);
+        const k = r * Math.SQRT1_2;
+        for (const [color, width] of [
+          [INK, 4 * u],
+          [PAPER, 2 * u],
+        ] as const) {
+          g.circle(s.x, s.y, r)
+            .moveTo(s.x - k, s.y + k)
+            .lineTo(s.x + k, s.y - k);
+          g.stroke({ color, width });
+        }
+      } else if (s) {
+        // Resting: a faint rim; held 500 ms, the accent's — the drop goes inside.
+        const ready = this.intoReady(m, now);
+        g.poly(hexCorners(s.x, s.y, s.r + (10 * u) / HEX_IN)).stroke({
+          color: ready ? ACCENT : PAPER,
+          width: 2 * u,
+          alpha: ready ? 1 : 0.5,
+        });
+        if (!ready) this.view.invalidate();
+      }
+      if (v === null) this.view.invalidate();
     }
     if (m.t === 'drag' && m.candidate) {
       if (this.candidateReady(m, now)) {

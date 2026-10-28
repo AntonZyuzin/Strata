@@ -2509,6 +2509,96 @@ fn wrap_into_a_network_is_one_step() {
 }
 
 #[test]
+fn a_network_says_what_it_may_not_hold_before_a_gesture_lands() {
+    // 06 §12.1: «⊘» over a network that would lie in itself (rule 4), and
+    // what is placed there already (rule 3), asked before the drop.
+    let mut w = ws();
+    let root = w.root();
+    let outer = create(&mut w, &root, NodeKind::Network, "Внешняя");
+    let inner = create(&mut w, &outer, NodeKind::Project, "Внутренняя");
+    let side = create(&mut w, &root, NodeKind::Network, "Соседняя");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let ids = [outer.clone(), side.clone(), note.clone()];
+    let p = w.placeable(&inner, &ids).expect("placeable");
+    assert_eq!(
+        p.cycle,
+        std::slice::from_ref(&outer),
+        "a network in one inside it"
+    );
+    assert!(p.here.is_empty());
+    let p = w.placeable(&side, &ids).expect("placeable");
+    assert_eq!(p.cycle, std::slice::from_ref(&side), "a network in itself");
+    // An appearance makes a way down: «Соседняя» inside «Внутренняя».
+    place(&mut w, &side, &inner).expect("an appearance");
+    let p = w.placeable(&side, &ids).expect("placeable");
+    assert_eq!(p.cycle, [outer.clone(), side.clone()]);
+    let p = w.placeable(&root, &ids).expect("placeable");
+    assert_eq!(p.here, ids, "all of them lie in the root");
+    assert!(p.cycle.is_empty());
+    assert!(w.placeable(&note, &ids).is_err(), "a note holds nothing");
+    // A node gone since the gesture began counts nowhere.
+    w.apply(
+        &[Op::Trash {
+            ids: vec![note.clone()],
+        }],
+        Label::new("t"),
+    )
+    .expect("trash");
+    let p = w.placeable(&root, &ids).expect("placeable");
+    assert_eq!(p.here, [outer, side]);
+}
+
+#[test]
+fn copies_of_several_nodes_are_one_step() {
+    // 05 §5 «Копировать», 06 §12.1 `Ctrl+C` → `Ctrl+V`: each copy where it
+    // is asked for, the hand-drawn wire between them copied too.
+    let mut w = ws();
+    let root = w.root();
+    let net = create(&mut w, &root, NodeKind::Network, "Сеть");
+    let a = create(&mut w, &root, NodeKind::Task, "А");
+    let b = create(&mut w, &root, NodeKind::Note, "Б");
+    let inside = create(&mut w, &net, NodeKind::Note, "Внутри");
+    w.apply(
+        &[Op::Connect {
+            from: a.clone(),
+            to: b.clone(),
+        }],
+        Label::new("t"),
+    )
+    .expect("wire");
+    let ids = w
+        .copy_nodes(
+            &[
+                (a.clone(), 10.0, 20.0),
+                (b.clone(), 30.0, 40.0),
+                (net.clone(), 0.0, 0.0),
+            ],
+            &net,
+            &[],
+            Label::new("t.copy"),
+        )
+        .expect("copy");
+    assert_eq!(ids.len(), 3);
+    assert_eq!(names(&mut w, &net), ["А", "Б", "Внутри", "Сеть"]);
+    let v = w.network_view(&net).expect("view");
+    let at = |id: &str| v.nodes.iter().find(|n| n.id == id).map(|n| (n.x, n.y));
+    assert_eq!(at(&ids[0]), Some((10.0, 20.0)));
+    assert_eq!(at(&ids[1]), Some((30.0, 40.0)));
+    assert!(
+        v.edges.iter().any(|e| e.from == ids[0] && e.to == ids[1]),
+        "the wire between the copies"
+    );
+    // The folder's copy took what is inside it, as a copy.
+    let copied = w.network_view(&ids[2]).expect("view").nodes;
+    assert_eq!(copied.len(), 1);
+    assert_eq!(copied[0].name, "Внутри");
+    assert_ne!(copied[0].id, inside);
+    w.undo().expect("one step");
+    assert_eq!(names(&mut w, &net), ["Внутри"]);
+    assert_eq!(names(&mut w, &root), ["А", "Б", "Сеть"]);
+}
+
+#[test]
 fn a_network_in_the_trash_takes_what_lives_only_inside_it() {
     // 05 §5, ☑ Q-05-6: what lives nowhere else goes with it; a node placed
     // elsewhere too only loses its placement inside.

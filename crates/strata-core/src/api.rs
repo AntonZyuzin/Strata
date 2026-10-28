@@ -6,8 +6,8 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::workspace::{
-    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, TrashItem, TrashPreview,
-    TreeItem, WireEnds, Workspace,
+    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, Placeable, TrashItem,
+    TrashPreview, TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -41,6 +41,19 @@ pub enum Request {
         #[serde(default)]
         inputs: Vec<String>,
         label: Label,
+    },
+    /// Copies of nodes in `net`, each at its point, everything inside them
+    /// too: `Ctrl+C` → `Ctrl+V` (06 §12.1). One step of undo.
+    CopyNodes {
+        nodes: Vec<CopyAt>,
+        net: String,
+        label: Label,
+    },
+    /// Which of `ids` network `net` may not hold, and which lie in it
+    /// already (05 §5 rules 3–4): «⊘» before a drop or a paste.
+    Placeable {
+        net: String,
+        ids: Vec<String>,
     },
     Undo,
     Redo,
@@ -95,6 +108,14 @@ pub enum Request {
     },
 }
 
+/// A node to copy and where its copy goes.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CopyAt {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Response {
@@ -115,6 +136,15 @@ pub enum Response {
     Copied {
         id: String,
         history: History,
+    },
+    /// The copies are made: their ids in the order asked, the undo and redo
+    /// steps after them.
+    CopiedMany {
+        ids: Vec<String>,
+        history: History,
+    },
+    Placeable {
+        placeable: Placeable,
     },
     /// An undo or redo: `None` when there was nothing to undo or redo.
     Reverted {
@@ -206,6 +236,18 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 id,
                 history: ws.history(),
             }),
+        Request::CopyNodes { nodes, net, label } => {
+            let from: Vec<(String, f64, f64)> =
+                nodes.into_iter().map(|n| (n.id, n.x, n.y)).collect();
+            ws.copy_nodes(&from, &net, &[], label)
+                .map(|ids| Response::CopiedMany {
+                    ids,
+                    history: ws.history(),
+                })
+        }
+        Request::Placeable { net, ids } => ws
+            .placeable(&net, &ids)
+            .map(|placeable| Response::Placeable { placeable }),
         Request::Undo => ws.undo().map(|report| Response::Reverted {
             report,
             history: ws.history(),
@@ -355,6 +397,39 @@ mod tests {
             json!({ "call": "pullDoc", "doc": doc, "since": "!" }),
         );
         assert_eq!(bad["invalid"], true);
+    }
+
+    #[test]
+    fn a_paste_and_a_drop_ask_the_core_first() {
+        // 06 §12.1: `Ctrl+C` → `Ctrl+V` copies in one step; a drop asks
+        // what the network may not hold (05 §5 rules 3–4).
+        let mut ws = Workspace::create(MemoryStore::default(), "Root").expect("create");
+        let root = ws.root();
+        let net = strata_model::NodeId::new().to_text();
+        let a = strata_model::NodeId::new().to_text();
+        ask(
+            &mut ws,
+            json!({ "call": "apply", "label": { "key": "t" }, "ops": [
+                { "op": "createNode", "id": net, "kind": "network", "name": "N", "net": root, "x": 0, "y": 0 },
+                { "op": "createNode", "id": a, "kind": "note", "name": "A", "net": root, "x": 0, "y": 0 }] }),
+        );
+        let p = ask(
+            &mut ws,
+            json!({ "call": "placeable", "net": net, "ids": [net, a] }),
+        );
+        assert_eq!(p["type"], "placeable");
+        assert_eq!(p["placeable"], json!({ "cycle": [net], "here": [] }));
+        let c = ask(
+            &mut ws,
+            json!({ "call": "copyNodes", "net": net, "label": { "key": "t.copy" },
+                    "nodes": [{ "id": a, "x": 5, "y": 6 }] }),
+        );
+        assert_eq!(c["type"], "copiedMany");
+        assert_eq!(c["history"]["undo"]["key"], "t.copy");
+        let id = c["ids"][0].as_str().expect("id");
+        let view = ask(&mut ws, json!({ "call": "view", "net": net }));
+        assert_eq!(view["view"]["nodes"][0]["id"], id);
+        assert_eq!(view["view"]["nodes"][0]["x"], 5.0);
     }
 
     #[test]

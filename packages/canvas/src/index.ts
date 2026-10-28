@@ -14,11 +14,13 @@ export * from './curve';
 export type { Interaction, RimTarget } from './decor';
 export {
   type CanvasAction,
+  type DropHow,
   Editor,
   type EditorEvents,
   type HintKey,
   type MenuChoice,
   type MenuTarget,
+  type Placeable as DropPlaceable,
   type WheelMode,
   WIRE_SHAPES,
 } from './editor';

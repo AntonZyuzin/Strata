@@ -4,13 +4,19 @@ import {
   type ChangeLabel,
   type CoreOp,
   CoreSync,
+  type ExternalWire,
+  type Flag,
+  flagsOf,
+  followExternal,
   followFolds,
+  followGhosts,
   followPreviews,
   followWires,
   type Graph,
   graphOf,
   type History,
   type HomeBackend,
+  hasCanvas,
   isTask,
   linkOf,
   type NetworkView,
@@ -21,6 +27,7 @@ import {
   type Person,
   sniffMime,
   type TrashItem,
+  type TrashPreview,
   type TreeItem,
 } from '@strata/backend';
 import {
@@ -36,8 +43,17 @@ import {
 import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
+import type { Scope } from '@strata/search';
 import type { LoroDoc } from 'loro-crdt';
-import { type MutableRefObject, useCallback, useEffect, useRef, useState } from 'react';
+import {
+  type MutableRefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import { linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { nodeIconFile, nodeIconImages } from '../icons/Icon';
@@ -45,18 +61,26 @@ import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
 import { Map3D, type MapNav, type MapState } from '../proto/map3d';
-import { type MenuItem, type MenuNode, remember } from '../proto/menu';
+import { type MenuGhost, type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
-import { TabMenu } from '../proto/TabMenu';
+import { menuOpening, TabMenu } from '../proto/TabMenu';
+import { netItems, searchClient, visited, visits } from '../search';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
+import { CommandPalette } from './CommandPalette';
+import type { CommandContext } from './commands';
+import { DeleteDialog } from './DeleteDialog';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
+import { ExternalList } from './ExternalList';
+import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
-import { MapSearch } from './MapSearch';
+import { NodeSearch } from './NodeSearch';
+import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
 import { PathBar } from './PathBar';
+import { pathLabel } from './paths';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -80,6 +104,8 @@ interface Camera {
 }
 
 const RECENT_KEY = 'strata.tabmenu.recent';
+/** «Перейти к ноде» ranks the whole workspace (09 §3.4). */
+const ALL: Scope = { t: 'all' };
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
@@ -93,6 +119,36 @@ function loadRecent(): string[] {
 }
 
 const pair = (a: string, b: string) => `${a}\u0000${b}`;
+
+/** A quick mark is set by holding its digit this long (06 §10.3). */
+const MARK_HOLD_MS = 600;
+const DIGITS: Partial<Record<string, number>> = {
+  Digit1: 0,
+  Digit2: 1,
+  Digit3: 2,
+  Digit4: 3,
+  Digit5: 4,
+};
+
+const navKey = (ws: string) => `strata.nav.${ws}`;
+const marksKey = (ws: string) => `strata.marks.${ws}`;
+
+/** The device's own notes (05 §13): a private window may refuse them. */
+function readLocal(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // The history and the marks are a convenience.
+  }
+}
 
 let fogPixels: Pixels | null = null;
 
@@ -119,6 +175,9 @@ export interface WorkspaceBridge {
   redo(): void;
   /** The star map and back (08 §7), as `M` does. */
   map(): void;
+  /** Back and forward over the places left (09 §6.1), as `Alt+←` / `Alt+→`. */
+  back(): void;
+  forward(): void;
 }
 
 /** What the bar shows of the open workspace: undo and redo, the star map. */
@@ -129,6 +188,9 @@ export interface UndoState {
   step: string;
   /** The star map is shown, or on its way. */
   map: boolean;
+  /** There is a place to go back or forward to (09 §6.1). */
+  canBack: boolean;
+  canForward: boolean;
 }
 
 export function WorkspaceScreen(props: {
@@ -157,6 +219,8 @@ export function WorkspaceScreen(props: {
   const openedRef = useRef(opened);
   const cameras = useRef(new Map<string, Camera>());
   const textWires = useRef(new Set<string>());
+  /** When the flag ring shows (06 §8): «Настройки» set it, every new canvas takes it. */
+  const ringModeRef = useRef(props.prefs.ring);
   /** Shows a network (the current one when none is given), after what is queued. */
   const loadRef = useRef<(net?: string) => Promise<void>>(async () => {});
   /** Loads and undo through the core, one after another (they replace the graph). */
@@ -172,7 +236,14 @@ export function WorkspaceScreen(props: {
   );
   const toastId = useRef(0);
   const [net, setNet] = useState<NetworkView | null>(null);
-  const [menu, setMenu] = useState<{ sx: number; sy: number; query: string } | null>(null);
+  const [menu, setMenu] = useState<{
+    sx: number;
+    sy: number;
+    query: string;
+    named?: string;
+    /** Each opening is a menu of its own (see `menuOpening`). */
+    seq: number;
+  } | null>(null);
   const [name, setName] = useState<{ id: string; sx: number; sy: number; name: string } | null>(
     null,
   );
@@ -192,11 +263,35 @@ export function WorkspaceScreen(props: {
   } | null>(null);
   /** A list opened: its items are in the panel, the keyboard goes there once. */
   const [listFocus, setListFocus] = useState<string | null>(null);
+  /** The shortcut of an appearance clicked: «Где размещена» takes the keyboard once (06 §12.2). */
+  const [placesFocus, setPlacesFocus] = useState<string | null>(null);
   const [boardFocus, setBoardFocus] = useState(false);
   const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
-  /** The star map's search (08 §10): `within` the cluster in focus for `Ctrl+F`. */
-  const [mapSearch, setMapSearch] = useState<{ within: string | null } | null>(null);
+  /** «Перейти к ноде» (09 §3.4): `Ctrl+O` on the canvas and on the star map (08 §10). */
+  const [finder, setFinder] = useState<{ map: boolean } | null>(null);
+  /** `Ctrl+F` on the canvas (09 §3.3) and on the star map (08 §6.1). */
+  const [finding, setFinding] = useState(false);
+  /** A removal that asks first (06 §12.3), and the question's data. */
+  const [removal, setRemoval] = useState<{
+    ids: string[];
+    everywhere: boolean;
+    placed: NodeDetails[];
+    preview: TrashPreview;
+  } | null>(null);
+  const askDeleteRef = useRef<(ids: string[], everywhere: boolean) => boolean>(() => false);
+  /** Who hears «the cluster in focus or the selected star changed» on the map. */
+  const mapChanged = useRef(new Set<() => void>());
+  /** The command palette, `Ctrl+P` (09 §3.5). */
+  const [palette, setPalette] = useState(false);
+  /** The list behind a node's «↗N» (06 §14), by the mark at (x, y); `wires` null until the core answers. */
+  const [external, setExternal] = useState<{
+    id: string;
+    x: number;
+    y: number;
+    flipX: number;
+    wires: ExternalWire[] | null;
+  } | null>(null);
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
   /** The core's undo and redo: the session's, across networks (05 §11). */
   const [history, setHistory] = useState<History>({ undo: null, redo: null });
@@ -218,6 +313,32 @@ export function WorkspaceScreen(props: {
   /** Link assets already asked for a preview this session. */
   const previewed = useRef(new Set<string>());
   const eventsRef = useRef<EditorEvents | null>(null);
+  /** Where one has been, and the quick marks, on this device (09 §6.1–6.2). */
+  const navRef = useRef(NavHistory.load(readLocal(navKey(opened.workspace.id))));
+  const [marks, setMarks] = useState(() => loadMarks(readLocal(marksKey(opened.workspace.id))));
+  const [navState, setNavState] = useState({
+    back: navRef.current.canBack,
+    forward: navRef.current.canForward,
+  });
+  /** The screen now as an entry of the history; a step that goes somewhere leaves it. */
+  const hereRef = useRef<() => NavEntry>(() => ({ mode: '2d', net: opened.root, at: 0 }));
+  const leaveRef = useRef<() => void>(() => undefined);
+  /** To an entry: its view, network, camera and selection. */
+  const walkRef = useRef<(e: NavEntry) => Promise<void>>(async () => {});
+  /** The history on this device and in the bar after it changed. */
+  const saveNav = () => {
+    writeLocal(navKey(openedRef.current.workspace.id), navRef.current.save());
+    setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
+  };
+  /** The history's own step is going on: it leaves no entry. */
+  const walking = useRef(false);
+  /** A place in 2D to show once the star map is gone. */
+  const pending = useRef<NavEntry | null>(null);
+  const view3dRef = useRef<MapState>('2d');
+  /** The minimap (06 §10.3): open or closed for every network of the session. */
+  const [minimap, setMinimap] = useState(false);
+  const minimapRef = useRef(false);
+  const placeRef = useRef<(e: NavEntry) => Promise<void>>(async () => {});
   const localeRef = useRef(locale);
   localeRef.current = locale;
   /** The companion on the canvas (07 §10.4): it reacts to the user's steps. */
@@ -299,7 +420,10 @@ export function WorkspaceScreen(props: {
       // the Tab menu is fixed to the page, the name field lies in this screen.
       tabMenu: (e) => {
         const r = el.getBoundingClientRect();
-        setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top });
+        // The menu ranks the canvas's nodes as they are now (09 §2.7).
+        const g = graph.current;
+        if (g) searchClient().set('net', netItems(g.nodes.values(), netRef.current));
+        setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top, seq: menuOpening() });
       },
       nameInput: (e) =>
         setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
@@ -317,7 +441,55 @@ export function WorkspaceScreen(props: {
         const r = viewRef.current?.canvas.getBoundingClientRect();
         setCtx({ x: e.sx + (r?.left ?? 0), y: e.sy + (r?.top ?? 0), at: e.at });
       },
+      // «Разместить здесь» (05 §5): the core places it, the network is read again.
+      place: (e) => {
+        void queue(async () => {
+          await sync.current?.settled();
+          const name = treeRef.current.find((i) => i.id === e.id)?.name ?? '';
+          const net = netRef.current;
+          await core.apply(
+            [
+              { op: 'place', id: e.id, net, x: e.x, y: e.y },
+              ...e.inputs.map((from): CoreOp => ({ op: 'connect', from, to: e.id })),
+            ],
+            { key: 'ws.change.place', params: { name } },
+          );
+          await show(net);
+          editor.current?.reveal(e.id);
+        }).catch(refused);
+      },
+      // Removing asks first when it would take more than one would see (06 §12.3).
+      deleting: (e) => askDeleteRef.current(e.ids, e.everywhere),
+      // «↗N» (06 §14): the list opens beside the mark at once, its top level
+      // with it, clear of the label under the bubble; the rows come from the core.
+      external: (e) => {
+        const r = el.getBoundingClientRect();
+        const net = netRef.current;
+        const v = viewRef.current;
+        const n = v?.nodeAt(e.id);
+        const left = v && n ? v.camera.toScreen(n.x - n.r, n.y).x : e.sx;
+        const at = {
+          id: e.id,
+          x: e.sx + r.left + 16,
+          y: e.sy + r.top - 12,
+          flipX: left + r.left - 16,
+        };
+        setExternal({ ...at, wires: null });
+        void (sync.current?.settled() ?? Promise.resolve())
+          .then(() => core.external(net, e.id))
+          .then((wires) => {
+            setExternal((x) => (x?.id === e.id && netRef.current === net ? { ...x, wires } : x));
+          })
+          .catch(refused);
+      },
+      // The shortcut of an appearance (06 §12.2): the node is chosen, its
+      // panel shows «Где размещена».
+      places: (e) => setPlacesFocus(e.id),
       map: () => map3d.current?.toggle(),
+      minimap: (open) => {
+        minimapRef.current = open;
+        setMinimap(open);
+      },
       up: () => void up(),
       historyEmpty: (which) => {
         // Steps of other networks, or of this one before it was read again:
@@ -329,11 +501,24 @@ export function WorkspaceScreen(props: {
           await show(netRef.current);
         }).catch(refused);
       },
+      // A template's copy is the core's (05 §7): everything inside comes too,
+      // one step of undo; the network is read again with it.
+      template: (e) => {
+        void queue(async () => {
+          await sync.current?.settled();
+          const label = { key: 'proto.change.template', params: { name: e.name } };
+          const at = { net: netRef.current, x: e.x, y: e.y };
+          const { id } = await core.copyNode(e.id, at, e.inputs, label);
+          await show(netRef.current);
+          editor.current?.reveal(id);
+        }).catch(refused);
+      },
       layout: (ids) => {
         const g = graph.current;
         const v = viewRef.current;
         if (!g || !v) return;
-        const chosen = ids ?? [...g.nodes.keys()];
+        // Ghosts stand by their notes (06 §14): `L` moves the notes.
+        const chosen = ids ?? [...g.nodes.values()].filter((n) => !n.ghostOf).map((n) => n.id);
         layouter.current ??= new Layouter();
         layouter.current
           .layout(g, v, chosen, 'layered', (a, b) => textWires.current.has(pair(a, b)))
@@ -355,6 +540,7 @@ export function WorkspaceScreen(props: {
         const d = docs.current;
         if (!v || !n || !p || !d) return;
         if (n.kind === 'network' || n.kind === 'project') {
+          leaveRef.current();
           void loadRef.current(id);
           return;
         }
@@ -412,6 +598,9 @@ export function WorkspaceScreen(props: {
         };
       },
       network: () => netRef.current,
+      change: () => {
+        for (const fn of mapChanged.current) fn();
+      },
       go: (net, node) => {
         const show = () => {
           if (node) editor.current?.focusNode(node);
@@ -419,12 +608,75 @@ export function WorkspaceScreen(props: {
         if (net === netRef.current) show();
         else void loadRef.current(net).then(show);
       },
+      leave: () => leaveRef.current(),
+    };
+
+    /** Where the screen is: the view, the network or cluster, the camera, the selection. */
+    hereRef.current = () => {
+      const v = viewRef.current;
+      const three = view3dRef.current !== '2d';
+      const selection = editor.current?.selected ?? [];
+      return {
+        mode: three ? '3d' : '2d',
+        net: three ? (map3d.current?.focusId() ?? netRef.current) : netRef.current,
+        ...(v && !three ? { camera: { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom } } : {}),
+        ...(selection.length > 0 && !three ? { selection } : {}),
+        at: Date.now(),
+      };
+    };
+    leaveRef.current = () => {
+      if (walking.current) return;
+      navRef.current.leave(hereRef.current());
+      saveNav();
+    };
+    /** A 2D entry: its network with its camera, its selection. */
+    const place = async (e: NavEntry) => {
+      if (e.net !== netRef.current) {
+        if (e.camera) cameras.current.set(e.net, e.camera);
+        await loadRef.current(e.net);
+      } else if (e.camera) {
+        viewRef.current?.flyTo(e.camera);
+      }
+      editor.current?.selectNodes(e.selection ?? []);
+    };
+    placeRef.current = place;
+    walkRef.current = async (e: NavEntry) => {
+      walking.current = true;
+      try {
+        const now = view3dRef.current;
+        if (e.mode === '2d') {
+          // From the star map: the place shows once the canvas is back.
+          if (now === '3d') {
+            pending.current = e;
+            map3d.current?.toggle();
+            return;
+          }
+          if (now === '2d') await place(e);
+          return;
+        }
+        if (now !== '2d') return;
+        if (e.net !== netRef.current) await loadRef.current(e.net);
+        map3d.current?.toggle();
+      } finally {
+        walking.current = false;
+      }
     };
 
     const up = async () => {
       const path = await core.view(netRef.current).then((v) => v.path);
       const parent = path.at(-2);
-      if (parent) await loadRef.current(parent[0]);
+      if (!parent) return;
+      leaveRef.current();
+      await loadRef.current(parent[0]);
+    };
+
+    /** The graph's text wires and ghosts as the core has them, outside undo (05 §8.2, §8.5). */
+    const followLinks = (g: Graph, nv: NetworkView) => {
+      textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
+      followWires(g, nv);
+      followGhosts(g, nv, viewRef.current?.iconFor('note') ?? 0);
+      // A wire to a node elsewhere, by hand or from text: «↗N» and the roll-ups (05 §8.3).
+      followExternal(g, nv);
     };
 
     /** Shows network `id`: a fresh graph from the core, the camera it had. */
@@ -493,13 +745,19 @@ export function WorkspaceScreen(props: {
         ed.selection.size === 1
           ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
           : 0;
+      ed.ringMode = ringModeRef.current;
+      ed.minimap.open = minimapRef.current;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
       map3d.current = new Map3D(el, v, g, setView3d, mapNav);
+      // A network loads onto the canvas: the screen is in 2D with the new map,
+      // even when the old one was open (another tab under the star map).
+      setView3d('2d');
       netRef.current = id;
       setNet(nv);
       setMenu(null);
       setName(null);
+      setExternal(null);
       const cam = cameras.current.get(id);
       if (cam) {
         v.camera.x = cam.x;
@@ -573,20 +831,28 @@ export function WorkspaceScreen(props: {
     /** The selected node from the core, for the panel; the pictures follow too. */
     refreshRef.current = () => {
       void pictures();
+      // The core's own edits of open texts: links a rename rewrote (13 §6.5).
+      void (sync.current?.settled() ?? Promise.resolve()).then(() => docs.current?.follow());
       void (sync.current?.settled() ?? Promise.resolve())
         .then(() => core.tree())
         .then((items) => {
           if (!cancelled) setTree(items);
         })
         .catch(() => undefined);
-      // Progress arcs that a tick, a subtask or a wire changed (05 §6.4).
+      // Progress arcs that a tick, a subtask or a wire changed (05 §6.4);
+      // the text wires and ghosts that a name changed (05 §8.5): a new node
+      // with the name resolves its ghosts, a renamed one may leave one.
       const g = graph.current;
+      const at = g?.version;
       void (sync.current?.settled() ?? Promise.resolve())
         .then(() => core.view(netRef.current))
         .then((nv) => {
-          if (!cancelled && graph.current === g && g && nv.net === netRef.current) {
-            followFolds(g, nv);
-          }
+          if (cancelled || graph.current !== g || !g || nv.net !== netRef.current) return;
+          // A step made since the question is not in the answer yet; the
+          // looks read back below move the version too, so it is asked first.
+          const fresh = g.version === at;
+          followFolds(g, nv);
+          if (fresh) followLinks(g, nv);
         })
         .catch(() => undefined);
       const ed = editor.current;
@@ -617,14 +883,11 @@ export function WorkspaceScreen(props: {
       new CoreDocs(
         core,
         () => {
-          // The core rewired a note's links: its wires follow, outside undo.
+          // The core rewired a note's links: its wires and ghosts follow, outside undo.
           void core.view(netRef.current).then((nv) => {
             const g = graph.current;
             if (!g || cancelled || nv.net !== netRef.current) return;
-            textWires.current = new Set(
-              nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)),
-            );
-            followWires(g, nv);
+            followLinks(g, nv);
           });
         },
         refused,
@@ -656,6 +919,7 @@ export function WorkspaceScreen(props: {
       (window as unknown as { __strataWs: unknown }).__strataWs = {
         view: v,
         graph: () => graph.current,
+        editor: () => editor.current,
         core,
         net: () => netRef.current,
         map: () => map3d.current,
@@ -695,23 +959,71 @@ export function WorkspaceScreen(props: {
   useEffect(() => {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
     editor.current?.setOverlayOpen(
-      menu !== null || name !== null || view3d !== '2d' || boardFocus || viewerFocus || covered,
+      menu !== null ||
+        name !== null ||
+        finder !== null ||
+        palette ||
+        view3d !== '2d' ||
+        boardFocus ||
+        viewerFocus ||
+        covered,
     );
-  }, [menu, name, view3d, boardFocus, viewerFocus, covered]);
+  }, [menu, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
 
   useEffect(() => {
-    if (view3d !== '3d') {
-      setMapSearch(null);
-      return;
-    }
-    // The search window takes its own keys while it is open.
-    if (mapSearch) return;
+    ringModeRef.current = props.prefs.ring;
+    if (editor.current) editor.current.ringMode = props.prefs.ring;
+  }, [props.prefs.ring]);
+
+  // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
+  useEffect(() => searchClient().set('space', tree), [tree]);
+
+  // The keys are there as soon as the view is: a layout effect runs in the
+  // commit that shows the star map, a passive one after paint, and a key
+  // pressed between the two was lost (CI under load).
+  useLayoutEffect(() => {
+    // Mid-bridge (08 §7) neither view takes keys.
+    if (view3d === 'to3d' || view3d === 'to2d') return;
+    // A search window and the palette take their own keys while open.
+    if (finder || palette || covered) return;
     const key = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
-      if (mod && !e.altKey && (e.code === 'KeyO' || e.code === 'KeyF')) {
+      // `Ctrl+P` — the palette, on the canvas and on the star map (09 §3.5).
+      if (mod && !e.altKey && !e.shiftKey && e.code === 'KeyP') {
+        const t = e.target as HTMLElement | null;
+        const typing =
+          t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+        if (typing || menu || name) return;
         e.preventDefault();
-        const within = e.code === 'KeyF' ? (map3d.current?.focusId() ?? null) : null;
-        setMapSearch({ within });
+        setFinding(false);
+        setPalette(true);
+        return;
+      }
+      const search = mod && !e.altKey && !e.shiftKey && (e.code === 'KeyO' || e.code === 'KeyF');
+      if (view3d === '2d') {
+        // A note's or a list's own search keeps its keys; so does any field.
+        const t = e.target as HTMLElement | null;
+        const typing =
+          t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
+        if (!search || typing || menu || name) return;
+        e.preventDefault();
+        if (e.code === 'KeyO') {
+          setFinding(false);
+          setFinder({ map: false });
+        } else {
+          setFinding(true);
+        }
+        return;
+      }
+      if (search) {
+        e.preventDefault();
+        if (e.code === 'KeyF') {
+          setFinder(null);
+          setFinding(true);
+        } else {
+          setFinding(false);
+          setFinder({ map: true });
+        }
         return;
       }
       if (e.code === 'KeyM' && !mod && !e.altKey) {
@@ -722,9 +1034,128 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, mapSearch]);
+  }, [view3d, finder, palette, covered, menu, name]);
 
-  const focusCanvas = useCallback(() => host.current?.querySelector('canvas')?.focus(), []);
+  // A search of one view closes with it (2D ↔ 3D).
+  useEffect(() => {
+    setFinder((f) => (f && f.map !== (view3d === '3d') ? null : f));
+    setFinding(false);
+  }, [view3d]);
+
+  // The history's place in 2D, once the star map has gone (09 §6.1).
+  useEffect(() => {
+    view3dRef.current = view3d;
+    const e = pending.current;
+    if (view3d !== '2d' || !e) return;
+    pending.current = null;
+    walking.current = true;
+    void placeRef.current(e).finally(() => {
+      walking.current = false;
+    });
+  }, [view3d]);
+
+  /** `Alt+←`, `Alt+→`, `` ` `` (09 §6.1). */
+  const walk = useCallback((how: 'back' | 'forward' | 'previous') => {
+    const nav = navRef.current;
+    const now = hereRef.current();
+    const to =
+      how === 'back' ? nav.back(now) : how === 'forward' ? nav.forward(now) : nav.previous(now);
+    if (!to) return;
+    writeLocal(navKey(openedRef.current.workspace.id), nav.save());
+    setNavState({ back: nav.canBack, forward: nav.canForward });
+    void walkRef.current(to);
+  }, []);
+
+  /** Quick marks (09 §6.2): set — the place now, without the selection; go — a step of the history. */
+  const setMark = useCallback((i: number) => {
+    setMarks((all) => {
+      const next = [...all];
+      next[i] = markOf(hereRef.current());
+      writeLocal(marksKey(openedRef.current.workspace.id), JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const clearMark = useCallback((i: number) => {
+    setMarks((all) => {
+      const next = [...all];
+      next[i] = null;
+      writeLocal(marksKey(openedRef.current.workspace.id), JSON.stringify(next));
+      return next;
+    });
+  }, []);
+  const marksRef = useRef(marks);
+  marksRef.current = marks;
+  const goMark = useCallback((i: number) => {
+    const m = marksRef.current[i];
+    if (!m) return;
+    leaveRef.current();
+    void walkRef.current(m);
+  }, []);
+
+  // The history's and the marks' keys (06 §10.3), on the canvas and the star
+  // map; a layout effect for the same reason as the view's keys above.
+  useLayoutEffect(() => {
+    if (view3d === 'to3d' || view3d === 'to2d' || finder || palette || covered) return;
+    // A digit held: its timer, or -1 once the mark is set.
+    const held = new Map<string, number>();
+    const down = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      if (menu || name || e.isComposing) return;
+      const mod = e.metaKey || e.ctrlKey;
+      if (e.altKey && !mod && !e.shiftKey && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+        e.preventDefault();
+        walk(e.code === 'ArrowLeft' ? 'back' : 'forward');
+        return;
+      }
+      if (e.code === 'Backquote' && !mod && !e.altKey && !e.shiftKey) {
+        e.preventDefault();
+        walk('previous');
+        return;
+      }
+      const slot = DIGITS[e.code];
+      if (slot === undefined || e.altKey || e.shiftKey) return;
+      e.preventDefault();
+      // `Ctrl+1…5` sets at once on the desktop; the browser keeps it for its tabs.
+      if (mod) {
+        setMark(slot);
+        return;
+      }
+      if (e.repeat || held.has(e.code)) return;
+      held.set(
+        e.code,
+        window.setTimeout(() => {
+          held.set(e.code, -1);
+          setMark(slot);
+        }, MARK_HOLD_MS),
+      );
+    };
+    const up = (e: KeyboardEvent) => {
+      const timer = held.get(e.code);
+      const slot = DIGITS[e.code];
+      if (timer === undefined || slot === undefined) return;
+      held.delete(e.code);
+      if (timer < 0) return;
+      window.clearTimeout(timer);
+      goMark(slot);
+    };
+    window.addEventListener('keydown', down);
+    window.addEventListener('keyup', up);
+    return () => {
+      window.removeEventListener('keydown', down);
+      window.removeEventListener('keyup', up);
+      for (const timer of held.values()) if (timer >= 0) window.clearTimeout(timer);
+    };
+  }, [view3d, finder, palette, covered, menu, name, walk, setMark, goMark]);
+
+  const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
+  /** The canvas one sees, page px: the properties panel covers its right (review 2026-10-24). */
+  const seenBounds = (): DOMRect | undefined => {
+    const r = host.current?.getBoundingClientRect();
+    if (!r) return undefined;
+    const covered = editor.current?.coveredRight() ?? 0;
+    return new DOMRect(r.left, r.top, Math.max(0, r.width - covered), r.height);
+  };
 
   const choose = useCallback(
     (item: MenuItem) => {
@@ -756,6 +1187,8 @@ export function WorkspaceScreen(props: {
       undo: () => editor.current?.undo(),
       redo: () => editor.current?.redo(),
       map: () => map3d.current?.toggle(),
+      back: () => walk('back'),
+      forward: () => walk('forward'),
       leave: async () => {
         if (leaving.current) return { picture: Promise.resolve() };
         leaving.current = true;
@@ -770,7 +1203,7 @@ export function WorkspaceScreen(props: {
         return { picture };
       },
     };
-  }, [home, opened.workspace.id, props.bridge]);
+  }, [home, opened.workspace.id, props.bridge, walk]);
 
   // Another tab: the same canvas, the other workspace's root network.
   useEffect(() => {
@@ -785,9 +1218,33 @@ export function WorkspaceScreen(props: {
     setViewer(null);
     setViewerFocus(false);
     setTrash(null);
+    navRef.current = NavHistory.load(readLocal(navKey(opened.workspace.id)));
+    setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
+    setMarks(loadMarks(readLocal(marksKey(opened.workspace.id))));
     netRef.current = opened.root;
     void loadRef.current(opened.root);
   }, [opened]);
+
+  /**
+   * Goes to a node (09 §3.4): the network of its primary placement on the
+   * canvas, a flight to it, the node selected (06 §10.3); `open` — into a
+   * folder or project, or its content beside it.
+   */
+  const goNode = (id: string, open: boolean) => {
+    leaveRef.current();
+    void core
+      .node(id)
+      .then(async (d) => {
+        if (!d.parent || (open && hasCanvas(d.kind))) {
+          await loadRef.current(id);
+          return;
+        }
+        if (d.parent !== netRef.current) await loadRef.current(d.parent);
+        editor.current?.flyTo([id]);
+        if (open) eventsRef.current?.open?.(id);
+      })
+      .catch(failed);
+  };
 
   const restore = async (item: TrashItem) => {
     try {
@@ -852,7 +1309,10 @@ export function WorkspaceScreen(props: {
   };
 
   // Another node in the panel: a list's open request no longer stands.
-  useEffect(() => setListFocus((f) => (f === details?.id ? f : null)), [details?.id]);
+  useEffect(() => {
+    setListFocus((f) => (f === details?.id ? f : null));
+    setPlacesFocus((f) => (f === details?.id ? f : null));
+  }, [details?.id]);
 
   /** An asset's file as an object URL, typed so the browser can show it; made once. */
   const urlOf = async (sha: string, mime: string) => {
@@ -1013,6 +1473,7 @@ export function WorkspaceScreen(props: {
   const selectLayer = async (id: string, open: boolean) => {
     const item = tree.find((x) => x.id === id);
     if (!item) return;
+    leaveRef.current();
     if (!item.parent) {
       await loadRef.current(id);
       return;
@@ -1024,6 +1485,36 @@ export function WorkspaceScreen(props: {
 
   const g = graph.current;
   const ed = editor.current;
+  const treeRef = useRef(tree);
+  treeRef.current = tree;
+  /**
+   * What `Ctrl+F` searches (09 §3.3, 08 §6.1), made when the bar opens: it
+   * keeps the choice of that moment for `Esc`. The network on the canvas,
+   * or the cluster in focus on the star map.
+   */
+  const findTarget = useMemo<FindTarget | null>(() => {
+    if (!finding) return null;
+    const map = map3d.current;
+    if (view3d === '3d' && map) {
+      return mapFind({
+        map,
+        tree: () => treeRef.current,
+        onChange: (fn) => {
+          mapChanged.current.add(fn);
+          return () => mapChanged.current.delete(fn);
+        },
+      });
+    }
+    if (view3d !== '2d' || !g || !ed) return null;
+    return canvasFind({
+      search: searchClient(),
+      graph: g,
+      editor: ed,
+      view: viewRef.current,
+      net: netRef.current,
+      tree: () => treeRef.current,
+    });
+  }, [finding, view3d, g, ed]);
   const field = (key: AttrKey) => t(locale, `ins.${key}` as MessageKey);
   const actions: InspectorActions | null =
     details && g
@@ -1044,7 +1535,8 @@ export function WorkspaceScreen(props: {
           addPerson: async (name) => {
             const id = newId();
             await coreStep(
-              [{ op: 'addPerson', id, name, color: peopleRef.current.length % 8 }],
+              // The core gives the next colour of the palette (07 §2.2).
+              [{ op: 'addPerson', id, name }],
               'change.assign',
               { name },
             ).catch(failed);
@@ -1077,6 +1569,7 @@ export function WorkspaceScreen(props: {
             focusCanvas();
           },
           focus: (id) => {
+            leaveRef.current();
             if (g.nodes.has(id)) {
               ed?.focusNode(id);
               return;
@@ -1118,8 +1611,60 @@ export function WorkspaceScreen(props: {
               params,
             ).catch(failed);
           },
+          net: netRef.current,
+          goPlace: (net) => {
+            const id = details.id;
+            leaveRef.current();
+            void loadRef.current(net).then(() => editor.current?.focusNode(id));
+          },
+          makePrimary: (net) => {
+            const path = pathLabel(details.places.find((p) => p.net === net)?.path ?? []);
+            void coreStep([{ op: 'setPrimary', id: details.id, net }], 'ws.change.primary', {
+              name: details.name,
+              path,
+            })
+              .then(() => toast('ws.toast.primary', { path }))
+              .catch(failed);
+          },
+          unplace: (net) => {
+            const path = pathLabel(details.places.find((p) => p.net === net)?.path ?? []);
+            void coreStep([{ op: 'unplace', id: details.id, net }], 'ws.change.unplace', {
+              name: details.name,
+              path,
+            }).catch(failed);
+          },
         }
       : null;
+
+  /**
+   * Asks before a removal that takes more than one sees (06 §12.3): «Удалить
+   * везде» of a node placed elsewhere too, or a network that goes to the
+   * trash with what is inside. True — the dialog will remove them.
+   */
+  askDeleteRef.current = (ids, everywhere) => {
+    const now = graph.current;
+    if (!now) return false;
+    const nodes = ids.flatMap((id) => now.nodes.get(id) ?? []);
+    // To the trash: all with «везде», else those placed only here.
+    const going = nodes.filter((n) => everywhere || n.places <= 1);
+    const placed = everywhere ? nodes.filter((n) => n.places > 1) : [];
+    if (placed.length === 0 && !going.some((n) => hasCanvas(n.kind))) return false;
+    void (async () => {
+      await sync.current?.settled();
+      const preview =
+        going.length > 0
+          ? await core.trashPreview(going.map((n) => n.id))
+          : { trashed: [], staying: [] };
+      const nested = preview.trashed.length > going.length || preview.staying.length > 0;
+      if (placed.length === 0 && !nested) {
+        editor.current?.removeNodes(ids, everywhere);
+        return;
+      }
+      const details = await Promise.all(placed.map((n) => core.node(n.id)));
+      setRemoval({ ids, everywhere, placed: details, preview });
+    })().catch(failed);
+    return true;
+  };
 
   /** The right button's menu (06 §5): for a node, a wire, or the bare canvas. */
   const ctxItems = (at: MenuTarget): MenuEntry[] => {
@@ -1200,28 +1745,113 @@ export function WorkspaceScreen(props: {
     if (n.kind === 'project') {
       items.push(makeInto('task', 'ctx.makeTask'), makeInto('network', 'ctx.makeFolder'));
     }
+    // The flags of 06 §8, ticked when every node they hit has them.
+    const hit = ed.flagTargets(n.id).flatMap((id) => g.nodes.get(id) ?? []);
+    const flag = (f: Flag, hint: string, separated = false): MenuEntry => ({
+      label: t(locale, `flag.${f}` as MessageKey),
+      hint,
+      separated,
+      checked: hit.every((x) => flagsOf(x).includes(f)),
+      onSelect: () => ed.switchFlag(f, ed.flagTargets(n.id)),
+    });
+    items.push(flag('key', 'R', true), flag('pause', 'Q'), flag('template', 'E'));
+    // Two commands, not side by side (06 §12.3): «Убрать отсюда» and «Удалить везде».
     items.push({
       label: t(locale, 'ctx.delete'),
       hint: 'Del',
       separated: true,
       onSelect: () => ed.deleteSelected(),
     });
+    items.push({
+      label: t(locale, 'ctx.deleteEverywhere'),
+      hint: 'Shift+Del',
+      separated: true,
+      onSelect: () => ed.deleteSelected(true),
+    });
     return items;
   };
 
+  // What «Перейти к ноде» ranks with, taken when it opens.
+  const finderScope = ALL;
+  const finderVisits = useMemo(
+    () => (finder ? visits(openedRef.current.workspace.id) : {}),
+    [finder],
+  );
+  // Templates of the whole workspace for the Tab menu (06 §5.2); what this
+  // screen has not written yet is in the tree after its next refresh.
+  const templates = useMemo(
+    () =>
+      tree
+        .filter((i) => i.flags?.includes('template'))
+        .map((i) => ({ id: i.id, name: i.name, kind: i.kind })),
+    [tree],
+  );
+  // The workspace's nodes for «Вставить здесь» (05 §5): each by the network it lies in.
+  const space = useMemo((): MenuNode[] => {
+    const name = new Map(tree.map((i) => [i.id, i.name]));
+    return tree
+      .filter((i) => i.parent)
+      .map((i) => ({
+        id: i.id,
+        name: i.name,
+        kind: i.kind,
+        where: name.get(i.parent ?? '') ?? '',
+      }));
+  }, [tree]);
   const nodes: MenuNode[] = g
-    ? [...g.nodes.values()].map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
+    ? [...g.nodes.values()]
+        .filter((n) => !n.ghostOf)
+        .map((n) => ({ id: n.id, name: n.name, kind: n.kind }))
     : [];
+  // This network's ghosts as the menu opens: the engine ranks them once per query.
+  const ghosts = useMemo((): MenuGhost[] => {
+    const now = graph.current;
+    if (!menu || !now) return [];
+    return [...now.nodes.values()].flatMap((n) =>
+      n.ghostOf ? [{ id: n.id, name: n.name, from: now.nodes.get(n.ghostOf)?.name ?? '' }] : [],
+    );
+  }, [menu]);
   const canUndo = Boolean(g?.canUndo || history.undo);
   const canRedo = Boolean(g?.canRedo || history.redo);
+  /** What the palette's commands may do here (09 §3.5). */
+  const commandContext: CommandContext = {
+    view: view3d === '2d' ? '2d' : '3d',
+    selected: ed?.selection.size ?? 0,
+    current: ed && ed.selection.size === 1 ? ed.current : null,
+    canUndo,
+    canRedo,
+    canBack: navState.back,
+    canForward: navState.forward,
+    marks: marks.map((m) => m !== null),
+    act: (action) => editor.current?.act(action),
+    goTo: () => {
+      setFinding(false);
+      setFinder({ map: view3d !== '2d' });
+    },
+    find: () => {
+      setFinder(null);
+      setFinding(true);
+    },
+    walk,
+    setMark,
+    goMark,
+  };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
     : label(null);
   const path = net?.path ?? [];
   const { onUndoState } = props;
   useEffect(
-    () => onUndoState({ canUndo, canRedo, step: lastStep, map: view3d !== '2d' }),
-    [onUndoState, canUndo, canRedo, lastStep, view3d],
+    () =>
+      onUndoState({
+        canUndo,
+        canRedo,
+        step: lastStep,
+        map: view3d !== '2d',
+        canBack: navState.back,
+        canForward: navState.forward,
+      }),
+    [onUndoState, canUndo, canRedo, lastStep, view3d, navState],
   );
 
   return (
@@ -1229,9 +1859,11 @@ export function WorkspaceScreen(props: {
       className="proto workspace"
       data-net={net?.net ?? ''}
       data-depth={path.length}
-      data-nodes={g?.nodes.size ?? 0}
+      data-nodes={nodes.length}
       data-wires={g?.edges().length ?? 0}
       data-view={view3d}
+      data-panel={details ? 'open' : 'closed'}
+      data-minimap={minimap ? 'open' : 'closed'}
     >
       <div className="ws-panel-probe" aria-hidden="true" />
       <div
@@ -1268,6 +1900,7 @@ export function WorkspaceScreen(props: {
           onSelect={(id) => void selectLayer(id, false)}
           onOpen={(id) => void selectLayer(id, true)}
           onRestore={(item) => void restore(item)}
+          search={searchClient()}
         />
       ) : null}
       {net && view3d === '2d' ? (
@@ -1276,7 +1909,13 @@ export function WorkspaceScreen(props: {
           path={net.path}
           kindOf={(id) => tree.find((i) => i.id === id)?.kind ?? 'network'}
           panel={details !== null}
-          onGo={(id) => void loadRef.current(id)}
+          onGo={(id) => {
+            leaveRef.current();
+            void loadRef.current(id);
+          }}
+          marks={marks.map((m) => (m ? (tree.find((i) => i.id === m.net)?.name ?? '') : null))}
+          onMark={goMark}
+          onClearMark={clearMark}
         />
       ) : null}
       <div ref={geckoHost} className="ws-gecko" data-panel={details ? 'open' : 'closed'}>
@@ -1298,10 +1937,12 @@ export function WorkspaceScreen(props: {
           people={people}
           actions={actions}
           focusList={listFocus === details.id}
+          focusPlaces={placesFocus === details.id}
           noteOpen={note?.id === details.id}
           viewerOpen={viewer?.id === details.id}
           when={reading(props.prefs)}
           onListFocused={() => setListFocus(null)}
+          onPlacesFocused={() => setPlacesFocus(null)}
         />
       ) : null}
       {ctx ? (
@@ -1336,31 +1977,127 @@ export function WorkspaceScreen(props: {
           </li>
         ))}
       </ul>
-      {mapSearch && view3d === '3d' ? (
-        <MapSearch
+      {finder && (view3d === '3d') === finder.map ? (
+        <NodeSearch
           locale={locale}
+          label={t(locale, finder.map ? 'map.find' : 'search.goTo')}
+          className={finder.map ? 'map-search' : 'goto'}
+          search={searchClient()}
           items={tree}
-          within={mapSearch.within}
+          scope={finderScope}
+          here={finder.map ? undefined : netRef.current}
+          visits={finderVisits}
+          trash={finder.map ? undefined : (trash ?? undefined)}
           left={
             (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
           }
           top={(host.current?.getBoundingClientRect().top ?? 0) + 48}
-          onChoose={(id) => {
-            setMapSearch(null);
-            map3d.current?.flyTo(id);
+          onChoose={(id, how) => {
+            const map = finder.map;
+            setFinder(null);
+            visited(openedRef.current.workspace.id, id);
+            if (map) {
+              map3d.current?.flyTo(id);
+              return;
+            }
+            focusCanvas();
+            if (how === 'restore') {
+              const item = trash?.find((x) => x.id === id);
+              if (item) void restore(item).then(() => goNode(id, false));
+              return;
+            }
+            goNode(id, how === 'open');
           }}
-          onClose={() => setMapSearch(null)}
+          onClose={() => {
+            setFinder(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {external && view3d === '2d' ? (
+        <ExternalList
+          locale={locale}
+          name={g?.nodes.get(external.id)?.name ?? ''}
+          wires={external.wires}
+          x={external.x}
+          y={external.y}
+          flipX={external.flipX}
+          bounds={seenBounds()}
+          onGo={(id) => {
+            setExternal(null);
+            focusCanvas();
+            goNode(id, false);
+          }}
+          onClose={() => {
+            setExternal(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {removal ? (
+        <DeleteDialog
+          locale={locale}
+          everywhere={removal.everywhere}
+          placed={removal.placed}
+          preview={removal.preview}
+          chosen={removal.ids.length}
+          onConfirm={(everywhere) => {
+            setRemoval(null);
+            focusCanvas();
+            editor.current?.removeNodes(removal.ids, everywhere);
+          }}
+          onCancel={() => {
+            setRemoval(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {palette ? (
+        <CommandPalette
+          locale={locale}
+          search={searchClient()}
+          context={commandContext}
+          left={
+            (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
+          }
+          top={(host.current?.getBoundingClientRect().top ?? 0) + 48}
+          onRun={(command) => {
+            setPalette(false);
+            focusCanvas();
+            command.run(commandContext);
+          }}
+          onClose={() => {
+            setPalette(false);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {finding && findTarget ? (
+        <FindBar
+          locale={locale}
+          search={searchClient()}
+          target={findTarget}
+          onClose={() => {
+            setFinding(false);
+            if (view3d === '2d') focusCanvas();
+          }}
         />
       ) : null}
       {menu ? (
         <TabMenu
+          key={menu.seq}
           locale={locale}
           x={menu.sx}
           y={menu.sy}
           bounds={host.current?.getBoundingClientRect()}
           initialQuery={menu.query}
+          named={menu.named}
           nodes={nodes}
+          ghosts={ghosts}
           recent={recent}
+          templates={templates}
+          space={space}
+          search={searchClient()}
           onChoose={choose}
           onCancel={() => {
             setMenu(null);

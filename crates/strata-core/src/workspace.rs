@@ -19,10 +19,13 @@ use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_model::{
-    ChangesetId, ChangesetOrigin, EdgeKey, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
+    ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
+
+mod links;
+mod places;
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -195,6 +198,9 @@ pub struct Attrs {
     /// A link asset's preview picture, its SHA-256 (05 §4.4, ✅ Q-13-16).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preview: Option<String>,
+    /// Its flags (05 §7).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<Flag>,
 }
 
 /// A roll-up (05 §6.4, ☑ Q-05-2, ADR-0010): over the tasks inside a folder
@@ -223,6 +229,80 @@ pub struct ViewNode {
     /// list, of its items.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
+    /// Its wires whose other end is not placed in this network: «↗N» (05 §8.3).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub external: u32,
+    /// This placement is not its primary one: an appearance (05 §5).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub appearance: bool,
+    /// The networks it is placed in, this one among them: «×N» (06 §12.2).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub places: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// What a step to the trash would take (05 §5, 06 §12.3), for its dialog:
+/// the nodes that go, those asked for among them, and the nodes that stay
+/// elsewhere with the path of the network they stay in.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrashPreview {
+    pub trashed: Vec<Linked>,
+    pub staying: Vec<Staying>,
+}
+
+/// A node inside a network going to the trash that is placed elsewhere too.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Staying {
+    #[serde(flatten)]
+    pub node: Linked,
+    /// From the root to the network that will be its primary.
+    pub path: Vec<(String, String)>,
+}
+
+/// One placement of a node, for «Где размещена» (06 §12.2).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Place {
+    pub net: String,
+    /// From the root to that network, both included: `[id, name]`.
+    pub path: Vec<(String, String)>,
+    pub primary: bool,
+}
+
+/// A wire of «↗N» (05 §8.3, 06 §14): its other end, not placed in the
+/// network, which way it goes and where it comes from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ExternalWire {
+    /// The node at the other end.
+    pub id: String,
+    pub name: String,
+    pub kind: NodeKind,
+    /// The wire comes into the node: `id → node`.
+    pub incoming: bool,
+    /// It comes (also) from a `[[link]]` in text.
+    pub text: bool,
+    /// It was drawn by hand or imported.
+    pub manual: bool,
+    /// From the root to the other end's primary network: `[id, name]`.
+    pub path: Vec<(String, String)>,
+}
+
+/// A roll-up wire (05 §8.3, 06 §13.3): wires between nodes inside a network
+/// placed here and the nodes outside it, drawn between the bubbles placed
+/// here with their count, both ways together. Only a view: no such wire is
+/// in the data.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewRollup {
+    /// The two bubbles, `a < b`.
+    pub a: String,
+    pub b: String,
+    pub count: u32,
 }
 
 /// A row of the checklist preview in a task's or project's panel (05 §4.3):
@@ -280,6 +360,9 @@ pub struct NodeDetails {
     pub subtasks: Vec<TaskRow>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fold: Option<Fold>,
+    /// Where it is placed (05 §5): the primary first, then the oldest.
+    #[serde(default)]
+    pub places: Vec<Place>,
 }
 
 /// A wire's ends, for the star map's whole space (08 §10).
@@ -311,6 +394,9 @@ pub struct TreeItem {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Its flags (05 §7): templates are offered in the Tab menu.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<Flag>,
 }
 
 /// A person of the workspace (05 §10).
@@ -332,6 +418,16 @@ pub struct ViewEdge {
     pub manual: bool,
 }
 
+/// A ghost (05 §8.5): the wire of a note's `[[X]]` to no node.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ViewGhost {
+    /// The wire's key, `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5).
+    pub edge: String,
+    pub from: String,
+    /// `X` as the text spells it.
+    pub name: String,
+}
+
 /// One network for the canvas (10 §7.3): its nodes, the wires between them,
 /// the way from the root.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -342,6 +438,12 @@ pub struct NetworkView {
     pub path: Vec<(String, String)>,
     pub nodes: Vec<ViewNode>,
     pub edges: Vec<ViewEdge>,
+    /// `[[Links]]` of the notes here to no node (05 §8.5).
+    #[serde(default)]
+    pub ghosts: Vec<ViewGhost>,
+    /// Roll-up wires to and from the networks placed here (06 §13.3).
+    #[serde(default)]
+    pub rollups: Vec<ViewRollup>,
     /// The network's wire style (05 §9.2); none — Bézier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_style: Option<WireStyle>,
@@ -374,6 +476,24 @@ pub struct Workspace<S: Store> {
     clock: fn() -> i64,
     undo: Vec<Changeset>,
     redo: Vec<Changeset>,
+    /// Content documents the core itself changed — the links rewritten after
+    /// a rename (13 §6.5) — by a growing number, for open editors to read
+    /// them again (15 §3.4). The last `EDITS_KEPT` only.
+    edits: Vec<(u64, String)>,
+    edit_seq: u64,
+}
+
+/// Edits of content documents kept for editors to catch up with.
+const EDITS_KEPT: usize = 256;
+
+/// What the core changed in content documents since an editor last asked.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Edited {
+    /// The number to ask with next time.
+    pub seq: u64,
+    /// The documents; none when the question is older than what is kept:
+    /// every open document is to be read again.
+    pub docs: Option<Vec<String>>,
 }
 
 impl<S: Store> std::fmt::Debug for Workspace<S> {
@@ -441,6 +561,8 @@ impl<S: Store> Workspace<S> {
             clock: now_ms,
             undo: Vec::new(),
             redo: Vec::new(),
+            edits: Vec::new(),
+            edit_seq: 0,
         };
         for doc in ["manifest", "sys"] {
             ws.docs.insert(doc.to_owned(), LoroDoc::new());
@@ -493,6 +615,8 @@ impl<S: Store> Workspace<S> {
             clock: now_ms,
             undo: Vec::new(),
             redo: Vec::new(),
+            edits: Vec::new(),
+            edit_seq: 0,
         };
         ws.load_index()?;
         Ok(ws)
@@ -628,10 +752,7 @@ impl<S: Store> Workspace<S> {
     fn ancestors(&self, net: NodeId) -> Vec<NodeId> {
         let mut out = Vec::new();
         let mut at = net;
-        while let Some(parent) = self
-            .field(at, "primaryNet")
-            .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()))
-        {
+        while let Some(parent) = self.primary_of(at) {
             if out.contains(&parent) || out.len() > 1000 {
                 break;
             }
@@ -698,6 +819,7 @@ impl<S: Store> Workspace<S> {
             self.undo.push(changeset.clone());
             self.redo.clear();
         }
+        self.links_after(&changeset, true)?;
         Ok(changeset)
     }
 
@@ -729,6 +851,11 @@ impl<S: Store> Workspace<S> {
         if written {
             self.redo.clear();
         }
+        // The rest of a gesture names what it made (06 §5.5): no text named
+        // it before, so nothing is rewritten.
+        if let Some(c) = &changeset {
+            self.links_after(c, false)?;
+        }
         Ok(changeset)
     }
 
@@ -737,7 +864,9 @@ impl<S: Store> Workspace<S> {
         let Some(cs) = self.undo.pop() else {
             return Ok(None);
         };
-        self.revert(&cs).map(|(_, report)| Some(report))
+        let (back, report) = self.revert(&cs)?;
+        self.links_after(&back, true)?;
+        Ok(Some(report))
     }
 
     /// Checks and writes the operations as one changeset, outside undo.
@@ -756,6 +885,8 @@ impl<S: Store> Workspace<S> {
             match op {
                 Op::CreateNode { net, .. }
                 | Op::Move { net, .. }
+                | Op::Place { net, .. }
+                | Op::Relocate { to: net, .. }
                 | Op::SetWireStyle { net, .. } => {
                     self.ensure_doc(&format!("net/{net}"))?;
                 }
@@ -782,8 +913,13 @@ impl<S: Store> Workspace<S> {
         };
         // Nodes made earlier in this list count as existing for the ops after them.
         let mut made: HashMap<NodeId, NodeKind> = HashMap::new();
+        // People added earlier in this list, for the next one's colour.
+        let mut people_added = 0i64;
         let exists =
             |n: NodeId, made: &HashMap<NodeId, NodeKind>| made.contains_key(&n) || self.alive(n);
+        // Placements as the ops so far leave them (05 §5).
+        let mut ov = places::Overlay::default();
+        let at_xy = |x: f64, y: f64| Some(Val::List(vec![Val::Float(x), Val::Float(y)]));
         for op in ops {
             match op {
                 Op::CreateNode {
@@ -823,12 +959,136 @@ impl<S: Store> Workspace<S> {
                         &PlacementKey::new(parent, node).to_text(),
                         Some(Val::map([("at", Val::Int(ts))])),
                     );
+                    put(&format!("net/{net}"), "pos", &key, at_xy(*x, *y));
+                    ov.placed.insert((parent, node), Some(ts));
+                    ov.primary.insert(node, parent);
+                    if kind.has_canvas() {
+                        ov.made_in.insert(node, parent);
+                    }
+                }
+                Op::Place { id, net, x, y } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    let target = match self.parse(net) {
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => p,
+                        _ => self.network(net)?,
+                    };
+                    if self.placed_now(&ov, target, n).is_some() {
+                        return Err(invalid(format!(
+                            "node {id} lies in {net} already (05 §5 rule 3)"
+                        )));
+                    }
+                    self.may_hold(target, n, &ov.made_in)?;
                     put(
-                        &format!("net/{net}"),
-                        "pos",
-                        &key,
-                        Some(Val::List(vec![Val::Float(*x), Val::Float(*y)])),
+                        &self.index_doc(n),
+                        "placement",
+                        &PlacementKey::new(target, n).to_text(),
+                        Some(Val::map([("at", Val::Int(ts))])),
                     );
+                    put(&format!("net/{net}"), "pos", &n.to_text(), at_xy(*x, *y));
+                    ov.placed.insert((target, n), Some(ts));
+                }
+                Op::Unplace { id, net } => {
+                    let n = self.live(id)?;
+                    let from = self.parse(net)?;
+                    if self.placed_now(&ov, from, n).is_none() {
+                        return Err(invalid(format!("node {id} is not placed in {net}")));
+                    }
+                    let was_primary = self.primary_now(&ov, n) == Some(from);
+                    let rest: Vec<NodeId> = self
+                        .places_now(&ov, n)
+                        .into_iter()
+                        .map(|(p, _)| p)
+                        .filter(|&p| p != from)
+                        .collect();
+                    let index = self.index_doc(n);
+                    let key = n.to_text();
+                    match rest.first() {
+                        // The last placement: the node goes to the trash from
+                        // where it lies, and comes back there (05 §5).
+                        None => {
+                            let c = self.cascade(&[n])?;
+                            self.put_cascade(&mut put, &c, ts, &batch);
+                        }
+                        Some(&oldest) => {
+                            put(
+                                &index,
+                                "placement",
+                                &PlacementKey::new(from, n).to_text(),
+                                None,
+                            );
+                            ov.placed.insert((from, n), None);
+                            if was_primary {
+                                put(&index, "primaryNet", &key, Some(Val::str(oldest.to_text())));
+                                ov.primary.insert(n, oldest);
+                            }
+                        }
+                    }
+                }
+                Op::SetPrimary { id, net } => {
+                    let n = self.live(id)?;
+                    let p = self.parse(net)?;
+                    if self.placed_now(&ov, p, n).is_none() {
+                        return Err(invalid(format!("node {id} is not placed in {net}")));
+                    }
+                    put(
+                        &self.index_doc(n),
+                        "primaryNet",
+                        &n.to_text(),
+                        Some(Val::str(p.to_text())),
+                    );
+                    ov.primary.insert(n, p);
+                }
+                Op::Relocate { id, from, to, x, y } => {
+                    let n = self.live(id)?;
+                    let src = self.parse(from)?;
+                    let Some(since) = self.placed_now(&ov, src, n) else {
+                        return Err(invalid(format!("node {id} is not placed in {from}")));
+                    };
+                    let target = match self.parse(to) {
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => p,
+                        _ => self.network(to)?,
+                    };
+                    if target == src {
+                        put(&format!("net/{to}"), "pos", &n.to_text(), at_xy(*x, *y));
+                        continue;
+                    }
+                    self.may_hold(target, n, &ov.made_in)?;
+                    let was_primary = self.primary_now(&ov, n) == Some(src);
+                    let there = self.placed_now(&ov, target, n).is_some();
+                    let index = self.index_doc(n);
+                    put(
+                        &index,
+                        "placement",
+                        &PlacementKey::new(src, n).to_text(),
+                        None,
+                    );
+                    ov.placed.insert((src, n), None);
+                    // Already there (05 §5): the one there keeps its place.
+                    if !there {
+                        // The same placement, moved: it keeps its age (10 §8.5).
+                        put(
+                            &index,
+                            "placement",
+                            &PlacementKey::new(target, n).to_text(),
+                            Some(Val::map([("at", Val::Int(since))])),
+                        );
+                        put(&format!("net/{to}"), "pos", &n.to_text(), at_xy(*x, *y));
+                        ov.placed.insert((target, n), Some(since));
+                    }
+                    if was_primary {
+                        put(
+                            &index,
+                            "primaryNet",
+                            &n.to_text(),
+                            Some(Val::str(target.to_text())),
+                        );
+                        ov.primary.insert(n, target);
+                    }
                 }
                 Op::SetKind { id, kind } => {
                     let n = self.parse(id)?;
@@ -837,6 +1097,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     let from = made.get(&n).copied().or_else(|| self.kind(n));
                     let pair = matches!(
                         (from, *kind),
@@ -888,6 +1149,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     put(
                         &self.index_doc(n),
                         "name",
@@ -956,16 +1218,12 @@ impl<S: Store> Workspace<S> {
                     }
                 }
                 Op::Trash { ids } => {
-                    for id in ids {
-                        let n = self.live(id)?;
-                        if n == self.root {
-                            return Err(invalid("the root network cannot go to the trash"));
-                        }
-                        let index = self.index_doc(n);
-                        let key = n.to_text();
-                        put(&index, "trashedAt", &key, Some(Val::Int(ts)));
-                        put(&index, "trashBatch", &key, Some(Val::str(batch.clone())));
-                    }
+                    let roots = ids
+                        .iter()
+                        .map(|id| self.live(id))
+                        .collect::<Result<Vec<_>>>()?;
+                    let c = self.cascade(&roots)?;
+                    self.put_cascade(&mut put, &c, ts, &batch);
                 }
                 Op::Restore { ids } => {
                     for id in ids {
@@ -973,10 +1231,13 @@ impl<S: Store> Workspace<S> {
                         if self.field(n, "trashedAt").is_none() {
                             return Err(invalid(format!("node {id} is not in the trash")));
                         }
-                        let index = self.index_doc(n);
-                        let key = n.to_text();
-                        put(&index, "trashedAt", &key, None);
-                        put(&index, "trashBatch", &key, None);
+                        // What went in the same step comes back with it (05 §5).
+                        for m in self.trashed_with(n) {
+                            let index = self.index_doc(m);
+                            let key = m.to_text();
+                            put(&index, "trashedAt", &key, None);
+                            put(&index, "trashBatch", &key, None);
+                        }
                     }
                 }
                 Op::SetAttr { id, key, value } => {
@@ -986,6 +1247,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     let kind = made.get(&n).copied().or_else(|| self.kind(n));
                     let task = kind.is_some_and(NodeKind::is_task);
                     let asset = kind == Some(NodeKind::Asset);
@@ -1049,6 +1311,7 @@ impl<S: Store> Workspace<S> {
                             "node {id} does not exist or is in the trash"
                         )));
                     }
+                    self.unlocked(n)?;
                     let kind = made.get(&n).copied().or_else(|| self.kind(n));
                     // Taking a person off stays open to any kind, as clearing a field.
                     if *on && !kind.is_some_and(NodeKind::is_task) {
@@ -1071,7 +1334,14 @@ impl<S: Store> Workspace<S> {
                     if read(&self.docs["manifest"], "people", &pid).is_some() {
                         return Err(invalid(format!("person {pid} already exists")));
                     }
-                    let c = color.unwrap_or(0).rem_euclid(COLORS);
+                    // With no colour asked, the next of the palette in the order
+                    // people come (07 §2.2 «Раздача цветов»), those of this list too.
+                    let known = match self.docs["manifest"].get_map("people").get_value() {
+                        LoroValue::Map(m) => m.len() as i64,
+                        _ => 0,
+                    };
+                    let c = color.unwrap_or(known + people_added).rem_euclid(COLORS);
+                    people_added += 1;
                     put(
                         "manifest",
                         "people",
@@ -1085,6 +1355,20 @@ impl<S: Store> Workspace<S> {
                     };
                     p.insert("name".to_owned(), Val::str(name.trim()));
                     put("manifest", "people", id, Some(Val::Map(p)));
+                }
+                Op::SetFlag { id, flag, on } => {
+                    let n = self.parse(id)?;
+                    if !exists(n, &made) {
+                        return Err(invalid(format!(
+                            "node {id} does not exist or is in the trash"
+                        )));
+                    }
+                    put(
+                        &self.index_doc(n),
+                        "flag",
+                        &format!("{}|{}", n.to_text(), flag.as_str()),
+                        on.then_some(Val::Int(1)),
+                    );
                 }
                 Op::SetWireStyle { net, style } => {
                     // A setting of the network's own document (05 §9.2).
@@ -1144,6 +1428,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (back, report) = self.revert(&cs)?;
+        self.links_after(&back, true)?;
         self.redo.push(back);
         Ok(Some(report))
     }
@@ -1154,6 +1439,7 @@ impl<S: Store> Workspace<S> {
             return Ok(None);
         };
         let (again, report) = self.revert(&cs)?;
+        self.links_after(&again, true)?;
         self.undo.push(again);
         Ok(Some(report))
     }
@@ -1188,6 +1474,7 @@ impl<S: Store> Workspace<S> {
     /// then become its text wires; the answer says whether they changed.
     pub fn doc_push(&mut self, doc: &str, update: &[u8]) -> Result<bool> {
         let node = self.content_node(doc)?;
+        self.unlocked(node)?;
         self.ensure_doc(doc)?;
         let d = &self.docs[doc];
         let vv = d.oplog_vv();
@@ -1203,102 +1490,50 @@ impl<S: Store> Workspace<S> {
             return Err(e.into());
         }
         if self.kind(node) == Some(NodeKind::Note) {
-            return self.relink(node).map(|c| c.is_some());
+            return self.relink(&BTreeSet::from([node])).map(|c| c.is_some());
         }
         Ok(false)
     }
 
-    /// The note's text wires follow its `[[links]]` (05 §8.2 rule 4): a link
-    /// to a live node by its name adds the origin `text`, a link gone takes
-    /// it away, and a wire with no origin left goes. A system changeset,
-    /// outside undo (05 §11). Links to no node become ghosts in 1C (05 §8.5).
-    fn relink(&mut self, note: NodeId) -> Result<Option<Changeset>> {
-        let doc = format!("content/{}", note.to_text());
-        let text = self.docs[&doc].get_text("text").to_string();
-        let mut by_name: HashMap<String, NodeId> = HashMap::new();
-        for shard in self.index_shards() {
-            let LoroValue::Map(names) = shard.get_map("name").get_value() else {
-                continue;
-            };
-            for (id, name) in names.iter() {
-                let (Ok(n), Some(name)) = (NodeId::parse(id), name.as_string()) else {
-                    continue;
-                };
-                // One name, several nodes: the oldest wins (UUIDv7 sorts by time).
-                let slot = by_name.entry(name.trim().to_lowercase()).or_insert(n);
-                if n < *slot {
-                    *slot = n;
-                }
-            }
+    /// What a content document has that an editor at `since` (an encoded
+    /// Loro version vector) has not: the core's own edits (13 §6.5).
+    pub fn doc_updates(&mut self, doc: &str, since: &[u8]) -> Result<Vec<u8>> {
+        self.content_node(doc)?;
+        self.ensure_doc(doc)?;
+        let vv = VersionVector::decode(since).map_err(engine)?;
+        let d = &self.docs[doc];
+        // Nothing new: no bytes, not an update with only its header.
+        if vv.includes_vv(&d.oplog_vv()) {
+            return Ok(Vec::new());
         }
-        let want: BTreeSet<NodeId> = strata_markdown::scan(&text)
-            .links
-            .iter()
-            .filter_map(|l| by_name.get(&l.target.trim().to_lowercase()).copied())
-            .filter(|&n| n != note && self.alive(n))
-            .collect();
-        let index = self.index_doc(note);
-        let from = note.to_text();
-        let mut have: BTreeMap<NodeId, String> = BTreeMap::new();
-        if let LoroValue::Map(edges) = self.docs[&index].get_map("edge").get_value() {
-            for (key, v) in edges.iter() {
-                let Some(v) = Val::from_loro(v) else { continue };
-                if v.get("from").and_then(Val::as_str) != Some(from.as_str())
-                    || read(&self.docs[&index], "edgeOrigin", &format!("{key}|text")).is_none()
-                {
-                    continue;
-                }
-                if let Some(to) = v
-                    .get("to")
-                    .and_then(Val::as_str)
-                    .and_then(|t| NodeId::parse(t).ok())
-                {
-                    have.insert(to, key.clone());
-                }
-            }
-        }
-        let ts = now_ms();
-        let mut plan: Vec<(&str, String, Option<Val>)> = Vec::new();
-        for &to in want.iter().filter(|t| !have.contains_key(t)) {
-            let edge = EdgeKey::between(note, to).to_text();
-            let ends = Val::map([
-                ("from", Val::str(from.clone())),
-                ("to", Val::str(to.to_text())),
-            ]);
-            plan.push((
-                "edgeOrigin",
-                format!("{edge}|text"),
-                Some(Val::map([("at", Val::Int(ts))])),
-            ));
-            plan.push(("edge", edge, Some(ends)));
-        }
-        for edge in have
-            .iter()
-            .filter(|(t, _)| !want.contains(t))
-            .map(|(_, e)| e)
-        {
-            plan.push(("edgeOrigin", format!("{edge}|text"), None));
-            let other = ["manual", "import"]
+        d.export(ExportMode::updates(&vv)).map_err(engine)
+    }
+
+    /// The content documents the core changed after edit `since` (15 §3.4).
+    pub fn edited(&self, since: u64) -> Edited {
+        let oldest = self.edits.first().map_or(self.edit_seq + 1, |(n, _)| *n);
+        let docs = (since + 1 >= oldest || since >= self.edit_seq).then(|| {
+            let set: BTreeSet<&String> = self
+                .edits
                 .iter()
-                .any(|o| read(&self.docs[&index], "edgeOrigin", &format!("{edge}|{o}")).is_some());
-            if !other {
-                plan.push(("edge", edge.clone(), None));
-            }
+                .filter(|(n, _)| *n > since)
+                .map(|(_, d)| d)
+                .collect();
+            set.into_iter().cloned().collect()
+        });
+        Edited {
+            seq: self.edit_seq,
+            docs,
         }
-        if plan.is_empty() {
-            return Ok(None);
+    }
+
+    /// Notes that the core changed a content document: editors read it again.
+    fn note_edit(&mut self, doc: &str) {
+        self.edit_seq += 1;
+        self.edits.push((self.edit_seq, doc.to_owned()));
+        if self.edits.len() > EDITS_KEPT {
+            self.edits.drain(..self.edits.len() - EDITS_KEPT);
         }
-        self.write(
-            ChangesetOrigin::System,
-            Label::new("core.change.links"),
-            |tx| {
-                for (map, key, value) in plan {
-                    tx.set(&index, map, &key, value)?;
-                }
-                Ok(())
-            },
-        )
-        .map(Some)
     }
 
     fn text_field(&self, node: NodeId, map: &str) -> Option<String> {
@@ -1336,7 +1571,43 @@ impl<S: Store> Workspace<S> {
             url: attr("url"),
             icon: attr("icon"),
             preview: attr("preview"),
+            flags: self.flags(node),
         }
+    }
+
+    /// The node's flags (05 §7), in their order.
+    fn flags(&self, node: NodeId) -> Vec<Flag> {
+        let Some(index) = self.docs.get(&self.index_doc(node)) else {
+            return Vec::new();
+        };
+        let key = node.to_text();
+        Flag::ALL
+            .into_iter()
+            .filter(|f| read(index, "flag", &format!("{key}|{}", f.as_str())).is_some())
+            .collect()
+    }
+
+    /// «Замок» (05 §7): a locked node keeps its name, fields and content and
+    /// stays out of the trash; it moves and its wires change.
+    fn unlocked(&self, node: NodeId) -> Result<()> {
+        if self.flagged(node, Flag::Lock) {
+            return Err(invalid(format!(
+                "node {} is locked (05 §7)",
+                node.to_text()
+            )));
+        }
+        Ok(())
+    }
+
+    fn flagged(&self, node: NodeId, flag: Flag) -> bool {
+        self.docs.get(&self.index_doc(node)).is_some_and(|index| {
+            read(
+                index,
+                "flag",
+                &format!("{}|{}", node.to_text(), flag.as_str()),
+            )
+            .is_some()
+        })
     }
 
     /// Every network's placed nodes: `net → nodes`, from the placements.
@@ -1404,7 +1675,8 @@ impl<S: Store> Workspace<S> {
             let mut stack = vec![node];
             while let Some(at) = stack.pop() {
                 for &n in children.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                    if !self.alive(n) || !seen.insert(n) {
+                    // A node on pause stays out of roll-ups, and what is inside it (05 §6.4).
+                    if !self.alive(n) || self.flagged(n, Flag::Pause) || !seen.insert(n) {
                         continue;
                     }
                     let kind = self.kind(n);
@@ -1423,7 +1695,7 @@ impl<S: Store> Workspace<S> {
         }
         while let Some(at) = stack.pop() {
             for &n in wires.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                if self.is_task(n) && seen.insert(n) {
+                if self.is_task(n) && !self.flagged(n, Flag::Pause) && seen.insert(n) {
                     tasks.push(n);
                     stack.push(n);
                 }
@@ -1552,7 +1824,8 @@ impl<S: Store> Workspace<S> {
     }
 
     /// A row of the preview with the rows under it; none for a node shown
-    /// already or a folder with no tasks.
+    /// already, a node on pause — the roll-up skips it (05 §7) — or a folder
+    /// with no tasks.
     fn task_row(
         &self,
         n: NodeId,
@@ -1561,7 +1834,7 @@ impl<S: Store> Workspace<S> {
         seen: &mut BTreeSet<NodeId>,
         depth: u32,
     ) -> Option<TaskRow> {
-        if !seen.insert(n) {
+        if self.flagged(n, Flag::Pause) || !seen.insert(n) {
             return None;
         }
         let rows = self.task_rows(n, children, wires, seen, depth + 1);
@@ -1653,13 +1926,79 @@ impl<S: Store> Workspace<S> {
             kind,
             name: self.name(n),
             attrs: self.attrs(n),
-            parent: self.text_field(n, "primaryNet"),
+            parent: self.primary_of(n).map(|p| p.to_text()),
             inputs,
             outputs,
             children,
             subtasks,
             fold: self.fold_of(n, kind, &all, &wires),
+            places: self.places(n),
         })
+    }
+
+    /// What trashing `ids` would take (05 §5, 06 §12.3), without taking it.
+    pub fn trash_preview(&self, ids: &[String]) -> Result<TrashPreview> {
+        let roots = ids
+            .iter()
+            .map(|id| self.live(id))
+            .collect::<Result<Vec<_>>>()?;
+        let c = self.cascade(&roots)?;
+        let mut staying: Vec<Staying> = Vec::new();
+        for &(n, _) in &c.unplaced {
+            if staying.iter().any(|s| s.node.id == n.to_text()) {
+                continue;
+            }
+            let gone: HashSet<NodeId> = c.trashed.iter().copied().collect();
+            let home = c
+                .primaries
+                .iter()
+                .find(|(m, _)| *m == n)
+                .map(|&(_, p)| p)
+                .or_else(|| self.primary_of(n).filter(|p| !gone.contains(p)));
+            let Some(home) = home else { continue };
+            let mut path: Vec<(String, String)> = self
+                .ancestors(home)
+                .into_iter()
+                .rev()
+                .map(|a| (a.to_text(), self.name(a)))
+                .collect();
+            path.push((home.to_text(), self.name(home)));
+            staying.push(Staying {
+                node: self.linked(n),
+                path,
+            });
+        }
+        Ok(TrashPreview {
+            trashed: c.trashed.iter().map(|&n| self.linked(n)).collect(),
+            staying,
+        })
+    }
+
+    /// Where node `n` is placed (05 §5, 06 §12.2): the primary first, then
+    /// the others from the oldest, each with its path from the root.
+    fn places(&self, n: NodeId) -> Vec<Place> {
+        let primary = self.primary_of(n);
+        let mut out: Vec<Place> = self
+            .placements_of(n)
+            .into_iter()
+            .map(|(net, _)| {
+                let mut path: Vec<(String, String)> = self
+                    .ancestors(net)
+                    .into_iter()
+                    .rev()
+                    .map(|a| (a.to_text(), self.name(a)))
+                    .collect();
+                path.push((net.to_text(), self.name(net)));
+                Place {
+                    net: net.to_text(),
+                    path,
+                    primary: Some(net) == primary,
+                }
+            })
+            .collect();
+        // Stable: the rest keep the oldest first.
+        out.sort_by_key(|p| !p.primary);
+        out
     }
 
     /// A picture or a file into the workspace's assets (10 §11); its
@@ -1678,6 +2017,204 @@ impl<S: Store> Workspace<S> {
         Ok(self.store.asset(sha)?)
     }
 
+    /// A copy of a node where a template is chosen (05 §7, `E`): a new node
+    /// of its kind at (x, y) in `net`, with its name, fields, people and
+    /// flags — the copy is no template — and its content document; a folder
+    /// or a project copies everything inside it, deep, with the positions,
+    /// the hand-drawn wires between the copies and the networks' wire style
+    /// (05 §5 «Копировать»). `inputs` wire into the copy, as into a node made
+    /// at the end of a wire being drawn (06 §5.1). One step of undo; the
+    /// copied notes' text wires follow as the system's (05 §8.2 rule 4). The
+    /// new node's id back.
+    pub fn copy_node(
+        &mut self,
+        from: &str,
+        net: &str,
+        (x, y): (f64, f64),
+        inputs: &[String],
+        label: Label,
+    ) -> Result<String> {
+        let source = self.live(from)?;
+        let target = self.network(net)?;
+        let children = self.children();
+        // Source, copy, the copy's network and position; parents before children.
+        let top = NodeId::new();
+        let mut copies: Vec<(NodeId, NodeId, String, f64, f64)> =
+            vec![(source, top, net.to_owned(), x, y)];
+        // Appearances inside stay appearances of the same nodes (05 §5): (node, copy's network, x, y).
+        let mut appear: Vec<(NodeId, NodeId, f64, f64)> = Vec::new();
+        let mut stack = vec![(source, top)];
+        while let Some((s, d)) = stack.pop() {
+            if !self.kind(s).is_some_and(NodeKind::has_canvas) {
+                continue;
+            }
+            let doc = format!("net/{}", s.to_text());
+            self.ensure_doc(&doc)?;
+            for &child in children.get(&s).map(Vec::as_slice).unwrap_or(&[]) {
+                if !self.alive(child) {
+                    continue;
+                }
+                let (px, py) = match read(&self.docs[&doc], "pos", &child.to_text()) {
+                    Some(Val::List(p)) => (
+                        p.first().and_then(Val::as_f64).unwrap_or(0.0),
+                        p.get(1).and_then(Val::as_f64).unwrap_or(0.0),
+                    ),
+                    _ => (0.0, 0.0),
+                };
+                // What lives here is copied; an appearance of a node elsewhere
+                // appears in the copy too, unless it would lie in itself (05 §5).
+                if self.primary_of(child) != Some(s) {
+                    let network = self.kind(child).is_some_and(NodeKind::has_canvas);
+                    let looped = network && (child == target || self.inside(target, child));
+                    if !looped {
+                        appear.push((child, d, px, py));
+                    }
+                    continue;
+                }
+                let copy = NodeId::new();
+                copies.push((child, copy, d.to_text(), px, py));
+                stack.push((child, copy));
+            }
+        }
+        let made: HashMap<NodeId, NodeId> = copies.iter().map(|c| (c.0, c.1)).collect();
+        let mut ops = Vec::new();
+        for (s, d, parent, px, py) in &copies {
+            let id = d.to_text();
+            let kind = self.kind(*s).unwrap_or(NodeKind::Note);
+            ops.push(Op::CreateNode {
+                id: Some(id.clone()),
+                kind,
+                name: self.name(*s),
+                net: parent.clone(),
+                x: *px,
+                y: *py,
+            });
+            let a = self.attrs(*s);
+            let text = |key: &str, v: Option<String>| {
+                v.map(|v| Op::SetAttr {
+                    id: id.clone(),
+                    key: key.to_owned(),
+                    value: Some(Val::str(v)),
+                })
+            };
+            ops.extend(
+                [
+                    text("status", a.status),
+                    text("start", a.start),
+                    text("deadline", a.deadline),
+                    text("priority", a.priority),
+                    text("asset", a.asset),
+                    text("mime", a.mime),
+                    text("url", a.url),
+                    text("icon", a.icon),
+                    text("preview", a.preview),
+                ]
+                .into_iter()
+                .flatten(),
+            );
+            if let Some(color) = a.color {
+                ops.push(Op::SetAttr {
+                    id: id.clone(),
+                    key: "color".to_owned(),
+                    value: Some(Val::Int(color)),
+                });
+            }
+            for person in a.assignees {
+                ops.push(Op::Assign {
+                    id: id.clone(),
+                    person,
+                    on: true,
+                });
+            }
+            // The copy of a template is no template; a template inside stays one.
+            for flag in a
+                .flags
+                .into_iter()
+                .filter(|f| !(*s == source && *f == Flag::Template))
+            {
+                ops.push(Op::SetFlag {
+                    id: id.clone(),
+                    flag,
+                    on: true,
+                });
+            }
+            if kind.has_canvas() {
+                let style = read(
+                    &self.docs[&format!("net/{}", s.to_text())],
+                    "settings",
+                    "wireStyle",
+                )
+                .and_then(|v| v.as_str().and_then(WireStyle::parse));
+                if style.is_some() {
+                    ops.push(Op::SetWireStyle { net: id, style });
+                }
+            }
+        }
+        for &(node, copy, px, py) in &appear {
+            ops.push(Op::Place {
+                id: node.to_text(),
+                net: copy.to_text(),
+                x: px,
+                y: py,
+            });
+        }
+        // An appearance is the same node in the copy: its wires to the copies come too.
+        let mut ends = made.clone();
+        for &(node, ..) in &appear {
+            ends.insert(node, node);
+        }
+        // Wires drawn by hand between the copies; text wires come from the text.
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for (key, v) in all.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let end = |k: &str| {
+                    v.get(k)
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                let (Some(a), Some(b)) = (end("from"), end("to")) else {
+                    continue;
+                };
+                let manual = ["manual", "import"]
+                    .iter()
+                    .any(|o| read(shard, "edgeOrigin", &format!("{key}|{o}")).is_some());
+                let copied = made.contains_key(&a) || made.contains_key(&b);
+                if let (true, true, Some(ca), Some(cb)) =
+                    (manual, copied, ends.get(&a), ends.get(&b))
+                {
+                    ops.push(Op::Connect {
+                        from: ca.to_text(),
+                        to: cb.to_text(),
+                    });
+                }
+            }
+        }
+        for input in inputs {
+            ops.push(Op::Connect {
+                from: input.clone(),
+                to: top.to_text(),
+            });
+        }
+        self.apply(&ops, label)?;
+        // Content documents as the editors' pushes are: outside the step.
+        let mut notes = BTreeSet::new();
+        for (s, d, ..) in &copies {
+            let Some(doc) = load(&self.store, &format!("content/{}", s.to_text()))? else {
+                continue;
+            };
+            let bytes = doc.export(ExportMode::Snapshot).map_err(engine)?;
+            let name = format!("content/{}", d.to_text());
+            self.store.append(&name, &bytes, now_ms())?;
+            self.docs.insert(name, doc);
+            notes.insert(*d);
+        }
+        self.relink(&notes)?;
+        Ok(top.to_text())
+    }
+
     /// The link asset's URL, for its preview to be fetched (✅ Q-13-16).
     pub fn link_of(&self, id: &str) -> Result<Option<String>> {
         let n = self.live(id)?;
@@ -1692,7 +2229,8 @@ impl<S: Store> Workspace<S> {
     /// page's title becomes the node's name while the name is still the one
     /// it got with the link — its host, the link itself, or nothing. Derived
     /// from the link, so a step of the system, not of the user's undo (05
-    /// §11). False when nothing changed, or the node's link is another by now.
+    /// §11). False when nothing changed, the node's link is another by now,
+    /// or the node is locked (05 §7).
     pub fn apply_preview(
         &mut self,
         id: &str,
@@ -1701,7 +2239,10 @@ impl<S: Store> Workspace<S> {
         picture: Option<&[u8]>,
     ) -> Result<bool> {
         let n = self.live(id)?;
-        if self.kind(n) != Some(NodeKind::Asset) || self.attrs(n).url.as_deref() != Some(url) {
+        if self.kind(n) != Some(NodeKind::Asset)
+            || self.attrs(n).url.as_deref() != Some(url)
+            || self.flagged(n, Flag::Lock)
+        {
             return Ok(false);
         }
         let mut ops = Vec::new();
@@ -1730,10 +2271,10 @@ impl<S: Store> Workspace<S> {
             return Ok(false);
         }
         let label = Label::new("core.change.preview");
-        Ok(!self
-            .commit_ops_as(ChangesetOrigin::System, &ops, label)?
-            .writes
-            .is_empty())
+        let step = self.commit_ops_as(ChangesetOrigin::System, &ops, label)?;
+        // The page's title may be the name a ghost waits for (05 §8.5).
+        self.links_after(&step, true)?;
+        Ok(!step.writes.is_empty())
     }
 
     /// Every live node of the workspace under its primary network, for the
@@ -1770,6 +2311,11 @@ impl<S: Store> Workspace<S> {
                 if !self.alive(n) {
                     continue;
                 }
+                // A node with no placement left in a live network lies nowhere (05 §5).
+                let parent = self.primary_of(n).map(|p| p.to_text());
+                if parent.is_none() && n != self.root {
+                    continue;
+                }
                 let kind = self.kind(n).unwrap_or(NodeKind::Note);
                 let look = if kind == NodeKind::Asset {
                     self.attrs(n)
@@ -1782,15 +2328,12 @@ impl<S: Store> Workspace<S> {
                     kind,
                     status: self.text_field(n, "status"),
                     deadline: self.text_field(n, "deadline"),
-                    parent: if n == self.root {
-                        None
-                    } else {
-                        self.text_field(n, "primaryNet")
-                    },
+                    parent,
                     asset: look.asset,
                     mime: look.mime,
                     url: look.url,
                     icon: look.icon,
+                    flags: self.flags(n),
                 });
             }
         }
@@ -1869,10 +2412,25 @@ impl<S: Store> Workspace<S> {
                 y,
                 attrs: self.attrs(node),
                 fold: self.fold_of(node, kind, &children, &wires),
+                external: 0,
+                appearance: false,
+                places: 0,
             });
+        }
+        let (external, rollups) = self.beyond(&nodes, &wires);
+        let index = self.placements_index();
+        for v in &mut nodes {
+            v.external = external.get(v.id.as_str()).copied().unwrap_or(0);
+            // An appearance and «×N» (05 §5, 06 §12.2).
+            if let Ok(node) = NodeId::parse(&v.id) {
+                let places = index.get(&node).map_or(0, Vec::len);
+                v.places = u32::try_from(places).unwrap_or(u32::MAX);
+                v.appearance = node != self.root && self.primary_of(node) != Some(n);
+            }
         }
         let shown: BTreeSet<&str> = nodes.iter().map(|v| v.id.as_str()).collect();
         let mut edges = Vec::new();
+        let mut ghosts = Vec::new();
         for shard in self.index_shards() {
             let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
                 continue;
@@ -1883,10 +2441,20 @@ impl<S: Store> Workspace<S> {
             };
             for (key, v) in all.iter() {
                 let Some(v) = Val::from_loro(v) else { continue };
-                let (Some(from), Some(to)) = (
-                    v.get("from").and_then(Val::as_str),
-                    v.get("to").and_then(Val::as_str),
-                ) else {
+                let Some(from) = v.get("from").and_then(Val::as_str) else {
+                    continue;
+                };
+                if let Some(name) = v.get("ghost").and_then(Val::as_str) {
+                    if shown.contains(from) {
+                        ghosts.push(ViewGhost {
+                            edge: key.clone(),
+                            from: from.to_owned(),
+                            name: name.to_owned(),
+                        });
+                    }
+                    continue;
+                }
+                let Some(to) = v.get("to").and_then(Val::as_str) else {
                     continue;
                 };
                 if !shown.contains(from) || !shown.contains(to) {
@@ -1902,6 +2470,7 @@ impl<S: Store> Workspace<S> {
             }
         }
         edges.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
+        ghosts.sort_by(|a, b| (&a.from, &a.name, &a.edge).cmp(&(&b.from, &b.name, &b.edge)));
         let mut path: Vec<(String, String)> = self
             .ancestors(n)
             .into_iter()
@@ -1917,12 +2486,132 @@ impl<S: Store> Workspace<S> {
             path,
             nodes,
             edges,
+            ghosts,
+            rollups,
             wire_style,
         })
     }
 
-    /// Nodes in the trash, newest first.
+    /// The wires of node `id` in network `net` whose other end is not placed
+    /// there (05 §8.3, 06 §14): inputs first, then outputs, each by name.
+    /// Ends in the trash count for nothing, as in «↗N».
+    pub fn external_wires(&mut self, net: &str, id: &str) -> Result<Vec<ExternalWire>> {
+        let view = self.network_view(net)?;
+        let node = self.live(id)?;
+        let placed: HashSet<&str> = view.nodes.iter().map(|v| v.id.as_str()).collect();
+        if !placed.contains(id) {
+            return Err(invalid(format!("{id} is not placed in {net}")));
+        }
+        let mut out = Vec::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(all) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for (key, v) in all.iter() {
+                let Some(v) = Val::from_loro(v) else { continue };
+                let end = |k: &str| {
+                    v.get(k)
+                        .and_then(Val::as_str)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                let (Some(from), Some(to)) = (end("from"), end("to")) else {
+                    continue;
+                };
+                let (other, incoming) = match (from == node, to == node) {
+                    (true, false) => (to, false),
+                    (false, true) => (from, true),
+                    _ => continue,
+                };
+                let other_id = other.to_text();
+                if placed.contains(other_id.as_str()) || !self.alive(other) {
+                    continue;
+                }
+                let has = |o: &str| read(shard, "edgeOrigin", &format!("{key}|{o}")).is_some();
+                out.push(ExternalWire {
+                    name: self.name(other),
+                    kind: self.kind(other).unwrap_or(NodeKind::Note),
+                    incoming,
+                    text: has("text"),
+                    manual: has("manual") || has("import"),
+                    path: self
+                        .ancestors(other)
+                        .into_iter()
+                        .rev()
+                        .map(|a| (a.to_text(), self.name(a)))
+                        .collect(),
+                    id: other_id,
+                });
+            }
+        }
+        out.sort_by(|a, b| (!a.incoming, &a.name, &a.id).cmp(&(!b.incoming, &b.name, &b.id)));
+        Ok(out)
+    }
+
+    /// The wires of a network's nodes that leave it (05 §8.3): their count
+    /// per node, «↗N», and the roll-up wires — a wire whose other end lies
+    /// inside a network placed here is drawn to that network's bubble, the
+    /// wires between the same two bubbles counted together whichever way
+    /// they go (06 §13.3). Ends in the trash count for nothing.
+    fn beyond(
+        &self,
+        nodes: &[ViewNode],
+        wires: &HashMap<NodeId, Vec<NodeId>>,
+    ) -> (HashMap<String, u32>, Vec<ViewRollup>) {
+        let placed: HashSet<NodeId> = nodes
+            .iter()
+            .filter_map(|v| NodeId::parse(&v.id).ok())
+            .collect();
+        let mut inside: HashMap<NodeId, Option<NodeId>> = HashMap::new();
+        let mut bubble = |n: NodeId| -> Option<NodeId> {
+            if placed.contains(&n) {
+                return Some(n);
+            }
+            *inside
+                .entry(n)
+                .or_insert_with(|| self.ancestors(n).into_iter().find(|a| placed.contains(a)))
+        };
+        let mut external: HashMap<String, u32> = HashMap::new();
+        let mut rolled: BTreeMap<(NodeId, NodeId), u32> = BTreeMap::new();
+        for (&a, tos) in wires {
+            if !self.alive(a) {
+                continue;
+            }
+            for &b in tos {
+                let (here_a, here_b) = (placed.contains(&a), placed.contains(&b));
+                if (here_a && here_b) || !self.alive(b) {
+                    continue;
+                }
+                for (n, here) in [(a, here_a), (b, here_b)] {
+                    if here {
+                        *external.entry(n.to_text()).or_default() += 1;
+                    }
+                }
+                if let (Some(x), Some(y)) = (bubble(a), bubble(b)) {
+                    if x != y {
+                        *rolled.entry((x.min(y), x.max(y))).or_default() += 1;
+                    }
+                }
+            }
+        }
+        let rollups = rolled
+            .into_iter()
+            .map(|((a, b), count)| ViewRollup {
+                a: a.to_text(),
+                b: b.to_text(),
+                count,
+            })
+            .collect();
+        (external, rollups)
+    }
+
+    /// Nodes in the trash, newest first: what went inside a network in the
+    /// same step is no item of its own, it comes back with the network (05 §5).
     pub fn trash(&self) -> Vec<TrashItem> {
+        let batch_of = |n: NodeId| {
+            self.field(n, "trashBatch")
+                .and_then(|v| v.as_str().map(str::to_owned))
+                .unwrap_or_default()
+        };
         let mut out = Vec::new();
         for shard in self.index_shards() {
             let LoroValue::Map(m) = shard.get_map("trashedAt").get_value() else {
@@ -1930,15 +2619,24 @@ impl<S: Store> Workspace<S> {
             };
             for (id, at) in m.iter() {
                 let Ok(n) = NodeId::parse(id) else { continue };
+                let batch = batch_of(n);
+                let home = self
+                    .field(n, "primaryNet")
+                    .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()));
+                let inside = home.is_some_and(|h| {
+                    self.field(h, "trashedAt").is_some()
+                        && !batch.is_empty()
+                        && batch_of(h) == batch
+                });
+                if inside {
+                    continue;
+                }
                 out.push(TrashItem {
                     id: id.clone(),
                     kind: self.kind(n).unwrap_or(NodeKind::Note),
                     name: self.name(n),
                     trashed_at: Val::from_loro(at).and_then(|v| v.as_i64()).unwrap_or(0),
-                    batch: self
-                        .field(n, "trashBatch")
-                        .and_then(|v| v.as_str().map(str::to_owned))
-                        .unwrap_or_default(),
+                    batch,
                 });
             }
         }

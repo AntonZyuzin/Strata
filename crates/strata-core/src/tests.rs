@@ -1275,3 +1275,1355 @@ fn a_link_preview_is_the_systems_step_and_names_only_an_unnamed_link() {
         .expect("v6 preview");
     assert_eq!(w.node_details(&bare).expect("details").name, "Локально");
 }
+
+fn flag(
+    w: &mut Workspace<MemoryStore>,
+    id: &str,
+    flag: crate::Flag,
+    on: bool,
+) -> crate::workspace::Result<crate::Changeset> {
+    w.apply(
+        &[Op::SetFlag {
+            id: id.to_owned(),
+            flag,
+            on,
+        }],
+        Label::new("t.flag"),
+    )
+}
+
+#[test]
+fn a_flag_is_set_and_cleared_in_one_step_each() {
+    use crate::Flag;
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let flags = |w: &mut Workspace<MemoryStore>| {
+        let root = w.root();
+        let v = w.network_view(&root).expect("view");
+        v.nodes[0].attrs.flags.clone()
+    };
+    flag(&mut w, &note, Flag::Template, true).expect("template");
+    flag(&mut w, &note, Flag::Key, true).expect("key");
+    assert_eq!(
+        flags(&mut w),
+        vec![Flag::Key, Flag::Template],
+        "flags come in the order of 05 §7"
+    );
+    let tree = w.tree();
+    let item = tree.iter().find(|i| i.id == note).expect("in the tree");
+    assert_eq!(
+        item.flags,
+        vec![Flag::Key, Flag::Template],
+        "the tree carries them for the Tab menu's templates (06 §5.2)"
+    );
+    w.undo().expect("undo");
+    assert_eq!(
+        flags(&mut w),
+        vec![Flag::Template],
+        "each switch is one step (06 §8)"
+    );
+    flag(&mut w, &note, Flag::Template, false).expect("off");
+    assert!(flags(&mut w).is_empty());
+    flag(&mut w, &note, Flag::HideAi, true).expect("the model holds every bit from the MVP");
+    w.apply(
+        &[Op::Trash {
+            ids: vec![note.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    assert!(
+        flag(&mut w, &note, Flag::Key, true).is_err(),
+        "a node in the trash takes no flags"
+    );
+    w.undo().expect("restore");
+    let mut again = Workspace::open(w.into_store()).expect("open");
+    assert_eq!(flags(&mut again), vec![Flag::HideAi], "flags are stored");
+}
+
+#[test]
+fn a_node_on_pause_stays_out_of_roll_ups() {
+    use crate::Flag;
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let project = create(&mut w, &root, NodeKind::Project, "Срез");
+    let a = create(&mut w, &project, NodeKind::Task, "Боёвка");
+    let b = create(&mut w, &project, NodeKind::Task, "Анимации");
+    let folder = create(&mut w, &project, NodeKind::Network, "Арт");
+    create(&mut w, &folder, NodeKind::Task, "Свет");
+    let far = create(&mut w, &root, NodeKind::Task, "Снаружи");
+    w.apply(
+        &[Op::Connect {
+            from: a.clone(),
+            to: far.clone(),
+        }],
+        Label::new("t.wire"),
+    )
+    .expect("wire");
+    set(&mut w, &a, "status", Some(Val::str("done"))).expect("done");
+    let fold = |w: &Workspace<MemoryStore>| {
+        let f = w
+            .node_details(&project)
+            .expect("details")
+            .fold
+            .expect("fold");
+        (f.done, f.total)
+    };
+    let rows = |w: &Workspace<MemoryStore>| -> Vec<String> {
+        let d = w.node_details(&project).expect("details");
+        d.subtasks.iter().map(|r| r.name.clone()).collect()
+    };
+    assert_eq!(fold(&w), (1, 4));
+    flag(&mut w, &b, Flag::Pause, true).expect("pause a task");
+    assert_eq!(fold(&w), (1, 3), "a task on pause is not counted (05 §7)");
+    assert_eq!(rows(&w), vec!["Боёвка", "Арт"], "nor shown in the preview");
+    flag(&mut w, &folder, Flag::Pause, true).expect("pause a folder");
+    assert_eq!(fold(&w), (1, 2), "what is inside a paused folder neither");
+    flag(&mut w, &far, Flag::Pause, true).expect("pause a subtask");
+    assert_eq!(fold(&w), (1, 1), "a paused subtask by a wire neither");
+    let own = w
+        .node_details(&folder)
+        .expect("details")
+        .fold
+        .expect("fold");
+    assert_eq!(
+        (own.done, own.total),
+        (0, 1),
+        "a paused folder still rolls up its own tasks"
+    );
+    w.undo().expect("undo");
+    assert_eq!(fold(&w), (1, 2));
+}
+
+#[test]
+fn a_locked_node_keeps_its_name_fields_and_content() {
+    use crate::Flag;
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let task = create(&mut w, &root, NodeKind::Task, "Сдать");
+    let other = create(&mut w, &root, NodeKind::Note, "Рядом");
+    w.apply(
+        &[Op::AddPerson {
+            id: Some("p1".to_owned()),
+            name: "Аня".to_owned(),
+            color: None,
+        }],
+        Label::new("t.person"),
+    )
+    .expect("person");
+    flag(&mut w, &task, Flag::Lock, true).expect("lock");
+    let refused =
+        |w: &mut Workspace<MemoryStore>, op: Op| w.apply(&[op], Label::new("t.x")).is_err();
+    let id = task.clone();
+    assert!(refused(
+        &mut w,
+        Op::Rename {
+            id: id.clone(),
+            name: "Иначе".to_owned(),
+        }
+    ));
+    assert!(set(&mut w, &task, "status", Some(Val::str("done"))).is_err());
+    assert!(refused(
+        &mut w,
+        Op::Assign {
+            id: id.clone(),
+            person: "p1".to_owned(),
+            on: true,
+        }
+    ));
+    assert!(refused(
+        &mut w,
+        Op::SetKind {
+            id: id.clone(),
+            kind: NodeKind::Project,
+        }
+    ));
+    assert!(refused(
+        &mut w,
+        Op::Trash {
+            ids: vec![id.clone()]
+        }
+    ));
+    let ed = Editor::open(&mut w, &task);
+    let t = ed.doc.get_text("text");
+    t.insert(0, "текст").expect("type");
+    ed.doc.commit();
+    let update = ed
+        .doc
+        .export(loro::ExportMode::updates(&ed.sent))
+        .expect("export");
+    assert!(
+        w.doc_push(&format!("content/{task}"), &update).is_err(),
+        "nor its content"
+    );
+    // It moves, its wires change, and the lock comes off from the menu.
+    w.apply(
+        &[
+            Op::Move {
+                net: root.clone(),
+                id: id.clone(),
+                x: 300.0,
+                y: 40.0,
+            },
+            Op::Connect {
+                from: other.clone(),
+                to: id.clone(),
+            },
+        ],
+        Label::new("t.move"),
+    )
+    .expect("a locked node moves and takes wires (05 §7)");
+    flag(&mut w, &task, Flag::Lock, false).expect("unlock");
+    w.apply(
+        &[Op::Rename {
+            id,
+            name: "Иначе".to_owned(),
+        }],
+        Label::new("t.rename"),
+    )
+    .expect("an unlocked node is renamed");
+
+    // The system keeps the lock too: a locked link takes no preview.
+    let url = "https://example.org/";
+    let link = create(&mut w, &root, NodeKind::Asset, "example.org");
+    set(&mut w, &link, "url", Some(Val::str(url))).expect("link");
+    flag(&mut w, &link, Flag::Lock, true).expect("lock the link");
+    assert!(
+        !w.apply_preview(&link, url, Some("Заголовок"), None)
+            .expect("preview")
+    );
+    assert_eq!(w.node_details(&link).expect("details").name, "example.org");
+}
+
+#[test]
+fn a_template_is_copied_with_everything_inside() {
+    use crate::value::Val;
+    use crate::{Flag, WireStyle};
+    let mut w = ws();
+    let root = w.root();
+    w.apply(
+        &[Op::AddPerson {
+            id: Some("p1".to_owned()),
+            name: "Аня".to_owned(),
+            color: None,
+        }],
+        Label::new("t.person"),
+    )
+    .expect("person");
+    let goal = create(&mut w, &root, NodeKind::Note, "Цель");
+    let bug = create(&mut w, &root, NodeKind::Project, "Баг");
+    set(&mut w, &bug, "color", Some(Val::Int(3))).expect("colour");
+    set(&mut w, &bug, "priority", Some(Val::str("high"))).expect("priority");
+    let repro = create(&mut w, &bug, NodeKind::Task, "Повторить");
+    set(&mut w, &repro, "status", Some(Val::str("todo"))).expect("status");
+    w.apply(
+        &[
+            Op::Assign {
+                id: repro.clone(),
+                person: "p1".to_owned(),
+                on: true,
+            },
+            Op::Move {
+                net: bug.clone(),
+                id: repro.clone(),
+                x: 120.0,
+                y: -40.0,
+            },
+            Op::SetWireStyle {
+                net: bug.clone(),
+                style: Some(WireStyle::Straight),
+            },
+        ],
+        Label::new("t.fields"),
+    )
+    .expect("fields");
+    let steps = create(&mut w, &bug, NodeKind::Note, "Шаги");
+    let mut ed = Editor::open(&mut w, &steps);
+    assert!(ed.type_text(&mut w, &steps, "1. Открыть [[Цель]]"));
+    let deep = create(&mut w, &bug, NodeKind::Network, "Логи");
+    create(&mut w, &deep, NodeKind::Asset, "лог.txt");
+    w.apply(
+        &[
+            Op::Connect {
+                from: repro.clone(),
+                to: steps.clone(),
+            },
+            // A wire out of the template is not between copies: it stays behind.
+            Op::Connect {
+                from: repro.clone(),
+                to: goal.clone(),
+            },
+        ],
+        Label::new("t.wires"),
+    )
+    .expect("wires");
+    flag(&mut w, &bug, Flag::Template, true).expect("template");
+    flag(&mut w, &bug, Flag::Key, true).expect("key");
+    let wires_before = w.wires().len();
+    let label = Label::new("t.copy");
+    let copy = w
+        .copy_node(
+            &bug,
+            &root,
+            (500.0, 60.0),
+            std::slice::from_ref(&goal),
+            label.clone(),
+        )
+        .expect("copy");
+    assert_ne!(copy, bug);
+    assert_eq!(
+        w.history().undo,
+        Some(label),
+        "the copy is one step of undo"
+    );
+
+    let d = w.node_details(&copy).expect("details");
+    assert_eq!(d.name, "Баг");
+    assert_eq!(d.kind, NodeKind::Project);
+    assert_eq!(d.attrs.color, Some(3));
+    assert_eq!(d.attrs.priority.as_deref(), Some("high"));
+    assert_eq!(
+        d.attrs.flags,
+        vec![Flag::Key],
+        "the copy keeps its flags but is no template (05 §7)"
+    );
+    let v = w.network_view(&root).expect("root");
+    let placed = v.nodes.iter().find(|n| n.id == copy).expect("placed");
+    assert_eq!((placed.x, placed.y), (500.0, 60.0));
+    let inside = w.network_view(&copy).expect("inside");
+    assert_eq!(inside.wire_style, Some(WireStyle::Straight));
+    let mut here: Vec<&str> = inside.nodes.iter().map(|n| n.name.as_str()).collect();
+    here.sort();
+    assert_eq!(here, vec!["Логи", "Повторить", "Шаги"]);
+    let task = inside
+        .nodes
+        .iter()
+        .find(|n| n.name == "Повторить")
+        .expect("task");
+    assert_ne!(task.id, repro, "a new node, not an appearance (05 §5)");
+    assert_eq!((task.x, task.y), (120.0, -40.0), "positions come along");
+    assert_eq!(task.attrs.status.as_deref(), Some("todo"));
+    assert_eq!(task.attrs.assignees, vec!["p1".to_owned()]);
+    let note = inside
+        .nodes
+        .iter()
+        .find(|n| n.name == "Шаги")
+        .expect("note");
+    let logs = inside
+        .nodes
+        .iter()
+        .find(|n| n.name == "Логи")
+        .expect("folder");
+    let logs = logs.id.clone();
+    assert_eq!(names(&mut w, &logs), vec!["лог.txt"], "deep");
+    assert_eq!(
+        Editor::open(&mut w, &note.id)
+            .doc
+            .get_text("text")
+            .to_string(),
+        "1. Открыть [[Цель]]",
+        "the content document comes along"
+    );
+    let wires = w.wires();
+    let has = |a: &str, b: &str| wires.iter().any(|e| e.from == a && e.to == b);
+    assert!(has(&task.id, &note.id), "a wire between copies is copied");
+    assert!(!has(&task.id, &goal), "a wire out of the copy is not");
+    assert!(
+        has(&note.id, &goal),
+        "the copied note's link wires it by its text"
+    );
+    assert!(has(&goal, &copy), "an input wires into the copy (06 §5.1)");
+    assert_eq!(wires.len(), wires_before + 3);
+    assert_eq!(
+        w.node_details(&bug).expect("source").attrs.flags,
+        vec![Flag::Key, Flag::Template],
+        "the template stays as it was"
+    );
+
+    w.undo().expect("undo");
+    assert!(w.node_details(&copy).is_err(), "undo takes the copy away");
+    assert!(
+        w.copy_node(&bug, &note.id, (0.0, 0.0), &[], Label::new("t.copy"))
+            .is_err(),
+        "a copy goes into a live folder or project only"
+    );
+}
+
+#[test]
+fn people_take_the_palette_in_the_order_they_come() {
+    let mut w = ws();
+    let before = w.people().len();
+    let add = |name: &str, color: Option<i64>| Op::AddPerson {
+        id: None,
+        name: name.to_owned(),
+        color,
+    };
+    w.apply(
+        &[add("Аня", None), add("Борис", None)],
+        Label::new("t.people"),
+    )
+    .expect("two at once");
+    w.apply(&[add("Вера", Some(6))], Label::new("t.person"))
+        .expect("one with her colour");
+    for name in ["Глеб", "Дина", "Егор", "Женя", "Зоя", "Ира"] {
+        w.apply(&[add(name, None)], Label::new("t.person"))
+            .expect("one more");
+    }
+    let mut people = w.people();
+    people.sort_by(|a, b| a.name.cmp(&b.name));
+    let colours: Vec<(String, i64)> = people.into_iter().map(|p| (p.name, p.color)).collect();
+    let next = |k: i64| (before as i64 + k).rem_euclid(8);
+    assert_eq!(
+        colours,
+        vec![
+            ("Аня".to_owned(), next(0)),
+            ("Борис".to_owned(), next(1)),
+            ("Вера".to_owned(), 6),
+            ("Глеб".to_owned(), next(3)),
+            ("Дина".to_owned(), next(4)),
+            ("Егор".to_owned(), next(5)),
+            ("Женя".to_owned(), next(6)),
+            ("Зоя".to_owned(), next(7)),
+            ("Ира".to_owned(), next(8)),
+        ],
+        "07 §2.2: in order, the ninth the first's again; a chosen colour stays"
+    );
+}
+
+fn rename(w: &mut Workspace<MemoryStore>, id: &str, name: &str) {
+    w.apply(
+        &[Op::Rename {
+            id: id.to_owned(),
+            name: name.to_owned(),
+        }],
+        Label::new("t.rename"),
+    )
+    .expect("rename");
+}
+
+/// `(from, to)` of the text wires and `(from, name)` of the ghosts in `net`.
+#[allow(clippy::type_complexity)]
+fn links(
+    w: &mut Workspace<MemoryStore>,
+    net: &str,
+) -> (Vec<(String, String)>, Vec<(String, String)>) {
+    let v = w.network_view(net).expect("view");
+    (
+        v.edges
+            .into_iter()
+            .filter(|e| e.text)
+            .map(|e| (e.from, e.to))
+            .collect(),
+        v.ghosts.into_iter().map(|g| (g.from, g.name)).collect(),
+    )
+}
+
+#[test]
+fn a_link_to_no_node_is_a_ghost_until_a_node_answers_it() {
+    // 05 §8.5: the wire of `[[X]]` with no node X leads to a ghost; its key
+    // is `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5); a node named X resolves it.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "Позже: [[Идея Й]], ещё раз [[идея й]]"));
+    let v = w.network_view(&root).expect("view");
+    assert!(v.edges.is_empty());
+    assert_eq!(v.ghosts.len(), 1, "one ghost for one link key");
+    let g = &v.ghosts[0];
+    let from = NodeId::parse(&note).expect("id");
+    assert_eq!(
+        (g.from.as_str(), g.name.as_str(), g.edge.clone()),
+        (
+            note.as_str(),
+            "Идея Й",
+            strata_model::EdgeKey::to_ghost(from, &strata_markdown::link_key("Идея Й")).to_text()
+        )
+    );
+
+    // The name as the text spells it now.
+    assert!(ed.type_text(&mut w, &note, "Позже: [[идея й]]"));
+    assert_eq!(
+        links(&mut w, &root).1,
+        vec![(note.clone(), "идея й".to_owned())]
+    );
+
+    // A node with the name, in another case and in NFD as macOS gives it.
+    let idea = create(&mut w, &root, NodeKind::Note, "ИДЕЯ \u{438}\u{306}");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(note.clone(), idea.clone())], vec![]),
+        "the ghost resolved into a wire with the origin text"
+    );
+    assert_eq!(
+        w.history().undo,
+        Some(Label::new("t.create")),
+        "resolving is the system's: the step is the creation alone"
+    );
+
+    // Undo takes the node away and the ghost comes back; redo resolves again.
+    w.undo().expect("undo").expect("a step");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note.clone(), "идея й".to_owned())])
+    );
+    w.redo().expect("redo").expect("a step");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(note.clone(), idea.clone())], vec![])
+    );
+
+    // A link gone from the text takes its wire or its ghost with it.
+    assert!(ed.type_text(&mut w, &note, "[[Нигде]]"));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note.clone(), "Нигде".to_owned())])
+    );
+    assert!(ed.type_text(&mut w, &note, "Пусто"));
+    assert_eq!(links(&mut w, &root), (vec![], vec![]));
+}
+
+#[test]
+fn a_wire_keeps_its_node_while_the_node_answers_its_link() {
+    // 13 §3.5, sticking: a new node with the name takes no link over; a
+    // node that no longer answers gives its link to another answer, or to
+    // a ghost.
+    let mut w = ws();
+    let root = w.root();
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[Цель]]"));
+    let other = create(&mut w, &root, NodeKind::Note, "цель");
+    assert_eq!(links(&mut w, &root).0, vec![(note.clone(), goal.clone())]);
+    // Typing again keeps it too.
+    assert!(!ed.type_text(&mut w, &note, "[[Цель]]"));
+
+    // Renamed, the node keeps its link: the text follows (13 §6.5).
+    rename(&mut w, &goal, "Главная цель");
+    assert_eq!(text_of(&mut w, &note), "[[Главная цель]]");
+    assert_eq!(links(&mut w, &root).0, vec![(note.clone(), goal.clone())]);
+    // The old name typed again is the other node's now.
+    assert!(ed.type_text(&mut w, &note, "[[Цель]]"));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(note.clone(), other.clone())], vec![])
+    );
+    // A name no link can carry (13 §3.4) leaves the link a ghost.
+    rename(&mut w, &other, "Средство | цель");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note.clone(), "Цель".to_owned())])
+    );
+    // Undo of the rename: the node answers again.
+    w.undo().expect("undo").expect("a step");
+    assert_eq!(links(&mut w, &root), (vec![(note.clone(), other)], vec![]));
+}
+
+#[test]
+fn a_name_of_several_nodes_goes_to_the_nearest_and_a_path_names_its_node() {
+    // 13 §3.5: a path from the root, then from the note's folder; else the
+    // nearest by the tree, then the shorter path, then the older.
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "Проекты");
+    let b = create(&mut w, &root, NodeKind::Network, "Архив");
+    let far = create(&mut w, &root, NodeKind::Note, "План");
+    let near = create(&mut w, &a, NodeKind::Note, "План");
+    let old = create(&mut w, &b, NodeKind::Note, "План");
+    let note = create(&mut w, &a, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[План]]"));
+    assert_eq!(links(&mut w, &a).0, vec![(note.clone(), near.clone())]);
+
+    // A path from the root.
+    assert!(ed.type_text(&mut w, &note, "[[Архив/План.md]]"));
+    let v = w.network_view(&a).expect("view");
+    assert!(
+        v.edges.is_empty() && v.ghosts.is_empty(),
+        "the wire leads out of this network"
+    );
+    let d = w.node_details(&note).expect("details");
+    assert_eq!(
+        d.outputs.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+        vec![old.clone()]
+    );
+
+    // The tail of a path, and a path no node answers.
+    let other = create(&mut w, &root, NodeKind::Network, "Прочее");
+    let elsewhere = create(&mut w, &other, NodeKind::Note, "Где-то");
+    let mut ed2 = Editor::open(&mut w, &elsewhere);
+    assert!(ed2.type_text(&mut w, &elsewhere, "[[проекты/план]] и [[Нет/План]]"));
+    let out = |w: &mut Workspace<MemoryStore>, n: &str| -> Vec<String> {
+        let d = w.node_details(n).expect("details");
+        d.outputs.into_iter().map(|l| l.id).collect()
+    };
+    assert_eq!(out(&mut w, &elsewhere), vec![near.clone()]);
+    assert_eq!(
+        links(&mut w, &other).1,
+        vec![(elsewhere.clone(), "Нет/План".to_owned())],
+        "a path no node answers is a ghost"
+    );
+    assert!(ed.type_text(&mut w, &note, "[[Корень/План]]"));
+    assert_eq!(
+        links(&mut w, &a).1,
+        vec![(note.clone(), "Корень/План".to_owned())],
+        "the root's name is no part of a path (05 §9.3)"
+    );
+
+    // No folder nearer: the shorter path; the same length: the older. A
+    // note with a wire to an answer keeps it (sticking), so fresh notes.
+    let third = create(&mut w, &other, NodeKind::Note, "Третья");
+    let mut ed3 = Editor::open(&mut w, &third);
+    assert!(ed3.type_text(&mut w, &third, "[[План]]"));
+    assert_eq!(out(&mut w, &third), vec![far.clone()]);
+    rename(&mut w, &far, "Бывший план");
+    let fourth = create(&mut w, &other, NodeKind::Note, "Четвёртая");
+    let mut ed4 = Editor::open(&mut w, &fourth);
+    assert!(ed4.type_text(&mut w, &fourth, "[[План]]"));
+    assert_eq!(
+        out(&mut w, &fourth),
+        vec![near.clone()],
+        "made before the one in «Архив»"
+    );
+    assert!(ed2.type_text(&mut w, &elsewhere, "[[План]]"));
+    assert_eq!(out(&mut w, &elsewhere), vec![near], "its wire sticks");
+    let _ = old;
+}
+
+#[test]
+fn a_wire_to_a_node_in_the_trash_stays_and_a_new_link_to_it_is_a_ghost() {
+    // 05 §14 rule 6: while an end is in the trash, the wire is hidden, not
+    // gone. A link to a name only the trash holds is a ghost; «Вернуть»
+    // resolves it.
+    let mut w = ws();
+    let root = w.root();
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let a = create(&mut w, &root, NodeKind::Note, "А");
+    let b = create(&mut w, &root, NodeKind::Note, "Б");
+    let mut ea = Editor::open(&mut w, &a);
+    let mut eb = Editor::open(&mut w, &b);
+    assert!(ea.type_text(&mut w, &a, "[[Цель]]"));
+    w.apply(
+        &[Op::Trash {
+            ids: vec![goal.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    assert!(
+        !ea.type_text(&mut w, &a, "[[Цель]] "),
+        "the wire stays, hidden"
+    );
+    assert!(eb.type_text(&mut w, &b, "[[Цель]]"));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(b.clone(), "Цель".to_owned())])
+    );
+    w.apply(
+        &[Op::Restore {
+            ids: vec![goal.clone()],
+        }],
+        Label::new("t.restore"),
+    )
+    .expect("restore");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(a.clone(), goal.clone()), (b.clone(), goal)], vec![])
+    );
+}
+
+#[test]
+fn a_note_linking_itself_has_no_wire_and_no_ghost() {
+    // 05 §8.2 rule 2: no wire from a node to itself.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Сама");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(!ed.type_text(&mut w, &note, "См. [[сама]]"));
+    assert_eq!(links(&mut w, &root), (vec![], vec![]));
+}
+
+fn text_of(w: &mut Workspace<MemoryStore>, note: &str) -> String {
+    Editor::open(w, note).doc.get_text("text").to_string()
+}
+
+#[test]
+fn a_rename_rewrites_the_links_that_named_the_node() {
+    // 13 §6.5, ☑ Q-10-9: `[[Старое]]` → `[[Новое]]` in every text whose
+    // link named the node; anchors, aliases, a path's networks and `.md`
+    // stay; the wire stays too. Undo renames back, and the texts follow.
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Проекты");
+    let goal = create(&mut w, &folder, NodeKind::Task, "Цель");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    let text = "См. [[Цель]], ![[цель#План|план]] и [[Проекты/Цель.md]]; [[Нет такой]]";
+    assert!(ed.type_text(&mut w, &note, text));
+    let seen = w.edited(0).seq;
+
+    rename(&mut w, &goal, "Миссия");
+    let rewritten = "См. [[Миссия]], ![[Миссия#План|план]] и [[Проекты/Миссия.md]]; [[Нет такой]]";
+    assert_eq!(text_of(&mut w, &note), rewritten);
+    let d = w.node_details(&note).expect("details");
+    assert_eq!(
+        d.outputs.iter().map(|l| l.id.clone()).collect::<Vec<_>>(),
+        vec![goal.clone()]
+    );
+    assert_eq!(
+        links(&mut w, &root).1,
+        vec![(note.clone(), "Нет такой".to_owned())]
+    );
+    assert_eq!(
+        w.history().undo,
+        Some(Label::new("t.rename")),
+        "the rewrite is no step"
+    );
+
+    // The open editor catches up from the core (15 §3.4).
+    let edited = w.edited(seen);
+    assert_eq!(edited.docs, Some(vec![format!("content/{note}")]));
+    let update = w
+        .doc_updates(&format!("content/{note}"), &ed.doc.oplog_vv().encode())
+        .expect("updates");
+    ed.doc.import(&update).expect("import");
+    assert_eq!(ed.doc.get_text("text").to_string(), rewritten);
+    let none = w
+        .doc_updates(&format!("content/{note}"), &ed.doc.oplog_vv().encode())
+        .expect("updates");
+    assert!(none.is_empty(), "nothing new is no bytes at all");
+    assert_eq!(w.edited(edited.seq).docs, Some(vec![]));
+
+    w.undo().expect("undo").expect("a step");
+    assert_eq!(
+        text_of(&mut w, &note),
+        "См. [[Цель]], ![[Цель#План|план]] и [[Проекты/Цель.md]]; [[Нет такой]]"
+    );
+
+    // A name that breaks links is not written into them: the link is a ghost.
+    rename(&mut w, &goal, "Цель | вторая");
+    assert_eq!(
+        text_of(&mut w, &note),
+        "См. [[Цель]], ![[Цель#План|план]] и [[Проекты/Цель.md]]; [[Нет такой]]"
+    );
+    assert!(
+        links(&mut w, &root)
+            .1
+            .contains(&(note.clone(), "Цель".to_owned()))
+    );
+}
+
+#[test]
+fn a_rename_leaves_the_links_of_another_node_with_the_name() {
+    // 13 §3.5: the link named the nearest «План»; renaming the other one
+    // changes nothing in the text.
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let near = create(&mut w, &a, NodeKind::Note, "План");
+    let far = create(&mut w, &b, NodeKind::Note, "План");
+    let note = create(&mut w, &a, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[План]]"));
+    rename(&mut w, &far, "Другой");
+    assert_eq!(text_of(&mut w, &note), "[[План]]");
+    rename(&mut w, &near, "Главный");
+    assert_eq!(text_of(&mut w, &note), "[[Главный]]");
+}
+
+#[test]
+fn naming_a_node_just_made_rewrites_no_link() {
+    // 06 §5.5: the name typed right after creating is the rest of the step;
+    // a ghost the placeholder name resolved goes back to being a ghost.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[Задача]]"));
+    let task = create(&mut w, &root, NodeKind::Task, "Задача");
+    assert_eq!(links(&mut w, &root).0, vec![(note.clone(), task.clone())]);
+    w.amend(
+        &[Op::Rename {
+            id: task.clone(),
+            name: "Купить хлеб".to_owned(),
+        }],
+        Label::new("t.named"),
+    )
+    .expect("amend");
+    assert_eq!(text_of(&mut w, &note), "[[Задача]]");
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![], vec![(note, "Задача".to_owned())])
+    );
+}
+
+#[test]
+fn editors_learn_what_the_core_edited_while_it_keeps_it() {
+    // 15 §3.4: an editor asks with the number it last saw; one too old to
+    // be answered reads every open document again.
+    let mut w = ws();
+    let root = w.root();
+    let goal = create(&mut w, &root, NodeKind::Task, "Ц0");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[Ц0]]"));
+    assert_eq!(
+        w.edited(0),
+        crate::workspace::Edited {
+            seq: 0,
+            docs: Some(vec![])
+        }
+    );
+    for i in 1..=300 {
+        rename(&mut w, &goal, &format!("Ц{i}"));
+    }
+    let now = w.edited(0);
+    assert_eq!((now.seq, now.docs), (300, None), "older than what is kept");
+    assert_eq!(w.edited(299).docs, Some(vec![format!("content/{note}")]));
+    assert_eq!(text_of(&mut w, &note), "[[Ц300]]");
+}
+
+fn connect(w: &mut Workspace<MemoryStore>, from: &str, to: &str) {
+    w.apply(
+        &[Op::Connect {
+            from: from.to_owned(),
+            to: to.to_owned(),
+        }],
+        Label::new("t.wire"),
+    )
+    .expect("connect");
+}
+
+#[test]
+fn wires_that_leave_a_network_are_counted_and_rolled_up_to_its_bubbles() {
+    // 05 §8.3: «↗N» counts a node's wires whose other end is not placed in
+    // the network; a wire into a network placed here is drawn to its bubble
+    // as a roll-up wire with a count (06 §13.3) — only a view.
+    let mut w = ws();
+    let root = w.root();
+    let net = create(&mut w, &root, NodeKind::Network, "Сеть");
+    let away = create(&mut w, &root, NodeKind::Network, "В стороне");
+    let a = create(&mut w, &net, NodeKind::Note, "А");
+    let inner = create(&mut w, &net, NodeKind::Network, "Внутри");
+    let b = create(&mut w, &inner, NodeKind::Note, "Б");
+    let deep = create(&mut w, &inner, NodeKind::Network, "Глубже");
+    let c = create(&mut w, &deep, NodeKind::Note, "В");
+    let far = create(&mut w, &away, NodeKind::Note, "Далеко");
+    connect(&mut w, &a, &b);
+    connect(&mut w, &c, &a);
+    connect(&mut w, &far, &a);
+    connect(&mut w, &a, &inner);
+    let v = w.network_view(&net).expect("view");
+    let ext = |id: &str| v.nodes.iter().find(|n| n.id == id).map(|n| n.external);
+    assert_eq!(
+        ext(&a),
+        Some(3),
+        "Б, В and «Далеко» lie elsewhere; «Внутри» is here"
+    );
+    assert_eq!(ext(&inner), Some(0));
+    let rolled: Vec<(String, String, u32)> = v
+        .rollups
+        .iter()
+        .map(|r| (r.a.clone(), r.b.clone(), r.count))
+        .collect();
+    // А → Б and В → А, both ways, as one roll-up between А and «Внутри».
+    let (x, y) = if a < inner {
+        (&a, &inner)
+    } else {
+        (&inner, &a)
+    };
+    assert_eq!(
+        rolled,
+        vec![(x.clone(), y.clone(), 2)],
+        "«Далеко» is inside no network placed here"
+    );
+    assert_eq!(v.edges.len(), 1, "the real wire А → «Внутри» stays a wire");
+
+    // The list behind «↗3» (06 §14): inputs first, each with its path.
+    let list = w.external_wires(&net, &a).expect("external");
+    let rows: Vec<(&str, bool, Vec<&str>)> = list
+        .iter()
+        .map(|e| {
+            let path = e.path.iter().map(|(_, n)| n.as_str()).collect();
+            (e.name.as_str(), e.incoming, path)
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            ("В", true, vec!["Корень", "Сеть", "Внутри", "Глубже"]),
+            ("Далеко", true, vec!["Корень", "В стороне"]),
+            ("Б", false, vec!["Корень", "Сеть", "Внутри"]),
+        ]
+    );
+    assert!(list.iter().all(|e| e.manual && !e.text));
+    assert!(
+        w.external_wires(&net, &far).is_err(),
+        "«Далеко» is not placed in «Сеть»"
+    );
+
+    // An end in the trash counts for nothing.
+    w.apply(&[Op::Trash { ids: vec![far] }], Label::new("t.trash"))
+        .expect("trash");
+    let v = w.network_view(&net).expect("view");
+    assert_eq!(
+        v.nodes.iter().find(|n| n.id == a).map(|n| n.external),
+        Some(2)
+    );
+    let names: Vec<String> = w
+        .external_wires(&net, &a)
+        .expect("external")
+        .into_iter()
+        .map(|e| e.name)
+        .collect();
+    assert_eq!(names, ["В", "Б"]);
+}
+
+// ── Placements (05 §5, ADR-0002) ─────────────────────────────────────
+
+/// A clock that moves a millisecond with every step: «the oldest placement».
+fn ticking() -> i64 {
+    use std::sync::atomic::{AtomicI64, Ordering};
+    static T: AtomicI64 = AtomicI64::new(1_760_000_000_000);
+    T.fetch_add(1, Ordering::Relaxed)
+}
+
+fn op(w: &mut Workspace<MemoryStore>, op: Op) -> crate::workspace::Result<crate::Changeset> {
+    w.apply(&[op], Label::new("t.place"))
+}
+
+fn place(
+    w: &mut Workspace<MemoryStore>,
+    id: &str,
+    net: &str,
+) -> crate::workspace::Result<crate::Changeset> {
+    op(
+        w,
+        Op::Place {
+            id: id.to_owned(),
+            net: net.to_owned(),
+            x: 5.0,
+            y: 6.0,
+        },
+    )
+}
+
+fn shown(w: &mut Workspace<MemoryStore>, net: &str, id: &str) -> Option<(bool, u32)> {
+    w.network_view(net)
+        .expect("view")
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .map(|n| (n.appearance, n.places))
+}
+
+fn primary(w: &Workspace<MemoryStore>, id: &str) -> Option<String> {
+    w.node_details(id).expect("node").parent
+}
+
+#[test]
+fn a_node_appears_in_several_networks_with_one_primary() {
+    let mut w = ws();
+    w.set_clock(ticking);
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Network, "Игра");
+    let film = create(&mut w, &root, NodeKind::Network, "Фильм");
+    let refs = create(&mut w, &game, NodeKind::Note, "Референсы");
+    place(&mut w, &refs, &film).expect("«Разместить здесь»");
+    // One node, two placements: the primary at home, an appearance with «×2».
+    assert_eq!(shown(&mut w, &game, &refs), Some((false, 2)));
+    assert_eq!(shown(&mut w, &film, &refs), Some((true, 2)));
+    assert_eq!(primary(&w, &refs), Some(game.clone()));
+    let places = w.node_details(&refs).expect("node").places;
+    let nets: Vec<(&str, bool)> = places.iter().map(|p| (p.net.as_str(), p.primary)).collect();
+    assert_eq!(nets, [(game.as_str(), true), (film.as_str(), false)]);
+    assert_eq!(
+        places[1]
+            .path
+            .iter()
+            .map(|(_, n)| n.as_str())
+            .collect::<Vec<_>>(),
+        ["Корень", "Фильм"]
+    );
+    // Rule 3: once in a network.
+    assert!(place(&mut w, &refs, &film).is_err());
+    assert!(place(&mut w, &refs, &game).is_err());
+    // The tree keeps the node once, under its primary network.
+    let items: Vec<_> = w.tree().into_iter().filter(|i| i.id == refs).collect();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0].parent.as_deref(), Some(game.as_str()));
+}
+
+#[test]
+fn networks_nest_without_cycles() {
+    // Rule 4: not a network in itself or in a network inside it.
+    let mut w = ws();
+    let root = w.root();
+    let outer = create(&mut w, &root, NodeKind::Network, "Внешняя");
+    let inner = create(&mut w, &outer, NodeKind::Project, "Внутренняя");
+    let deep = create(&mut w, &inner, NodeKind::Network, "Глубокая");
+    assert!(place(&mut w, &outer, &outer).is_err());
+    assert!(place(&mut w, &outer, &inner).is_err());
+    assert!(place(&mut w, &outer, &deep).is_err(), "inside at any depth");
+    assert!(
+        place(&mut w, &root, &outer).is_err(),
+        "the root lies nowhere"
+    );
+    // An appearance makes a way down too: «Глубокая» in «Соседняя» puts
+    // «Соседняя» out of reach of «Глубокая».
+    let side = create(&mut w, &root, NodeKind::Network, "Соседняя");
+    place(&mut w, &deep, &side).expect("an appearance");
+    place(&mut w, &inner, &side).expect("a project in a folder beside");
+    assert!(place(&mut w, &side, &deep).is_err());
+    // A note takes no part in cycles.
+    let note = create(&mut w, &deep, NodeKind::Note, "Заметка");
+    place(&mut w, &note, &outer).expect("a note anywhere");
+}
+
+#[test]
+fn a_placement_goes_and_the_primary_falls_to_the_oldest_left() {
+    let mut w = ws();
+    w.set_clock(ticking);
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let c = create(&mut w, &root, NodeKind::Network, "В");
+    let n = create(&mut w, &a, NodeKind::Note, "Нода");
+    place(&mut w, &n, &c).expect("in В first");
+    place(&mut w, &n, &b).expect("in Б then");
+    // «Убрать отсюда» an appearance: the primary stays.
+    let unplace = |net: &str| Op::Unplace {
+        id: n.clone(),
+        net: net.to_owned(),
+    };
+    op(&mut w, unplace(&b)).expect("out of Б");
+    assert_eq!(shown(&mut w, &b, &n), None);
+    assert_eq!(primary(&w, &n), Some(a.clone()));
+    assert_eq!(shown(&mut w, &a, &n), Some((false, 2)));
+    // Out of its primary: the oldest placement left is the primary now.
+    place(&mut w, &n, &b).expect("in Б again, younger than В");
+    op(&mut w, unplace(&a)).expect("out of А");
+    assert_eq!(primary(&w, &n), Some(c.clone()));
+    assert_eq!(shown(&mut w, &c, &n), Some((false, 2)));
+    assert!(
+        op(&mut w, unplace(&a)).is_err(),
+        "not placed there any more"
+    );
+    // Undo brings the placement and the primary back.
+    w.undo().expect("undo");
+    assert_eq!(primary(&w, &n), Some(a.clone()));
+    assert_eq!(shown(&mut w, &a, &n), Some((false, 3)));
+}
+
+#[test]
+fn the_last_placement_out_sends_the_node_to_the_trash_and_back_there() {
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let n = create(&mut w, &folder, NodeKind::Task, "Задача");
+    op(
+        &mut w,
+        Op::Unplace {
+            id: n.clone(),
+            net: folder.clone(),
+        },
+    )
+    .expect("the last placement");
+    assert_eq!(shown(&mut w, &folder, &n), None);
+    assert_eq!(
+        w.trash().into_iter().map(|t| t.id).collect::<Vec<_>>(),
+        std::slice::from_ref(&n)
+    );
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![n.clone()],
+        },
+    )
+    .expect("restore");
+    assert_eq!(shown(&mut w, &folder, &n), Some((false, 1)));
+    // A locked node does not go by its last placement (05 §7).
+    flag(&mut w, &n, crate::Flag::Lock, true).expect("lock");
+    assert!(
+        op(
+            &mut w,
+            Op::Unplace {
+                id: n.clone(),
+                net: folder.clone()
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn make_primary_changes_the_path_not_the_node() {
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Network, "Игра");
+    let film = create(&mut w, &root, NodeKind::Network, "Фильм");
+    let refs = create(&mut w, &game, NodeKind::Network, "Референсы");
+    let inside = create(&mut w, &refs, NodeKind::Note, "Палитра");
+    place(&mut w, &refs, &film).expect("appear in Фильм");
+    let path = |w: &mut Workspace<MemoryStore>| -> Vec<String> {
+        w.network_view(&refs)
+            .expect("view")
+            .path
+            .into_iter()
+            .map(|(_, n)| n)
+            .collect()
+    };
+    assert_eq!(path(&mut w), ["Корень", "Игра", "Референсы"]);
+    op(
+        &mut w,
+        Op::SetPrimary {
+            id: refs.clone(),
+            net: film.clone(),
+        },
+    )
+    .expect("«Сделать основным»");
+    assert_eq!(primary(&w, &refs), Some(film.clone()));
+    assert_eq!(path(&mut w), ["Корень", "Фильм", "Референсы"]);
+    assert_eq!(shown(&mut w, &game, &refs), Some((true, 2)));
+    assert_eq!(
+        shown(&mut w, &refs, &inside),
+        Some((false, 1)),
+        "the content stays"
+    );
+    // Only where it lies.
+    let away = create(&mut w, &root, NodeKind::Network, "В стороне");
+    assert!(
+        op(
+            &mut w,
+            Op::SetPrimary {
+                id: refs.clone(),
+                net: away.clone()
+            }
+        )
+        .is_err()
+    );
+    w.undo().expect("undo");
+    w.undo().expect("undo");
+    assert_eq!(primary(&w, &refs), Some(game.clone()));
+}
+
+#[test]
+fn relocate_moves_the_placement_and_keeps_the_primary() {
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Network, "А");
+    let b = create(&mut w, &root, NodeKind::Network, "Б");
+    let n = create(&mut w, &a, NodeKind::Note, "Нода");
+    let relocate = |from: &str, to: &str| Op::Relocate {
+        id: n.clone(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+        x: 7.0,
+        y: 8.0,
+    };
+    op(&mut w, relocate(&a, &b)).expect("«Перенести»");
+    assert_eq!(shown(&mut w, &a, &n), None);
+    assert_eq!(shown(&mut w, &b, &n), Some((false, 1)));
+    assert_eq!(primary(&w, &n), Some(b.clone()));
+    let at = w.network_view(&b).expect("view").nodes;
+    assert_eq!((at[0].x, at[0].y), (7.0, 8.0));
+    // Where it lies already: the moved placement goes, the one there stays put.
+    place(&mut w, &n, &a).expect("an appearance in А");
+    op(
+        &mut w,
+        Op::Move {
+            net: a.clone(),
+            id: n.clone(),
+            x: 100.0,
+            y: 200.0,
+        },
+    )
+    .expect("move it there");
+    op(&mut w, relocate(&b, &a)).expect("relocate onto itself");
+    assert_eq!(shown(&mut w, &b, &n), None);
+    assert_eq!(
+        shown(&mut w, &a, &n),
+        Some((false, 1)),
+        "the primary went with it"
+    );
+    let at = w.network_view(&a).expect("view").nodes;
+    assert_eq!((at[0].x, at[0].y), (100.0, 200.0));
+    // No cycle by relocating either.
+    let inner = create(&mut w, &a, NodeKind::Network, "Внутри");
+    assert!(
+        op(
+            &mut w,
+            Op::Relocate {
+                id: a.clone(),
+                from: root.clone(),
+                to: inner.clone(),
+                x: 0.0,
+                y: 0.0
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn wrap_into_a_network_is_one_step() {
+    // 05 §4.2 «Обернуть в сеть»: a new network, the placements move inside.
+    let mut w = ws();
+    let root = w.root();
+    let a = create(&mut w, &root, NodeKind::Note, "А");
+    let b = create(&mut w, &root, NodeKind::Note, "Б");
+    let net = NodeId::new().to_text();
+    let mv = |id: &str| Op::Relocate {
+        id: id.to_owned(),
+        from: root.clone(),
+        to: net.clone(),
+        x: 0.0,
+        y: 0.0,
+    };
+    w.apply(
+        &[
+            Op::CreateNode {
+                id: Some(net.clone()),
+                kind: NodeKind::Network,
+                name: "Сеть".to_owned(),
+                net: root.clone(),
+                x: 0.0,
+                y: 0.0,
+            },
+            mv(&a),
+            mv(&b),
+        ],
+        Label::new("t.wrap"),
+    )
+    .expect("wrap");
+    assert_eq!(names(&mut w, &root), ["Сеть"]);
+    assert_eq!(names(&mut w, &net), ["А", "Б"]);
+    assert_eq!(primary(&w, &a), Some(net.clone()));
+    w.undo().expect("one step");
+    assert_eq!(names(&mut w, &root), ["А", "Б"]);
+}
+
+#[test]
+fn a_network_in_the_trash_takes_what_lives_only_inside_it() {
+    // 05 §5, ☑ Q-05-6: what lives nowhere else goes with it; a node placed
+    // elsewhere too only loses its placement inside.
+    let mut w = ws();
+    w.set_clock(ticking);
+    let root = w.root();
+    let sprint = create(&mut w, &root, NodeKind::Project, "Спринт");
+    let inner = create(&mut w, &sprint, NodeKind::Network, "Внутри");
+    let only = create(&mut w, &inner, NodeKind::Task, "Только здесь");
+    let shared = create(&mut w, &sprint, NodeKind::Note, "Общая");
+    let archive = create(&mut w, &root, NodeKind::Network, "Архив");
+    place(&mut w, &shared, &archive).expect("also in Архив");
+    // The dialog's preview (06 §12.3) takes nothing.
+    let p = w
+        .trash_preview(std::slice::from_ref(&sprint))
+        .expect("preview");
+    let mut gone: Vec<&str> = p.trashed.iter().map(|l| l.name.as_str()).collect();
+    gone.sort_unstable();
+    assert_eq!(gone, ["Внутри", "Спринт", "Только здесь"]);
+    let stays: Vec<(&str, Vec<&str>)> = p
+        .staying
+        .iter()
+        .map(|s| {
+            let path = s.path.iter().map(|(_, n)| n.as_str()).collect();
+            (s.node.name.as_str(), path)
+        })
+        .collect();
+    assert_eq!(stays, [("Общая", vec!["Корень", "Архив"])]);
+    assert!(w.trash().is_empty());
+    op(
+        &mut w,
+        Op::Trash {
+            ids: vec![sprint.clone()],
+        },
+    )
+    .expect("trash the sprint");
+    // One item in the trash: the rest comes back with it.
+    assert_eq!(
+        w.trash().into_iter().map(|t| t.name).collect::<Vec<_>>(),
+        ["Спринт"]
+    );
+    let live: Vec<String> = w.tree().into_iter().map(|i| i.name).collect();
+    assert!(!live.contains(&"Только здесь".to_owned()));
+    assert!(!live.contains(&"Внутри".to_owned()));
+    // The shared node stays in Архив, its primary now.
+    assert_eq!(primary(&w, &shared), Some(archive.clone()));
+    assert_eq!(shown(&mut w, &archive, &shared), Some((false, 1)));
+    // Back from the trash: the whole batch, the shared one stays where it is.
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![sprint.clone()],
+        },
+    )
+    .expect("restore");
+    assert_eq!(names(&mut w, &inner), ["Только здесь"]);
+    assert_eq!(shown(&mut w, &sprint, &shared), None);
+    // Undo gives everything back as it was.
+    w.undo().expect("undo the restore");
+    w.undo().expect("undo the trash");
+    assert_eq!(shown(&mut w, &sprint, &shared), Some((false, 2)));
+    assert_eq!(primary(&w, &shared), Some(sprint.clone()));
+    // A locked node inside keeps the network out of the trash (05 §7).
+    flag(&mut w, &only, crate::Flag::Lock, true).expect("lock");
+    assert!(
+        op(
+            &mut w,
+            Op::Trash {
+                ids: vec![sprint.clone()]
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn a_template_copies_its_appearances_as_appearances() {
+    // 05 §5: a network copied deep — what lives inside is copied, an
+    // appearance stays an appearance of the same node; one that would make
+    // a cycle is left out.
+    let mut w = ws();
+    let root = w.root();
+    let tpl = create(&mut w, &root, NodeKind::Project, "Шаблон");
+    let own = create(&mut w, &tpl, NodeKind::Task, "Своя");
+    let lib = create(&mut w, &root, NodeKind::Network, "Библиотека");
+    let guide = create(&mut w, &lib, NodeKind::Note, "Гайд");
+    place(&mut w, &guide, &tpl).expect("an appearance in the template");
+    connect(&mut w, &guide, &own);
+    let copy = w
+        .copy_node(&tpl, &root, (300.0, 0.0), &[], Label::new("t.copy"))
+        .expect("copy");
+    let v = w.network_view(&copy).expect("view");
+    let inside: Vec<(String, bool)> = v
+        .nodes
+        .iter()
+        .map(|n| (n.name.clone(), n.appearance))
+        .collect();
+    assert!(
+        inside.contains(&("Гайд".to_owned(), true)),
+        "the same node: {inside:?}"
+    );
+    assert!(inside.contains(&("Своя".to_owned(), false)));
+    assert!(v.nodes.iter().any(|n| n.id == guide));
+    assert_eq!(v.edges.len(), 1, "its wire to the copy comes too");
+    // The library placed inside the template would be a cycle in a copy put in the library.
+    place(&mut w, &lib, &tpl).expect("the library in the template");
+    let inner = w
+        .copy_node(&tpl, &lib, (0.0, 0.0), &[], Label::new("t.copy"))
+        .expect("a copy in the library");
+    let names: Vec<String> = w
+        .network_view(&inner)
+        .expect("view")
+        .nodes
+        .into_iter()
+        .map(|n| n.name)
+        .collect();
+    assert!(!names.contains(&"Библиотека".to_owned()), "{names:?}");
+}

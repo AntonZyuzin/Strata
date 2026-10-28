@@ -1,3 +1,4 @@
+import type { ViewGhost } from './core';
 import {
   type Core,
   type CoreFold,
@@ -14,10 +15,14 @@ import {
   Graph,
   type GraphEvent,
   type GraphNode,
+  ghostId,
+  ghostSpot,
+  isGhostId,
   lookOf,
   type NodeKind,
   newNode,
   type Op,
+  type Tx,
   today,
 } from './graph';
 
@@ -63,7 +68,7 @@ export function graphOf(
   g.kindColors = true;
   g.derive({ key: 'core.change.load' }, (tx) => {
     for (const n of view.nodes) {
-      const { id, kind, name, x, y, fold, ...attrs } = n;
+      const { id, kind, name, x, y, fold, external, appearance, places, ...attrs } = n;
       const node = newNode({
         id,
         name,
@@ -75,13 +80,40 @@ export function graphOf(
       });
       Object.assign(node, lookOf(node, day(), personColor));
       if (fold) node.fold = foldOf(fold, day());
+      node.external = external ?? 0;
+      node.appearance = appearance ?? false;
+      node.places = places ?? 1;
       tx.add(node);
     }
     for (const e of view.edges) tx.connect(e.from, e.to);
+    for (const ghost of view.ghosts) addGhost(g, tx, ghost, icon('note'));
     tx.wireShape(view.wire_style ?? null);
   });
+  g.setRollups(view.rollups);
   g.clearHistory();
   return g;
+}
+
+/**
+ * A ghost on the canvas (05 §8.5): a node of the canvas only, beside its
+ * note, with the wire of its link. The core keeps it as a wire.
+ */
+function addGhost(graph: Graph, tx: Tx, ghost: ViewGhost, icon: number): void {
+  const from = graph.nodes.get(ghost.from);
+  if (!from) return;
+  const id = ghostId(ghost.edge);
+  tx.add(
+    newNode({
+      id,
+      name: ghost.name,
+      kind: 'note',
+      icon,
+      ghost: true,
+      ghostOf: ghost.from,
+      ...ghostSpot(from, ghost.name),
+    }),
+  );
+  tx.connect(ghost.from, id);
 }
 
 /** A finished node: its own status is final (05 §6.3). */
@@ -94,10 +126,27 @@ export function opsOf(changeset: Changeset, net: string): CoreOp[] {
   const removed = new Set(changeset.ops.flatMap((op) => (op.t === 'remove' ? [op.id] : [])));
   const out: CoreOp[] = [];
   for (const op of changeset.ops) {
+    // A ghost is the core's wire, not a node: what happens to it on the
+    // canvas follows the note's text (05 §8.5).
+    if (touchesGhost(op)) continue;
     const core = opOf(op, net, removed);
     if (core) out.push(core);
   }
   return out;
+}
+
+function touchesGhost(op: Op): boolean {
+  switch (op.t) {
+    case 'add':
+      return isGhostId(op.node.id);
+    case 'connect':
+    case 'disconnect':
+      return isGhostId(op.from) || isGhostId(op.to);
+    case 'wireShape':
+      return false;
+    default:
+      return isGhostId(op.id);
+  }
 }
 
 function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
@@ -115,7 +164,8 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       };
     }
     case 'remove':
-      return { op: 'trash', ids: [op.id] };
+      // «Убрать отсюда»: the core sends the last placement's node to the trash (05 §5).
+      return op.everywhere ? { op: 'trash', ids: [op.id] } : { op: 'unplace', id: op.id, net };
     case 'move':
       return { op: 'move', net, id: op.id, x: op.x, y: op.y };
     case 'rename':
@@ -130,6 +180,8 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       return { op: 'setAttr', id: op.id, key: op.key, value: op.value };
     case 'assign':
       return { op: 'assign', id: op.id, person: op.person, on: op.on };
+    case 'flag':
+      return { op: 'setFlag', id: op.id, flag: op.flag, on: op.on };
     case 'wireShape':
       return { op: 'setWireStyle', net, style: op.value };
   }
@@ -215,6 +267,22 @@ export function followFolds(graph: Graph, view: NetworkView, day: string = graph
 }
 
 /**
+ * Brings «↗N», the roll-up wires and the appearances' marks to what the
+ * core says (05 §5, §8.3, 06 §12.2, §13.3): a wire, a placement or the
+ * trash elsewhere changes them, which only the core sees. Derived state,
+ * outside undo.
+ */
+export function followExternal(graph: Graph, view: NetworkView): void {
+  for (const n of view.nodes) {
+    graph.setExternal(n.id, n.external ?? 0);
+    // A placement made or taken away elsewhere: the shortcut and «×N» (05 §5).
+    graph.setPlacement(n.id, n.appearance ?? false, n.places ?? 1);
+  }
+  // Bubbles the graph no longer has (a step since the question) draw nothing.
+  graph.setRollups(view.rollups.filter((r) => graph.nodes.has(r.a) && graph.nodes.has(r.b)));
+}
+
+/**
  * Brings link assets to their previews from the core (05 §4.4, ✅ Q-13-16),
  * outside undo: the picture, and the page's title for a link the user has
  * not named. The core's step of the system, read back.
@@ -240,10 +308,36 @@ export function followWires(graph: Graph, view: NetworkView): void {
   const want = new Set(view.edges.map((e) => `${e.from}\u0000${e.to}`));
   graph.derive({ key: 'core.change.links' }, (tx) => {
     for (const [from, to] of graph.edges()) {
+      // Ghosts' wires are `followGhosts`'.
+      if (isGhostId(to)) continue;
       if (!want.has(`${from}\u0000${to}`)) tx.disconnect(from, to);
     }
     for (const e of view.edges) {
       if (!graph.hasEdge(e.from, e.to)) tx.connect(e.from, e.to);
+    }
+  });
+}
+
+/**
+ * Brings the canvas's ghosts to what the core says, outside undo (05 §8.5):
+ * a `[[link]]` to no node gets its ghost, a ghost whose link went or found
+ * its node goes, a renamed one follows the text. Each stands beside its note.
+ */
+export function followGhosts(graph: Graph, view: NetworkView, icon: number): void {
+  const want = new Map(view.ghosts.map((g) => [ghostId(g.edge), g]));
+  graph.derive({ key: 'core.change.links' }, (tx) => {
+    for (const n of [...graph.nodes.values()]) {
+      if (n.ghostOf === null) continue;
+      const g = want.get(n.id);
+      if (!g || g.from !== n.ghostOf) {
+        tx.remove(n.id);
+        continue;
+      }
+      if (n.name !== g.name) tx.rename(n.id, g.name);
+      if (!graph.hasEdge(g.from, n.id)) tx.connect(g.from, n.id);
+    }
+    for (const [id, g] of want) {
+      if (!graph.nodes.has(id)) addGhost(graph, tx, g, icon);
     }
   });
 }

@@ -6,7 +6,8 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::workspace::{
-    History, NetworkView, NodeDetails, Person, TrashItem, TreeItem, WireEnds, Workspace,
+    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, TrashItem, TrashPreview,
+    TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -29,12 +30,28 @@ pub enum Request {
         #[serde(default)]
         amend: bool,
     },
+    /// A copy of a node at (x, y) in `net`, everything inside it too: a
+    /// template chosen in the Tab menu (05 §7); `inputs` wire into it. One
+    /// step of undo.
+    CopyNode {
+        from: String,
+        net: String,
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        inputs: Vec<String>,
+        label: Label,
+    },
     Undo,
     Redo,
     /// The last step reverted and forgotten: a gesture cancelled with Esc.
     Cancel,
     History,
     Trash,
+    /// What trashing `ids` would take, without taking it (06 §12.3).
+    TrashPreview {
+        ids: Vec<String>,
+    },
     /// A content document for an editor (`content/<id>`).
     OpenDoc {
         doc: String,
@@ -44,6 +61,17 @@ pub enum Request {
         doc: String,
         update: String,
     },
+    /// What a content document has that an editor at `since` — its Loro
+    /// version vector, encoded, in base64 — has not: the core's own edits.
+    PullDoc {
+        doc: String,
+        since: String,
+    },
+    /// The content documents the core changed after its edit `since`: the
+    /// links a rename rewrote (13 §6.5).
+    Edited {
+        since: u64,
+    },
     /// One node for the properties panel.
     Node {
         id: String,
@@ -52,6 +80,11 @@ pub enum Request {
     Tree,
     /// Every live wire, for the star map (08 §10).
     Wires,
+    /// The wires of `id` in `net` to nodes not placed there: «↗N» (05 §8.3).
+    External {
+        net: String,
+        id: String,
+    },
     People,
     /// A picture or a file, in base64; answers its SHA-256.
     PutAsset {
@@ -78,6 +111,11 @@ pub enum Response {
         changeset: Option<String>,
         history: History,
     },
+    /// The copy is made: its id, the undo and redo steps after it.
+    Copied {
+        id: String,
+        history: History,
+    },
     /// An undo or redo: `None` when there was nothing to undo or redo.
     Reverted {
         report: Option<RevertReport>,
@@ -89,6 +127,9 @@ pub enum Response {
     Trash {
         items: Vec<TrashItem>,
     },
+    TrashPreview {
+        preview: TrashPreview,
+    },
     /// A content document as a Loro snapshot in base64.
     Doc {
         doc: String,
@@ -98,6 +139,14 @@ pub enum Response {
     Pushed {
         wires: bool,
     },
+    /// Updates of a content document for an editor, in base64; empty — none.
+    Updates {
+        doc: String,
+        update: String,
+    },
+    Edited {
+        edited: Edited,
+    },
     Node {
         node: Box<NodeDetails>,
     },
@@ -106,6 +155,9 @@ pub enum Response {
     },
     Wires {
         wires: Vec<WireEnds>,
+    },
+    External {
+        wires: Vec<ExternalWire>,
     },
     People {
         people: Vec<Person>,
@@ -141,6 +193,19 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 history: ws.history(),
             })
         }
+        Request::CopyNode {
+            from,
+            net,
+            x,
+            y,
+            inputs,
+            label,
+        } => ws
+            .copy_node(&from, &net, (x, y), &inputs, label)
+            .map(|id| Response::Copied {
+                id,
+                history: ws.history(),
+            }),
         Request::Undo => ws.undo().map(|report| Response::Reverted {
             report,
             history: ws.history(),
@@ -163,11 +228,24 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 .map(|wires| Response::Pushed { wires }),
             Err(e) => Err(crate::CoreError::Invalid(format!("update: {e}"))),
         },
+        Request::PullDoc { doc, since } => match B64.decode(since) {
+            Ok(vv) => ws.doc_updates(&doc, &vv).map(|bytes| Response::Updates {
+                doc,
+                update: B64.encode(bytes),
+            }),
+            Err(e) => Err(crate::CoreError::Invalid(format!("since: {e}"))),
+        },
+        Request::Edited { since } => Ok(Response::Edited {
+            edited: ws.edited(since),
+        }),
         Request::Node { id } => ws.node_details(&id).map(|node| Response::Node {
             node: Box::new(node),
         }),
         Request::Tree => Ok(Response::Tree { items: ws.tree() }),
         Request::Wires => Ok(Response::Wires { wires: ws.wires() }),
+        Request::External { net, id } => ws
+            .external_wires(&net, &id)
+            .map(|wires| Response::External { wires }),
         Request::People => Ok(Response::People {
             people: ws.people(),
         }),
@@ -188,6 +266,9 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             history: ws.history(),
         }),
         Request::Trash => Ok(Response::Trash { items: ws.trash() }),
+        Request::TrashPreview { ids } => ws
+            .trash_preview(&ids)
+            .map(|preview| Response::TrashPreview { preview }),
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, crate::CoreError::Invalid(_)),
@@ -239,6 +320,41 @@ mod tests {
         let undone = ask(&mut ws, json!({ "call": "undo" }));
         assert_eq!(undone["type"], "reverted");
         assert_eq!(undone["history"]["redo"]["key"], "proto.change.create");
+    }
+
+    #[test]
+    fn an_editor_pulls_what_the_core_edited() {
+        // 15 §3.4: `edited` names the documents, `pullDoc` gives the updates
+        // an editor at its version vector has not seen.
+        let mut ws = Workspace::create(MemoryStore::default(), "Root").expect("create");
+        let root = ws.root();
+        let note = strata_model::NodeId::new().to_text();
+        ask(
+            &mut ws,
+            json!({ "call": "apply", "label": { "key": "t" },
+                    "ops": [{ "op": "createNode", "id": note, "kind": "note", "name": "A", "net": root, "x": 0, "y": 0 }] }),
+        );
+        let doc = format!("content/{note}");
+        let edited = ask(&mut ws, json!({ "call": "edited", "since": 0 }));
+        assert_eq!(edited["edited"], json!({ "seq": 0, "docs": [] }));
+        let editor = loro::LoroDoc::new();
+        let since = B64.encode(editor.oplog_vv().encode());
+        let pulled = ask(
+            &mut ws,
+            json!({ "call": "pullDoc", "doc": doc, "since": since }),
+        );
+        assert_eq!(pulled["type"], "updates");
+        let bytes = B64
+            .decode(pulled["update"].as_str().expect("update"))
+            .expect("base64");
+        if !bytes.is_empty() {
+            editor.import(&bytes).expect("import");
+        }
+        let bad = ask(
+            &mut ws,
+            json!({ "call": "pullDoc", "doc": doc, "since": "!" }),
+        );
+        assert_eq!(bad["invalid"], true);
     }
 
     #[test]

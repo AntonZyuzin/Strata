@@ -20,7 +20,7 @@ in vec2 aPosition;   // x: t in [0, 1], y: side -1 / +1
 in vec4 aHead;       // per wire: the first two control points, world units
 in vec4 aTail;       // per wire: the last two control points, world units
 in vec4 aColor;      // per wire: premultiplied later; rgb and alpha
-in vec4 aStyle;      // per wire: x stroke width in CSS px, y running dot 0 or 1, z dash in u (0 solid)
+in vec4 aStyle;      // per wire: x stroke width in CSS px, y running dot 0 or 1, z dash in u (0 solid), w serifs 0 or 1
 
 uniform mat3 uProjectionMatrix;
 uniform mat3 uWorldTransformMatrix;
@@ -60,9 +60,9 @@ void main() {
   if (dot(tg, tg) < 1e-12) tg = b - a;
   vec2 normal = normalize(vec2(-tg.y, tg.x) + vec2(1e-6, 0.0));
   float width = aStyle.x;
-  // A dashed wire carries serifs 3u to each side (07 5): the strip is that wide.
+  // A dashed wire may carry serifs 3u to each side (07 5): the strip is that wide.
   vDash = aStyle.z * uUnit;
-  vSerif = aStyle.z > 0.0 ? 3.0 * uUnit : 0.0;
+  vSerif = aStyle.z > 0.0 && aStyle.w > 0.5 ? 3.0 * uUnit : 0.0;
   float reach = max(width, 2.0 * vSerif);
   // Half a pixel of feathering on each side for antialiasing.
   p += normal * aPosition.y * ((reach + 1.0) * 0.5 / uZoom);
@@ -96,7 +96,7 @@ void main() {
   float on = 1.0;
   if (vDash > 0.0) {
     float at = mod(vRun, 2.0 * vDash);
-    float serif = (1.0 - step(vDash * 0.25, at)) * (1.0 - smoothstep(vSerif - 0.5, vSerif + 0.5, abs(vPx)));
+    float serif = vSerif > 0.0 ? (1.0 - step(vDash * 0.25, at)) * (1.0 - smoothstep(vSerif - 0.5, vSerif + 0.5, abs(vPx))) : 0.0;
     on = max(step(at, vDash) * edge, serif);
     edge = 1.0;
   }
@@ -112,8 +112,10 @@ export interface WireStyle {
   /** Stroke width, CSS px. */
   width: number;
   dot: boolean;
-  /** Dashes and gaps of this many pixel units u, with serifs across (07 §5, scissors); none — solid. */
+  /** Dashes and gaps of this many pixel units u (07 §5); none — solid. */
   dash?: number;
+  /** Serifs across every dash and gap: the wires the scissors cross (06 §6.7). */
+  serifs?: boolean;
 }
 
 export class WireLayer {
@@ -201,6 +203,7 @@ export class WireLayer {
     this.style[i * 4] = s.width;
     this.style[i * 4 + 1] = s.dot ? 1 : 0;
     this.style[i * 4 + 2] = s.dash ?? 0;
+    this.style[i * 4 + 3] = s.serifs ? 1 : 0;
   }
 
   /** Sends the arrays to the GPU; only the used part (15 §4.1 rule 4). */

@@ -1,9 +1,10 @@
-import type { GraphNode } from '@strata/backend';
+import type { Flag, GraphNode } from '@strata/backend';
 import { fog, type GlyphName, hex, palette, people } from '@strata/design-tokens';
 import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
 import { controls } from './curve';
+import { RING_DELAY_MS, ringSlots, SLOT_U } from './flagring';
 import { chordOf, HEX_IN, perimeterAngle, rimAt } from './hex';
 import {
   arrowOn,
@@ -34,6 +35,13 @@ export interface Interaction {
   hover: string | null;
   selection: ReadonlySet<string>;
   current: string | null;
+  /** The nodes a search matched; the rest are dimmed (07 §4.5). */
+  lens?: ReadonlySet<string> | null;
+  /**
+   * The flag ring (06 §8): the bubble the cursor rests on since `since`, and
+   * the slot under it; hidden while `Ctrl` is held.
+   */
+  ring?: { id: string; since: number; slot: Flag | null } | null;
 }
 
 export interface DecorNode {
@@ -74,6 +82,21 @@ const ARROW = { length: 10, half: 5 };
 const MID = { t: 0.6, length: 8, half: 4 };
 /** Half-size of a rim glyph: 8u picture on a 2u plate (textures.ts). */
 const GLYPH_REACH = 6;
+/** The least click target of a mark on the rim, CSS px (07 §4.10, WCAG 2.5.8). */
+const TARGET = 24;
+
+/** A rim mark one clicks: «↗N» (06 §14) or an appearance's shortcut (06 §12.2). */
+export type RimTarget = 'external' | 'places';
+
+interface RimTargetHit {
+  id: string;
+  mark: RimTarget;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
 const CORNERS = [
   [-1, -1],
   [1, -1],
@@ -103,6 +126,13 @@ export class Decor {
   private plateUsed = 0;
   private badgeUsed = 0;
   private textUsed = 0;
+  /**
+   * Where each rim mark one clicks was drawn this frame, CSS px of the
+   * canvas, keyed `{mark}:{node}`: «↗N» (06 §14) and an appearance's
+   * shortcut (06 §12.2). Targets of at least 24 px (07 §4.10), only while
+   * the glyphs show (d ≥ 32 px).
+   */
+  private readonly marks = new Map<string, RimTargetHit>();
   private antsFor: string | null = null;
   private antsStart = 0;
   reducedMotion = false;
@@ -158,8 +188,11 @@ export class Decor {
     h: number,
     ia: Interaction,
     now: number,
+    /** The «×N» of the roll-up wires at their middles, world units (06 §13.3). */
+    counts: readonly { x: number; y: number; text: string }[] = [],
   ): boolean {
     const g = this.g;
+    this.marks.clear();
     const rings = this.rings;
     g.clear();
     this.hatching.clear();
@@ -178,9 +211,11 @@ export class Decor {
       this.antsFor = ia.current;
       this.antsStart = now;
     }
+    let ringAt: { x: number; y: number; R: number; n: GraphNode } | null = null;
     for (const v of nodes) {
       const s = cam.toScreen(v.x, v.y);
       const R = v.r * cam.zoom;
+      if (ia.ring?.id === v.id) ringAt = { x: s.x, y: s.y, R, n: v.node };
       // A node's rims and rings are hexagons (ADR-0011): offsets go square to the sides.
       const Rin = R * HEX_IN;
       const rim = (offset: number, width: number, style: RingStyle) =>
@@ -190,7 +225,8 @@ export class Decor {
       const lv = levelOf(2 * R);
       if (lv === 'dot') continue;
       const n = v.node;
-      const a = nodeAlpha(n);
+      const a =
+        ia.lens && !ia.lens.has(v.id) ? Math.min(nodeAlpha(n), fog.scene.lensAlpha) : nodeAlpha(n);
       const selected = ia.selection.has(v.id);
       const hovered = ia.hover === v.id;
       const closed = isClosed(n);
@@ -381,11 +417,45 @@ export class Decor {
           flagHour += 1;
         }
         if (n.template) this.badge('template', 'ink', ...slot(flagHour));
-        if (n.appearance) this.badge('shortcut', 'ink', ...slot(7.5));
+        // The shortcut of an appearance always, «×N» on hover (06 §12.2);
+        // the hour is taken only when something stands on it.
+        const counted = hovered && n.places > 1;
+        const [px, py] = n.appearance || counted ? slot(7.5) : [0, 0];
+        if (n.appearance) this.badge('shortcut', 'ink', px, py);
+        const half = Math.max(TARGET / 2, GLYPH_REACH * U);
+        let x0 = px - half;
+        if (counted) {
+          const label = `×${n.places}`;
+          const t = this.text(label, px, py - this.uiCss / 2);
+          // Left of the mark: the 7–8 o'clock side is the bubble's outer one.
+          const left = this.snap(px - (n.appearance ? GLYPH_REACH * U + U : 0) - t.width);
+          t.position.x = left;
+          this.plate(left - U, t.position.y - U, t.width + 2 * U, this.uiCss + 2 * U);
+          x0 = Math.min(x0, left - U);
+        }
+        // A click on it opens «Где размещена» (06 §12.2).
+        if (n.appearance || counted) {
+          this.marks.set(`places:${v.id}`, {
+            id: v.id,
+            mark: 'places',
+            x0,
+            y0: py - half,
+            x1: px + half,
+            y1: py + half,
+          });
+        }
         if (n.external > 0) {
           const [ex, ey] = slot(1.5);
           this.badge('external', 'ink', ex, ey);
-          this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
+          const count = this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
+          this.marks.set(`external:${v.id}`, {
+            id: v.id,
+            mark: 'external',
+            x0: ex - half,
+            y0: ey - half,
+            x1: Math.max(ex + half, ex + 7 * U + count.width + U),
+            y1: ey + half,
+          });
         }
         if (!n.ghost && this.kindBadge) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
       }
@@ -405,6 +475,50 @@ export class Decor {
           dated.add(v.id);
         }
       }
+    }
+    // The flag ring over everything of its bubble, once the cursor has rested (06 §8).
+    const ring = ia.ring;
+    if (ring && ringAt) {
+      if (now - ring.since < RING_DELAY_MS) {
+        animating = true;
+      } else {
+        const on: Record<Flag, boolean> = {
+          key: ringAt.n.key,
+          pause: ringAt.n.pause,
+          template: ringAt.n.template,
+          hideAi: false,
+          lock: false,
+        };
+        // A 16u slot: the 8u glyph with a 4u margin; a flag that is on inverts it.
+        const pad = (SLOT_U - 8) / 2;
+        for (const slot of ringSlots(ringAt.x, ringAt.y, ringAt.R, U)) {
+          const flag = slot.flag;
+          this.badge(
+            RING_GLYPH[flag],
+            on[flag] ? 'paper' : 'ink',
+            slot.x,
+            slot.y,
+            1,
+            1,
+            !on[flag],
+            pad,
+          );
+          if (ring.slot === flag) {
+            const half = (SLOT_U / 2 + 1) * U;
+            g.rect(slot.x - half, slot.y - half, 2 * half, 2 * half);
+            corners = true;
+          }
+        }
+      }
+    }
+    // «×N» of the roll-up wires on a plate at their middles (07 §5, 06 §13.3).
+    for (const c of counts) {
+      const p = cam.toScreen(c.x, c.y);
+      if (p.x < -40 * U || p.x > w + 40 * U || p.y < -40 * U || p.y > h + 40 * U) continue;
+      const t = this.text(c.text, p.x, p.y - this.uiCss / 2);
+      const left = this.snap(p.x - t.width / 2);
+      t.position.x = left;
+      this.plate(left - 2 * U, t.position.y - U, t.width + 4 * U, this.uiCss + 2 * U);
     }
     if (corners) g.stroke({ width: U, color: ACCENT });
     if (hatched) this.hatching.stroke({ width: U, color: INK, alpha: 0.5 * fog.scene.pauseAlpha });
@@ -435,6 +549,7 @@ export class Decor {
     scale = 1,
     alpha = 1,
     paper = plate === 'ink',
+    pad = 2,
   ): void {
     let sprite = this.badgePool[this.badgeUsed];
     if (!sprite) {
@@ -443,7 +558,7 @@ export class Decor {
       this.badges.addChild(sprite);
     }
     this.badgeUsed++;
-    const tex = this.glyphs.get(name, plate, scale, paper);
+    const tex = this.glyphs.get(name, plate, scale, paper, pad);
     sprite.texture = tex;
     sprite.position.set(this.snap(cx - tex.width / 2), this.snap(cy - tex.height / 2));
     sprite.alpha = alpha;
@@ -464,7 +579,31 @@ export class Decor {
     sprite.visible = true;
   }
 
-  private text(str: string, x: number, y: number): void {
+  /**
+   * The rim mark at (x, y), CSS px of the canvas, as drawn in the last
+   * frame; of two, the one whose centre is nearer.
+   */
+  markAt(x: number, y: number): { id: string; mark: RimTarget } | null {
+    let best: RimTargetHit | null = null;
+    let near = Number.POSITIVE_INFINITY;
+    for (const r of this.marks.values()) {
+      if (x < r.x0 || x > r.x1 || y < r.y0 || y > r.y1) continue;
+      const d = Math.hypot(x - (r.x0 + r.x1) / 2, y - (r.y0 + r.y1) / 2);
+      if (d < near) {
+        near = d;
+        best = r;
+      }
+    }
+    return best ? { id: best.id, mark: best.mark } : null;
+  }
+
+  /** The middle of node `id`'s mark as drawn in the last frame, CSS px; for tests. */
+  markOf(id: string, mark: RimTarget): { x: number; y: number } | null {
+    const r = this.marks.get(`${mark}:${id}`);
+    return r ? { x: (r.x0 + r.x1) / 2, y: (r.y0 + r.y1) / 2 } : null;
+  }
+
+  private text(str: string, x: number, y: number): BitmapText {
     let t = this.textPool[this.textUsed];
     if (!t) {
       t = this.makeText(false);
@@ -475,6 +614,7 @@ export class Decor {
     if (t.text !== str) t.text = str;
     t.position.set(this.snap(x), this.snap(y));
     t.visible = true;
+    return t;
   }
 
   private makeText(large: boolean): BitmapText {
@@ -549,6 +689,13 @@ function onRim(s: { x: number; y: number }, R: number, angle: number): [number, 
   const r = R * rimAt(angle);
   return [s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r];
 }
+
+/** The ring's slots (07 §4.8): ★ key, ‖ pause, the stencil of a template. */
+const RING_GLYPH: Record<'key' | 'pause' | 'template', GlyphName> = {
+  key: 'star',
+  pause: 'pause',
+  template: 'template',
+};
 
 function kindGlyph(n: GraphNode, big: boolean): GlyphName {
   return big ? n.kind : `${n.kind}-8`;

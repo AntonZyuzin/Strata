@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Glyph } from './TabBar';
 
 /**
  * A context menu (07 §8.2: `surface-raised`, 1u frame, `shadow-menu`, rows
@@ -14,6 +15,8 @@ export interface MenuEntry {
   disabled?: boolean | undefined;
   /** A line above this entry. */
   separated?: boolean;
+  /** An entry that is on or off, as a flag (06 §8): a tick on the left. */
+  checked?: boolean | undefined;
   onSelect: () => void;
 }
 
@@ -28,6 +31,8 @@ export function ContextMenu(props: {
   const box = useRef<HTMLDivElement>(null);
   const [at, setAt] = useState({ x: props.x, y: props.y });
   const [current, setCurrent] = useState(() => items.findIndex((i) => !i.disabled));
+  // Ticks take a column of their own, so every label starts in one line.
+  const ticks = items.some((i) => i.checked !== undefined);
 
   // Inside the window: flip left or up when the menu would leave it.
   useLayoutEffect(() => {
@@ -73,6 +78,7 @@ export function ContextMenu(props: {
       role="menu"
       aria-label={props.label}
       tabIndex={-1}
+      data-ticks={ticks || undefined}
       style={{ left: at.x, top: at.y }}
       onContextMenu={(e) => e.preventDefault()}
       onKeyDown={(e) => {
@@ -85,30 +91,50 @@ export function ContextMenu(props: {
         e.preventDefault();
       }}
     >
-      {items.map((item, i) => (
-        <div
-          key={item.label}
-          role="menuitem"
-          tabIndex={-1}
-          aria-disabled={item.disabled || undefined}
-          className={[
+      {items.map((item, i) => {
+        const row = {
+          'aria-disabled': item.disabled || undefined,
+          className: [
             'context-menu-row',
             i === current ? 'is-current' : '',
             item.separated ? 'is-separated' : '',
             item.disabled ? 'is-disabled' : '',
           ]
             .filter(Boolean)
-            .join(' ')}
-          onPointerEnter={() => !item.disabled && setCurrent(i)}
-          onClick={() => choose(i)}
-          onKeyDown={() => undefined}
-        >
-          <span className="context-menu-label" title={item.label}>
-            {item.label}
-          </span>
-          {item.hint ? <span className="context-menu-hint">{item.hint}</span> : null}
-        </div>
-      ))}
+            .join(' '),
+          onPointerEnter: () => !item.disabled && setCurrent(i),
+          onClick: () => choose(i),
+          onKeyDown: () => undefined,
+        };
+        const body = (
+          <>
+            {ticks ? (
+              <span className="context-menu-tick">
+                {item.checked ? <Glyph name="check" /> : null}
+              </span>
+            ) : null}
+            <span className="context-menu-label" title={item.label}>
+              {item.label}
+            </span>
+            {item.hint ? <span className="context-menu-hint">{item.hint}</span> : null}
+          </>
+        );
+        return item.checked === undefined ? (
+          <div key={item.label} role="menuitem" tabIndex={-1} {...row}>
+            {body}
+          </div>
+        ) : (
+          <div
+            key={item.label}
+            role="menuitemcheckbox"
+            aria-checked={item.checked}
+            tabIndex={-1}
+            {...row}
+          >
+            {body}
+          </div>
+        );
+      })}
     </div>
   );
 }

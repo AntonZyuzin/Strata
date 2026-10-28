@@ -4,6 +4,7 @@ import {
   formatDate,
   formatTime,
   joinWhen,
+  loadPrefs,
   parseDate,
   parseTime,
   reading,
@@ -21,6 +22,11 @@ describe('dates and times of the settings (✅ Q-06-23, 05 §6.1)', () => {
       date: 'dmy.',
       clock: '24',
     });
+  });
+
+  it('show the flag ring always until told otherwise (06 §8)', () => {
+    // No storage here: the defaults.
+    expect(loadPrefs('ru')).toEqual({ locale: 'ru', date: 'auto', clock: 'auto', ring: 'always' });
   });
 
   it('show a stored day in the chosen order', () => {

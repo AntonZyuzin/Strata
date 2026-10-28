@@ -1,7 +1,17 @@
 import { glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { type Group, type MenuItem, type MenuNode, menuItems } from './menu';
+import { pointerMoved } from '../pointer';
+import {
+  type Group,
+  type MenuGhost,
+  type MenuItem,
+  type MenuNode,
+  type MenuRanking,
+  type MenuSearch,
+  menuItems,
+  rankMenu,
+} from './menu';
 
 /**
  * Tab menu (06 §5, 07 §8.2): a window without a title bar, 52 ch of the UI font
@@ -12,6 +22,19 @@ import { type Group, type MenuItem, type MenuNode, menuItems } from './menu';
 
 const MARGIN = 8;
 
+let openings = 0;
+
+/**
+ * A serial for each opening of the menu, its React `key`. A choice made once
+ * the engine answers closes the menu in a later render, and a `Tab` typed
+ * before that render opens the next one in the same batch: without a key of
+ * its own the new menu would be the old one, its query and all.
+ */
+export function menuOpening(): number {
+  openings += 1;
+  return openings;
+}
+
 export function TabMenu(props: {
   locale: Locale;
   x: number;
@@ -20,17 +43,56 @@ export function TabMenu(props: {
   bounds?: { right: number; bottom: number } | undefined;
   initialQuery: string;
   nodes: readonly MenuNode[];
+  /** The workspace's nodes: another network's one is placed here (05 §5). */
+  space?: readonly MenuNode[] | undefined;
   recent: readonly string[];
+  /** Nodes with the flag «Шаблон» (05 §7), from the whole workspace. */
+  templates?: readonly MenuNode[] | undefined;
+  /** This network's ghosts (05 §8.5). */
+  ghosts?: readonly MenuGhost[] | undefined;
+  /** A ghost's name, clicked with Shift: the kinds for it (06 §14). */
+  named?: string | undefined;
+  /** The search engine (09 §2): it ranks what a query matches. */
+  search: MenuSearch;
   onChoose: (item: MenuItem) => void;
   onCancel: () => void;
 }) {
-  const { locale } = props;
+  const { locale, search, templates, ghosts, named, space } = props;
   const [query, setQuery] = useState(props.initialQuery);
   const [index, setIndex] = useState(0);
+  const [moved] = useState(pointerMoved);
+  // The engine answers in its worker: the rows stay those of the last
+  // answer until the next one comes, and `Enter` waits for the query's own.
+  const [ranking, setRanking] = useState<MenuRanking | null>(null);
+  /** `Enter` (the current row) or `Alt+Enter` (the best existing node) typed before the answer. */
+  const [waiting, setWaiting] = useState<'current' | 'insert' | null>(null);
+  useEffect(() => {
+    if (query.trim() === '') return;
+    let live = true;
+    void rankMenu(search, query, templates ?? [], ghosts ?? []).then((r) => {
+      if (live) setRanking(r);
+    });
+    return () => {
+      live = false;
+    };
+  }, [search, query, templates, ghosts]);
+  const shown = query.trim() === '' ? query : (ranking?.query ?? query);
   const items = useMemo(
-    () => menuItems(locale, query, props.nodes, props.recent),
-    [locale, query, props.nodes, props.recent],
+    () =>
+      menuItems(
+        locale,
+        shown,
+        props.nodes,
+        props.recent,
+        templates,
+        ranking,
+        ghosts,
+        named ?? null,
+        space,
+      ),
+    [locale, shown, props.nodes, props.recent, templates, ranking, ghosts, named, space],
   );
+  const ready = query.trim() === '' || ranking?.query === query;
   const input = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: props.x, top: props.y });
@@ -53,8 +115,27 @@ export function TabMenu(props: {
   }, [props.x, props.y, items.length]);
 
   const current = items[Math.min(index, items.length - 1)];
+  // `Enter` typed before the engine's answer chooses once it comes.
+  const { onChoose } = props;
+  useEffect(() => {
+    if (!waiting || !ready) return;
+    const how = waiting;
+    setWaiting(null);
+    if (how === 'insert') {
+      const best = items.find((i) => i.group === 'insert');
+      if (best) onChoose(best);
+      return;
+    }
+    if (current) onChoose(current);
+  }, [waiting, ready, current, items, onChoose]);
 
   const onKey = (e: React.KeyboardEvent) => {
+    // `Enter` chose the query as it was: what is typed until the answer
+    // comes would change a choice already made; only `Esc` takes it back.
+    if (waiting && e.key !== 'Escape') {
+      e.preventDefault();
+      return;
+    }
     const n = items.length;
     switch (e.key) {
       case 'ArrowDown':
@@ -74,10 +155,18 @@ export function TabMenu(props: {
         e.preventDefault();
         setIndex((i) => Math.max(0, i - 5));
         return;
-      case 'Enter':
+      case 'Enter': {
         e.preventDefault();
-        if (current) props.onChoose(current);
+        // `Alt+Enter` — an appearance of the best existing match (06 §5.3).
+        const how = e.altKey ? 'insert' : 'current';
+        if (!ready) {
+          setWaiting(how);
+          return;
+        }
+        const pick = how === 'insert' ? items.find((i) => i.group === 'insert') : current;
+        if (pick) props.onChoose(pick);
         return;
+      }
       case 'Escape':
         e.preventDefault();
         props.onCancel();
@@ -108,6 +197,8 @@ export function TabMenu(props: {
             title={t(locale, 'menu.footer')}
             spellCheck={false}
             autoComplete="off"
+            readOnly={waiting !== null}
+            aria-busy={waiting !== null}
             onChange={(e) => {
               setQuery(e.target.value);
               setIndex(0);
@@ -116,7 +207,7 @@ export function TabMenu(props: {
           />
         </div>
         <div className="tab-menu-list" role="listbox" aria-label={t(locale, 'menu.query')}>
-          {items.length === 0 ? (
+          {items.length === 0 && ready ? (
             <div className="tab-menu-empty">{t(locale, 'menu.nothing', { q: query })}</div>
           ) : null}
           {items.map((item, i) => {
@@ -135,7 +226,9 @@ export function TabMenu(props: {
                 tabIndex={-1}
                 aria-selected={i === index}
                 className={i === index ? 'tab-menu-row is-current' : 'tab-menu-row'}
-                onPointerEnter={() => setIndex(i)}
+                onPointerMove={(e) => {
+                  if (moved(e)) setIndex(i);
+                }}
                 onPointerDown={(e) => {
                   e.preventDefault();
                   props.onChoose(item);

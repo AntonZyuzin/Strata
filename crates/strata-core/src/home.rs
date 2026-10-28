@@ -207,6 +207,21 @@ impl Home {
         Ok((ws, entry))
     }
 
+    /// A workspace open in a tab comes to the canvas: it is the last opened.
+    pub fn touch(&mut self, id: &str) -> Result<Entry> {
+        let at = now_ms();
+        let entry = self
+            .saved
+            .workspaces
+            .iter_mut()
+            .find(|e| e.id == id)
+            .ok_or_else(|| invalid(format!("no workspace {id} on this device")))?;
+        entry.opened_at = at;
+        let entry = entry.clone();
+        self.save()?;
+        Ok(entry)
+    }
+
     /// «Открыть пространство…» (10 §3.6): a folder of the user's choice, added
     /// to the list or, for a known workspace that moved, its new place.
     pub fn add(&mut self, path: &Path) -> Result<(Workspace<SqliteStore>, Entry)> {
@@ -281,6 +296,54 @@ impl Home {
     }
 }
 
+/// The workspaces open in tabs (✅ Q-16-12: tabs of a retro browser), kept
+/// in memory with their undo (05 §11): switching tabs keeps each one's
+/// steps; closing a tab lets its workspace go. One of them is on the canvas.
+#[derive(Debug, Default)]
+pub struct Desk {
+    tabs: Vec<Workspace<SqliteStore>>,
+    current: Option<String>,
+}
+
+impl Desk {
+    /// The workspace on the canvas.
+    pub fn current(&self) -> Option<&Workspace<SqliteStore>> {
+        let id = self.current.as_deref()?;
+        self.tabs.iter().find(|w| w.id() == id)
+    }
+
+    pub fn current_mut(&mut self) -> Option<&mut Workspace<SqliteStore>> {
+        let id = self.current.clone()?;
+        self.get_mut(&id)
+    }
+
+    /// An open workspace, on the canvas or in a tab behind it.
+    pub fn get_mut(&mut self, id: &str) -> Option<&mut Workspace<SqliteStore>> {
+        self.tabs.iter_mut().find(|w| w.id() == id)
+    }
+
+    pub fn is_open(&self, id: &str) -> bool {
+        self.tabs.iter().any(|w| w.id() == id)
+    }
+
+    /// A workspace into its tab, on the canvas; one there with its id gives way.
+    fn put(&mut self, ws: Workspace<SqliteStore>) -> String {
+        let id = ws.id().to_owned();
+        self.tabs.retain(|w| w.id() != id);
+        self.tabs.push(ws);
+        self.current = Some(id.clone());
+        id
+    }
+
+    /// The tab closes: its workspace and its undo go.
+    fn release(&mut self, id: &str) {
+        self.tabs.retain(|w| w.id() != id);
+        if self.current.as_deref() == Some(id) {
+            self.current = None;
+        }
+    }
+}
+
 /// The home screen's calls as JSON, beside [`crate::api`] for the open workspace.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "call", rename_all = "camelCase")]
@@ -297,8 +360,12 @@ pub enum Request {
     Add {
         path: String,
     },
-    /// Back to the home screen: the open workspace closes.
+    /// Back to the home screen: the tabs stay open behind it.
     Close,
+    /// A tab closes: its workspace leaves memory, its undo with it.
+    Release {
+        id: String,
+    },
     Rename {
         id: String,
         name: String,
@@ -355,11 +422,11 @@ pub enum Response {
     },
 }
 
-fn home_of(home: &Home, current: &Option<Workspace<SqliteStore>>) -> Response {
+fn home_of(home: &Home, desk: &Desk) -> Response {
     Response::Home {
         workspaces: home.list(),
         profile: home.profile().clone(),
-        current: current.as_ref().map(|w| w.id().to_owned()),
+        current: desk.current.clone(),
     }
 }
 
@@ -367,63 +434,66 @@ fn home_of(home: &Home, current: &Option<Workspace<SqliteStore>>) -> Response {
 /// knows how (the desktop uses the OS; tests use a stub).
 pub fn handle(
     home: &mut Home,
-    current: &mut Option<Workspace<SqliteStore>>,
+    desk: &mut Desk,
     request: Request,
     to_trash: &dyn Fn(&Path) -> std::result::Result<(), String>,
 ) -> Response {
-    let opened = |current: &mut Option<Workspace<SqliteStore>>,
-                  done: Result<(Workspace<SqliteStore>, Entry)>| {
+    let opened = |desk: &mut Desk, done: Result<(Workspace<SqliteStore>, Entry)>| {
         done.map(|(ws, workspace)| {
             let root = ws.root();
-            *current = Some(ws);
+            desk.put(ws);
             Response::Opened { workspace, root }
         })
     };
     let result = match request {
-        Request::Home => Ok(home_of(home, current)),
+        Request::Home => Ok(home_of(home, desk)),
         Request::Create { name } => {
-            *current = None;
             let done = home.create(&name);
-            opened(current, done)
+            opened(desk, done)
         }
-        Request::Open { id } => {
-            *current = None;
-            let done = home.open(&id);
-            opened(current, done)
-        }
+        // A workspace in a tab comes back as it was, its undo too.
+        Request::Open { id } => match desk.get_mut(&id).map(|w| w.root()) {
+            Some(root) => home.touch(&id).map(|workspace| {
+                desk.current = Some(id);
+                Response::Opened { workspace, root }
+            }),
+            None => {
+                let done = home.open(&id);
+                opened(desk, done)
+            }
+        },
         Request::Add { path } => {
-            *current = None;
             let done = home.add(Path::new(&path));
-            opened(current, done)
+            opened(desk, done)
         }
         Request::Close => {
-            *current = None;
-            Ok(home_of(home, current))
+            desk.current = None;
+            Ok(home_of(home, desk))
+        }
+        Request::Release { id } => {
+            desk.release(&id);
+            Ok(home_of(home, desk))
         }
         Request::Rename { id, name } => {
-            let done = match current.as_mut().filter(|w| w.id() == id) {
+            let done = match desk.get_mut(&id) {
                 Some(ws) => home.rename(ws, &name),
                 None => home
                     .open(&id)
                     .and_then(|(mut ws, _)| home.rename(&mut ws, &name)),
             };
-            done.map(|()| home_of(home, current))
+            done.map(|()| home_of(home, desk))
         }
         Request::Forget { id } => {
-            if current.as_ref().is_some_and(|w| w.id() == id) {
-                *current = None;
-            }
-            home.forget(&id).map(|_| home_of(home, current))
+            desk.release(&id);
+            home.forget(&id).map(|_| home_of(home, desk))
         }
         Request::Remove { id } => {
-            if current.as_ref().is_some_and(|w| w.id() == id) {
-                *current = None;
-            }
+            desk.release(&id);
             match home.entry(&id).map(|e| (e.path.clone(), e.missing)) {
                 Ok((path, _)) => {
                     let gone = !path.exists() || to_trash(&path).is_ok();
                     if gone {
-                        home.forget(&id).map(|_| home_of(home, current))
+                        home.forget(&id).map(|_| home_of(home, desk))
                     } else {
                         Err(io(format!("{} could not go to the trash", path.display())))
                     }
@@ -439,11 +509,9 @@ pub fn handle(
         Request::Preview { id } => Ok(Response::Preview {
             png: home.preview(&id).map(|b| B64.encode(b)),
         }),
-        Request::SetProfile { profile } => {
-            home.set_profile(profile).map(|()| home_of(home, current))
-        }
+        Request::SetProfile { profile } => home.set_profile(profile).map(|()| home_of(home, desk)),
         Request::Export { id, path } => {
-            let bytes = match current.as_ref().filter(|w| w.id() == id) {
+            let bytes = match desk.get_mut(&id) {
                 Some(ws) => crate::archive::export(ws),
                 None => home
                     .entry(&id)
@@ -456,11 +524,10 @@ pub fn handle(
                 .map(|()| Response::Done)
         }
         Request::Import { path } => {
-            *current = None;
             let done = std::fs::read(&path)
                 .map_err(io)
                 .and_then(|b| home.import(&b));
-            opened(current, done)
+            opened(desk, done)
         }
     };
     result.unwrap_or_else(|e| Response::Error {
@@ -472,12 +539,12 @@ pub fn handle(
 /// [`handle`] on JSON.
 pub fn call(
     home: &mut Home,
-    current: &mut Option<Workspace<SqliteStore>>,
+    desk: &mut Desk,
     json: &str,
     to_trash: &dyn Fn(&Path) -> std::result::Result<(), String>,
 ) -> String {
     let response = match serde_json::from_str::<Request>(json) {
-        Ok(r) => handle(home, current, r, to_trash),
+        Ok(r) => handle(home, desk, r, to_trash),
         Err(e) => Response::Error {
             message: format!("bad request: {e}"),
             invalid: true,
@@ -498,16 +565,16 @@ mod tests {
         std::env::temp_dir().join(format!("strata-home-{}", NodeId::new().to_text()))
     }
 
-    fn ask(home: &mut Home, current: &mut Option<Workspace<SqliteStore>>, v: Value) -> Value {
+    fn ask(home: &mut Home, desk: &mut Desk, v: Value) -> Value {
         let trash = |p: &Path| std::fs::remove_dir_all(p).map_err(|e| e.to_string());
-        serde_json::from_str(&call(home, current, &v.to_string(), &trash)).expect("json")
+        serde_json::from_str(&call(home, desk, &v.to_string(), &trash)).expect("json")
     }
 
     #[test]
     fn the_home_screen_creates_lists_and_reopens_workspaces() {
         let dir = temp_dir();
         let mut home = Home::load(&dir);
-        let mut current = None;
+        let mut current = Desk::default();
         let a = ask(
             &mut home,
             &mut current,
@@ -515,7 +582,7 @@ mod tests {
         );
         assert_eq!(a["type"], "opened");
         let a_id = a["workspace"]["id"].as_str().expect("id").to_owned();
-        assert!(current.is_some());
+        assert!(current.current().is_some());
         let folder = PathBuf::from(a["workspace"]["path"].as_str().expect("path"));
         assert_eq!(
             folder.file_name().and_then(|f| f.to_str()),
@@ -556,7 +623,7 @@ mod tests {
         assert_eq!(again["workspace"]["name"], "Работа");
         let root = again["root"].as_str().expect("root").to_owned();
         let view = current
-            .as_mut()
+            .current_mut()
             .expect("open")
             .network_view(&root)
             .expect("view");
@@ -569,7 +636,7 @@ mod tests {
             json!({ "call": "setProfile", "profile": { "name": " Антон " } }),
         );
         let mut later = Home::load(&dir);
-        let mut none = None;
+        let mut none = Desk::default();
         let list = ask(&mut later, &mut none, json!({ "call": "home" }));
         assert_eq!(list["workspaces"].as_array().map(Vec::len), Some(2));
         assert_eq!(list["profile"]["name"], "Антон");
@@ -610,6 +677,74 @@ mod tests {
     }
 
     #[test]
+    fn tabs_keep_their_workspaces_and_their_undo() {
+        let dir = temp_dir();
+        let mut home = Home::load(&dir);
+        let mut desk = Desk::default();
+        let a = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "create", "name": "А" }),
+        );
+        let a_id = a["workspace"]["id"].as_str().expect("id").to_owned();
+        let root = a["root"].as_str().expect("root").to_owned();
+        let step = json!({
+            "call": "apply",
+            "label": { "key": "t.create" },
+            "ops": [{ "op": "createNode", "kind": "note", "name": "Заметка", "net": root, "x": 0, "y": 0 }],
+        });
+        let ws = desk.current_mut().expect("A on the canvas");
+        let out: Value =
+            serde_json::from_str(&crate::api::call(ws, &step.to_string())).expect("json");
+        assert_eq!(out["type"], "applied");
+        let undo = |desk: &Desk| desk.current().and_then(|w| w.history().undo);
+
+        // Another tab, then back: A's step can still be undone.
+        let b = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "create", "name": "Б" }),
+        );
+        assert_eq!(
+            desk.current().map(Workspace::id),
+            b["workspace"]["id"].as_str()
+        );
+        assert_eq!(undo(&desk), None);
+        let back = ask(&mut home, &mut desk, json!({ "call": "open", "id": a_id }));
+        assert_eq!(back["type"], "opened");
+        assert_eq!(back["root"], root.as_str());
+        assert_eq!(
+            undo(&desk),
+            Some(Label::new("t.create")),
+            "the undo of A kept"
+        );
+        let list = ask(&mut home, &mut desk, json!({ "call": "home" }));
+        assert_eq!(
+            list["workspaces"][0]["id"],
+            a_id.as_str(),
+            "the last opened first"
+        );
+
+        // The home screen keeps the tabs behind it.
+        ask(&mut home, &mut desk, json!({ "call": "close" }));
+        assert!(desk.current().is_none() && desk.is_open(&a_id));
+        ask(&mut home, &mut desk, json!({ "call": "open", "id": a_id }));
+        assert_eq!(undo(&desk), Some(Label::new("t.create")));
+
+        // A closed tab lets its workspace go: opened again, it starts afresh.
+        let gone = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "release", "id": a_id }),
+        );
+        assert_eq!(gone["current"], Value::Null);
+        assert!(!desk.is_open(&a_id));
+        ask(&mut home, &mut desk, json!({ "call": "open", "id": a_id }));
+        assert_eq!(undo(&desk), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_folder_opened_by_hand_joins_the_list() {
         let dir = temp_dir();
         let elsewhere = temp_dir().join("Мой проект.strata");
@@ -618,7 +753,7 @@ mod tests {
             .id()
             .to_owned();
         let mut home = Home::load(&dir);
-        let mut current = None;
+        let mut current = Desk::default();
         let opened = ask(
             &mut home,
             &mut current,
@@ -634,7 +769,7 @@ mod tests {
         );
         assert_eq!(bad["type"], "error");
         // A folder gone missing stays on the list, marked.
-        current = None;
+        current = Desk::default();
         std::fs::remove_dir_all(&elsewhere).expect("rm");
         let list = ask(&mut home, &mut current, json!({ "call": "home" }));
         assert_eq!(list["workspaces"][0]["missing"], true);
@@ -660,7 +795,7 @@ mod tests {
     fn archives_go_out_and_come_back_as_copies() {
         let dir = temp_dir();
         let mut home = Home::load(&dir);
-        let mut current = None;
+        let mut current = Desk::default();
         let made = ask(
             &mut home,
             &mut current,
@@ -688,7 +823,7 @@ mod tests {
         // Another device does not: the same id.
         let other = temp_dir();
         let mut there = Home::load(&other);
-        let mut none = None;
+        let mut none = Desk::default();
         let moved = ask(
             &mut there,
             &mut none,

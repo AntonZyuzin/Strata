@@ -6,7 +6,7 @@
  * same calls; nodes carry their placement in this network directly (05 §9.2).
  */
 
-import type { AttrKey, NodeAttrs, WireShape } from './core';
+import { type AttrKey, FLAGS, type Flag, type NodeAttrs, type WireShape } from './core';
 
 /**
  * Kinds of 05 §4.2 (ADR-0010): a folder (`network`), a project — a task one
@@ -54,8 +54,15 @@ export interface GraphNode {
   template: boolean;
   /** `[[X]]` without a node yet (05 §8.5). */
   ghost: boolean;
+  /**
+   * The note whose `[[X]]` this ghost is: the ghost stands beside it and
+   * follows it (06 §14). Null for a node and for the prototype's ghost.
+   */
+  ghostOf: string | null;
   /** This placement is not the node's primary one (05 §5). */
   appearance: boolean;
+  /** The networks it is placed in, this one among them: «×N» (06 §12.2). */
+  places: number;
   /** Wires to nodes not placed in this network (05 §8.3). */
   external: number;
   /** Assignees as indices into the people palette (07 §2.2). */
@@ -71,6 +78,37 @@ export interface GraphNode {
   attrs: NodeAttrs;
 }
 
+/** Ids of ghosts on the canvas: the wire's key after `?`, never a node's (05 §4.1). */
+export function ghostId(edge: string): string {
+  return `?${edge}`;
+}
+
+export function isGhostId(id: string): boolean {
+  return id.startsWith('?');
+}
+
+/** World units from a note to its ghosts (06 §14). */
+export const GHOST_DISTANCE = 88;
+
+/**
+ * Where a ghost stands (06 §14): beside its note, at an angle by the hash of
+ * its name, so the same `[[X]]` stands in the same place. Not stored; a
+ * ghost is not dragged.
+ */
+export function ghostSpot(
+  source: { x: number; y: number },
+  name: string,
+): { x: number; y: number } {
+  // FNV-1a over UTF-16 units: stable across sessions and engines.
+  let h = 0x811c9dc5;
+  for (let i = 0; i < name.length; i++) {
+    h ^= name.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  const a = ((h >>> 0) / 0x1_0000_0000) * 2 * Math.PI;
+  return { x: source.x + GHOST_DISTANCE * Math.cos(a), y: source.y + GHOST_DISTANCE * Math.sin(a) };
+}
+
 /** A plain node: open, no deadline, no flags. */
 export function newNode(
   base: Pick<GraphNode, 'id' | 'name' | 'kind' | 'icon' | 'x' | 'y'> & Partial<GraphNode>,
@@ -82,7 +120,9 @@ export function newNode(
     pause: false,
     template: false,
     ghost: false,
+    ghostOf: null,
     appearance: false,
+    places: 1,
     external: 0,
     assignees: [],
     color: null,
@@ -134,7 +174,7 @@ export function dueOf(deadline: string | undefined, day: string, time = clockNow
 
 /**
  * The look of a node from its fields (07 §4.5–4.6): status, deadline,
- * colour, the assignees' dots. A node with no fields keeps its look.
+ * colour, the assignees' dots, the flags. A node with no fields keeps its look.
  */
 export function lookOf(
   node: GraphNode,
@@ -143,23 +183,46 @@ export function lookOf(
 ): Partial<GraphNode> {
   const a = node.attrs;
   const final = a.status === 'done' || a.status === 'cancelled';
-  return {
+  const look: Partial<GraphNode> = {
     status: a.status === 'done' ? 'done' : a.status === 'cancelled' ? 'cancelled' : 'open',
     due: final ? 'none' : dueOf(a.deadline, day),
     color: a.color ?? KIND_COLOR[node.kind] ?? null,
     assignees: (a.assignees ?? []).map(personColor),
   };
+  if (a.flags) {
+    look.key = a.flags.includes('key');
+    look.pause = a.flags.includes('pause');
+    look.template = a.flags.includes('template');
+  }
+  return look;
+}
+
+/** The node's flags (05 §7): its fields', or, in the prototype's demo, its look's. */
+export function flagsOf(node: GraphNode): Flag[] {
+  if (node.attrs.flags) return node.attrs.flags;
+  return FLAGS.filter(
+    (f) =>
+      (f === 'key' && node.key) ||
+      (f === 'pause' && node.pause) ||
+      (f === 'template' && node.template),
+  );
 }
 
 export type Op =
   | { t: 'add'; node: GraphNode }
-  | { t: 'remove'; id: string }
+  /**
+   * The node leaves this network (05 §5): «Убрать отсюда», its placement
+   * here goes; `everywhere` — «Удалить везде», the node goes to the trash.
+   */
+  | { t: 'remove'; id: string; everywhere?: boolean }
   | { t: 'move'; id: string; x: number; y: number }
   | { t: 'connect'; from: string; to: string }
   | { t: 'disconnect'; from: string; to: string }
   | { t: 'rename'; id: string; name: string }
   | { t: 'attr'; id: string; key: AttrKey; value: string | number | null }
   | { t: 'assign'; id: string; person: string; on: boolean }
+  /** A flag of 05 §7 set or cleared. */
+  | { t: 'flag'; id: string; flag: Flag; on: boolean }
   /** The network's wire style (06 §6.2); null — Bézier. */
   | { t: 'wireShape'; value: WireShape | null };
 
@@ -191,8 +254,23 @@ export interface Changeset {
 export type GraphEvent =
   | { type: 'apply'; changeset: Changeset; amend: boolean }
   | { type: 'undo' | 'redo' | 'cancel'; changeset: Changeset }
-  /** A node's look changed with no step: a list's ticks in its window. */
-  | { type: 'look'; id: string };
+  /**
+   * A look changed with no step: a node's (a list's ticks in its window, a
+   * roll-up or «↗N» read back from the core) or, with no id, the network's
+   * roll-up wires.
+   */
+  | { type: 'look'; id: string | null };
+
+/**
+ * A roll-up wire (05 §8.3, 06 §13.3): `count` wires between nodes inside a
+ * network placed here and other nodes, drawn between the bubbles `a` and
+ * `b` placed here, both ways together. Only a view: no wire of the graph.
+ */
+export interface Rollup {
+  a: string;
+  b: string;
+  count: number;
+}
 
 /** 06 §1.2, NFR-79: 200 steps per session. */
 export const UNDO_DEPTH = 200;
@@ -200,7 +278,8 @@ export const UNDO_DEPTH = 200;
 /** Collects operations of one gesture; every call applies at once and records its inverse. */
 export interface Tx {
   add(node: GraphNode): void;
-  remove(id: string): void;
+  /** Out of this network (05 §5); `everywhere` — to the trash, from every network. */
+  remove(id: string, everywhere?: boolean): void;
   move(id: string, x: number, y: number): void;
   /** 05 §8.2 rule 2: no self-loop, at most one wire per ordered pair. False when skipped. */
   connect(from: string, to: string): boolean;
@@ -209,6 +288,7 @@ export interface Tx {
   /** A field of 05 §6.1; null clears it. */
   attr(id: string, key: AttrKey, value: string | number | null): void;
   assign(id: string, person: string, on: boolean): void;
+  flag(id: string, flag: Flag, on: boolean): void;
   wireShape(value: WireShape | null): void;
 }
 
@@ -228,9 +308,24 @@ export class Graph {
   kindColors = false;
   /** How this network draws its wires (05 §9.2, 06 §6.2); null — Bézier. Set through `Tx`. */
   private shape: WireShape | null = null;
+  private rolled: readonly Rollup[] = [];
+  private stamp = 0;
 
   get wireShape(): WireShape {
     return this.shape ?? 'bezier';
+  }
+
+  /** The network's roll-up wires as the core counts them (06 §13.3). */
+  get rollups(): readonly Rollup[] {
+    return this.rolled;
+  }
+
+  /**
+   * Grows with every change: an answer of the core asked for before the
+   * latest one may be behind the graph, and must not overwrite it.
+   */
+  get version(): number {
+    return this.stamp;
   }
 
   subscribe(fn: (e: GraphEvent) => void): () => void {
@@ -305,11 +400,14 @@ export class Graph {
       add: (node) => {
         run({ t: 'add', node: { ...node } });
       },
-      remove: (id) => {
+      remove: (id, everywhere) => {
+        // A note's ghosts go with it (05 §8.5), and come back with it.
+        const ghosts = this.outputs(id).filter((o) => this.nodes.get(o)?.ghostOf === id);
         // Wires go first, each as its own operation, so undo restores them.
         for (const to of this.outputs(id)) run({ t: 'disconnect', from: id, to });
         for (const from of this.inputs(id)) run({ t: 'disconnect', from, to: id });
-        run({ t: 'remove', id });
+        run(everywhere ? { t: 'remove', id, everywhere } : { t: 'remove', id });
+        for (const g of ghosts) run({ t: 'remove', id: g });
       },
       move: (id, x, y) => {
         run({ t: 'move', id, x, y });
@@ -324,6 +422,9 @@ export class Graph {
       },
       assign: (id, person, on) => {
         run({ t: 'assign', id, person, on });
+      },
+      flag: (id, flag, on) => {
+        run({ t: 'flag', id, flag, on });
       },
       wireShape: (value) => {
         run({ t: 'wireShape', value });
@@ -415,6 +516,43 @@ export class Graph {
     this.emit({ type: 'look', id });
   }
 
+  /**
+   * A node's wires to nodes not placed here, «↗N» (05 §8.3), as the core
+   * counts them after a step. Derived state: no step, nothing for the core.
+   */
+  setExternal(id: string, count: number): void {
+    const n = this.nodes.get(id);
+    if (!n || n.external === count) return;
+    n.external = count;
+    this.emit({ type: 'look', id });
+  }
+
+  /**
+   * Whether this placement is an appearance and in how many networks the
+   * node lies (05 §5, 06 §12.2), as the core says after a step; derived
+   * state, as `setExternal`.
+   */
+  setPlacement(id: string, appearance: boolean, places: number): void {
+    const n = this.nodes.get(id);
+    if (!n || (n.appearance === appearance && n.places === places)) return;
+    n.appearance = appearance;
+    n.places = places;
+    this.emit({ type: 'look', id });
+  }
+
+  /** The roll-up wires as the core counts them; derived state, as `setExternal`. */
+  setRollups(list: readonly Rollup[]): void {
+    const same =
+      list.length === this.rolled.length &&
+      list.every((r, i) => {
+        const was = this.rolled[i];
+        return was && was.a === r.a && was.b === r.b && was.count === r.count;
+      });
+    if (same) return;
+    this.rolled = list;
+    this.emit({ type: 'look', id: null });
+  }
+
   /** Forgets undo and redo, for example after loading the demo network. */
   clearHistory(): void {
     this.undoStack = [];
@@ -422,6 +560,7 @@ export class Graph {
   }
 
   private emit(e: GraphEvent) {
+    this.stamp++;
     for (const fn of this.listeners) fn(e);
   }
 
@@ -464,10 +603,16 @@ export class Graph {
       }
       case 'move': {
         const node = this.nodes.get(op.id);
-        if (!node || (node.x === op.x && node.y === op.y)) return null;
+        // A ghost stands where its note puts it (06 §14).
+        if (!node || node.ghostOf !== null || (node.x === op.x && node.y === op.y)) return null;
         const back: Op = { t: 'move', id: op.id, x: node.x, y: node.y };
         node.x = op.x;
         node.y = op.y;
+        // Its ghosts stand beside it (06 §14): derived, no operation of their own.
+        for (const o of this.outs.get(op.id) ?? []) {
+          const g = this.nodes.get(o);
+          if (g?.ghostOf === op.id) Object.assign(g, ghostSpot(node, g.name));
+        }
         return [back];
       }
       case 'rename': {
@@ -475,6 +620,9 @@ export class Graph {
         if (!node || node.name === op.name) return null;
         const back: Op = { t: 'rename', id: op.id, name: node.name };
         node.name = op.name;
+        // A ghost's place is by its name (06 §14).
+        const source = node.ghostOf === null ? undefined : this.nodes.get(node.ghostOf);
+        if (source) Object.assign(node, ghostSpot(source, node.name));
         return [back];
       }
       case 'attr': {
@@ -500,9 +648,23 @@ export class Graph {
         this.nodes.set(op.id, Object.assign(next, lookOf(next, this.day(), this.personColor)));
         return [{ t: 'assign', id: op.id, person: op.person, on: !op.on }];
       }
+      case 'flag': {
+        const node = this.nodes.get(op.id);
+        if (!node) return null;
+        const had = flagsOf(node);
+        if (had.includes(op.flag) === op.on) return null;
+        const flags = FLAGS.filter((f) => (f === op.flag ? op.on : had.includes(f)));
+        const next = { ...node, attrs: { ...node.attrs, flags } };
+        this.nodes.set(op.id, Object.assign(next, lookOf(next, this.day(), this.personColor)));
+        return [{ t: 'flag', id: op.id, flag: op.flag, on: !op.on }];
+      }
       case 'connect': {
         if (op.from === op.to) return null; // 05 §8.2 rule 2: no self-loop
-        if (!this.nodes.has(op.from) || !this.nodes.has(op.to)) return null;
+        const a = this.nodes.get(op.from);
+        const b = this.nodes.get(op.to);
+        if (!a || !b) return null;
+        // A ghost has one wire, from its note (05 §8.5).
+        if (a.ghostOf !== null || (b.ghostOf !== null && b.ghostOf !== op.from)) return null;
         if (this.hasEdge(op.from, op.to)) return null; // one wire per ordered pair
         set(this.outs, op.from).add(op.to);
         set(this.ins, op.to).add(op.from);
@@ -545,6 +707,17 @@ export function insertIntoWire(graph: Graph, tx: Tx, x: string, from: string, to
   return true;
 }
 
+/**
+ * A flag switched on nodes (06 §8): set on all when one of them lacks it,
+ * else cleared on all. True when it is set.
+ */
+export function switchFlag(graph: Graph, tx: Tx, ids: readonly string[], flag: Flag): boolean {
+  const nodes = ids.flatMap((id) => graph.nodes.get(id) ?? []);
+  const on = nodes.some((n) => !flagsOf(n).includes(flag));
+  for (const n of nodes) tx.flag(n.id, flag, on);
+  return on;
+}
+
 /** 05 §8.4 precondition for inserting into a wire: the node has no wires. */
 export function canInsert(graph: Graph, x: string): boolean {
   return graph.inputs(x).length === 0 && graph.outputs(x).length === 0;
@@ -564,7 +737,8 @@ export interface ShakeResult {
  */
 export function shake(graph: Graph, tx: Tx, x: string): ShakeResult {
   const ins = graph.inputs(x);
-  const outs = graph.outputs(x);
+  // A ghost's wire is its `[[link]]`: the text keeps it (05 §8.2 rule 5).
+  const outs = graph.outputs(x).filter((o) => graph.nodes.get(o)?.ghostOf !== x);
   for (const p of ins) tx.disconnect(p, x);
   for (const o of outs) tx.disconnect(x, o);
   const p = ins.length === 1 ? ins[0] : undefined;
@@ -590,7 +764,7 @@ export function extract(graph: Graph, tx: Tx, ids: readonly string[]): ShakeResu
       }
     }
     for (const o of graph.outputs(id)) {
-      if (!inSet.has(o)) {
+      if (!inSet.has(o) && graph.nodes.get(o)?.ghostOf !== id) {
         targets.add(o);
         cut.push([id, o]);
       }

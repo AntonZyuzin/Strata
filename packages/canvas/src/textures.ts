@@ -68,15 +68,24 @@ export class GlyphTextures {
     readonly dpr: number,
   ) {}
 
-  /** `paper` draws the glyph itself in paper, for the ghost's «?» on the bare Scene. */
-  get(name: GlyphName, plate: Plate = 'none', scale = 1, paper = plate === 'ink'): Texture {
-    const key = `${name}:${plate}:${scale}:${paper}`;
+  /**
+   * `paper` draws the glyph itself in paper, for the ghost's «?» on the bare
+   * Scene; `pad` — the plate's margin around the glyph in pixel units.
+   */
+  get(
+    name: GlyphName,
+    plate: Plate = 'none',
+    scale = 1,
+    paper = plate === 'ink',
+    pad = 2,
+  ): Texture {
+    const key = `${name}:${plate}:${scale}:${paper}:${pad}`;
     const hit = this.cache.get(key);
     if (hit) return hit;
     const rows = GLYPHS[name];
     const n = rows.length;
     const px = this.u * scale;
-    const border = plate === 'none' ? 0 : 2 * this.u;
+    const border = plate === 'none' ? 0 : pad * this.u;
     const side = n * px + 2 * border;
     const [c, ctx] = canvas(side, side);
     if (plate !== 'none') {

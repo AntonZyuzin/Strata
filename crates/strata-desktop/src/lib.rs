@@ -1,22 +1,21 @@
 //! Desktop shell (ADR-0004): one TypeScript SPA talking to the Rust core over
 //! Tauri IPC. `home` takes the home screen's calls (`strata_core::home`:
-//! the workspaces of this device, ✅ Q-16-12), `core` the calls for the open
-//! workspace (`strata_core::api`); `preview` fetches a link asset's preview
+//! the workspaces of this device, ✅ Q-16-12; the tabs' workspaces stay in
+//! memory with their undo, `home::Desk`), `core` the calls for the workspace
+//! on the canvas (`strata_core::api`); `preview` fetches a link asset's preview
 //! (ADR-0012); `build_info` feeds «О программе» and the benchmark.
 
 use serde::Serialize;
 use std::sync::Mutex;
-use strata_core::Workspace;
-use strata_core::home::Home;
-use strata_core::sqlite::SqliteStore;
+use strata_core::home::{Desk, Home};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
 use tauri::Manager;
 
-/// The home screen's list and the open workspace, if any.
+/// The home screen's list and the workspaces open in tabs.
 #[derive(Debug)]
 struct App {
     home: Home,
-    current: Option<Workspace<SqliteStore>>,
+    desk: Desk,
 }
 
 /// The app, or why its data folder could not be found.
@@ -74,16 +73,16 @@ fn build_info() -> BuildInfo {
     }
 }
 
-/// One call of the core as JSON (15 §2.5) for the open workspace: the same
+/// One call of the core as JSON (15 §2.5) for the workspace on the canvas: the same
 /// requests the browser build answers in WASM.
 #[tauri::command]
 fn core(state: tauri::State<'_, Core>, request: String) -> String {
     let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
     match guard.as_mut() {
-        Ok(App {
-            current: Some(ws), ..
-        }) => strata_core::api::call(ws, &request),
-        Ok(_) => error("no workspace is open"),
+        Ok(app) => match app.desk.current_mut() {
+            Some(ws) => strata_core::api::call(ws, &request),
+            None => error("no workspace is open"),
+        },
         Err(e) => error(e),
     }
 }
@@ -94,7 +93,7 @@ fn core(state: tauri::State<'_, Core>, request: String) -> String {
 fn home(state: tauri::State<'_, Core>, request: String) -> String {
     let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
     match guard.as_mut() {
-        Ok(app) => strata_core::home::call(&mut app.home, &mut app.current, &request, &|p| {
+        Ok(app) => strata_core::home::call(&mut app.home, &mut app.desk, &request, &|p| {
             trash::delete(p).map_err(|e| e.to_string())
         }),
         Err(e) => error(e),
@@ -111,13 +110,13 @@ async fn preview(state: tauri::State<'_, Core>, id: String) -> Result<bool, Stri
     let (workspace, url) = {
         let guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
         match guard.as_ref() {
-            Ok(App {
-                current: Some(ws), ..
-            }) => (
-                ws.id().to_owned(),
-                ws.link_of(&id).map_err(|e| e.to_string())?,
-            ),
-            Ok(_) => return Err("no workspace is open".to_owned()),
+            Ok(app) => match app.desk.current() {
+                Some(ws) => (
+                    ws.id().to_owned(),
+                    ws.link_of(&id).map_err(|e| e.to_string())?,
+                ),
+                None => return Err("no workspace is open".to_owned()),
+            },
             Err(e) => return Err(e.clone()),
         }
     };
@@ -127,11 +126,14 @@ async fn preview(state: tauri::State<'_, Core>, id: String) -> Result<bool, Stri
         .await
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
+    // The workspace that asked, on the canvas or in a tab behind it by now.
     let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    match guard.as_mut() {
-        Ok(App {
-            current: Some(ws), ..
-        }) if ws.id() == workspace => ws
+    match guard
+        .as_mut()
+        .ok()
+        .and_then(|app| app.desk.get_mut(&workspace))
+    {
+        Some(ws) => ws
             .apply_preview(
                 &id,
                 &url,
@@ -139,7 +141,7 @@ async fn preview(state: tauri::State<'_, Core>, id: String) -> Result<bool, Stri
                 fetched.picture.as_deref(),
             )
             .map_err(|e| e.to_string()),
-        _ => Ok(false),
+        None => Ok(false),
     }
 }
 
@@ -156,7 +158,7 @@ pub fn run() {
                 .map_err(|e| e.to_string())
                 .map(|dir| App {
                     home: Home::load(&dir),
-                    current: None,
+                    desk: Desk::default(),
                 });
             app.manage(Core(Mutex::new(loaded)));
             Ok(())

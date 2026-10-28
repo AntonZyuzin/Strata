@@ -56,6 +56,12 @@ export interface MapNav {
   go: (net: string, node: string | null) => void;
   /** The selected star or the cluster in focus changed. */
   change?: () => void;
+  /**
+   * A step of the map that goes somewhere — 2D ↔ 3D, `Enter`, a click on a
+   * star, `I`, `U`, a search's flight — before it goes: the screen keeps
+   * where it was (09 §6.1).
+   */
+  leave?: () => void;
 }
 
 const REST = { nodes: 3_000, edges: 4_500, seed: 11 };
@@ -92,9 +98,16 @@ export class Map3D {
   private worker: Worker | null = null;
   private drag: { x: number; y: number; moved: number } | null = null;
   private flight = 0;
+  /**
+   * Destroyed: a network loaded under the map makes a new one. A bridge or a
+   * layout still under way stops there and tells the screen nothing more.
+   */
+  private dead = false;
   /** The selected star and the cluster in focus, as bodies (08 §5.1). */
   private selected: number | null = null;
   private focus = 0;
+  /** `Ctrl+F`'s matches (08 §6.1): lit over the cluster's dimming while the bar is open. */
+  private lit: Uint8Array | null = null;
   private readonly resize: ResizeObserver;
 
   constructor(
@@ -161,11 +174,14 @@ export class Map3D {
 
   /** 2D → 3D or 3D → 2D; ignored while the bridge plays. */
   toggle(): void {
+    if (this.state !== '2d' && this.state !== '3d') return;
+    this.nav?.leave?.();
     if (this.state === '2d') void this.to3d();
-    else if (this.state === '3d') this.to2d();
+    else this.to2d();
   }
 
   destroy(): void {
+    this.dead = true;
     this.stop();
     this.resize.disconnect();
     this.worker?.terminate();
@@ -230,10 +246,49 @@ export class Map3D {
     return false;
   }
 
+  /**
+   * `Ctrl+F` on the map (08 §6.1): the matches stay bright and the rest dims
+   * as outside the cluster in focus; `null` gives the cluster's dimming back.
+   */
+  lens(ids: readonly string[] | null): void {
+    const space = this.space;
+    if (!space) return;
+    if (ids) {
+      const lit = new Uint8Array(space.x.count);
+      for (const id of ids) {
+        const b = space.body.get(id);
+        if (b !== undefined) lit[b] = 1;
+      }
+      this.lit = lit;
+    } else {
+      this.lit = null;
+    }
+    // Mid-bridge the bridge's own focus stays (08 §7).
+    if (this.state !== '3d') return;
+    this.showFocus();
+    this.draw();
+  }
+
+  /** The nodes `Ctrl+F` lights now, or null with no lens; for tests. */
+  lensIds(): string[] | null {
+    const { lit, space } = this;
+    if (!lit || !space) return null;
+    return space.ids.filter((_, b) => lit[b] === 1);
+  }
+
+  /** Node `id`'s star selected where it is, with no flight; null — none. */
+  selectId(id: string | null): void {
+    const b = id === null ? null : (this.space?.body.get(id) ?? null);
+    if (this.state !== '3d') return;
+    this.select(b);
+    this.draw();
+  }
+
   /** A search's choice (08 §6.1): fly to node `id`'s star and select it. */
   flyTo(id: string): void {
     const b = this.space?.body.get(id);
     if (b === undefined || this.state !== '3d') return;
+    this.nav?.leave?.();
     this.select(b);
     const p = this.at(b);
     if (p) this.fly(p, (this.starSize(b) * this.pxPerUnit()) / ARRIVE_PX);
@@ -252,6 +307,7 @@ export class Map3D {
   }
 
   private set(s: MapState): void {
+    if (this.dead) return;
     this.state = s;
     this.label.hidden = s !== '3d' || this.selected === null;
     this.onState(s);
@@ -295,10 +351,12 @@ export class Map3D {
     const nav = this.nav;
     if (!nav) return;
     const { items, wires } = await nav.space();
+    if (this.dead) return;
     const signature = `${items.map((i) => `${i.id}${i.parent ?? ''}`).join()}|${wires.map((w) => w.from + w.to).join()}`;
     if (!this.space || !this.pos || signature !== this.signature) {
       const space = spaceExtract(items, wires);
       const pos = await this.layout(space.x, initialLayout(space.x, 1));
+      if (this.dead) return;
       this.map ??= new StarMap({ canvas: this.canvas, dpr: window.devicePixelRatio, bloom: true });
       this.map.setData(space.x, pos);
       const name = new Map(items.map((i) => [i.id, i.name]));
@@ -341,7 +399,7 @@ export class Map3D {
       return;
     }
     const { map, merged, pos } = this;
-    if (!map || !merged || !pos) return;
+    if (this.dead || !map || !merged || !pos) return;
     map.setSize(this.host.clientWidth, this.host.clientHeight);
     const v = this.view2d();
     const flat = new Float32Array(merged.ids.length * 2);
@@ -403,11 +461,13 @@ export class Map3D {
     if (id === undefined) return;
     const cluster = isCluster(space.x.kind[b] ?? 0);
     const parent = space.ids[space.x.primaryNet[b] ?? -1] ?? space.ids[0] ?? id;
+    nav.leave?.();
     void this.to2d().then(() => nav.go(cluster ? id : parent, cluster ? null : id));
   }
 
   /** `I` (08 §6.3): fly into a cluster; it is in focus, the rest dimmed. */
   private into(b: number): void {
+    this.nav?.leave?.();
     this.focus = b;
     this.showFocus();
     this.flyToCluster(b);
@@ -419,6 +479,7 @@ export class Map3D {
     const space = this.space;
     if (!space) return;
     const parent = space.x.primaryNet[this.focus] ?? -1;
+    this.nav?.leave?.();
     this.focus = parent >= 0 ? parent : 0;
     this.showFocus();
     this.flyToCluster(this.focus);
@@ -429,6 +490,11 @@ export class Map3D {
   private showFocus(): void {
     const { map, space } = this;
     if (!map || !space) return;
+    if (this.lit) {
+      map.setFocus(this.lit);
+      map.setFade(0.3, 0.15, 1);
+      return;
+    }
     if (this.focus === 0) {
       map.setFocus(null);
       map.setFade(1, 1, 1);
@@ -592,6 +658,8 @@ export class Map3D {
     return new Promise((done) => {
       const t0 = performance.now();
       const step = (now: number) => {
+        // Never done once destroyed: what was to follow the bridge does not.
+        if (this.dead) return;
         const k = Math.min(1, (now - t0) / BRIDGE_MS);
         bridge.frame(from + (to - from) * k);
         if (k < 1) requestAnimationFrame(step);

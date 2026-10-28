@@ -42,7 +42,13 @@ export interface NodeAttrs {
   icon?: string;
   /** A link asset's preview picture, its SHA-256 (05 §4.4, ✅ Q-13-16); the core sets it. */
   preview?: string;
+  /** Its flags (05 §7), in their order. */
+  flags?: Flag[];
 }
+
+/** The flags of 05 §7: `R`, `Q`, `E`; «Скрыть от AI» and «Замок» get their interface with MCP. */
+export const FLAGS = ['key', 'pause', 'template', 'hideAi', 'lock'] as const;
+export type Flag = (typeof FLAGS)[number];
 
 export type AttrKey =
   | 'status'
@@ -130,6 +136,14 @@ export type CoreOp =
   | { op: 'move'; net: string; id: string; x: number; y: number }
   | { op: 'connect'; from: string; to: string }
   | { op: 'disconnect'; from: string; to: string }
+  /** «Разместить здесь» (05 §5): an appearance in `net`. */
+  | { op: 'place'; id: string; net: string; x: number; y: number }
+  /** «Убрать отсюда» (05 §5); the last placement sends the node to the trash. */
+  | { op: 'unplace'; id: string; net: string }
+  /** «Сделать основным» (05 §5). */
+  | { op: 'setPrimary'; id: string; net: string }
+  /** «Перенести» (05 §5): the placement moves; a primary stays primary. */
+  | { op: 'relocate'; id: string; from: string; to: string; x: number; y: number }
   | { op: 'trash'; ids: string[] }
   | { op: 'restore'; ids: string[] }
   /** «Сделать проектом / задачей / папкой» (05 §4.2). */
@@ -138,6 +152,8 @@ export type CoreOp =
   | { op: 'assign'; id: string; person: string; on: boolean }
   | { op: 'addPerson'; id?: string; name: string; color?: number }
   | { op: 'renamePerson'; id: string; name: string }
+  /** A flag set or cleared (05 §7). */
+  | { op: 'setFlag'; id: string; flag: Flag; on: boolean }
   /** The network's wire style (05 §9.2, 06 §6.2); null — Bézier. */
   | { op: 'setWireStyle'; net: string; style: WireShape | null };
 
@@ -145,16 +161,29 @@ export type CoreRequest =
   | { call: 'workspace' }
   | { call: 'view'; net: string }
   | { call: 'apply'; ops: CoreOp[]; label: ChangeLabel; amend?: boolean }
+  | {
+      call: 'copyNode';
+      from: string;
+      net: string;
+      x: number;
+      y: number;
+      inputs: string[];
+      label: ChangeLabel;
+    }
   | { call: 'undo' }
   | { call: 'redo' }
   | { call: 'cancel' }
   | { call: 'history' }
   | { call: 'trash' }
+  | { call: 'trashPreview'; ids: string[] }
   | { call: 'openDoc'; doc: string }
   | { call: 'pushDoc'; doc: string; update: string }
+  | { call: 'pullDoc'; doc: string; since: string }
+  | { call: 'edited'; since: number }
   | { call: 'node'; id: string }
   | { call: 'tree' }
   | { call: 'wires' }
+  | { call: 'external'; net: string; id: string }
   | { call: 'people' }
   | { call: 'putAsset'; bytes: string }
   | { call: 'asset'; sha: string };
@@ -167,6 +196,12 @@ export interface ViewNode extends NodeAttrs {
   y: number;
   /** For folders, projects and tasks: the roll-up of their tasks. */
   fold?: CoreFold;
+  /** Its wires whose other end is not placed in this network: «↗N» (05 §8.3). */
+  external?: number;
+  /** This placement is not its primary one: an appearance (05 §5). */
+  appearance?: boolean;
+  /** The networks it is placed in, this one among them: «×N» (06 §12.2). */
+  places?: number;
 }
 
 /** A row of the checklist preview of a task's or project's hierarchy (05 §4.3). */
@@ -208,6 +243,26 @@ export interface NodeDetails extends NodeAttrs {
   /** For tasks and projects: the checklist preview of the hierarchy. */
   subtasks: TaskRow[];
   fold?: CoreFold;
+  /** Where it is placed (05 §5): the primary first, then the oldest. */
+  places: Place[];
+}
+
+/**
+ * What a step to the trash would take (05 §5, 06 §12.3), for its dialog:
+ * the nodes that go, and those inside that stay elsewhere, with the path of
+ * the network they stay in.
+ */
+export interface TrashPreview {
+  trashed: Linked[];
+  staying: (Linked & { path: [string, string][] })[];
+}
+
+/** One placement of a node, for «Где размещена» (06 §12.2). */
+export interface Place {
+  net: string;
+  /** From the root to that network, both included: `[id, name]`. */
+  path: [string, string][];
+  primary: boolean;
 }
 
 /** A node in the «Слои» panel, under its primary network; the root has no parent. */
@@ -224,6 +279,8 @@ export interface TreeItem {
   mime?: string;
   url?: string;
   icon?: string;
+  /** Its flags: templates are offered in the Tab menu (06 §5.2). */
+  flags?: Flag[];
 }
 
 /** A wire's two ends. */
@@ -251,6 +308,50 @@ export interface ViewEdge {
 /** How a network draws its wires (06 §6.2): a segment, an S-curve, an S-curve that follows the hand. */
 export type WireShape = 'straight' | 'bezier' | 'kinetic';
 
+/**
+ * What the core changed in content documents after edit `seq` (15 §3.4):
+ * the links a rename rewrote (13 §6.5). `docs` null — the question was
+ * older than what the core keeps: every open document is to be read again.
+ */
+export interface Edited {
+  seq: number;
+  docs: string[] | null;
+}
+
+/** A ghost (05 §8.5): the wire of a note's `[[X]]` to no node. */
+export interface ViewGhost {
+  /** The wire's key, `h(from ‖ "?" ‖ linkKey(X))` (10 §2.5). */
+  edge: string;
+  from: string;
+  /** `X` as the text spells it. */
+  name: string;
+}
+
+/**
+ * A roll-up wire (05 §8.3, 06 §13.3): the wires between two bubbles placed
+ * here that run inside a network, both ways together. Only a view.
+ */
+export interface ViewRollup {
+  a: string;
+  b: string;
+  count: number;
+}
+
+/** A wire of «↗N» (06 §14): its other end, not placed in the network. */
+export interface ExternalWire {
+  id: string;
+  name: string;
+  kind: NodeKind;
+  /** It comes into the node: `id → node`. */
+  incoming: boolean;
+  /** It comes (also) from a `[[link]]` in text. */
+  text: boolean;
+  /** It was drawn by hand or imported. */
+  manual: boolean;
+  /** From the root to the other end's primary network: `[id, name]`. */
+  path: [string, string][];
+}
+
 /** One network for the canvas (10 §7.3). */
 export interface NetworkView {
   net: string;
@@ -259,6 +360,10 @@ export interface NetworkView {
   path: [string, string][];
   nodes: ViewNode[];
   edges: ViewEdge[];
+  /** `[[Links]]` of the notes here to no node (05 §8.5). */
+  ghosts: ViewGhost[];
+  /** Roll-up wires to and from the networks placed here (06 §13.3). */
+  rollups: ViewRollup[];
   /** The network's wire style; none — Bézier. */
   wire_style?: WireShape;
 }
@@ -280,14 +385,19 @@ type CoreResponse =
   | { type: 'workspace'; id: string; root: string }
   | { type: 'view'; view: NetworkView }
   | { type: 'applied'; changeset: string | null; history: History }
+  | { type: 'copied'; id: string; history: History }
   | { type: 'reverted'; report: unknown; history: History }
   | { type: 'history'; history: History }
   | { type: 'trash'; items: TrashItem[] }
+  | { type: 'trashPreview'; preview: TrashPreview }
   | { type: 'doc'; doc: string; snapshot: string }
   | { type: 'pushed'; wires: boolean }
+  | { type: 'updates'; doc: string; update: string }
+  | { type: 'edited'; edited: Edited }
   | { type: 'node'; node: NodeDetails }
   | { type: 'tree'; items: TreeItem[] }
   | { type: 'wires'; wires: WireEnds[] }
+  | { type: 'external'; wires: ExternalWire[] }
   | { type: 'people'; people: Person[] }
   | { type: 'asset'; sha: string; bytes?: string }
   | { type: 'error'; message: string; invalid: boolean };
@@ -359,6 +469,23 @@ export class Core {
     return expect(await this.call({ call: 'apply', ops, label, amend }), 'applied').history;
   }
 
+  /**
+   * A copy of a node at (x, y) in `net`, everything inside it too: a template
+   * chosen in the Tab menu (05 §7); `inputs` wire into it. One step of undo;
+   * the copy's id back.
+   */
+  async copyNode(
+    from: string,
+    at: { net: string; x: number; y: number },
+    inputs: string[],
+    label: ChangeLabel,
+  ): Promise<{ id: string; history: History }> {
+    const { net, x, y } = at;
+    const request: CoreRequest = { call: 'copyNode', from, net, x, y, inputs, label };
+    const r = expect(await this.call(request), 'copied');
+    return { id: r.id, history: r.history };
+  }
+
   async undo(): Promise<History> {
     return expect(await this.call({ call: 'undo' }), 'reverted').history;
   }
@@ -379,6 +506,11 @@ export class Core {
     return expect(await this.call({ call: 'trash' }), 'trash').items;
   }
 
+  /** What trashing `ids` would take, without taking it (06 §12.3). */
+  async trashPreview(ids: string[]): Promise<TrashPreview> {
+    return expect(await this.call({ call: 'trashPreview', ids }), 'trashPreview').preview;
+  }
+
   /** A content document's snapshot for an editor (`content/<id>`). */
   async openDoc(doc: string): Promise<Uint8Array> {
     return fromBase64(expect(await this.call({ call: 'openDoc', doc }), 'doc').snapshot);
@@ -397,6 +529,11 @@ export class Core {
     return expect(await this.call({ call: 'wires' }), 'wires').wires;
   }
 
+  /** The wires of `id` in `net` to nodes not placed there: the list behind «↗N» (06 §14). */
+  async external(net: string, id: string): Promise<ExternalWire[]> {
+    return expect(await this.call({ call: 'external', net, id }), 'external').wires;
+  }
+
   async people(): Promise<Person[]> {
     return expect(await this.call({ call: 'people' }), 'people').people;
   }
@@ -409,6 +546,17 @@ export class Core {
   async asset(sha: string): Promise<Uint8Array> {
     const r = expect(await this.call({ call: 'asset', sha }), 'asset');
     return fromBase64(r.bytes ?? '');
+  }
+
+  /** What a content document has that an editor at version `since` has not. */
+  async pullDoc(doc: string, since: Uint8Array): Promise<Uint8Array> {
+    const r = await this.call({ call: 'pullDoc', doc, since: toBase64(since) });
+    return fromBase64(expect(r, 'updates').update);
+  }
+
+  /** The content documents the core changed after its edit `since`. */
+  async edited(since: number): Promise<Edited> {
+    return expect(await this.call({ call: 'edited', since }), 'edited').edited;
   }
 
   /** An editor's updates; true when the note's text wires changed. */
@@ -454,7 +602,10 @@ export interface HomeBackend {
   open(id: string): Promise<Opened>;
   /** «Открыть…»: a workspace folder of the user's choice (desktop). */
   add?(path: string): Promise<Opened>;
+  /** Back to the home screen: the tabs' workspaces stay open behind it. */
   close(): Promise<HomeState>;
+  /** A tab closes: its workspace leaves memory, and its undo with it (05 §11). */
+  release(id: string): Promise<HomeState>;
   rename(id: string, name: string): Promise<HomeState>;
   forget(id: string): Promise<HomeState>;
   /** To the system trash on desktop; gone for good in a browser. */
@@ -503,6 +654,7 @@ export function jsonHome(home: Transport, core: Transport): HomeBackend {
     open: (id) => opened({ call: 'open', id }),
     add: (path) => opened({ call: 'add', path }),
     close: () => state({ call: 'close' }),
+    release: (id) => state({ call: 'release', id }),
     rename: (id, name) => state({ call: 'rename', id, name }),
     forget: (id) => state({ call: 'forget', id }),
     remove: (id) => state({ call: 'remove', id }),

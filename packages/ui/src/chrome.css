@@ -698,11 +698,6 @@ button:focus-visible {
   display: none;
 }
 
-/* The star map's search: the Tab menu's look, centred over the map. */
-.map-search {
-  translate: -50% 0;
-}
-
 .proto-top {
   position: absolute;
   top: calc(6 * var(--u));
@@ -898,6 +893,101 @@ button:focus-visible {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+/* `Ctrl+F` (09 §3.3): a bar at the canvas's top middle, its width in the
+   UI font's `ch` whatever the language; the toggles stay pressed in. */
+.find-bar {
+  position: absolute;
+  z-index: 20;
+  top: calc(8 * var(--u));
+  left: calc(var(--layers-w) + (100% - var(--layers-w)) / 2);
+  translate: -50% 0;
+  width: 64ch;
+  padding: calc(3 * var(--u));
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
+}
+
+.find-row {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+}
+
+.find-row .tab-menu-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.find-toggle[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.find-count {
+  flex: none;
+  width: 10ch;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-variant-numeric: tabular-nums;
+  color: var(--st-color-text-muted);
+}
+
+.find-fuzzy {
+  padding: calc(2 * var(--u)) calc(4 * var(--u)) 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+/* «Перейти к ноде» on the canvas and the star map: the Tab menu's look,
+   centred over the canvas; the path takes more room than a kind. */
+.node-search {
+  translate: -50% 0;
+}
+
+.node-search .tab-menu-row .tab-menu-detail {
+  max-width: 22ch;
+}
+
+/* The command palette (09 §3.5): the Tab menu's window; its list scrolls past
+   fourteen rows, the keys right in each row. */
+.command-palette .tab-menu-list {
+  max-height: calc(14 * var(--st-size-row));
+  overflow-y: auto;
+}
+
+/* The list behind «↗N» (06 §14): the Tab menu's window, its width in `ch`
+   whatever the language; the path and the origin in fixed columns for the
+   longest language, each line on one row with an ellipsis. */
+.ext-list {
+  width: 64ch;
+}
+
+.ext-list .tab-menu-list {
+  max-height: calc(12 * var(--st-size-row));
+  overflow-y: auto;
+  outline: none;
+}
+
+.ext-way {
+  display: inline-flex;
+  flex: none;
+}
+
+.ext-list .ext-path {
+  width: 24ch;
+  max-width: 24ch;
+}
+
+.ext-list .ext-origin {
+  width: 10ch;
+  max-width: 10ch;
 }
 
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
@@ -1615,6 +1705,34 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin: 0;
 }
 
+/* What a removal asks first (06 §12.3): the places or the nodes that stay,
+   each on one row with an ellipsis and its whole text in the tooltip. */
+.delete-list {
+  display: grid;
+  gap: var(--u);
+  max-height: calc(8 * var(--st-size-row));
+  margin: calc(3 * var(--u)) 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.delete-list li {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  min-width: 0;
+  min-height: var(--st-size-row);
+}
+
+.delete-row {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .dialog-actions {
   display: flex;
   justify-content: flex-end;
@@ -1714,6 +1832,14 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 .context-menu-hint {
   flex: none;
   color: var(--st-color-text-muted);
+}
+
+/* A tick of an entry that is on (06 §8 flags), in a column of its own. */
+.context-menu-tick {
+  flex: none;
+  display: flex;
+  width: calc(16 * var(--u));
+  margin-right: calc(-4 * var(--u));
 }
 
 .context-menu-row.is-current .context-menu-hint {
@@ -2002,13 +2128,43 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   top: 0;
   bottom: 0;
   left: var(--layers-w);
-  right: 0;
+  right: var(--minimap-w, 0px);
   z-index: 3;
   pointer-events: none;
 }
 
 .ws-gecko[data-panel="open"] {
-  right: var(--panel-w);
+  right: calc(var(--panel-w) + var(--minimap-w, 0px));
+}
+
+/* The minimap (06 §10.3, `O`): the network's overview at the canvas's bottom
+   right, 200 × 150 px as Houdini's, framed as the path; left of the properties
+   panel. The gecko's home and the path keep clear of it while it is open. */
+.canvas-minimap {
+  position: absolute;
+  right: calc(16 * var(--u));
+  bottom: calc(16 * var(--u));
+  z-index: 2;
+  box-sizing: content-box;
+  width: 200px;
+  height: 150px;
+  background: var(--st-color-surface-sunken);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
+  touch-action: none;
+}
+
+.canvas-minimap[hidden],
+.workspace:not([data-view="2d"]) .canvas-minimap {
+  display: none;
+}
+
+.workspace[data-panel="open"] .canvas-minimap {
+  right: calc(var(--panel-w) + 16 * var(--u));
+}
+
+.workspace[data-minimap="open"] {
+  --minimap-w: calc(200px + 18 * var(--u));
 }
 
 /* The gecko is a button only for the keyboard and screen readers: no bevel,
@@ -2029,18 +2185,33 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   left: calc(var(--layers-w) + 16 * var(--u));
   bottom: calc(16 * var(--u));
   z-index: 2;
-  max-width: min(64ch, calc(100% - var(--layers-w) - 32 * var(--u) - var(--gecko-w)));
+  display: flex;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  max-width: min(
+    64ch,
+    calc(100% - var(--layers-w) - 32 * var(--u) - var(--gecko-w) - var(--minimap-w, 0px))
+  );
 }
 
 /* Left of the properties panel when it is open, as the gecko. */
 .ws-path[data-panel="open"] {
   max-width: min(
     64ch,
-    calc(100% - var(--layers-w) - var(--panel-w) - 32 * var(--u) - var(--gecko-w))
+    calc(
+      100% -
+      var(--layers-w) -
+      var(--panel-w) -
+      32 *
+      var(--u) -
+      var(--gecko-w) -
+      var(--minimap-w, 0px)
+    )
   );
 }
 
-.ws-path ol {
+.ws-path ol,
+.ws-marks {
   display: flex;
   align-items: center;
   min-width: 0;
@@ -2050,6 +2221,37 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   background: var(--st-color-surface);
   border: var(--u) solid var(--st-color-frame);
   box-shadow: var(--st-bevel-raised);
+}
+
+.ws-path ol {
+  flex: 0 1 auto;
+}
+
+/* The quick marks set (06 §10.3): ★ and the digit, beside the path. */
+.ws-marks {
+  flex: none;
+}
+
+.ws-mark {
+  display: flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+  min-height: var(--st-size-control);
+  padding: 0 calc(4 * var(--u));
+  color: var(--st-color-text-muted);
+  background: transparent;
+  border: var(--u) solid transparent;
+  box-shadow: none;
+}
+
+.ws-mark:hover {
+  color: var(--st-color-text);
+  background: var(--st-color-surface-raised);
+  border-color: var(--st-color-frame);
+}
+
+.ws-mark:active {
+  box-shadow: var(--st-bevel-sunken);
 }
 
 .ws-path li {
@@ -2114,6 +2316,12 @@ button.ws-path-step:active:not(:disabled) {
   white-space: nowrap;
 }
 
+/* The marks' slots are no steps of the path: as wide as their ★ and digit. */
+.ws-marks > li {
+  flex: none;
+  min-width: 0;
+}
+
 /* «Слои»: the workspace's nodes as a tree, the whole height. */
 .ws-layers {
   position: absolute;
@@ -2162,6 +2370,12 @@ button.ws-path-step:active:not(:disabled) {
    triangles' column, the nodes' icons stand right of it; one and a half
    times the UI face (owner, 2026-10-24: twice was too big): three device
    pixels a font pixel on DPR 2, softer on DPR 1. */
+/* The filter (09 §2): the Tab menu's prompt, under the title. */
+.layers-filter {
+  flex: none;
+  margin: 0 calc(8 * var(--u)) calc(6 * var(--u)) calc(16 * var(--u));
+}
+
 .layers-title {
   flex: none;
   margin: 0;
@@ -2260,6 +2474,10 @@ button.ws-path-step:active:not(:disabled) {
 .layer-name.is-done .layer-label {
   text-decoration: line-through;
   opacity: 0.6;
+}
+
+.layer-row.is-way .layer-name {
+  color: var(--st-color-text-muted);
 }
 
 .layers-trash {
@@ -2670,6 +2888,21 @@ button.ws-path-step:active:not(:disabled) {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
+}
+
+/* ⌂ the primary placement or the shortcut mark of an appearance (05 §5):
+   «Где размещена» in the panel and the rows of «Удалить везде?». */
+.place-mark {
+  display: inline-flex;
+  flex: none;
+}
+
+/* «Где размещена» (06 §12.2): the canvas's own network is plain text, not a
+   way to go; the path in the canvas's corner already says it is here. */
+.ins-places .is-here .ins-link:disabled {
+  color: var(--st-color-text);
+  background: transparent;
+  border-color: transparent;
 }
 
 .ins-link.is-done {

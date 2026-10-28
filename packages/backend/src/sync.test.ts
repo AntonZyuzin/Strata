@@ -3,8 +3,17 @@ import { LoroDoc } from 'loro-crdt';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
 import type { HomeBackend, NetworkView } from './core';
-import { dueOf, type Graph, newNode } from './graph';
-import { CoreSync, followFolds, followPreviews, followWires, graphOf } from './sync';
+import { dueOf, type Graph, ghostId, ghostSpot, newNode } from './graph';
+import {
+  CoreSync,
+  followExternal,
+  followFolds,
+  followGhosts,
+  followPreviews,
+  followWires,
+  graphOf,
+  opsOf,
+} from './sync';
 
 beforeAll(async () => {
   await loadCore(readFileSync(new URL('../pkg/strata_core_bg.wasm', import.meta.url)));
@@ -83,6 +92,28 @@ describe('the canvas and the core in step', () => {
     await sync.settled();
     expect(g.wireShape).toBe('straight');
     expect((await home.core.view(root)).wire_style).toBe('straight');
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the flags in the core and copies a template, one step of undo (05 §7)', async () => {
+    const { home, root, g, sync, errors } = await start();
+    g.transaction({ key: 't.create' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'Баг', kind: 'project', icon: 0, x: 0, y: 0 }));
+      tx.flag(A, 'template', true);
+      tx.flag(A, 'key', true);
+    });
+    await sync.settled();
+    const tree = await home.core.tree();
+    expect(tree.find((i) => i.id === A)?.flags).toEqual(['key', 'template']);
+    expect(graphOf(await home.core.view(root), () => 0).nodes.get(A)).toMatchObject({
+      key: true,
+      template: true,
+    });
+    const at = { net: root, x: 300, y: 40 };
+    const { id, history } = await home.core.copyNode(A, at, [], { key: 't.copy' });
+    expect(history.undo).toEqual({ key: 't.copy' });
+    const copy = (await home.core.view(root)).nodes.find((n) => n.id === id);
+    expect(copy).toMatchObject({ name: 'Баг', kind: 'project', x: 300, y: 40, flags: ['key'] });
     expect(errors).toEqual([]);
   });
 
@@ -189,6 +220,80 @@ describe('the canvas and the core in step', () => {
     expect(g.edges()).toEqual([[A, B]]);
     expect(g.undoLabel).toEqual(undoBefore);
   });
+
+  it('shows ghosts beside their note and a new node with the name resolves one (05 §8.5)', async () => {
+    const { home, root, g, sync, errors } = await start();
+    g.transaction({ key: 't' }, (tx) => tx.add(node(A, 'Заметка', 0, 0)));
+    await sync.settled();
+    const doc = new LoroDoc();
+    doc.import(await home.core.openDoc(`content/${A}`));
+    doc.getText('text').insert(0, 'Позже: [[Идея]]');
+    doc.commit();
+    await home.core.pushDoc(`content/${A}`, doc.export({ mode: 'update' }));
+    const view = await home.core.view(root);
+    expect(view.ghosts.map((x) => [x.from, x.name])).toEqual([[A, 'Идея']]);
+    const id = ghostId(view.ghosts[0]?.edge ?? '');
+    const undoBefore = g.undoLabel;
+    followGhosts(g, view, 0);
+    expect(g.undoLabel).toEqual(undoBefore);
+    const ghost = () => g.nodes.get(id);
+    expect(ghost()).toMatchObject({
+      ghost: true,
+      ghostOf: A,
+      name: 'Идея',
+      ...ghostSpot({ x: 0, y: 0 }, 'Идея'),
+    });
+    expect(g.edges()).toEqual([[A, id]]);
+    // A graph read afresh has it too.
+    expect(graphOf(view, () => 0).nodes.get(id)).toMatchObject({ ghostOf: A, x: ghost()?.x });
+
+    // It follows its note and is not dragged, wired or sent to the core.
+    const moved = g.transaction({ key: 't.move' }, (tx) => tx.move(A, 100, 0));
+    expect(ghost()).toMatchObject(ghostSpot({ x: 100, y: 0 }, 'Идея'));
+    expect(
+      opsOf(moved ?? { id: 0, label: { key: '' }, source: 'user', ops: [], inverse: [] }, root),
+    ).toEqual([{ op: 'move', net: root, id: A, x: 100, y: 0 }]);
+    g.transaction({ key: 't' }, (tx) => tx.add(node(B, 'Другая', 0, 200)));
+    expect(g.transaction({ key: 't.move' }, (tx) => tx.move(id, 5, 5))).toBeNull();
+    expect(g.transaction({ key: 't.wire' }, (tx) => tx.connect(B, id))).toBeNull();
+    await sync.settled();
+    expect(errors).toEqual([]);
+
+    // A node with the name: the ghost resolves into a wire, outside undo.
+    const spot = { x: ghost()?.x ?? 0, y: ghost()?.y ?? 0 };
+    g.transaction({ key: 't.create' }, (tx) => tx.add(node(C, 'идея', spot.x, spot.y)));
+    await sync.settled();
+    let v = await home.core.view(root);
+    followGhosts(g, v, 0);
+    followWires(g, v);
+    expect(ghost()).toBeUndefined();
+    expect(g.edges().sort()).toEqual([[A, C]]);
+    expect(g.undoLabel).toEqual({ key: 't.create' });
+
+    // Undo: the node goes and the ghost comes back.
+    g.undo();
+    await sync.settled();
+    v = await home.core.view(root);
+    followGhosts(g, v, 0);
+    followWires(g, v);
+    expect(ghost()?.ghostOf).toBe(A);
+    expect(g.edges()).toEqual([[A, id]]);
+
+    // The note out of its only network takes its ghost along; undo brings
+    // both back. «Убрать отсюда» is the core's `unplace`: the last
+    // placement out sends the note to the trash (05 §5).
+    const none = { id: 0, label: { key: '' }, source: 'user' as const, ops: [], inverse: [] };
+    const trashed = g.transaction({ key: 't.delete' }, (tx) => tx.remove(A));
+    expect(ghost()).toBeUndefined();
+    expect(opsOf(trashed ?? none, root)).toEqual([{ op: 'unplace', id: A, net: root }]);
+    await sync.settled();
+    expect((await home.core.trash()).map((t) => t.id)).toEqual([A]);
+    g.undo();
+    expect(ghost()?.ghostOf).toBe(A);
+    expect(g.edges()).toEqual([[A, id]]);
+    await sync.settled();
+    expect(errors).toEqual([]);
+  });
 });
 
 describe('fields of a node (05 §6.1)', () => {
@@ -235,6 +340,70 @@ describe('fields of a node (05 §6.1)', () => {
     ).rejects.toThrow();
   });
 
+  it('«↗N» and the roll-up wires come from the core, outside undo (05 §8.3, 06 §13.3)', async () => {
+    const { home, root, g, sync } = await start();
+    // «Арт» here wired to «Эскиз» inside the folder «Папка» placed here.
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Арт', 0, 0));
+      tx.add(newNode({ id: B, name: 'Папка', kind: 'network', icon: 0, x: 300, y: 0 }));
+    });
+    await sync.settled();
+    await home.core.apply(
+      [
+        { op: 'createNode', id: C, kind: 'note', name: 'Эскиз', net: B, x: 0, y: 0 },
+        { op: 'connect', from: A, to: C },
+      ],
+      { key: 't' },
+    );
+    const view = await home.core.view(root);
+    expect(view.nodes.find((n) => n.id === A)?.external).toBe(1);
+    const looks: (string | null)[] = [];
+    g.subscribe((e) => {
+      if (e.type === 'look') looks.push(e.id);
+    });
+    followExternal(g, view);
+    expect(g.nodes.get(A)?.external).toBe(1);
+    expect(g.rollups).toEqual([{ a: A < B ? A : B, b: A < B ? B : A, count: 1 }]);
+    expect(looks).toEqual([A, null]);
+    // Looks only, no step: the same answer again changes nothing.
+    followExternal(g, view);
+    expect(looks).toHaveLength(2);
+    // A fresh graph reads them at once.
+    expect(graphOf(view, () => 0).rollups).toHaveLength(1);
+    expect(graphOf(view, () => 0).nodes.get(A)?.external).toBe(1);
+    // The list behind «↗1» (06 §14): the other end, its way and its path.
+    const list = await home.core.external(root, A);
+    expect(list.map((w) => [w.name, w.incoming, w.manual, w.path.map(([, n]) => n)])).toEqual([
+      ['Эскиз', false, true, ['Тест', 'Папка']],
+    ]);
+  });
+
+  it('an appearance is marked; «Удалить везде» is the trash, «Убрать отсюда» is not (05 §5)', async () => {
+    const { home, root, g, sync } = await start();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node(A, 'Референсы'));
+      tx.add(newNode({ id: B, name: 'Фильм', kind: 'network', icon: 0, x: 300, y: 0 }));
+    });
+    await sync.settled();
+    await home.core.apply([{ op: 'place', id: A, net: B, x: 0, y: 0 }], { key: 't' });
+    expect(graphOf(await home.core.view(B), () => 0).nodes.get(A)).toMatchObject({
+      appearance: true,
+      places: 2,
+    });
+    followExternal(g, await home.core.view(root));
+    expect(g.nodes.get(A)).toMatchObject({ appearance: false, places: 2 });
+    // Out of here: it stays in «Фильм», its primary now.
+    const none = { id: 0, label: { key: '' }, source: 'user' as const, ops: [], inverse: [] };
+    g.transaction({ key: 't.delete' }, (tx) => tx.remove(A));
+    await sync.settled();
+    expect((await home.core.node(A)).parent).toBe(B);
+    expect(await home.core.trash()).toEqual([]);
+    // Everywhere: to the trash.
+    const film = graphOf(await home.core.view(B), () => 0);
+    const gone = film.transaction({ key: 't.delete' }, (tx) => tx.remove(A, true));
+    expect(opsOf(gone ?? none, B)).toEqual([{ op: 'trash', ids: [A] }]);
+  });
+
   it("a tick follows into the parent's progress arc on the canvas, outside undo", async () => {
     const { home, root, g, sync } = await start();
     g.transaction({ key: 't' }, (tx) => {
@@ -245,7 +414,7 @@ describe('fields of a node (05 §6.1)', () => {
     await sync.settled();
     followFolds(g, await home.core.view(root));
     expect(g.nodes.get(A)?.fold).toMatchObject({ done: 0, total: 1 });
-    const looks: string[] = [];
+    const looks: (string | null)[] = [];
     g.subscribe((e) => {
       if (e.type === 'look') looks.push(e.id);
     });
@@ -296,6 +465,29 @@ describe('fields of a node (05 §6.1)', () => {
 });
 
 describe('the home screen in a browser', () => {
+  it("keeps a tab's undo while another opens, and lets it go with the tab (05 §11)", async () => {
+    const home = await browserHome(memoryShelf());
+    const a = await home.create('А');
+    const step = { key: 't.create' };
+    await home.core.apply(
+      [{ op: 'createNode', kind: 'note', name: 'Заметка', net: a.root, x: 0, y: 0 }],
+      step,
+    );
+    await home.create('Б');
+    expect((await home.core.history()).undo).toBeNull();
+    await home.open(a.workspace.id);
+    expect((await home.core.history()).undo).toEqual(step);
+    // The home screen keeps the tabs behind it.
+    await home.close();
+    await home.open(a.workspace.id);
+    expect((await home.core.history()).undo).toEqual(step);
+    // A closed tab: opened again, the workspace starts afresh, its work kept.
+    expect((await home.release(a.workspace.id)).current).toBeNull();
+    await home.open(a.workspace.id);
+    expect((await home.core.history()).undo).toBeNull();
+    expect((await home.core.view(a.root)).nodes.map((n) => n.name)).toEqual(['Заметка']);
+  });
+
   it('creates, renames, lists by last opened and removes workspaces', async () => {
     let t = 1_000;
     const home: HomeBackend = await browserHome(memoryShelf(), () => t++);

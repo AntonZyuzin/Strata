@@ -26,6 +26,7 @@
     "@strata/gecko": "workspace:*",
     "@strata/i18n": "workspace:*",
     "@strata/layout": "workspace:*",
+    "@strata/search": "workspace:*",
     "@strata/view3d": "workspace:*",
     "@tauri-apps/api": "2.12.4",
     "@tauri-apps/plugin-dialog": "~2.7.3",

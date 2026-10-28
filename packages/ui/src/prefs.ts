@@ -15,6 +15,9 @@ export type Clock = '24' | '12';
 
 export const DATE_FORMATS: readonly DateFormat[] = ['dmy/', 'dmy.', 'mdy/', 'ymd-'];
 export const CLOCKS: readonly Clock[] = ['24', '12'];
+/** When the flag ring shows (06 §8): always, on bubbles seen from afar, never. */
+export type RingMode = 'always' | 'far' | 'never';
+export const RING_MODES: readonly RingMode[] = ['always', 'far', 'never'];
 
 /**
  * What the device keeps: the language; a date's form and the clock, or
@@ -24,6 +27,8 @@ export interface Prefs {
   locale: Locale;
   date: DateFormat | 'auto';
   clock: Clock | 'auto';
+  /** The flag ring (06 §8): «Всегда» by default. */
+  ring: RingMode;
 }
 
 const KEY = 'strata.prefs';
@@ -34,7 +39,10 @@ export function defaults(locale: Locale): { date: DateFormat; clock: Clock } {
 }
 
 /** The date form and the clock in force: chosen, or the language's. */
-export function reading(p: Prefs): { date: DateFormat; clock: Clock } {
+export function reading(p: Pick<Prefs, 'locale' | 'date' | 'clock'>): {
+  date: DateFormat;
+  clock: Clock;
+} {
   const base = defaults(p.locale);
   return {
     date: p.date === 'auto' ? base.date : p.date,
@@ -49,9 +57,10 @@ export function loadPrefs(fallback: Locale): Prefs {
       locale: v?.locale === 'ru' || v?.locale === 'en' ? v.locale : fallback,
       date: DATE_FORMATS.includes(v?.date as DateFormat) ? (v?.date as DateFormat) : 'auto',
       clock: CLOCKS.includes(v?.clock as Clock) ? (v?.clock as Clock) : 'auto',
+      ring: RING_MODES.includes(v?.ring as RingMode) ? (v?.ring as RingMode) : 'always',
     };
   } catch {
-    return { locale: fallback, date: 'auto', clock: 'auto' };
+    return { locale: fallback, date: 'auto', clock: 'auto', ring: 'always' };
   }
 }
 

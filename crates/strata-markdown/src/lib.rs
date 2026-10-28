@@ -10,6 +10,7 @@
 use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, TagEnd};
 use saphyr::{LoadableYamlNode, Yaml};
 use std::ops::Range;
+use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
 
 /// One `[[link]]` or `![[embed]]`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -128,6 +129,26 @@ pub fn scan(text: &str) -> Scan {
     out
 }
 
+/// The link key of 13 §3.4: `casefold(NFC(s))` without `.md`, by which a
+/// `[[link]]` finds its node and a wire to a ghost gets its key (05 §8.5,
+/// 10 §2.5). Not search's `norm()`: «ё» stays apart from «е» and separators
+/// stay as they are, or «Ёлка» and «Елка» would be one note. Full case
+/// folding of Unicode (`caseless`), so «Straße» and «STRASSE» are one key.
+pub fn link_key(s: &str) -> String {
+    let s = s.trim();
+    let mut key = if s.is_ascii() {
+        s.to_ascii_lowercase()
+    } else if is_nfc_quick(s.chars()) == IsNormalized::Yes {
+        caseless::default_case_fold_str(s)
+    } else {
+        caseless::default_case_fold_str(&s.nfc().collect::<String>())
+    };
+    if let Some(stem) = key.strip_suffix(".md") {
+        key.truncate(stem.len());
+    }
+    key
+}
+
 fn link(dest: &str, alias: Option<String>, embed: bool, range: Range<usize>) -> Link {
     let (target, anchor) = match dest.split_once('#') {
         Some((t, a)) => (t, Some(a.to_owned())),
@@ -213,6 +234,21 @@ fn read_properties(source: &str, out: &mut Scan) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn link_keys_fold_case_and_forms_but_keep_letters_apart() {
+        // macOS gives «й» and «ё» as a letter and a combining mark (13 §3.4).
+        assert_eq!(link_key("Идея Й"), link_key("иде\u{44f} \u{438}\u{306}"));
+        assert_eq!(link_key("ЁЛКА"), "ёлка");
+        assert_ne!(link_key("Ёлка"), link_key("Елка"));
+        assert_eq!(link_key("Straße"), link_key("STRASSE"));
+        assert_eq!(link_key(" Plan.md "), "plan");
+        assert_eq!(link_key("Plan.MD"), "plan");
+        assert_eq!(link_key("scan.png"), "scan.png");
+        // Separators are kept: «a-b» and «a b» are two notes.
+        assert_ne!(link_key("a-b"), link_key("a b"));
+        assert_eq!(link_key("Проекты/Игра"), "проекты/игра");
+    }
 
     fn targets(text: &str) -> Vec<(String, bool)> {
         scan(text)

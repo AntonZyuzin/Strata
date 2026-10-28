@@ -2,20 +2,28 @@ import {
   canInsert,
   downstream,
   extract,
+  type Flag,
+  flagsOf,
   type Graph,
   type GraphNode,
+  ghostSpot,
   insertIntoWire,
   type NodeKind,
   newId,
   newNode,
   shake,
+  switchFlag,
   type WireShape,
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
+import { Camera } from './camera';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
+import { RING_DELAY_MS, type RingSlot, ringSlots, SLOT_U, slotAt } from './flagring';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
+import { Minimap } from './minimap';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
+import { arrowStep, chainStep, type Dir, siblingStep } from './traverse';
 import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
 import type { WireStyle } from './wires';
 
@@ -55,7 +63,22 @@ const ACTIVE_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false };
 const RUNNING_WIRE: WireStyle = { ...ACTIVE_WIRE, dot: true };
 const CANDIDATE_WIRE: WireStyle = { color: ATTENTION, alpha: 1, width: 2.5, dot: false };
 /** Crossed by the scissors: dashed, not red — red is only for overdue (06 §6.7). */
-const CUT_WIRE: WireStyle = { color: PAPER, alpha: 1, width: 2, dot: false, dash: CUT_DASH };
+const CUT_WIRE: WireStyle = {
+  color: PAPER,
+  alpha: 1,
+  width: 2,
+  dot: false,
+  dash: CUT_DASH,
+  serifs: true,
+};
+/** To a ghost (07 §5): dashed 4u / 4u at 50 % (05 §8.5). */
+const GHOST_WIRE: WireStyle = {
+  color: PAPER,
+  alpha: fog.scene.ghostAlpha,
+  width: fog.scene.edgeWidth,
+  dot: false,
+  dash: 4,
+};
 
 export type WheelMode = 'mouse' | 'trackpad';
 
@@ -69,11 +92,16 @@ export type HintKey =
   | 'proto.hint.dragInsert'
   | 'proto.hint.wireDrag'
   | 'proto.hint.marquee'
-  | 'proto.hint.cut';
+  | 'proto.hint.cut'
+  | 'proto.hint.ghost';
 
 export interface EditorEvents {
-  /** Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5). */
-  tabMenu(e: { sx: number; sy: number; query: string }): void;
+  /**
+   * Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5).
+   * `named` — the menu offers the kinds for a node of this name: a ghost
+   * clicked with Shift (06 §14).
+   */
+  tabMenu(e: { sx: number; sy: number; query: string; named?: string }): void;
   /** Show or hide the inline name input over a node's label slot. */
   nameInput(e: { id: string; sx: number; sy: number; name: string } | null): void;
   toast(e: { key: string; params?: Record<string, string | number> }): void;
@@ -82,6 +110,8 @@ export interface EditorEvents {
   change(): void;
   /** `M`: to the star map and back (08 §7, 06 §17). */
   map?(): void;
+  /** `O` opened or closed the minimap (06 §10.3). */
+  minimap?(open: boolean): void;
   /** Double click or `Enter` on a node: open its content (06 §13.1). */
   open?(id: string): void;
   /** `L`: lay out the selection, or the whole network when nothing is selected (06 §9.1). */
@@ -98,7 +128,59 @@ export interface EditorEvents {
    * canvas at a screen point; the Chrome shows its menu there.
    */
   contextMenu?(e: { sx: number; sy: number; at: MenuTarget }): void;
+  /**
+   * A template chosen in the Tab menu (05 §7): its copy goes at (x, y), the
+   * `inputs` wired into it. The copy is the core's: everything inside comes too.
+   */
+  template?(e: { id: string; name: string; x: number; y: number; inputs: string[] }): void;
+  /**
+   * A click on a node's «↗N» (05 §8.3, 06 §14): the Chrome lists its wires
+   * that leave the network, by the mark at (sx, sy). The node is chosen.
+   */
+  external?(e: { id: string; sx: number; sy: number }): void;
+  /**
+   * A click on the shortcut of an appearance (06 §12.2): the Chrome shows
+   * «Где размещена». The node is chosen.
+   */
+  places?(e: { id: string; sx: number; sy: number }): void;
+  /**
+   * «Убрать отсюда» or, with `everywhere`, «Удалить везде» (05 §5, 06
+   * §12.3): true when the Chrome asks first — a dialog — and removes the
+   * nodes itself with `removeNodes`; false or none — they go at once.
+   */
+  deleting?(e: { ids: string[]; everywhere: boolean }): boolean;
+  /**
+   * An existing node of another network chosen in the Tab menu (05 §5
+   * «Разместить здесь»): its appearance goes at (x, y), wired from `inputs`.
+   * The core places it; the graph has no such node yet.
+   */
+  place?(e: { id: string; x: number; y: number; inputs: string[] }): void;
 }
+
+/** The canvas's actions by name (06 §1 rule 6): its keys and the palette's commands. */
+export type CanvasAction =
+  | 'create'
+  | 'undo'
+  | 'redo'
+  | 'extract'
+  | 'selectAll'
+  | 'delete'
+  | 'deleteEverywhere'
+  | 'rename'
+  | 'fitAll'
+  | 'frame'
+  | 'map'
+  | 'minimap'
+  | 'wireStyle'
+  | 'flag:key'
+  | 'flag:pause'
+  | 'flag:template'
+  | 'layout'
+  | 'up'
+  | 'open'
+  | 'zoomIn'
+  | 'zoomOut'
+  | 'zoomReset';
 
 /** What the right button was pressed on. */
 export type MenuTarget =
@@ -114,10 +196,32 @@ export type MenuChoice =
       /** Open the name input after creating (the kind's name was used as a placeholder). */
       rename: boolean;
     }
-  | { t: 'existing'; id: string };
+  /** An existing node: on this canvas — wired or framed; elsewhere — its appearance here (05 §5). */
+  | { t: 'existing'; id: string; kind: NodeKind }
+  /** A node with the flag «Шаблон»: its copy (05 §7). */
+  | { t: 'template'; id: string; kind: NodeKind; name: string }
+  /** A ghost of this network: a note with its name, which resolves it (05 §8.5). */
+  | { t: 'ghost'; id: string };
+
+/** The arrows' directions on the canvas (06 §10.3). */
+const ARROWS: Partial<Record<string, Dir>> = {
+  ArrowLeft: 'left',
+  ArrowRight: 'right',
+  ArrowUp: 'up',
+  ArrowDown: 'down',
+};
+
+/** The flags with a key on the canvas (06 §8); «Скрыть от AI» and «Замок» come with MCP. */
+const FLAG_KEYS: Partial<Record<string, Flag>> = {
+  KeyR: 'key',
+  KeyQ: 'pause',
+  KeyE: 'template',
+};
 
 type Hit =
   | { t: 'node'; id: string }
+  /** A ghost (05 §8.5): no ports, no drag; a click makes its node. */
+  | { t: 'ghost'; id: string }
   | { t: 'port'; id: string; angle: number }
   | { t: 'wire'; from: string; to: string }
   | { t: 'empty' };
@@ -190,6 +294,8 @@ type Mode =
       sources: string[];
       sibling: string | null;
       atAnchor: boolean;
+      /** The ghost the node made here resolves (06 §14). */
+      ghost?: string;
     }
   | { t: 'name'; id: string; created: boolean };
 
@@ -206,6 +312,8 @@ interface WireBox extends NodeBox {
 
 export class Editor {
   readonly selection = new Set<string>();
+  /** The overview at the canvas's bottom right, `O` (06 §10.3). */
+  readonly minimap: Minimap;
   current: string | null = null;
   wheelMode: WheelMode = /Mac/.test(navigator.platform) ? 'trackpad' : 'mouse';
   /** Swing of the shake in screen px; 0 turns the gesture off (05 §8.4). */
@@ -222,6 +330,14 @@ export class Editor {
   textWire: (from: string, to: string) => boolean = () => false;
   private mode: Mode = { t: 'idle' };
   private hover: Hit = { t: 'empty' };
+  /** The flag ring (06 §8): the bubble the cursor rests on, since when; the slot under it. */
+  private ring: { id: string; since: number } | null = null;
+  /**
+   * When the ring shows (06 §8, «Настройки»): always; from afar — on a
+   * bubble under 32 px on screen, its flags' glyphs too small (07 §4.9); never.
+   */
+  ringMode: 'always' | 'far' | 'never' = 'always';
+  private ringSlot: Flag | null = null;
   private selectedWire: [string, string] | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
@@ -238,12 +354,22 @@ export class Editor {
     private readonly graph: Graph,
     private readonly events: EditorEvents,
   ) {
+    this.minimap = new Minimap(
+      view,
+      () => this.graph,
+      () => this.seen(),
+    );
     view.wireStyle = (from, to) => this.styleOf(from, to);
-    view.onFrame = (now) => this.drawOverlay(now);
+    view.onFrame = (now) => {
+      this.drawOverlay(now);
+      this.minimap.draw();
+    };
     view.interaction = () => {
       const h = this.hover;
       const hover = this.mode.t === 'idle' && (h.t === 'node' || h.t === 'port') ? h.id : null;
-      return { hover, selection: this.selection, current: this.current };
+      // The decor waits out the ring's delay itself, drawing frames until it shows.
+      const ring = this.ringOn() && this.ring ? { ...this.ring, slot: this.ringSlot } : null;
+      return { hover, selection: this.selection, current: this.current, ring };
     };
     this.detach.push(
       view.setGraph(graph),
@@ -262,6 +388,7 @@ export class Editor {
 
   destroy(): void {
     for (const f of this.detach) f();
+    this.minimap.destroy();
   }
 
   /** The React Chrome tells the editor when a menu or input owns the keyboard. */
@@ -314,8 +441,8 @@ export class Editor {
   }
 
   /** The menu's «Удалить»: the selection, or the selected wire (Delete). */
-  deleteSelected(): void {
-    this.deleteSelection();
+  deleteSelected(everywhere = false): void {
+    this.deleteSelection(everywhere);
   }
 
   /** Nothing selected: the panel's × closes it so (06, «P»). */
@@ -326,11 +453,201 @@ export class Editor {
     this.view.invalidate();
   }
 
+  /**
+   * Flies to nodes and selects them (09 §3.4: `Ctrl+O`; §3.3: the next
+   * match of `Ctrl+F`): the camera ends framing them as `G` does.
+   */
+  flyTo(ids: string[], select = true): void {
+    const box = this.boxOf(ids.filter((id) => this.graph.nodes.has(id)));
+    if (!box) return;
+    const pad = 120;
+    const c = new Camera();
+    c.fit(
+      { minX: box.minX - pad, minY: box.minY - pad, maxX: box.maxX + pad, maxY: box.maxY + pad },
+      this.seen(),
+      this.view.height,
+    );
+    this.view.flyTo({ x: c.x, y: c.y, zoom: c.zoom });
+    if (select) this.select(ids);
+  }
+
+  /** Selects nodes, as a search chose them: `Enter` of `Ctrl+F` (09 §3.3). */
+  selectNodes(ids: string[]): void {
+    this.select(ids.filter((id) => this.graph.nodes.has(id)));
+  }
+
+  /** The selection, for a search to give back on `Esc` (09 §3.3). */
+  get selected(): string[] {
+    return [...this.selection];
+  }
+
+  /** Selects a node the core made and keeps it in view, at the zoom one has (a template's copy). */
+  reveal(id: string): void {
+    if (!this.graph.nodes.has(id)) return;
+    this.select([id]);
+    this.follow(id);
+  }
+
   /** Selects one node and keeps it in view (the «Структура» tree, the panel's links). */
   focusNode(id: string): void {
     if (!this.graph.nodes.has(id)) return;
     this.select([id]);
     this.frameNodes([id]);
+  }
+
+  /**
+   * The nodes a flag's key hits (06 §8): the node under the cursor — the
+   * whole selection when it is in it; with nothing under it, the selection.
+   */
+  flagTargets(id: string | null = this.hoverNode()): string[] {
+    if (id && !this.selection.has(id)) return [id];
+    return [...this.selection];
+  }
+
+  /**
+   * `R`, `Q`, `E` and the menu's flags (06 §8): set on all the nodes when
+   * one of them lacks it, else cleared on all; one step of undo.
+   */
+  switchFlag(flag: Flag, ids: string[] = this.flagTargets()): void {
+    const nodes = ids.filter((id) => this.graph.nodes.has(id));
+    if (this.mode.t !== 'idle' || nodes.length === 0) return;
+    const on = nodes.some((id) => {
+      const n = this.graph.nodes.get(id);
+      return !!n && !flagsOf(n).includes(flag);
+    });
+    const label = {
+      key: `proto.change.flag.${flag}.${on ? 'on' : 'off'}`,
+      params: { n: nodes.length },
+    };
+    this.graph.transaction(label, (tx) => switchFlag(this.graph, tx, nodes, flag));
+    this.view.invalidate();
+  }
+
+  /** Whether the ring's mode lets it show on this bubble. */
+  private ringFor(id: string): boolean {
+    if (this.ringMode === 'never') return false;
+    if (this.ringMode === 'always') return true;
+    const p = this.view.nodeAt(id);
+    return !!p && 2 * p.r * this.view.camera.zoom < 32;
+  }
+
+  /** A ring may be up: a bubble under the cursor, `Ctrl` not held, no gesture running. */
+  private ringOn(): boolean {
+    const ctrl = this.held.has('ControlLeft') || this.held.has('ControlRight');
+    return this.ring !== null && this.mode.t === 'idle' && !ctrl;
+  }
+
+  /** The ring is up: and the cursor has rested its delay. */
+  private ringShown(): boolean {
+    return this.ringOn() && performance.now() - (this.ring?.since ?? 0) >= RING_DELAY_MS;
+  }
+
+  /** The ring's slots on screen, when it is up. */
+  ringSlots(): RingSlot[] {
+    if (!this.ringShown() || !this.ring) return [];
+    const p = this.view.nodeAt(this.ring.id);
+    if (!p) return [];
+    const s = this.view.camera.toScreen(p.x, p.y);
+    return ringSlots(s.x, s.y, p.r * this.view.camera.zoom, this.view.unit);
+  }
+
+  /** Within the ring that is up: its circle and the slots' half beyond. */
+  private insideRing(sx: number, sy: number): boolean {
+    const [slot] = this.ringSlots();
+    const p = this.ring ? this.view.nodeAt(this.ring.id) : null;
+    if (!slot || !p) return false;
+    const c = this.view.camera.toScreen(p.x, p.y);
+    const radius = Math.hypot(slot.x - c.x, slot.y - c.y);
+    return Math.hypot(sx - c.x, sy - c.y) <= radius + (SLOT_U / 2) * this.view.unit;
+  }
+
+  private slotUnder(sx: number, sy: number): RingSlot | null {
+    return slotAt(this.ringSlots(), sx, sy, this.view.unit);
+  }
+
+  private hoverNode(): string | null {
+    const h = this.hover;
+    return this.pointer.inside && (h.t === 'node' || h.t === 'port') ? h.id : null;
+  }
+
+  /**
+   * A canvas action by its name, as its key does it: every gesture has a
+   * command (06 §1 rule 6), the palette's included (09 §3.5).
+   */
+  act(action: CanvasAction): void {
+    const cam = this.view.camera;
+    const zoom = (factor: number) => {
+      this.view.stopFlight();
+      cam.zoomAt(this.seen() / 2, this.view.height / 2, factor);
+      this.view.invalidate();
+    };
+    switch (action) {
+      case 'create':
+        this.tabKey(false);
+        return;
+      case 'undo':
+        this.undo();
+        return;
+      case 'redo':
+        this.redo();
+        return;
+      case 'extract':
+        this.extractSelection();
+        return;
+      case 'selectAll':
+        this.select([...this.graph.nodes.keys()]);
+        return;
+      case 'delete':
+        this.deleteSelection(false);
+        return;
+      case 'deleteEverywhere':
+        this.deleteSelection(true);
+        return;
+      case 'rename':
+        if (this.current) this.openName(this.current, false);
+        return;
+      case 'fitAll':
+        this.fitAll();
+        return;
+      case 'frame':
+        if (this.selection.size > 0) this.frameNodes([...this.selection]);
+        else this.fitAll();
+        return;
+      case 'map':
+        this.events.map?.();
+        return;
+      case 'minimap':
+        this.minimap.open = !this.minimap.open;
+        this.events.minimap?.(this.minimap.open);
+        return;
+      case 'wireStyle':
+        this.cycleWireShape();
+        return;
+      case 'flag:key':
+      case 'flag:pause':
+      case 'flag:template':
+        // From a command the selection, not the node under the cursor (06 §8).
+        this.switchFlag(action.slice('flag:'.length) as Flag, [...this.selection]);
+        return;
+      case 'layout':
+        this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);
+        return;
+      case 'up':
+        this.events.up?.();
+        return;
+      case 'open':
+        if (this.current) this.events.open?.(this.current);
+        return;
+      case 'zoomIn':
+        zoom(1.25);
+        return;
+      case 'zoomOut':
+        zoom(1 / 1.25);
+        return;
+      case 'zoomReset':
+        zoom(1 / cam.zoom);
+        return;
+    }
   }
 
   /** The style `Shift+S` turns the network's wires to next (06 §6.2). */
@@ -359,7 +676,13 @@ export class Editor {
     this.mode = { t: 'idle' };
     if (choice.t === 'existing') {
       const node = this.graph.nodes.get(choice.id);
-      if (!node) return;
+      if (!node) {
+        // Another network's node: «Разместить здесь» (05 §5), where a new one would go.
+        const place = this.placeNew(m, radiusOf({ kind: choice.kind, key: false }));
+        const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
+        this.events.place?.({ id: choice.id, x: place.x, y: place.y, inputs: [...inputs] });
+        return;
+      }
       const sources = m.sources.filter((s) => s !== choice.id);
       if (sources.length > 0) {
         this.graph.transaction(
@@ -374,24 +697,76 @@ export class Editor {
       this.select([choice.id]);
       return;
     }
-    const r = radiusOf({ kind: choice.kind, key: false });
+    const ghost = choice.t === 'ghost' ? this.graph.nodes.get(choice.id) : undefined;
+    if (choice.t === 'ghost' && !ghost?.ghostOf) return;
+    const kind = choice.t === 'ghost' ? 'note' : choice.kind;
+    const r = radiusOf({ kind, key: false });
     const place = this.placeNew(m, r);
+    const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
+    if (choice.t === 'template') {
+      const { id, name } = choice;
+      this.events.template?.({ id, name, x: place.x, y: place.y, inputs: [...inputs] });
+      return;
+    }
+    const name = ghost ? ghost.name : choice.t === 'create' ? choice.name : '';
+    // From a ghost with Shift: a kind for its name resolves it; another name does not.
+    const asked = m.ghost && this.graph.nodes.get(m.ghost)?.name === name ? m.ghost : null;
+    const id = this.createNode(kind, name, place, inputs, ghost?.id ?? asked);
+    if (choice.t === 'create' && choice.rename) this.openName(id, true);
+  }
+
+  /**
+   * A node of `kind` named `name` at `place`, wired from `inputs`; one step
+   * of undo. With `ghost` the node is the one its `[[link]]` waits for: the
+   * ghost goes in the same step, and its wire turns into the note's, which
+   * the core makes from the text (05 §8.5, 06 §14).
+   */
+  private createNode(
+    kind: NodeKind,
+    name: string,
+    place: { x: number; y: number },
+    inputs: readonly string[],
+    ghost: string | null,
+  ): string {
     const node = newNode({
       id: newId(),
-      name: choice.name,
-      kind: choice.kind,
-      icon: this.view.iconFor(choice.kind),
+      name,
+      kind,
+      icon: this.view.iconFor(kind),
       x: place.x,
       y: place.y,
     });
-    const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
+    const from = ghost ? this.graph.nodes.get(ghost)?.ghostOf : null;
     this.graph.transaction({ key: 'proto.change.create', params: { name: node.name } }, (tx) => {
       tx.add(node);
       for (const s of inputs) tx.connect(s, node.id);
+      if (ghost && from) tx.remove(ghost);
     });
+    if (from) this.graph.derive({ key: 'core.change.links' }, (tx) => tx.connect(from, node.id));
     this.select([node.id]);
     this.follow(node.id);
-    if (choice.rename) this.openName(node.id, true);
+    return node.id;
+  }
+
+  /**
+   * A ghost clicked (06 §14): a note with its name in its place; with
+   * `named`, the Tab menu first, to choose the kind.
+   */
+  private resolveGhost(id: string, named: boolean): void {
+    const g = this.graph.nodes.get(id);
+    if (!g?.ghostOf) return;
+    if (named) {
+      const s = this.view.camera.toScreen(g.x, g.y);
+      this.openMenu(
+        s.x,
+        s.y,
+        { ax: g.x, ay: g.y, sources: [], sibling: null, atAnchor: true, ghost: id },
+        '',
+        g.name,
+      );
+      return;
+    }
+    this.createNode('note', g.name, { x: g.x, y: g.y }, [], id);
   }
 
   menuCancel(): void {
@@ -470,6 +845,9 @@ export class Editor {
     on(el, 'pointercancel', () => this.cancelGesture());
     on(el, 'pointerleave', () => {
       this.pointer.inside = false;
+      this.ring = null;
+      this.ringSlot = null;
+      this.view.invalidate();
     });
     on(el, 'contextmenu', (e) => {
       e.preventDefault();
@@ -516,6 +894,8 @@ export class Editor {
     on(window, 'keydown', (e) => this.onKey(e), { capture: true });
     on(window, 'keyup', (e) => {
       this.held.delete(e.code);
+      // `Ctrl` let go: the flag ring comes back.
+      if (e.code === 'ControlLeft' || e.code === 'ControlRight') this.view.invalidate();
       if (e.code === 'Digit8') this.view.invalidate();
       if (e.code === 'KeyY') this.scissorsCursor();
     });
@@ -533,6 +913,7 @@ export class Editor {
   private onDown(e: PointerEvent) {
     const { sx, sy } = this.local(e);
     this.view.canvas.focus({ preventScroll: true });
+    this.view.stopFlight();
     const m = this.mode;
     if (m.t === 'wire' && m.twoClick && e.button === 0) {
       this.finishWire(sx, sy);
@@ -554,6 +935,24 @@ export class Editor {
       return;
     }
     if (e.button !== 0) return;
+    // A slot of the flag ring switches its flag (06 §8), on the selection
+    // when the bubble is in it; no press, no drag.
+    const slot = this.slotUnder(sx, sy);
+    if (slot && this.ring) {
+      this.switchFlag(slot.flag, this.flagTargets(this.ring.id));
+      return;
+    }
+    // A mark on the rim: «↗N» opens its list (06 §14), the shortcut of an
+    // appearance «Где размещена» (06 §12.2); not a press on the bubble.
+    const mark = this.view.markAt(sx, sy);
+    const open = mark && (mark.mark === 'external' ? this.events.external : this.events.places);
+    if (mark && open) {
+      // No mousedown after it: what opens keeps the focus it takes.
+      e.preventDefault();
+      this.select([mark.id]);
+      open({ id: mark.id, sx, sy });
+      return;
+    }
     this.mode = {
       t: 'press',
       hit: this.hitTest(sx, sy),
@@ -571,10 +970,23 @@ export class Editor {
     const m = this.mode;
     switch (m.t) {
       case 'idle': {
+        // Over the flag ring the bubble keeps its hover and its ring.
+        const slot = this.slotUnder(sx, sy);
+        this.ringSlot = slot?.flag ?? null;
+        if (slot) {
+          this.view.invalidate();
+          return;
+        }
         const hit = this.hitTest(sx, sy);
         if (!sameHit(hit, this.hover)) {
           this.hover = hit;
           this.events.hint(hintOf(hit));
+        }
+        const id = hit.t === 'node' || hit.t === 'port' ? hit.id : null;
+        // On the way from the bubble to its ring the ring stays.
+        const kept = !id && this.insideRing(sx, sy);
+        if (id !== this.ring?.id && !kept) {
+          this.ring = id && this.ringFor(id) ? { id, since: performance.now() } : null;
         }
         this.view.invalidate();
         return;
@@ -652,6 +1064,10 @@ export class Editor {
       now - this.lastClick.time < DOUBLE_CLICK_MS &&
       Math.hypot(sx - this.lastClick.sx, sy - this.lastClick.sy) <= DRAG_PX;
     this.lastClick = { time: now, sx, sy };
+    if (hit.t === 'ghost') {
+      this.resolveGhost(hit.id, e.shiftKey);
+      return;
+    }
     if (hit.t === 'port') {
       // A click on the port without moving: the wire is "in hand" (06 §6.1, two-click mode).
       const w = this.view.camera.toWorld(sx, sy);
@@ -708,6 +1124,11 @@ export class Editor {
 
   private startDrag(m: Extract<Mode, { t: 'press' }>, sx: number, sy: number, e: PointerEvent) {
     const hit = m.hit;
+    // A ghost stands where its note puts it (06 §14).
+    if (hit.t === 'ghost') {
+      this.mode = { t: 'idle' };
+      return;
+    }
     if (hit.t === 'port') {
       const w = this.view.camera.toWorld(sx, sy);
       this.mode = {
@@ -789,7 +1210,16 @@ export class Editor {
     const w = this.view.camera.toWorld(sx, sy);
     const dx = w.x - m.grabX;
     const dy = w.y - m.grabY;
-    for (const [id, o] of m.origin) this.view.place(id, o.x + dx, o.y + dy);
+    for (const [id, o] of m.origin) {
+      this.view.place(id, o.x + dx, o.y + dy);
+      // Its ghosts stand beside it on the way (06 §14).
+      for (const g of this.graph.outputs(id)) {
+        const ghost = this.graph.nodes.get(g);
+        if (ghost?.ghostOf !== id) continue;
+        const at = ghostSpot({ x: o.x + dx, y: o.y + dy }, ghost.name);
+        this.view.place(g, at.x, at.y);
+      }
+    }
     const single = m.ids.length === 1 ? m.ids[0] : undefined;
     if (single === undefined) return;
     // Shake: the node comes out of its chains, still on the cursor (06 §6.7).
@@ -959,7 +1389,8 @@ export class Editor {
     this.refreshIndex();
     const hits = this.nodeIndex
       .search({ minX: a.x, minY: a.y, maxX: b.x, maxY: b.y })
-      .map((h) => h.id);
+      .map((h) => h.id)
+      .filter((id) => !this.graph.nodes.get(id)?.ghostOf);
     if (m.mode === 'set') this.selection.clear();
     for (const id of hits) {
       if (m.mode === 'sub') this.selection.delete(id);
@@ -1014,6 +1445,7 @@ export class Editor {
 
   private onWheel(e: WheelEvent) {
     e.preventDefault();
+    this.view.stopFlight();
     const { sx, sy } = this.local(e);
     const cam = this.view.camera;
     const scale = e.deltaMode === 1 ? 16 : 1;
@@ -1036,6 +1468,8 @@ export class Editor {
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     const mod = e.metaKey || e.ctrlKey;
     if (!e.repeat) this.held.add(e.code);
+    // `Ctrl` held hides the flag ring over a neighbour (06 §8).
+    if (e.code === 'ControlLeft' || e.code === 'ControlRight') this.view.invalidate();
     const cam = this.view.camera;
     switch (e.code) {
       case 'Tab': {
@@ -1055,80 +1489,113 @@ export class Editor {
       case 'KeyZ':
         if (!mod) return;
         e.preventDefault();
-        if (e.shiftKey) this.redo();
-        else this.undo();
+        this.act(e.shiftKey ? 'redo' : 'undo');
         return;
       case 'KeyX':
         if (!(mod && e.shiftKey)) return;
         e.preventDefault();
-        this.extractSelection();
+        this.act('extract');
         return;
       case 'KeyA':
         if (!mod) return;
         e.preventDefault();
-        this.select([...this.graph.nodes.keys()]);
+        this.act('selectAll');
         return;
       case 'Delete':
       case 'Backspace':
         e.preventDefault();
-        this.deleteSelection();
+        // `Shift` — «Удалить везде», else «Убрать отсюда» (06 §12.3).
+        this.act(e.shiftKey ? 'deleteEverywhere' : 'delete');
         return;
       case 'F2':
-        if (this.current) this.openName(this.current, false);
+        this.act('rename');
         return;
       case 'KeyH':
         if (mod) return;
-        this.fitAll();
+        this.act('fitAll');
         return;
       case 'KeyM':
         if (mod) return;
-        this.events.map?.();
+        this.act('map');
+        return;
+      case 'KeyO':
+        if (mod || e.altKey || e.shiftKey) return;
+        this.act('minimap');
         return;
       case 'KeyS':
         if (mod || !e.shiftKey) return;
         e.preventDefault();
-        this.cycleWireShape();
+        this.act('wireStyle');
         return;
       case 'KeyY':
         if (mod) return;
         this.scissorsCursor();
         return;
+      case 'KeyR':
+      case 'KeyQ':
+      case 'KeyE': {
+        const flag = FLAG_KEYS[e.code];
+        if (mod || e.shiftKey || e.altKey || !flag) return;
+        e.preventDefault();
+        this.switchFlag(flag);
+        return;
+      }
       case 'KeyL':
         if (mod) return;
-        this.events.layout?.(this.selection.size > 0 ? [...this.selection] : null);
+        this.act('layout');
         return;
       case 'KeyU':
         if (mod) return;
-        this.events.up?.();
+        this.act('up');
         return;
       case 'Enter':
       case 'NumpadEnter':
         if (mod || !this.current) return;
         e.preventDefault();
-        this.events.open?.(this.current);
+        this.act('open');
         return;
       case 'KeyG':
       case 'KeyF':
         if (mod) return;
-        if (this.selection.size > 0) this.frameNodes([...this.selection]);
-        else this.fitAll();
+        this.act('frame');
         return;
       case 'Equal':
       case 'NumpadAdd':
-        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1.25);
-        break;
+        this.act('zoomIn');
+        return;
       case 'Minus':
       case 'NumpadSubtract':
-        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / 1.25);
-        break;
+        this.act('zoomOut');
+        return;
       case 'Digit0':
-        cam.zoomAt(this.seen() / 2, this.view.height / 2, 1 / cam.zoom);
-        break;
+        this.act('zoomReset');
+        return;
+      case 'PageUp':
+      case 'PageDown': {
+        // Along the chain; with Shift — to the neighbours (06 §10.3).
+        if (mod || e.altKey || !this.current) return;
+        e.preventDefault();
+        const down = e.code === 'PageDown';
+        this.step(
+          e.shiftKey
+            ? siblingStep(this.graph, this.current, down)
+            : chainStep(this.graph, this.current, !down),
+        );
+        return;
+      }
       case 'ArrowLeft':
       case 'ArrowRight':
       case 'ArrowUp':
       case 'ArrowDown': {
-        if (!e.shiftKey) return;
+        if (mod || e.altKey) return;
+        if (!e.shiftKey) {
+          // To the nearest node that way (06 §10.3); none chosen — the one in the middle.
+          e.preventDefault();
+          const dir = ARROWS[e.code] ?? 'right';
+          const middle = cam.toWorld(this.seen() / 2, this.view.height / 2);
+          this.step(arrowStep(this.graph, this.current, dir, middle));
+          return;
+        }
         e.preventDefault();
         const step =
           (e.code === 'ArrowLeft' || e.code === 'ArrowRight' ? this.view.width : this.view.height) /
@@ -1141,6 +1608,8 @@ export class Editor {
       default:
         return;
     }
+    // The keys that reach here move the camera: a flight gives way.
+    this.view.stopFlight();
     this.view.invalidate();
   }
 
@@ -1192,9 +1661,15 @@ export class Editor {
     return { sx: this.seen() / 2, sy: this.view.height / 2 };
   }
 
-  private openMenu(sx: number, sy: number, m: Omit<Extract<Mode, { t: 'menu' }>, 't'>, query = '') {
+  private openMenu(
+    sx: number,
+    sy: number,
+    m: Omit<Extract<Mode, { t: 'menu' }>, 't'>,
+    query = '',
+    named?: string,
+  ) {
     this.mode = { t: 'menu', ...m };
-    this.events.tabMenu({ sx, sy, query });
+    this.events.tabMenu(named === undefined ? { sx, sy, query } : { sx, sy, query, named });
     this.view.invalidate();
   }
 
@@ -1242,7 +1717,7 @@ export class Editor {
   }
 
   /** `Delete` with healing (06 §6.7, §12.3): extract, then remove; undo brings it back. */
-  private deleteSelection() {
+  private deleteSelection(everywhere: boolean) {
     const ids = [...this.selection];
     if (ids.length === 0) {
       const w = this.selectedWire;
@@ -1251,11 +1726,33 @@ export class Editor {
       this.selectedWire = null;
       return;
     }
-    this.graph.transaction({ key: 'proto.change.delete', params: { n: ids.length } }, (tx) => {
-      extract(this.graph, tx, ids);
-      for (const id of ids) tx.remove(id);
+    if (this.events.deleting?.({ ids, everywhere })) return;
+    this.removeNodes(ids, everywhere);
+  }
+
+  /**
+   * The nodes out of this network, one step of undo (05 §5, 06 §12.3): the
+   * chains through them heal (§6.7); a node placed nowhere else, or all of
+   * them with `everywhere`, goes to the trash.
+   */
+  removeNodes(ids: readonly string[], everywhere: boolean): void {
+    const here = ids.filter((id) => this.graph.nodes.has(id));
+    if (here.length === 0) return;
+    // Placed elsewhere too: they leave only this network.
+    const stay = !everywhere && here.some((id) => (this.graph.nodes.get(id)?.places ?? 1) > 1);
+    const n = here.length;
+    this.graph.transaction(
+      { key: stay ? 'proto.change.unplace' : 'proto.change.delete', params: { n } },
+      (tx) => {
+        extract(this.graph, tx, here);
+        for (const id of here) tx.remove(id, everywhere);
+      },
+    );
+    for (const id of here) this.selection.delete(id);
+    this.events.toast({
+      key: stay ? 'proto.toast.unplaced' : 'proto.toast.deleted',
+      params: { n },
     });
-    this.events.toast({ key: 'proto.toast.deleted', params: { n: ids.length } });
   }
 
   private copyNodes(ids: string[]): string[] {
@@ -1286,9 +1783,11 @@ export class Editor {
   }
 
   private select(ids: string[]) {
+    // A ghost is not a node (05 §8.5): no selection, no gestures.
+    const nodes = ids.filter((id) => !this.graph.nodes.get(id)?.ghostOf);
     this.selection.clear();
-    for (const id of ids) this.selection.add(id);
-    this.current = ids.at(-1) ?? null;
+    for (const id of nodes) this.selection.add(id);
+    this.current = nodes.at(-1) ?? null;
     this.selectedWire = null;
     this.events.change();
     this.view.invalidate();
@@ -1350,6 +1849,14 @@ export class Editor {
   }
 
   /** Moves the camera only if the node left the screen, with a 48 px margin (06 §3). */
+  /** A key's step to node `id`: it alone is chosen, the camera keeps it in view. */
+  private step(id: string | null) {
+    if (!id || this.mode.t !== 'idle') return;
+    this.view.stopFlight();
+    this.select([id]);
+    this.follow(id);
+  }
+
   private follow(id: string) {
     const n = this.graph.nodes.get(id);
     if (!n) return;
@@ -1408,6 +1915,8 @@ export class Editor {
     this.nodeIndex = new RBush<NodeBox>().load(nodes);
     const wires: WireBox[] = [];
     for (const [from, to] of this.graph.edges()) {
+      // A ghost's wire is its note's text: not picked, cut or branched.
+      if (this.graph.nodes.get(to)?.ghostOf) continue;
       const b = wireBounds(this.wireEnds(from, to));
       wires.push({ ...b, id: from, to });
     }
@@ -1453,8 +1962,10 @@ export class Editor {
     if (best) {
       const rs = best.r * zoom;
       const hitR = Math.max(rs * HEX_IN, MIN_HIT_PX);
-      if (best.d <= hitR) return { t: 'node', id: best.id };
-      if (best.d <= hitR + PORT_RING(rs)) {
+      // A ghost has no ports: nothing is wired to it by hand (05 §8.5).
+      const ghost = !!this.graph.nodes.get(best.id)?.ghostOf;
+      if (best.d <= hitR) return { t: ghost ? 'ghost' : 'node', id: best.id };
+      if (!ghost && best.d <= hitR + PORT_RING(rs)) {
         const p = this.view.nodeAt(best.id);
         return { t: 'port', id: best.id, angle: Math.atan2(w.y - (p?.y ?? 0), w.x - (p?.x ?? 0)) };
       }
@@ -1477,6 +1988,7 @@ export class Editor {
   // ── Drawing (07 §4.5, §5) ─────────────────────────────────────────
 
   private styleOf(from: string, to: string): WireStyle {
+    if (this.graph.nodes.get(to)?.ghostOf) return GHOST_WIRE;
     const m = this.mode;
     if (m.t === 'cut') return m.crossed.has(wireKey(from, to)) ? CUT_WIRE : NORMAL_WIRE;
     if (m.t === 'drag' && m.candidate && m.candidate.from === from && m.candidate.to === to) {
@@ -1635,7 +2147,8 @@ function dashed(g: CanvasView['overlay'], pts: readonly { x: number; y: number }
 
 function sameHit(a: Hit, b: Hit): boolean {
   if (a.t !== b.t) return false;
-  if (a.t === 'node' && b.t === 'node') return a.id === b.id;
+  if ((a.t === 'node' && b.t === 'node') || (a.t === 'ghost' && b.t === 'ghost'))
+    return a.id === b.id;
   if (a.t === 'port' && b.t === 'port') return a.id === b.id && Math.abs(a.angle - b.angle) < 0.05;
   if (a.t === 'wire' && b.t === 'wire') return a.from === b.from && a.to === b.to;
   return true;
@@ -1649,6 +2162,8 @@ function hintOf(hit: Hit): HintKey {
       return 'proto.hint.port';
     case 'wire':
       return 'proto.hint.wire';
+    case 'ghost':
+      return 'proto.hint.ghost';
     default:
       return 'proto.hint.empty';
   }

@@ -27,6 +27,7 @@ import { formatNumber, type Locale, type MessageKey, t } from '@strata/i18n';
 import type { NetLayout } from '@strata/layout';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
+import { netItems, searchClient } from '../search';
 import { BoardWindow } from './BoardWindow';
 import { Layouter } from './layouter';
 import { Map3D, type MapState } from './map3d';
@@ -34,7 +35,7 @@ import { type MenuItem, type MenuNode, remember } from './menu';
 import { NameInput } from './NameInput';
 import { NoteWindow } from './NoteWindow';
 import { NoteStore } from './notes';
-import { TabMenu } from './TabMenu';
+import { menuOpening, TabMenu } from './TabMenu';
 
 /**
  * Clickable canvas prototype (16 §3.2, step 0.3): about 200 bubbles to check
@@ -178,7 +179,13 @@ export function Prototype(props: {
   const [backdrop, setBackdrop] = useState<Backdrop>('fog');
   const [p95, setP95] = useState<number | null>(null);
   const graph = useRef<Graph | null>(null);
-  const [menu, setMenu] = useState<{ sx: number; sy: number; query: string } | null>(null);
+  const [menu, setMenu] = useState<{
+    sx: number;
+    sy: number;
+    query: string;
+    /** Each opening is a menu of its own (see `menuOpening`). */
+    seq: number;
+  } | null>(null);
   const [name, setName] = useState<{ id: string; sx: number; sy: number; name: string } | null>(
     null,
   );
@@ -210,7 +217,12 @@ export function Prototype(props: {
     let cancelled = false;
     let view: CanvasView | null = null;
     const events: EditorEvents = {
-      tabMenu: (e) => setMenu(e),
+      tabMenu: (e) => {
+        // The menu ranks the canvas's nodes as they are now (09 §2.7).
+        const g = graph.current;
+        if (g) searchClient().set('net', netItems(g.nodes.values(), 'proto'));
+        setMenu({ ...e, seq: menuOpening() });
+      },
       nameInput: (e) => setName(e),
       toast: (e) => {
         const id = ++toastId.current;
@@ -664,6 +676,7 @@ export function Prototype(props: {
       </ul>
       {menu ? (
         <TabMenu
+          key={menu.seq}
           locale={locale}
           x={menu.sx}
           y={menu.sy}
@@ -671,6 +684,7 @@ export function Prototype(props: {
           initialQuery={menu.query}
           nodes={nodes}
           recent={recent}
+          search={searchClient()}
           onChoose={choose}
           onCancel={() => {
             setMenu(null);

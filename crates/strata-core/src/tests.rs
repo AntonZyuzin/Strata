@@ -3,6 +3,8 @@
 use crate::{Label, MemoryStore, Op, Store, Workspace};
 use strata_model::{NodeId, NodeKind};
 
+mod import;
+
 fn ws() -> Workspace<MemoryStore> {
     let mut w = Workspace::create(MemoryStore::default(), "Корень").expect("create");
     w.set_clock(|| 1_760_000_000_000);
@@ -2626,4 +2628,56 @@ fn a_template_copies_its_appearances_as_appearances() {
         .map(|n| n.name)
         .collect();
     assert!(!names.contains(&"Библиотека".to_owned()), "{names:?}");
+}
+
+#[test]
+fn markdown_links_are_wires_and_a_rename_rewrites_them_encoded() {
+    // 13 §2.5: `[текст](Папка/X%20Y.md)` is a link as `[[Папка/X Y]]`; a
+    // rename writes the new name encoded, `<…>` keeps its spaces (13 §6.5).
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let plan = create(&mut w, &folder, NodeKind::Note, "Мой план");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    let text = "[план](Папка/Мой%20план.md#Цели) и [то же](<Мой план.md>), [сайт](https://x.org)";
+    assert!(ed.type_text(&mut w, &note, text));
+    let outputs = |w: &Workspace<MemoryStore>| {
+        w.node_details(&note)
+            .expect("details")
+            .outputs
+            .into_iter()
+            .map(|l| l.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(outputs(&w), vec![plan.clone()]);
+    rename(&mut w, &plan, "Новый план");
+    assert_eq!(
+        text_of(&mut w, &note),
+        "[план](Папка/Новый%20план.md#Цели) и [то же](<Новый план.md>), [сайт](https://x.org)"
+    );
+    assert_eq!(outputs(&w), vec![plan]);
+}
+
+#[test]
+fn links_to_a_canvas_and_a_drawing_name_their_network_and_board() {
+    // 13 §2.5: `[[X.canvas]]` → the network X, `[[X.excalidraw]]` → the board X.
+    let mut w = ws();
+    let root = w.root();
+    let net = create(&mut w, &root, NodeKind::Network, "План");
+    let board = create(&mut w, &root, NodeKind::Board, "План");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "[[План.canvas]] и [[План.excalidraw.md]]"));
+    let mut outputs: Vec<String> = w
+        .node_details(&note)
+        .expect("details")
+        .outputs
+        .into_iter()
+        .map(|l| l.id)
+        .collect();
+    outputs.sort();
+    let mut want = vec![net, board];
+    want.sort();
+    assert_eq!(outputs, want);
 }

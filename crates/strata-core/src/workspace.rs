@@ -24,8 +24,11 @@ use strata_model::{
     ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
 
+mod import;
 mod links;
 mod places;
+
+pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -363,6 +366,22 @@ pub struct NodeDetails {
     /// Where it is placed (05 §5): the primary first, then the oldest.
     #[serde(default)]
     pub places: Vec<Place>,
+    /// Tags (05 §6.1), as first written; from a vault's `tags` (13 §2.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
+    /// Other names (05 §6.1), a vault's `aliases` (13 §2.4).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// User attributes (05 §6.2): a vault's other properties (13 §2.3), by key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub props: Vec<Prop>,
+}
+
+/// A user attribute (05 §6.2) and its value.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Prop {
+    pub key: String,
+    pub value: Val,
 }
 
 /// A wire's ends, for the star map's whole space (08 §10).
@@ -505,6 +524,9 @@ impl<S: Store> std::fmt::Debug for Workspace<S> {
             .finish_non_exhaustive()
     }
 }
+
+/// Key writes planned before a changeset: document, map, key, the new value.
+type Writes = Vec<(String, String, String, Option<Val>)>;
 
 /// The writes of one operation in progress.
 struct Tx<'a> {
@@ -776,6 +798,60 @@ impl<S: Store> Workspace<S> {
         };
         let built = build(&mut tx);
         let Tx { before, writes, .. } = tx;
+        self.finish(origin, label, before, writes, built)
+    }
+
+    /// [`Self::write`] in two passes, one changeset: the second pass sees
+    /// what the first wrote — the import finds the nodes its wires join by
+    /// the rule of 13 §3.5 among the nodes it has just made.
+    fn write_two(
+        &mut self,
+        origin: ChangesetOrigin,
+        label: Label,
+        first: Writes,
+        second: impl FnOnce(&Self) -> Result<Writes>,
+    ) -> Result<Changeset> {
+        let mut tx = Tx {
+            docs: &mut self.docs,
+            before: HashMap::new(),
+            writes: Vec::new(),
+        };
+        let mut built = first
+            .into_iter()
+            .try_for_each(|(doc, map, key, value)| tx.set(&doc, &map, &key, value));
+        let Tx {
+            mut before,
+            mut writes,
+            ..
+        } = tx;
+        if built.is_ok() {
+            built = second(self).and_then(|more| {
+                let mut tx = Tx {
+                    docs: &mut self.docs,
+                    before: std::mem::take(&mut before),
+                    writes: std::mem::take(&mut writes),
+                };
+                let done = more
+                    .into_iter()
+                    .try_for_each(|(doc, map, key, value)| tx.set(&doc, &map, &key, value));
+                before = tx.before;
+                writes = tx.writes;
+                done
+            });
+        }
+        self.finish(origin, label, before, writes, built)
+    }
+
+    /// Commits the writes of an operation as one changeset, or — when it
+    /// failed — takes them back out of memory.
+    fn finish(
+        &mut self,
+        origin: ChangesetOrigin,
+        label: Label,
+        before: HashMap<String, VersionVector>,
+        writes: Vec<KeyWrite>,
+        built: Result<()>,
+    ) -> Result<Changeset> {
         if let Err(e) = built {
             // The documents in memory go back to the store's state (10 §3.3).
             for doc in before.keys() {
@@ -903,8 +979,7 @@ impl<S: Store> Workspace<S> {
     }
 
     /// The key writes of `ops`, checked against the model's rules first.
-    #[allow(clippy::type_complexity)]
-    fn plan(&self, ops: &[Op]) -> Result<Vec<(String, String, String, Option<Val>)>> {
+    fn plan(&self, ops: &[Op]) -> Result<Writes> {
         let ts = (self.clock)();
         let batch = ChangesetId::new().to_text();
         let mut out = Vec::new();
@@ -913,8 +988,10 @@ impl<S: Store> Workspace<S> {
         };
         // Nodes made earlier in this list count as existing for the ops after them.
         let mut made: HashMap<NodeId, NodeKind> = HashMap::new();
-        // People added earlier in this list, for the next one's colour.
+        // People added earlier in this list, for the next one's colour and
+        // for the assignments after them.
         let mut people_added = 0i64;
+        let mut people_made: HashSet<String> = HashSet::new();
         let exists =
             |n: NodeId, made: &HashMap<NodeId, NodeKind>| made.contains_key(&n) || self.alive(n);
         // Placements as the ops so far leave them (05 §5).
@@ -1319,7 +1396,10 @@ impl<S: Store> Workspace<S> {
                             "assignees are a field of tasks and projects (05 §4.3)",
                         ));
                     }
-                    if *on && read(&self.docs["manifest"], "people", person).is_none() {
+                    if *on
+                        && !people_made.contains(person)
+                        && read(&self.docs["manifest"], "people", person).is_none()
+                    {
                         return Err(invalid(format!("no person {person} in this workspace")));
                     }
                     let key = format!("{}|assignees|{person}", n.to_text());
@@ -1342,6 +1422,7 @@ impl<S: Store> Workspace<S> {
                     };
                     let c = color.unwrap_or(known + people_added).rem_euclid(COLORS);
                     people_added += 1;
+                    people_made.insert(pid.clone());
                     put(
                         "manifest",
                         "people",
@@ -1737,9 +1818,25 @@ impl<S: Store> Workspace<S> {
         let mut fold = Fold::default();
         for item in tree.get_nodes(false) {
             fold.total += 1;
-            let done = tree.get_meta(item.id).ok().and_then(|m| m.get("done"));
-            if matches!(done, Some(ValueOrContainer::Value(LoroValue::Bool(true)))) {
+            let Ok(meta) = tree.get_meta(item.id) else {
+                continue;
+            };
+            if matches!(
+                meta.get("done"),
+                Some(ValueOrContainer::Value(LoroValue::Bool(true)))
+            ) {
                 fold.done += 1;
+                continue;
+            }
+            // An open item's deadline of the Tasks plugin (13 §2.9.1).
+            if let Some(ValueOrContainer::Container(loro::Container::Text(t))) = meta.get("text") {
+                let line = format!("- [ ] {}", t.to_string());
+                let due = strata_markdown::task_items(&line)
+                    .into_iter()
+                    .find_map(|i| i.due);
+                if let Some(d) = due.filter(|d| fold.nearest.as_ref().is_none_or(|x| d < x)) {
+                    fold.nearest = Some(d);
+                }
             }
         }
         fold
@@ -1756,6 +1853,13 @@ impl<S: Store> Workspace<S> {
     ) -> Option<Fold> {
         if kind == NodeKind::Checklist {
             return Some(self.list_fold(node));
+        }
+        // A note's Tasks items light it as a roll-up does (☑ Q-13-10).
+        if kind == NodeKind::Note {
+            return self.text_field(node, "itemsDue").map(|d| Fold {
+                nearest: Some(d),
+                ..Fold::default()
+            });
         }
         (kind.has_canvas() || kind.is_task()).then(|| self.fold(node, children, wires))
     }
@@ -1933,7 +2037,52 @@ impl<S: Store> Workspace<S> {
             subtasks,
             fold: self.fold_of(n, kind, &all, &wires),
             places: self.places(n),
+            tags: self.set_of(n, "tags"),
+            aliases: self.set_of(n, "aliases"),
+            props: self.props(n),
         })
+    }
+
+    /// The values of a set attribute (05 §6.1, 10 §2.3): `set` keys
+    /// `{node}|{key}|{value}`, by name.
+    fn set_of(&self, node: NodeId, key: &str) -> Vec<String> {
+        let Some(LoroValue::Map(set)) = self
+            .docs
+            .get(&self.index_doc(node))
+            .map(|d| d.get_map("set").get_value())
+        else {
+            return Vec::new();
+        };
+        let prefix = format!("{}|{key}|", node.to_text());
+        let mut out: Vec<String> = set
+            .keys()
+            .filter_map(|k| k.strip_prefix(&prefix).map(str::to_owned))
+            .collect();
+        out.sort_by_key(|v| v.to_lowercase());
+        out
+    }
+
+    /// The user attributes of a node (05 §6.2): `prop` keys `{node}|{key}`, by key.
+    fn props(&self, node: NodeId) -> Vec<Prop> {
+        let Some(LoroValue::Map(all)) = self
+            .docs
+            .get(&self.index_doc(node))
+            .map(|d| d.get_map("prop").get_value())
+        else {
+            return Vec::new();
+        };
+        let prefix = format!("{}|", node.to_text());
+        let mut out: Vec<Prop> = all
+            .iter()
+            .filter_map(|(k, v)| {
+                Some(Prop {
+                    key: k.strip_prefix(&prefix)?.to_owned(),
+                    value: Val::from_loro(v)?,
+                })
+            })
+            .collect();
+        out.sort_by(|a, b| a.key.cmp(&b.key));
+        out
     }
 
     /// What trashing `ids` would take (05 §5, 06 §12.3), without taking it.

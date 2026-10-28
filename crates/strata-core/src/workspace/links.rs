@@ -33,11 +33,28 @@ const BREAKS_LINKS: [char; 5] = ['[', ']', '|', '#', '^'];
 type Before = HashMap<NodeId, String>;
 
 /// The parts of a link key between `/`: a path's networks and the name last.
-fn segments(key: &str) -> Vec<String> {
+pub(super) fn segments(key: &str) -> Vec<String> {
     key.split('/')
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect()
+}
+
+/// The path of a Markdown link `[text](path#anchor "title")` within the
+/// link's text: its offset, its length, and whether it is in `<…>` (where
+/// spaces are written as they are).
+fn markdown_path(link: &str) -> Option<(usize, usize, bool)> {
+    let open = link.rfind("](")? + 2;
+    let rest = link.get(open..link.len().checked_sub(1)?)?;
+    let (start, path, angle) = match rest.strip_prefix('<') {
+        Some(inner) => (open + 1, &inner[..inner.find('>')?], true),
+        None => (
+            open,
+            &rest[..rest.find(char::is_whitespace).unwrap_or(rest.len())],
+            false,
+        ),
+    };
+    Some((start, path.find('#').unwrap_or(path.len()), angle))
 }
 
 /// What a link names.
@@ -47,18 +64,25 @@ enum Target {
     Ghost,
 }
 
+/// What a link may name: the node its wire holds (13 §3.5 «залипание»), or
+/// the nodes that answer it — more than one is an ambiguous link.
+pub(super) enum Found {
+    Held(NodeId),
+    Some(Vec<NodeId>),
+}
+
 /// The wires and ghosts a note has, by the edges of its shard.
 #[derive(Default)]
-struct Outgoing {
+pub(super) struct Outgoing {
     /// Wires with the origin `text`: target → wire key.
-    wires: BTreeMap<NodeId, String>,
+    pub(super) wires: BTreeMap<NodeId, String>,
     /// Ghosts: link key → (wire key, the name as written).
-    ghosts: BTreeMap<String, (String, String)>,
+    pub(super) ghosts: BTreeMap<String, (String, String)>,
 }
 
 impl<S: Store> Workspace<S> {
     /// Live nodes by the link key of their name (13 §3.4).
-    fn link_names(&self) -> HashMap<String, Vec<NodeId>> {
+    pub(super) fn link_names(&self) -> HashMap<String, Vec<NodeId>> {
         let mut out: HashMap<String, Vec<NodeId>> = HashMap::new();
         for shard in self.index_shards() {
             let LoroValue::Map(names) = shard.get_map("name").get_value() else {
@@ -105,18 +129,66 @@ impl<S: Store> Workspace<S> {
         names: &HashMap<String, Vec<NodeId>>,
         was: &Before,
     ) -> Target {
+        match self.candidates(src, segs, held, names, was) {
+            Found::Held(n) => Target::Node(n),
+            Found::Some(found) => match found.len() {
+                0 => Target::Ghost,
+                1 => Target::Node(found[0]),
+                _ => Target::Node(self.nearest(src, &found)),
+            },
+        }
+    }
+
+    /// The nodes a link of `src` may name (13 §3.5 steps 1–2), or the one
+    /// its wire holds already. A link to `X.canvas` or `X.excalidraw` names
+    /// the network or the board the import made of that file: its name has
+    /// no extension (13 §2.5, §3.4).
+    pub(super) fn candidates(
+        &self,
+        src: NodeId,
+        segs: &[String],
+        held: &BTreeSet<NodeId>,
+        names: &HashMap<String, Vec<NodeId>>,
+        was: &Before,
+    ) -> Found {
         let Some(last) = segs.last() else {
-            return Target::Ghost;
+            return Found::Some(Vec::new());
         };
         let answers = |n: NodeId| self.path_keys(n, was).ends_with(segs);
         // Sticking (13 §3.5): a new node with the name takes no link over.
         if let Some(&n) = held.iter().find(|&&n| self.kind(n).is_some() && answers(n)) {
-            return Target::Node(n);
+            return Found::Held(n);
         }
         let mut found: Vec<NodeId> = names
             .get(last)
             .map(|c| c.iter().copied().filter(|&n| answers(n)).collect())
             .unwrap_or_default();
+        if found.is_empty() {
+            for (ext, canvas) in [(".canvas", true), (".excalidraw", false)] {
+                let Some(stem) = last.strip_suffix(ext).filter(|s| !s.is_empty()) else {
+                    continue;
+                };
+                let mut bare = segs.to_vec();
+                if let Some(l) = bare.last_mut() {
+                    *l = stem.to_owned();
+                }
+                let fits = |n: NodeId| match self.kind(n) {
+                    Some(k) if canvas => k.has_canvas(),
+                    Some(k) => k == NodeKind::Board,
+                    None => false,
+                };
+                if let Some(&n) = held
+                    .iter()
+                    .find(|&&n| fits(n) && self.path_keys(n, was).ends_with(&bare))
+                {
+                    return Found::Held(n);
+                }
+                return match self.candidates(src, &bare, &BTreeSet::new(), names, was) {
+                    Found::Some(f) => Found::Some(f.into_iter().filter(|&n| fits(n)).collect()),
+                    held => held,
+                };
+            }
+        }
         if segs.len() > 1 && found.len() > 1 {
             // A path: from the root exactly, then from the note's folder.
             let mut here: Vec<String> = self.path_keys(src, was);
@@ -134,16 +206,12 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
-        match found.len() {
-            0 => Target::Ghost,
-            1 => Target::Node(found[0]),
-            _ => Target::Node(self.nearest(src, &found)),
-        }
+        Found::Some(found)
     }
 
     /// Of several nodes with one name, the nearest to `src` by the tree (the
     /// deeper common network), then the shorter path, then the older (13 §3.5).
-    fn nearest(&self, src: NodeId, found: &[NodeId]) -> NodeId {
+    pub(super) fn nearest(&self, src: NodeId, found: &[NodeId]) -> NodeId {
         let chain = |n: NodeId| -> Vec<NodeId> { self.ancestors(n).into_iter().rev().collect() };
         let mine = chain(src);
         let created = |n: NodeId| {
@@ -164,7 +232,7 @@ impl<S: Store> Workspace<S> {
     }
 
     /// The text wires and ghosts that leave `note`.
-    fn outgoing(&self, note: NodeId) -> Outgoing {
+    pub(super) fn outgoing(&self, note: NodeId) -> Outgoing {
         let mut out = Outgoing::default();
         let index = &self.docs[&self.index_doc(note)];
         let from = note.to_text();
@@ -216,6 +284,17 @@ impl<S: Store> Workspace<S> {
         for (&note, text) in notes.iter().zip(&texts) {
             let index = self.index_doc(note);
             let from = note.to_text();
+            // The nearest open deadline of the note's Tasks items (13 §2.9.1,
+            // ☑ Q-13-10): derived from the text, as its wires are.
+            let due = strata_markdown::task_items(text)
+                .into_iter()
+                .filter(strata_markdown::TaskItem::open)
+                .filter_map(|i| i.due)
+                .min()
+                .map(Val::Str);
+            if read(&self.docs[&index], "itemsDue", &from) != due {
+                plan.push((index.clone(), "itemsDue", from.clone(), due));
+            }
             let have = self.outgoing(note);
             let held: BTreeSet<NodeId> = have.wires.keys().copied().collect();
             // What the text asks for: nodes, and ghosts by key with the name
@@ -415,9 +494,29 @@ impl<S: Store> Workspace<S> {
                 if name.contains(BREAKS_LINKS) {
                     continue;
                 }
-                let target = link.target.as_str();
-                let Some(at) = text[link.range.clone()].find(target) else {
-                    continue;
+                // A Markdown link's path as written, `%20` and all (13 §2.5).
+                let raw = link
+                    .markdown
+                    .then(|| markdown_path(&text[link.range.clone()]))
+                    .flatten();
+                let (target, at, encode) = match raw {
+                    Some((at, len, angle)) => {
+                        let s = &text[link.range.start + at..link.range.start + at + len];
+                        (s, at, !angle)
+                    }
+                    None if link.markdown => continue,
+                    None => {
+                        let target = link.target.as_str();
+                        let Some(at) = text[link.range.clone()].find(target) else {
+                            continue;
+                        };
+                        (target, at, false)
+                    }
+                };
+                let name = if encode {
+                    strata_markdown::percent_encode(name)
+                } else {
+                    name.clone()
                 };
                 let (head, last) = match target.rfind('/') {
                     Some(i) => (&target[..=i], &target[i + 1..]),

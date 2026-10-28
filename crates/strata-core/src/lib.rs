@@ -12,7 +12,9 @@
 //!   workspace folder and its `store.sqlite` (10 §3.1–3.3);
 //! - [`home`]: the workspaces of this device for the home screen (✅ Q-16-12);
 //! - [`archive`]: `.strata.zip`, a workspace as one file (10 §3.5);
-//! - `preview`: a link's preview fetched from its page (ADR-0012), native only.
+//! - `preview`: a link's preview fetched from its page (ADR-0012), native only;
+//! - [`vault`]: a vault of Obsidian as files, its config, JSON Canvas and
+//!   Excalidraw drawings; [`Workspace::import_vault`] takes it in (13 §2–3).
 
 pub mod api;
 pub mod archive;
@@ -26,6 +28,7 @@ pub mod preview;
 pub mod sqlite;
 pub mod store;
 pub mod value;
+pub mod vault;
 pub mod workspace;
 
 pub use changeset::{Changeset, KeyWrite, Label, RevertReport};
@@ -34,9 +37,9 @@ pub use store::{MemoryStore, Store, StoreError, StoredDoc};
 pub use strata_model as model;
 pub use strata_model::Flag;
 pub use workspace::{
-    Attrs, CoreError, Edited, ExternalWire, Fold, History, Linked, NetworkView, NodeDetails,
-    Person, Place, Staying, TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode,
-    WireEnds, Workspace,
+    Attrs, CoreError, Edited, ExternalWire, Fold, History, ImportCounts, ImportItem, ImportOptions,
+    ImportReport, Linked, NetworkView, NodeDetails, Person, Place, Prop, Staying, TrashItem,
+    TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

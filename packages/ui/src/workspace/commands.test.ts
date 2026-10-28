@@ -17,6 +17,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   canBack: false,
   canForward: false,
   marks: [false, false, false, false, false],
+  clip: false,
   act: () => undefined,
   goTo: () => undefined,
   find: () => undefined,
@@ -57,6 +58,19 @@ describe('the command palette (09 §3.5)', () => {
     expect(can('nav.back', ctx())).toBe(false);
     expect(can('nav.mark.go.2', ctx({ marks: [false, true, false, false, false] }))).toBe(true);
     expect(can('nav.mark.go.1', ctx({ marks: [false, true, false, false, false] }))).toBe(false);
+    // Cut, copy and wrap take the chosen nodes; a paste — what was cut or copied (06 §12.1).
+    expect(can('canvas.cut', ctx())).toBe(false);
+    expect(can('canvas.wrap', ctx({ selected: 3 }))).toBe(true);
+    expect(can('canvas.paste', ctx())).toBe(false);
+    expect(can('canvas.pasteAppearance', ctx({ clip: true }))).toBe(true);
+    expect(can('canvas.paste', ctx({ clip: true, view: '3d' }))).toBe(false);
+  });
+
+  it('finds the moves of 06 §12.1 and the wrap of §13.3 in both languages', () => {
+    expect(find('обернуть')[0]).toBe('canvas.wrap');
+    expect(find('wrap in a folder')[0]).toBe('canvas.wrap');
+    expect(find('появление')[0]).toBe('canvas.pasteAppearance');
+    expect(find('вырезать')[0]).toBe('canvas.cut');
   });
 
   it('every command has words to be found by and an id of its own', () => {

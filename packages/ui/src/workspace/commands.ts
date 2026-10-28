@@ -24,6 +24,8 @@ export interface CommandContext {
   canForward: boolean;
   /** The quick marks set. */
   marks: readonly boolean[];
+  /** Nodes cut or copied wait for `Ctrl+V` (06 §12.1). */
+  clip: boolean;
   act(action: CanvasAction): void;
   goTo(): void;
   find(): void;
@@ -47,6 +49,7 @@ export interface Command {
 const flat = (c: CommandContext) => c.view === '2d';
 const chosen = (c: CommandContext) => c.view === '2d' && c.selected > 0;
 const one = (c: CommandContext) => c.view === '2d' && c.current !== null;
+const clipped = (c: CommandContext) => c.view === '2d' && c.clip;
 
 const canvas = (
   id: string,
@@ -101,6 +104,24 @@ export const COMMANDS: readonly Command[] = [
     'extract',
     'Ctrl+Shift+X',
     ['вынуть', 'цепочка', 'extract', 'chain'],
+    chosen,
+    'node',
+  ),
+  canvas('cut', 'cut', 'Ctrl+X', ['вырезать', 'перенести', 'cut', 'move'], chosen, 'node'),
+  canvas('copy', 'copy', 'Ctrl+C', ['копировать', 'копия', 'copy', 'duplicate'], chosen, 'node'),
+  canvas('paste', 'paste', 'Ctrl+V', ['вставить', 'перенести', 'paste', 'move'], clipped),
+  canvas(
+    'pasteAppearance',
+    'pasteAppearance',
+    'Ctrl+Shift+V',
+    ['вставить', 'появление', 'ярлык', 'разместить', 'paste', 'appearance', 'shortcut', 'place'],
+    clipped,
+  ),
+  canvas(
+    'wrap',
+    'wrap',
+    'Shift+C',
+    ['обернуть', 'папка', 'сгруппировать', 'wrap', 'folder', 'group', 'collapse'],
     chosen,
     'node',
   ),

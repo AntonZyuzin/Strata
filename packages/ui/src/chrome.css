@@ -2488,6 +2488,60 @@ button.ws-path-step:active:not(:disabled) {
   color: var(--st-color-text-muted);
 }
 
+/* Rows dragged onto a folder or project (05 §5 «Перенести»): the network
+   that takes them shows the accent's rim, one that may not hold them «⊘». */
+.ws-layers.is-dragging {
+  user-select: none;
+}
+
+.layer-row.is-dragged {
+  opacity: 0.5;
+}
+
+.layer-row.is-drop,
+.layers-list.is-drop {
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) var(--st-color-accent);
+}
+
+.layer-forbid {
+  flex: none;
+  display: inline-flex;
+  margin-left: auto;
+}
+
+/* The dragged row's name rides by the cursor; an Esc puts it back. */
+.layer-drag {
+  position: fixed;
+  z-index: 30;
+  max-width: 24ch;
+  overflow: hidden;
+  padding: calc(2 * var(--u)) calc(6 * var(--u));
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
+  transform: translate(calc(12 * var(--u)), calc(8 * var(--u)));
+}
+
+/* «⊘ Нода уже здесь» by the cursor (06 §12.1): an appearance cannot be
+   where the node lies; the gesture goes on as a plain drag. */
+.ws-cursor-note {
+  position: fixed;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  padding: calc(2 * var(--u)) calc(6 * var(--u)) calc(2 * var(--u)) calc(4 * var(--u));
+  white-space: nowrap;
+  pointer-events: none;
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
+  transform: translate(calc(16 * var(--u)), calc(16 * var(--u)));
+}
+
 .layers-trash {
   flex: none;
   max-height: 40%;

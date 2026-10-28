@@ -1,5 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
-import { box, LAYOUTS, overflowing } from './helpers';
+import { box, chWidth, LAYOUTS, overflowing } from './helpers';
 
 // Milestone 1A (16 §4.7): the home screen (✅ Q-16-12) and a workspace on the
 // canvas, written by the core — here the same Rust core as WASM, its store in
@@ -39,6 +39,11 @@ interface WsHook {
     markOf(id: string, mark: 'external' | 'places'): { x: number; y: number } | null;
     canvas: HTMLCanvasElement;
     lens: ReadonlySet<string> | null;
+    /** Nodes cut with `Ctrl+X`, half seen until the paste (06 §12.1). */
+    cut: ReadonlySet<string>;
+  };
+  core: {
+    tree(): Promise<{ id: string; name: string; parent?: string }[]>;
   };
   editor(): {
     selected: string[];
@@ -381,6 +386,78 @@ const outline = (page: Page) =>
       return `${'  '.repeat(depth)}[${tick}] ${text}`;
     }),
   );
+
+/** A folder from the Tab menu at (x, y), named, the canvas staying where it is. */
+async function makeFolder(page: Page, name: string, x: number, y: number) {
+  const before = (await graphNow(page)).names.length;
+  await page.mouse.move(x, y);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('папка');
+  const kind = page.locator('.tab-menu-label', { hasText: /^(Папка|Folder)$/ });
+  await page.locator('.tab-menu-row', { has: kind }).first().click();
+  await expect(page.locator('.name-input')).toBeVisible();
+  await page.keyboard.type(name);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', String(before + 1));
+  await settled(page);
+}
+
+/** The network a node's primary placement is in, by the core's tree (05 §5). */
+const parentOf = (page: Page, name: string) =>
+  page.evaluate(async (name) => {
+    const ws = window.__strataWs as WsHook;
+    await ws.settled();
+    const items = await ws.core.tree();
+    const item = items.find((i) => i.name === name);
+    return items.find((i) => i.id === item?.parent)?.name ?? null;
+  }, name);
+
+/** How many nodes of the workspace bear this name. */
+const named = (page: Page, name: string) =>
+  page.evaluate(async (name) => {
+    const ws = window.__strataWs as WsHook;
+    await ws.settled();
+    return (await ws.core.tree()).filter((i) => i.name === name).length;
+  }, name);
+
+const cutNow = (page: Page) =>
+  page.evaluate(() => [...((window.__strataWs as WsHook).view.cut ?? [])]);
+
+/** Into a network on the canvas by its bubble: chosen, then `Enter`. */
+async function enter(page: Page, name: string) {
+  const depth = Number(await page.locator('.workspace').getAttribute('data-depth'));
+  await select(page, name);
+  await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', String(depth + 1));
+}
+
+/** Out of the network on the canvas, `U`. */
+async function leave(page: Page) {
+  const depth = Number(await page.locator('.workspace').getAttribute('data-depth'));
+  await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+  await page.keyboard.press('KeyU');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', String(depth - 1));
+}
+
+/**
+ * Drags node `name` onto the bubble of `onto`, rests there `hold` ms and lets
+ * go (06 §12.1), the keys of `mods` held all along; the steps written are awaited.
+ */
+async function dragOnto(page: Page, name: string, onto: string, mods: string[] = [], hold = 700) {
+  const from = await at(page, name);
+  const to = await at(page, onto);
+  for (const m of mods) await page.keyboard.down(m);
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(from.x + 8, from.y + 8, { steps: 2 });
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.waitForTimeout(hold);
+  await page.mouse.move(to.x + 1, to.y, { steps: 1 });
+  await page.mouse.up();
+  for (const m of [...mods].reverse()) await page.keyboard.up(m);
+  await settled(page);
+}
 
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
   test.describe(`home ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, () => {
@@ -845,6 +922,79 @@ for (const deviceScaleFactor of [1, 2]) {
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['section', 'row', 'dialog', 'list'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`the moves' menu, «⊘ Нода уже здесь» and «⊘» in «Ноды» fit in RU and EN @${deviceScaleFactor}x (06 §12.1)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Перенос');
+      await makeFolder(page, 'Архив', 520, 320);
+      await createNode(page, 760, 480, 'Эскиз');
+      // The node's menu with a copy waiting: cut, copy, paste, as an appearance, wrap.
+      await select(page, 'Эскиз');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Control+c');
+      const sketch = await at(page, 'Эскиз');
+      await page.mouse.click(sketch.x, sketch.y, { button: 'right' });
+      const menu = page.locator('.context-menu');
+      await expect(menu.locator('.context-menu-row')).toHaveCount(12);
+      expect(await overflowing(page, '.context-menu'), `${locale} the menu must fit`).toEqual([]);
+      expect((await box(page, '.context-menu')).width).toBeLessThanOrEqual(
+        (await chWidth(page, 40)) + 2,
+      );
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+      // An appearance dragged away from any folder: «⊘ Нода уже здесь» by the cursor.
+      const mods = ['Alt', 'ControlOrMeta', 'Shift'];
+      for (const m of mods) await page.keyboard.down(m);
+      await page.mouse.move(sketch.x, sketch.y);
+      await page.mouse.down();
+      await page.mouse.move(sketch.x + 60, sketch.y + 40, { steps: 6 });
+      const note = page.locator('.ws-cursor-note');
+      await expect(note).toBeVisible();
+      expect(await overflowing(page, '.ws-cursor-note'), `${locale} the note must fit`).toEqual([]);
+      const glyph = await box(page, '.ws-cursor-note .kind-icon');
+      const shown = await box(page, '.ws-cursor-note');
+      await page.mouse.up();
+      for (const m of [...mods].reverse()) await page.keyboard.up(m);
+      await expect(note).toHaveCount(0);
+      // «Архив» dragged onto itself in «Ноды»: «⊘» on its row, the drop moves nothing.
+      const row = page.locator('.layer-row', { hasText: 'Архив' });
+      const name = await box(page, '.layer-row:has-text("Архив") .layer-name');
+      await page.mouse.move(name.x + 20, name.y + name.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(name.x + 60, name.y + name.height / 2, { steps: 4 });
+      await expect(row).toHaveClass(/is-refused/);
+      boxes.push({
+        glyph,
+        note: { ...shown, width: 0 },
+        row: await box(page, '.layer-row.is-refused'),
+        forbid: await box(page, '.layer-row.is-refused .layer-forbid .kind-icon'),
+      });
+      await page.mouse.up();
+      await expect(row).not.toHaveClass(/is-refused/);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    // The glyphs are 16u in both languages; the note grows only to the right.
+    expect(ru.glyph.width).toBe(ru.glyph.height);
+    for (const part of ['glyph', 'note', 'row', 'forbid'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2601,6 +2751,261 @@ test.describe('a workspace on the core', () => {
     await expect(dialog).toHaveCount(0);
     // «Игра» went alone, «Референсы» after it: one node each.
     await expect(page.locator('.toast', { hasText: 'В корзине: 1 нода' })).toHaveCount(2);
+  });
+
+  test('Ctrl+X → Ctrl+V moves a node into another network, Esc takes the cut back; one undo (05 §5, 06 §12.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Перенос');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 520, 320);
+    await createNode(page, 760, 480, 'Эскиз');
+    const sketch = await idOf(page, 'Эскиз');
+    // Cut: half seen with its mark until the paste; `Esc` takes it back.
+    await select(page, 'Эскиз');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+x');
+    await expect.poll(() => cutNow(page)).toEqual([sketch]);
+    expect((await graphNow(page)).names).toEqual(['Архив', 'Эскиз']);
+    await page.keyboard.press('Escape');
+    await expect.poll(() => cutNow(page)).toEqual([]);
+    // Nothing waits for a paste now: `Ctrl+V` makes nothing of the nodes.
+    await page.keyboard.press('Control+v');
+    await settled(page);
+    expect((await graphNow(page)).names).toEqual(['Архив', 'Эскиз']);
+    // Cut again, into «Архив», `Ctrl+V`: the same node, its placement moved.
+    // (A click away first: two clicks on the bubble would be a double click.)
+    await page.mouse.click(400, 650);
+    await select(page, 'Эскиз');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+x');
+    await expect.poll(() => cutNow(page)).toEqual([sketch]);
+    await enter(page, 'Архив');
+    await expect.poll(() => cutNow(page)).toEqual([]);
+    await page.mouse.move(700, 400);
+    await page.keyboard.press('Control+v');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    expect(await idOf(page, 'Эскиз')).toBe(sketch);
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Архив');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.editor()?.selected))
+      .toEqual([sketch]);
+    // The cut is done: another `Ctrl+V` moves nothing.
+    await page.keyboard.press('Control+v');
+    await settled(page);
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    // One step of undo brings it back to the root.
+    await leave(page);
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Перенос');
+  });
+
+  test('Ctrl+C → Ctrl+V copies, Ctrl+Shift+V places an appearance; «Нода уже здесь», «Нода уже была здесь» (05 §5, 06 §12.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Копии');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 520, 320);
+    await createNode(page, 760, 480, 'Эскиз');
+    const sketch = await idOf(page, 'Эскиз');
+    await select(page, 'Эскиз');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+c');
+    // A copy is not cut: nothing is half seen.
+    expect(await cutNow(page)).toEqual([]);
+    // Here it lies already: no appearance, the toast says so.
+    await page.keyboard.press('Control+Shift+v');
+    await expect(page.locator('.toast', { hasText: 'Нода уже здесь' })).toBeVisible();
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    // `Ctrl+V` of a copy: a new node of the same name beside, one step.
+    await page.mouse.move(900, 300);
+    await page.keyboard.press('Control+v');
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    expect(await named(page, 'Эскиз')).toBe(2);
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    // The palette pastes an appearance too, in «Архив».
+    await enter(page, 'Архив');
+    await page.keyboard.press('Control+p');
+    await page.locator('.command-palette input').fill('появление');
+    await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(
+      'Вставить как появление',
+    );
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    expect(await idOf(page, 'Эскиз')).toBe(sketch);
+    await expect.poll(() => placement(page, sketch)).toEqual({ appearance: true, places: 2 });
+    // Cut at the root and pasted where it lies already: one placement left, the toast says so.
+    await leave(page);
+    await select(page, 'Эскиз');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+x');
+    await enter(page, 'Архив');
+    await page.keyboard.press('Control+v');
+    await expect(page.locator('.toast', { hasText: 'Нода уже была здесь' })).toBeVisible();
+    await expect.poll(() => placement(page, sketch)).toEqual({ appearance: false, places: 1 });
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    // One step of undo: both placements again.
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => placement(page, sketch)).toEqual({ appearance: true, places: 2 });
+  });
+
+  test('a drag held 500 ms on a folder: inside, Alt — a copy, Alt+Ctrl+Shift — an appearance (06 §12.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Броски');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 520, 320);
+    await createNode(page, 820, 480, 'Эскиз');
+    await createNode(page, 900, 300, 'Палитра');
+    const sketch = await idOf(page, 'Эскиз');
+    // A pass over the bubble does not drop inside: it is a move.
+    await dragOnto(page, 'Палитра', 'Архив', [], 0);
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    await page.keyboard.press('Control+z');
+    await settled(page);
+    // Held: «Эскиз» goes inside «Архив».
+    await dragOnto(page, 'Эскиз', 'Архив');
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Архив');
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Броски');
+    // `Alt`: a copy goes inside, the node stays; one step of undo.
+    await dragOnto(page, 'Палитра', 'Архив', ['Alt']);
+    await expect.poll(() => named(page, 'Палитра')).toBe(2);
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => named(page, 'Палитра')).toBe(1);
+    // `Alt+Ctrl+Shift`: an appearance inside, the node stays where it was.
+    const mods = ['Alt', 'ControlOrMeta', 'Shift'];
+    await dragOnto(page, 'Эскиз', 'Архив', mods);
+    await expect.poll(() => placement(page, sketch)).toEqual({ appearance: false, places: 2 });
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    // Away from a folder's bubble an appearance cannot be: «⊘ Нода уже здесь»,
+    // and the gesture is a plain drag.
+    const from = await at(page, 'Палитра');
+    for (const m of mods) await page.keyboard.down(m);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + 40, from.y + 60, { steps: 6 });
+    const note = page.locator('.ws-cursor-note');
+    await expect(note).toHaveText('Нода уже здесь');
+    await expect(note.locator('.kind-icon')).toBeVisible();
+    await page.mouse.up();
+    for (const m of [...mods].reverse()) await page.keyboard.up(m);
+    await expect(note).toHaveCount(0);
+    await settled(page);
+    await expect.poll(() => named(page, 'Палитра')).toBe(1);
+    const moved = await at(page, 'Палитра');
+    expect(Math.round(moved.x - from.x)).toBe(40);
+  });
+
+  test('Shift+C wraps the chosen nodes in a folder, one step; several are named next (06 §13.3)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Обёртки');
+    const ws = page.locator('.workspace');
+    await createNode(page, 560, 320, 'Эскиз');
+    await createNode(page, 760, 320, 'Палитра');
+    await createNode(page, 660, 520, 'Звук');
+    // Two chosen: a folder at their middle, its name typed into the same step.
+    await select(page, 'Эскиз');
+    const b = await at(page, 'Палитра');
+    await page.keyboard.down('Shift');
+    await page.mouse.click(b.x, b.y);
+    await page.keyboard.up('Shift');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Shift+c');
+    const field = page.locator('input.name-input');
+    await expect(field).toHaveValue('Папка');
+    await field.fill('Пакет');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Звук', 'Пакет']);
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Пакет');
+    await expect.poll(() => parentOf(page, 'Палитра')).toBe('Пакет');
+    await expect(page.locator('.layer-row', { hasText: 'Пакет' })).toBeVisible();
+    // One step: the wrap and its name go back together.
+    await page.keyboard.press('Control+z');
+    await expect
+      .poll(async () => (await graphNow(page)).names)
+      .toEqual(['Звук', 'Палитра', 'Эскиз']);
+    // One node names its folder; from the menu by the right button.
+    const sound = await at(page, 'Звук');
+    await page.mouse.click(sound.x, sound.y, { button: 'right' });
+    await page.getByRole('menuitem', { name: 'Обернуть в папку' }).click();
+    await expect
+      .poll(async () => (await graphNow(page)).names)
+      .toEqual(['Звук', 'Палитра', 'Эскиз']);
+    await expect(page.locator('.name-input')).toHaveCount(0);
+    const folder = await page.evaluate(() =>
+      [...(window.__strataWs?.graph()?.nodes.values() ?? [])].find((n) => n.kind === 'network'),
+    );
+    expect(folder?.name).toBe('Звук');
+    await expect.poll(() => parentOf(page, 'Звук')).toBe('Звук');
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+  });
+
+  test('rows of «Ноды» dragged onto a folder move there; a folder onto one inside it is «⊘» (05 §5)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Дерево');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 520, 320);
+    await createNode(page, 760, 480, 'Эскиз');
+    await enter(page, 'Архив');
+    await makeFolder(page, 'Внутри', 600, 400);
+    await leave(page);
+    const row = (name: string) => page.locator('.layer-row', { hasText: name });
+    const drag = async (name: string, onto: string, drop = true) => {
+      const a = await box(page, `.layer-row[data-layer="${await rowId(name)}"] .layer-name`);
+      const b = await box(page, `.layer-row[data-layer="${await rowId(onto)}"] .layer-name`);
+      await page.mouse.move(a.x + 20, a.y + a.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(a.x + 30, a.y + a.height / 2 + 6, { steps: 2 });
+      await page.mouse.move(b.x + 40, b.y + b.height / 2, { steps: 6 });
+      if (drop) await page.mouse.up();
+    };
+    const rowId = (name: string) =>
+      page.evaluate(async (name) => {
+        const items = await (window.__strataWs as WsHook).core.tree();
+        return items.find((i) => i.name === name)?.id ?? '';
+      }, name);
+    // «Эскиз» onto «Архив»: it moves there, the canvas of the root lets it go.
+    await drag('Эскиз', 'Архив');
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Архив');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    // «Архив» onto «Внутри», a folder inside it: «⊘», and the drop moves nothing.
+    await drag('Архив', 'Внутри', false);
+    await expect(row('Внутри')).toHaveClass(/is-refused/);
+    await expect(row('Внутри').locator('.layer-forbid .kind-icon')).toBeVisible();
+    await page.mouse.up();
+    await settled(page);
+    await expect(row('Внутри')).not.toHaveClass(/is-refused/);
+    await expect.poll(() => parentOf(page, 'Архив')).toBe('Дерево');
+    // `Esc` puts rows back mid-drag.
+    await drag('Внутри', 'Архив', false);
+    await page.keyboard.press('Escape');
+    await page.mouse.up();
+    await settled(page);
+    await expect.poll(() => parentOf(page, 'Внутри')).toBe('Архив');
+    // One step of undo brings «Эскиз» back.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Дерево');
   });
 
   test('«Настройки» are a window the gear opens, not a tab (owner, 2026-10-28)', async ({

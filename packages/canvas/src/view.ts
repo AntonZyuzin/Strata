@@ -104,6 +104,7 @@ export class CanvasView {
   private flight: { from: View; to: View; start: number | null } | null = null;
   /** The nodes a search matched; the rest are dimmed (07 §4.5, 09 §3.3). */
   private lensIds: ReadonlySet<string> | null = null;
+  private cutIds: ReadonlySet<string> = new Set();
   private readonly dimmed = new WeakMap<WireStyle, WireStyle>();
   /** A roll-up wire (07 §5, 06 §13.3): dotted 1u at 50 %. */
   private readonly rollupStyle: WireStyle;
@@ -276,6 +277,20 @@ export class CanvasView {
     this.invalidate();
   }
 
+  /**
+   * Nodes cut with `Ctrl+X` (06 §12.1, ☑ Q-06-17): half seen, with the
+   * editor's dashed mark, until they are pasted or `Esc` takes the cut back.
+   */
+  get cut(): ReadonlySet<string> {
+    return this.cutIds;
+  }
+
+  setCut(ids: Iterable<string>): void {
+    this.cutIds = new Set(ids);
+    for (const v of this.views.values()) this.applyLevel(v);
+    this.invalidate();
+  }
+
   /** CSS px of one pixel unit (07 §2.3) at this screen's DPR. */
   get unit(): number {
     const dpr = this.app.renderer.resolution;
@@ -390,7 +405,10 @@ export class CanvasView {
   /** Shows `graph` and follows its changes. */
   setGraph(graph: Graph): () => void {
     this.graph = graph;
-    this.sync();
+    // Another network: a node placed in both (05 §5) stands where this one
+    // has it at once, not gliding over from the network left.
+    this.tweens = [];
+    this.sync(true);
     return graph.subscribe(() => this.sync());
   }
 
@@ -660,7 +678,8 @@ export class CanvasView {
     const n = v.node;
     const lv = levelOf(2 * v.r * this.camera.zoom);
     const lens = this.lensIds;
-    const a = lens && !lens.has(v.id) ? Math.min(nodeAlpha(n), fog.scene.lensAlpha) : nodeAlpha(n);
+    let a = lens && !lens.has(v.id) ? Math.min(nodeAlpha(n), fog.scene.lensAlpha) : nodeAlpha(n);
+    if (this.cutIds.has(v.id)) a = Math.min(a, fog.scene.ghostAlpha);
     const closed = isClosed(n);
     v.body.visible = !n.ghost || lv === 'dot';
     v.body.tint = lv === 'dot' ? dotColor(n) : closed ? hex(fog.scene.doneFill) : PAPER;
@@ -672,8 +691,8 @@ export class CanvasView {
     if (v.halo) v.halo.visible = lv !== 'dot';
   }
 
-  /** Creates, updates and removes sprites to match the graph. */
-  private sync() {
+  /** Creates, updates and removes sprites to match the graph; `jump` — no glide to new places. */
+  private sync(jump = false) {
     const graph = this.graph;
     if (!graph) return;
     for (const [id, v] of this.views) {
@@ -720,7 +739,15 @@ export class CanvasView {
       a.outputs.push(b);
       b.inputs.push(a);
     }
-    this.settle(moved);
+    if (jump) {
+      for (const id of moved) {
+        const v = this.views.get(id);
+        const node = graph.nodes.get(id);
+        if (v && node) this.setPosition(v, node.x, node.y);
+      }
+    } else {
+      this.settle(moved);
+    }
     this.invalidate();
   }
 

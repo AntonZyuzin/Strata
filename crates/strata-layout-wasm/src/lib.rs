@@ -90,6 +90,30 @@ impl Physics3d {
         p[i * 3 + 1] = y;
         p[i * 3 + 2] = z;
     }
+
+    /// Fixes body `i` in place (a star grabbed or pinned on the map), or frees it.
+    #[wasm_bindgen(js_name = setFixed)]
+    pub fn set_fixed(&mut self, i: usize, fixed: bool) {
+        self.inner.set_fixed(i, fixed);
+    }
+
+    /// Fixes the bodies whose entry is not 0, frees the rest (08 §3.1 p. 4).
+    #[wasm_bindgen(js_name = setFrozen)]
+    pub fn set_frozen(&mut self, mask: &[u8]) {
+        self.inner.set_frozen(mask);
+    }
+
+    /// Body `i`'s velocity, world units per tick: a star thrown (08 §3.6).
+    #[wasm_bindgen(js_name = setVelocity)]
+    pub fn set_velocity(&mut self, i: usize, x: f32, y: f32, z: f32) {
+        self.inner.set_velocity(i, [x, y, z]);
+    }
+
+    /// The fastest free body's speed, world units per tick.
+    #[wasm_bindgen(js_name = maxSpeed)]
+    pub fn max_speed(&self) -> f32 {
+        self.inner.max_speed()
+    }
 }
 
 /// `L` on a network (06 §9.2): `kind` 0 layered, 1 radial, 2 force; positions

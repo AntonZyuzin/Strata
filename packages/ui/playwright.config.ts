@@ -7,6 +7,11 @@ export default defineConfig({
   testDir: 'e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
+  // One retry in CI only: WebKit's software WebGL in the container now and
+  // then loses a page or stalls a load under memory (36617be); the report
+  // names a test that passed on its retry as flaky, and a regression fails
+  // twice.
+  retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
   use: { baseURL: 'http://localhost:4173' },
   projects: [

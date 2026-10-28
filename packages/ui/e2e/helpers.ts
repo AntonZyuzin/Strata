@@ -32,6 +32,8 @@ export function chWidth(page: Page, n: number): Promise<number> {
 }
 
 export async function box(page: Page, selector: string) {
+  // What a render shows a moment later (the canvas after its workspace) is waited for.
+  await page.locator(selector).waitFor({ state: 'visible' });
   const b = await page.locator(selector).boundingBox();
   if (!b) throw new Error(`${selector} is not visible`);
   return b;

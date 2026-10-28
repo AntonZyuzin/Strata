@@ -78,18 +78,26 @@ test('a vault comes in from the home screen and goes back with one undo', async 
   await expect(report).toBeVisible();
   await report
     .locator('.import-section', { hasText: 'Свойства' })
-    .locator('.import-row', { hasText: 'Ошибка разбора YAML' })
+    .locator('.import-row', { hasText: 'Вложенный объект' })
     .click();
   await expect(report).toHaveCount(0);
-  await expect
-    .poll(() =>
-      page.evaluate(() => {
-        const ws = (window as unknown as { __strataWs?: ImportHook }).__strataWs;
-        const g = ws?.graph();
-        return (ws?.editor()?.selected ?? []).map((id) => g?.nodes.get(id)?.name);
-      }),
-    )
-    .toEqual(['Битый']);
+  // The line led to its note; the panel shows its properties (13 §2.3–2.4).
+  const panel = page.locator('.ws-inspector');
+  await expect(panel.locator('.ins-title-name')).toHaveText('Диздок');
+  await expect(panel.locator('.ins-props dd').first()).toHaveText('#idea/2026 #игра');
+  await expect(panel.locator('.ins-props')).toContainText('Сценарий');
+  await expect(panel.locator('.ins-props')).toContainText('rating5');
+  expect(await overflowing(page, '.ins-props')).toEqual([]);
+  await panel.screenshot({ path: test.info().outputPath('panel-props.png') });
+  // Back to the root: Игра → Проекты → the vault.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page
+    .locator('.workspace canvas')
+    .first()
+    .click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('u');
+  await page.keyboard.press('u');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
   // One step of undo takes the whole vault back (13 §1.4 item 3).
   await page.keyboard.press('Control+z');
   await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '0');

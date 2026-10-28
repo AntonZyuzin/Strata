@@ -502,100 +502,13 @@ pub fn excalidraw_md(text: &str) -> Option<Drawing> {
     Some(drawing(scene, files, kept.join("\n")))
 }
 
-/// LZString's `decompressFromBase64` (lz-string 1.5.0, MIT, R2 §7): the
-/// Excalidraw plugin packs its scenes so. Written from the algorithm's
-/// description: base64 digits give 6 bits each; codes 0 and 1 bring a new
-/// 8- or 16-bit character into the dictionary, 2 ends the stream; the code
-/// width grows as the dictionary does. Text comes out as UTF-16.
+/// LZString's `decompressFromBase64` (lz-string 1.5.0, R2 §7): the
+/// Excalidraw plugin packs its scenes so. The crate `lz-str` (spike 11).
 pub fn lz_decompress_base64(input: &str) -> Option<String> {
-    const KEY: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-    let digits: Vec<u32> = input
-        .bytes()
-        .map(|b| KEY.iter().position(|&k| k == b).map_or(0, |p| p as u32))
-        .collect();
-    if digits.is_empty() {
+    if input.is_empty() {
         return None;
     }
-    struct Bits<'a> {
-        digits: &'a [u32],
-        val: u32,
-        position: u32,
-        index: usize,
-    }
-    impl Bits<'_> {
-        fn read(&mut self, n: u32) -> u32 {
-            let mut bits = 0;
-            for i in 0..n {
-                let bit = self.val & self.position;
-                self.position >>= 1;
-                if self.position == 0 {
-                    self.position = 32;
-                    self.val = self.digits.get(self.index).copied().unwrap_or(0);
-                    self.index += 1;
-                }
-                if bit > 0 {
-                    bits |= 1 << i;
-                }
-            }
-            bits
-        }
-    }
-    let mut bits = Bits {
-        digits: &digits,
-        val: digits[0],
-        position: 32,
-        index: 1,
-    };
-    let mut dict: Vec<Vec<u16>> = vec![Vec::new(), Vec::new(), Vec::new()];
-    let mut enlarge_in: u32 = 4;
-    let mut num_bits: u32 = 3;
-    let first = match bits.read(2) {
-        0 => bits.read(8) as u16,
-        1 => bits.read(16) as u16,
-        _ => return Some(String::new()),
-    };
-    dict.push(vec![first]);
-    let mut w = vec![first];
-    let mut out: Vec<u16> = vec![first];
-    loop {
-        if bits.index > digits.len() {
-            return None;
-        }
-        let mut c = bits.read(num_bits) as usize;
-        match c {
-            0 | 1 => {
-                let ch = bits.read(if c == 0 { 8 } else { 16 }) as u16;
-                dict.push(vec![ch]);
-                c = dict.len() - 1;
-                enlarge_in -= 1;
-            }
-            2 => return Some(String::from_utf16_lossy(&out)),
-            _ => {}
-        }
-        if enlarge_in == 0 {
-            enlarge_in = 1 << num_bits;
-            num_bits += 1;
-        }
-        let entry = if c < dict.len() {
-            dict[c].clone()
-        } else if c == dict.len() {
-            let mut e = w.clone();
-            e.push(w[0]);
-            e
-        } else {
-            return None;
-        };
-        out.extend_from_slice(&entry);
-        let mut next = w.clone();
-        next.push(entry[0]);
-        dict.push(next);
-        enlarge_in -= 1;
-        w = entry;
-        if enlarge_in == 0 {
-            enlarge_in = 1 << num_bits;
-            num_bits += 1;
-        }
-    }
+    lz_str::decompress_from_base64(input).map(|text| String::from_utf16_lossy(&text))
 }
 
 #[cfg(test)]
@@ -627,118 +540,6 @@ mod tests {
         assert_eq!(config(&[]).attachments, "/");
     }
 
-    /// LZString's `compressToBase64`, for the tests: the other half of the
-    /// algorithm (lz-string 1.5.0), the way the plugin packs its scenes.
-    pub(crate) fn lz_compress_base64(input: &str) -> String {
-        use std::collections::{HashMap, HashSet};
-        const KEY: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=";
-        struct Out {
-            data: String,
-            val: u32,
-            position: u32,
-        }
-        impl Out {
-            fn bits(&mut self, mut value: u32, n: u32) {
-                for _ in 0..n {
-                    self.val = (self.val << 1) | (value & 1);
-                    if self.position == 5 {
-                        self.position = 0;
-                        self.data.push(KEY[self.val as usize] as char);
-                        self.val = 0;
-                    } else {
-                        self.position += 1;
-                    }
-                    value >>= 1;
-                }
-            }
-        }
-        let mut out = Out {
-            data: String::new(),
-            val: 0,
-            position: 0,
-        };
-        let mut dict: HashMap<Vec<u16>, u32> = HashMap::new();
-        let mut to_create: HashSet<Vec<u16>> = HashSet::new();
-        let (mut enlarge_in, mut dict_size, mut num_bits) = (2u32, 3u32, 2u32);
-        let mut w: Vec<u16> = Vec::new();
-        let emit = |w: &Vec<u16>,
-                    dict: &HashMap<Vec<u16>, u32>,
-                    to_create: &mut HashSet<Vec<u16>>,
-                    enlarge_in: &mut u32,
-                    num_bits: &mut u32,
-                    out: &mut Out| {
-            if to_create.remove(w) {
-                if w[0] < 256 {
-                    out.bits(0, *num_bits);
-                    out.bits(u32::from(w[0]), 8);
-                } else {
-                    out.bits(1, *num_bits);
-                    out.bits(u32::from(w[0]), 16);
-                }
-                *enlarge_in -= 1;
-                if *enlarge_in == 0 {
-                    *enlarge_in = 1 << *num_bits;
-                    *num_bits += 1;
-                }
-            } else {
-                out.bits(dict[w], *num_bits);
-            }
-            *enlarge_in -= 1;
-            if *enlarge_in == 0 {
-                *enlarge_in = 1 << *num_bits;
-                *num_bits += 1;
-            }
-        };
-        for c in input.encode_utf16() {
-            let cc = vec![c];
-            if !dict.contains_key(&cc) {
-                dict.insert(cc.clone(), dict_size);
-                dict_size += 1;
-                to_create.insert(cc.clone());
-            }
-            let mut wc = w.clone();
-            wc.push(c);
-            if dict.contains_key(&wc) {
-                w = wc;
-            } else {
-                emit(
-                    &w,
-                    &dict,
-                    &mut to_create,
-                    &mut enlarge_in,
-                    &mut num_bits,
-                    &mut out,
-                );
-                dict.insert(wc, dict_size);
-                dict_size += 1;
-                w = cc;
-            }
-        }
-        if !w.is_empty() {
-            emit(
-                &w,
-                &dict,
-                &mut to_create,
-                &mut enlarge_in,
-                &mut num_bits,
-                &mut out,
-            );
-        }
-        out.bits(2, num_bits);
-        loop {
-            out.val <<= 1;
-            if out.position == 5 {
-                out.data.push(KEY[out.val as usize] as char);
-                break;
-            }
-            out.position += 1;
-        }
-        while out.data.len() % 4 != 0 {
-            out.data.push('=');
-        }
-        out.data
-    }
-
     #[test]
     fn lz_string_unpacks_what_it_packed() {
         for s in [
@@ -747,7 +548,7 @@ mod tests {
             r#"{"type":"excalidraw","version":2,"elements":[{"id":"e1","text":"Привет, [[Заметка]] 👩‍💻"}]}"#,
             &"абвгд abcde ".repeat(200),
         ] {
-            let packed = lz_compress_base64(s);
+            let packed = lz_str::compress_to_base64(s);
             assert_eq!(
                 lz_decompress_base64(&packed).as_deref(),
                 Some(s),

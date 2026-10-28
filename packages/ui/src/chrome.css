@@ -2786,6 +2786,16 @@ button.ws-path-step:active:not(:disabled) {
   width: 100%;
 }
 
+/* A vault's properties (13 §2.3): read only, one line each. */
+.ins-props .ins-label,
+.ins-props .ins-value {
+  min-height: var(--st-size-row);
+  line-height: var(--st-size-row);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .ins-people {
   display: flex;
   flex-wrap: wrap;

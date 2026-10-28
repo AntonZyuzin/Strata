@@ -19,6 +19,8 @@ net = ["dep:ureq", "dep:html5gum", "dep:url", "dep:encoding_rs"]
 [dependencies]
 base64 = "0.22"
 loro = "=1.16.2"
+# LZString of the Excalidraw plugin's drawings (13 §2.8, spike 11).
+lz-str = "0.2.1"
 rusqlite = { version = "0.40.2", features = ["bundled"], optional = true }
 serde.workspace = true
 serde_json.workspace = true

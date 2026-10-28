@@ -48,14 +48,12 @@ export function Shell(props: {
   const { prefs, home } = props;
   const locale = prefs.locale;
   /**
-   * «Настройки» as a tab of the bar (✅ Q-06-23): open or not, and in front or
-   * not. In front it covers the home or the workspace, which stay as they are.
+   * «Настройки» (✅ Q-06-23): a window the gear opens over the home or the
+   * workspace, no tab of its own (owner, 2026-10-28: a tab only repeated the
+   * gear). Going anywhere closes it.
    */
-  const [settings, setSettings] = useState<{ open: boolean; front: boolean }>({
-    open: false,
-    front: false,
-  });
-  const behind = () => setSettings((s) => (s.front ? { ...s, front: false } : s));
+  const [settings, setSettings] = useState(false);
+  const behind = () => setSettings(false);
   const [tabs, setTabs] = useState<Tab[]>(loadTabs);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -136,10 +134,9 @@ export function Shell(props: {
       <TabBar
         locale={locale}
         tabs={tabs}
-        active={settings.front ? null : (pending ?? active)}
+        active={pending ?? active}
         settings={settings}
-        onSettings={() => setSettings({ open: true, front: true })}
-        onSettingsClose={() => setSettings({ open: false, front: false })}
+        onSettings={() => setSettings((open) => !open)}
         undo={opened ? (undo ?? undefined) : undefined}
         onUndo={() => bridge.current?.undo()}
         onRedo={() => bridge.current?.redo()}
@@ -251,7 +248,7 @@ export function Shell(props: {
             home={home}
             opened={opened}
             prefs={prefs}
-            covered={settings.front}
+            covered={settings}
             bridge={bridge}
             onUndoState={setUndo}
           />
@@ -270,13 +267,14 @@ export function Shell(props: {
             onRemoved={(id) => setTabs((ts) => ts.filter((x) => x.id !== id))}
           />
         )}
-        {settings.front ? (
+        {settings ? (
           <SettingsScreen
             locale={locale}
             home={home}
             prefs={prefs}
             onPrefs={props.onPrefs}
             onAbout={props.onAbout}
+            onClose={() => setSettings(false)}
           />
         ) : null}
       </div>

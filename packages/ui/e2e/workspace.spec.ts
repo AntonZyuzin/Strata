@@ -78,7 +78,11 @@ async function createWorkspace(page: Page, name: string) {
   await expect(page.locator('.workspace')).toBeVisible();
   await page.waitForFunction(() => window.__strataWs?.graph() != null);
   // The graph comes before the network's path: the root's depth is 1 once both are in.
-  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+  // The first frames of software WebGL hold the main thread (CI's WebKit under
+  // load): the render with the path may come seconds later than the graph.
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1', {
+    timeout: 15_000,
+  });
 }
 
 const graphNow = (page: Page) =>
@@ -593,15 +597,15 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       await expect(page.locator('.settings')).toBeVisible();
       expect(await overflowing(page, '.settings, .tabbar'), `${locale} text must fit`).toEqual([]);
       boxes.push({
+        window: await box(page, '.settings'),
         page: await box(page, '.settings-page'),
         fields: await box(page, '.settings section:nth-of-type(2) .ins-fields'),
-        tab: await box(page, '.tab.is-active'),
         gear: await box(page, '.tabbar-settings'),
       });
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['page', 'fields', 'tab', 'gear'] as const) {
+    for (const part of ['window', 'page', 'fields', 'gear'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -1873,7 +1877,7 @@ test.describe('a workspace on the core', () => {
     // «Настройки»: never.
     await page.locator('.tabbar-settings').click();
     await page.locator('.settings').getByLabel('Кольцо флагов').selectOption('never');
-    await page.locator('.tab', { hasText: 'Кольцо' }).first().click();
+    await page.locator('.tabbar-settings').click();
     await expect(page.locator('.settings')).toHaveCount(0);
     await page.mouse.move(p.x, p.y, { steps: 4 });
     await page.waitForTimeout(400);
@@ -2597,6 +2601,40 @@ test.describe('a workspace on the core', () => {
     await expect(dialog).toHaveCount(0);
     // «Игра» went alone, «Референсы» after it: one node each.
     await expect(page.locator('.toast', { hasText: 'В корзине: 1 нода' })).toHaveCount(2);
+  });
+
+  test('«Настройки» are a window the gear opens, not a tab (owner, 2026-10-28)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Окно настроек');
+    const gear = page.locator('.tabbar-settings');
+    const win = page.locator('.settings');
+    const tabs = page.locator('.tabbar .tab');
+    await expect(tabs).toHaveCount(1);
+    // The gear opens it under itself and stays pressed; the bar gets no tab.
+    await gear.click();
+    await expect(win).toBeVisible();
+    await expect(win).toBeFocused();
+    await expect(gear).toHaveAttribute('aria-pressed', 'true');
+    await expect(tabs).toHaveCount(1);
+    await expect(page.locator('.workspace')).toBeVisible();
+    const g = await box(page, '.tabbar-settings');
+    const w = await box(page, '.settings');
+    expect(Math.abs(w.x + w.width - (g.x + g.width))).toBeLessThanOrEqual(8);
+    // The gear again, Esc, its ×, a press elsewhere: each closes it.
+    await gear.click();
+    await expect(win).toHaveCount(0);
+    await expect(gear).toHaveAttribute('aria-pressed', 'false');
+    await gear.click();
+    await page.keyboard.press('Escape');
+    await expect(win).toHaveCount(0);
+    await gear.click();
+    await win.getByRole('button', { name: 'Закрыть настройки' }).click();
+    await expect(win).toHaveCount(0);
+    await gear.click();
+    await page.mouse.click(500, 500);
+    await expect(win).toHaveCount(0);
   });
 
   test('the profile and the language are kept on this device, in «Настройки»', async ({ page }) => {

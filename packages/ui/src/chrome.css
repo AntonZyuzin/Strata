@@ -2009,18 +2009,24 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 
 /* «Настройки» over the home or the workspace, which stay as they were: the
    panel's grid in one column (✅ Q-06-23). */
+/* «Настройки» (✅ Q-06-23): a window under the gear at the bar's right end,
+   8u below the bar and from the window's edge, the panel's width; it scrolls
+   inside when the window is short. */
 .settings {
   position: absolute;
-  inset: 0;
+  top: calc(8 * var(--u));
+  right: calc(8 * var(--u));
   z-index: 30;
-  overflow: auto;
-  background: var(--st-color-bg);
+  display: flex;
+  flex-direction: column;
+  width: min(var(--panel-w, 46ch), calc(100% - 16 * var(--u)));
+  max-height: calc(100% - 16 * var(--u));
+  outline: none;
 }
 
 .settings-page {
-  width: min(64ch, 100%);
-  margin: 0 auto;
-  padding: calc(16 * var(--u)) 0 calc(24 * var(--u));
+  min-height: 0;
+  overflow: auto;
 }
 
 .settings-about {

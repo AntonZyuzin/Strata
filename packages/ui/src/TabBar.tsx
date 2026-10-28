@@ -84,10 +84,9 @@ export function TabBar(props: {
   onBack: () => void;
   onForward: () => void;
   onMap: () => void;
-  /** «Настройки» (✅ Q-06-23): a tab of its own while open, in front or behind. */
-  settings: { open: boolean; front: boolean };
+  /** «Настройки» (✅ Q-06-23): the gear's window is open. */
+  settings: boolean;
   onSettings: () => void;
-  onSettingsClose: () => void;
 }) {
   const { settings } = props;
   const { locale, active } = props;
@@ -98,7 +97,7 @@ export function TabBar(props: {
         className="tabbar-logo"
         aria-label={t(locale, 'ws.home')}
         title={t(locale, 'ws.homeHint')}
-        aria-current={active === null && !settings.front ? 'page' : undefined}
+        aria-current={active === null ? 'page' : undefined}
         onClick={props.onHome}
       >
         <Glyph name="logo" />
@@ -170,27 +169,6 @@ export function TabBar(props: {
             />
           </div>
         ))}
-        {settings.open ? (
-          <div className={settings.front ? 'tab is-active' : 'tab'}>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={settings.front}
-              className="tab-name"
-              title={t(locale, 'settings.title')}
-              onClick={props.onSettings}
-            >
-              <Icon name="settings" />
-              <span className="tab-label">{t(locale, 'settings.title')}</span>
-            </button>
-            <IconButton
-              icon="close"
-              className="tab-close"
-              label={t(locale, 'settings.close')}
-              onClick={props.onSettingsClose}
-            />
-          </div>
-        ) : null}
         <IconButton
           icon="plus"
           className="tab-new"
@@ -202,7 +180,7 @@ export function TabBar(props: {
         icon="settings"
         className="tabbar-settings"
         label={t(locale, 'settings.title')}
-        pressed={settings.front}
+        pressed={settings}
         onClick={props.onSettings}
       />
     </nav>

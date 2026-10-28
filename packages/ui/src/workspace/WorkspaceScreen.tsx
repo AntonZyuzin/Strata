@@ -1164,8 +1164,9 @@ export function WorkspaceScreen(props: {
     }
   }, [view3d]);
 
-  // A search of one view closes with it (2D ↔ 3D).
-  useEffect(() => {
+  // A search of one view closes with it (2D ↔ 3D) — in the commit that
+  // changes the view: after paint it would close a `Ctrl+F` typed at once.
+  useLayoutEffect(() => {
     setFinder((f) => (f && f.map !== (view3d === '3d') ? null : f));
     setFinding(false);
   }, [view3d]);

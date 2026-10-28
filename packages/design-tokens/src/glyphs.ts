@@ -348,6 +348,18 @@ const S8 = {
     '........',
     '...##...',
   ],
+  // «Закрепить на карте» (08 §3.6, §4.3): a pin with an orbit round its needle,
+  // not the canvas's own pinned position (06 §9.1).
+  orbitPin: [
+    '..####..',
+    '..####..',
+    '.######.',
+    '...#....',
+    '.######.',
+    '#..#...#',
+    '.######.',
+    '...#....',
+  ],
 } as const;
 
 /** Chrome actions on 16 × 16: the tab bar and the home cards. */

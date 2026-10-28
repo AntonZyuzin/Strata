@@ -13,6 +13,11 @@ export interface NavEntry {
   /** The network on the canvas; in 3D — the cluster in focus. */
   net: string;
   camera?: { x: number; y: number; zoom: number };
+  /** The star map's camera, without the bridge's offset (09 §6.2: a mark keeps it). */
+  camera3d?: {
+    position: [number, number, number];
+    target: [number, number, number];
+  };
   /** At most `MAX_SELECTION` nodes. */
   selection?: string[];
   at: number;

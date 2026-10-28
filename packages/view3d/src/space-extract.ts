@@ -15,6 +15,10 @@ export interface SpaceItem {
   /** The network of its primary placement; none for the root. */
   parent?: string | undefined;
   status?: string | undefined;
+  /** Its flags' bits, `FLAG` (05 §7): key, pause, template. */
+  flags?: number | undefined;
+  /** A near or past deadline (07 §4.6): the star's yellow or red (08 §4.3). */
+  due?: 'soon' | 'today' | 'overdue' | undefined;
 }
 
 export interface SpaceWire {
@@ -71,7 +75,10 @@ export function spaceExtract(
     const it = known.get(id);
     if (!it) return;
     kind[b] = KIND[it.kind] ?? KIND.note;
-    state[b] = it.status && FINAL.has(it.status) ? STATE.closed : STATE.plain;
+    flags[b] = it.flags ?? 0;
+    // A final status outweighs its deadline: the work is over (05 §6.1).
+    state[b] =
+      it.status && FINAL.has(it.status) ? STATE.closed : it.due ? STATE[it.due] : STATE.plain;
     if (b > 0)
       primaryNet[b] = body.get(it.parent && known.has(it.parent) ? it.parent : (ids[0] ?? '')) ?? 0;
   });

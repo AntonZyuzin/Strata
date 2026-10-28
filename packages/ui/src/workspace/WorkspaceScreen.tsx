@@ -21,6 +21,7 @@ import {
   linkOf,
   type NetworkView,
   type NodeDetails,
+  type NodeKind,
   newId,
   newNode,
   type Opened,
@@ -45,6 +46,7 @@ import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { Scope } from '@strata/search';
+import { type Quality, qualityOf } from '@strata/view3d/map';
 import type { LoroDoc } from 'loro-crdt';
 import {
   type MutableRefObject,
@@ -61,7 +63,14 @@ import { nodeIconFile, nodeIconImages } from '../icons/Icon';
 import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
-import { Map3D, type MapNav, type MapState } from '../proto/map3d';
+import {
+  Map3D,
+  type MapAction,
+  type MapNav,
+  type MapState,
+  mapQuality,
+  setMapQuality,
+} from '../proto/map3d';
 import { type MenuGhost, type MenuItem, type MenuNode, remember } from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
@@ -78,6 +87,7 @@ import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { Inspector, type InspectorActions } from './Inspector';
 import { Layers } from './Layers';
+import { mapItems, pathTo, placeIn, removeOps } from './mapSteps';
 import { NodeSearch } from './NodeSearch';
 import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
 import { PathBar } from './PathBar';
@@ -103,6 +113,17 @@ interface Camera {
   y: number;
   zoom: number;
 }
+
+/** Where a node made on the star map goes (08 §6.4). */
+interface MapTarget {
+  net: string;
+  from: string | null;
+  /** The Tab menu's header: `→ path · от «P»`. */
+  target: string;
+}
+
+/** The star map's steps that this screen writes through the core (08 §6). */
+type MapCalls = Pick<MapNav, 'create' | 'flag' | 'remove' | 'menu' | 'undo' | 'open'>;
 
 const RECENT_KEY = 'strata.tabmenu.recent';
 /** «Перейти к ноде» ranks the whole workspace (09 §3.4). */
@@ -244,10 +265,23 @@ export function WorkspaceScreen(props: {
     named?: string;
     /** Each opening is a menu of its own (see `menuOpening`). */
     seq: number;
+    /** Opened on the star map (08 §6.4): where the node goes, and the header saying so. */
+    map?: MapTarget;
   } | null>(null);
-  const [name, setName] = useState<{ id: string; sx: number; sy: number; name: string } | null>(
-    null,
-  );
+  const [name, setName] = useState<{
+    id: string;
+    sx: number;
+    sy: number;
+    name: string;
+    /** A node just made on the star map: its name is written by the core. */
+    map?: MapTarget;
+  } | null>(null);
+  /** The right button's menu on the star map (08 §5.4): of a star, or of the map. */
+  const [mapCtx, setMapCtx] = useState<{ x: number; y: number; id: string | null } | null>(null);
+  /** The cluster in focus on the star map: its path and the quick marks show under it. */
+  const [mapFocus, setMapFocus] = useState<string | null>(null);
+  /** The quality of the star map chosen by hand, or `auto` (08 §8.4). */
+  const [quality, setQuality] = useState<Quality | 'auto'>(() => mapQuality().manual ?? 'auto');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [note, setNote] = useState<{
     id: string;
@@ -279,6 +313,8 @@ export function WorkspaceScreen(props: {
     everywhere: boolean;
     placed: NodeDetails[];
     preview: TrashPreview;
+    /** From the star map (08 §6.7): the contextual network it leaves. */
+    map?: string;
   } | null>(null);
   const askDeleteRef = useRef<(ids: string[], everywhere: boolean) => boolean>(() => false);
   /** Who hears «the cluster in focus or the selected star changed» on the map. */
@@ -335,6 +371,8 @@ export function WorkspaceScreen(props: {
   const walking = useRef(false);
   /** A place in 2D to show once the star map is gone. */
   const pending = useRef<NavEntry | null>(null);
+  /** A place on the map to fly to once the map is shown. */
+  const pending3d = useRef<NavEntry | null>(null);
   const view3dRef = useRef<MapState>('2d');
   /** The minimap (06 §10.3): open or closed for every network of the session. */
   const [minimap, setMinimap] = useState(false);
@@ -342,6 +380,14 @@ export function WorkspaceScreen(props: {
   const placeRef = useRef<(e: NavEntry) => Promise<void>>(async () => {});
   const localeRef = useRef(locale);
   localeRef.current = locale;
+  const prefsRef = useRef(props.prefs);
+  prefsRef.current = props.prefs;
+  /** A network loads under the star map for it (08 §7.2): the map stays and lands there. */
+  const keepMap = useRef(false);
+  /** Steps on the star map changed the core: the canvas reads its network again before 2D. */
+  const canvasStale = useRef(false);
+  /** The map's steps written by the core, as this render has them. */
+  const mapCalls = useRef<MapCalls | null>(null);
   /** The companion on the canvas (07 §10.4): it reacts to the user's steps. */
   const gecko = useRef<GeckoHandle>(null);
   const geckoHost = useRef<HTMLDivElement>(null);
@@ -582,34 +628,57 @@ export function WorkspaceScreen(props: {
       },
     };
 
-    /** The star map navigates the whole space from the core (08 §10). */
+    /**
+     * The star map works in the whole space from the core (08 §6, §10): its
+     * steps are the core's; a network it bridges into loads under it first.
+     */
     const mapNav: MapNav = {
       space: async () => {
         await sync.current?.settled();
         const [items, wires] = await Promise.all([core.tree(), core.wires()]);
-        return {
-          items: items.map((i) => ({
-            id: i.id,
-            kind: i.kind,
-            parent: i.parent,
-            status: i.status,
-            name: i.name,
-          })),
-          wires,
-        };
+        return { items: mapItems(items), wires };
       },
       network: () => netRef.current,
       change: () => {
         for (const fn of mapChanged.current) fn();
+        setMapFocus(map3d.current?.focusId() ?? null);
       },
-      go: (net, node) => {
-        const show = () => {
+      load: async (net, node, camera) => {
+        keepMap.current = true;
+        try {
+          if (camera) cameras.current.set(net, camera);
+          if (net !== netRef.current || canvasStale.current) {
+            canvasStale.current = false;
+            await loadRef.current(net);
+          } else if (camera && viewRef.current) {
+            const c = viewRef.current.camera;
+            c.x = camera.x;
+            c.y = camera.y;
+            c.zoom = camera.zoom;
+          }
           if (node) editor.current?.focusNode(node);
-        };
-        if (net === netRef.current) show();
-        else void loadRef.current(net).then(show);
+        } finally {
+          keepMap.current = false;
+        }
       },
       leave: () => leaveRef.current(),
+      get workspace() {
+        return openedRef.current.workspace.id;
+      },
+      words: () => ({ locale: localeRef.current, date: reading(prefsRef.current).date }),
+      person: (id) => peopleRef.current.find((p) => p.id === id)?.name,
+      details: async (id) => {
+        await sync.current?.settled();
+        return core.node(id);
+      },
+      open: (id, at) => mapCalls.current?.open(id, at) ?? false,
+      create: (at) => mapCalls.current?.create(at),
+      flag: (ids, flag) => mapCalls.current?.flag(ids, flag),
+      remove: (id, net, everywhere) => mapCalls.current?.remove(id, net, everywhere),
+      menu: (x, y, id) => mapCalls.current?.menu(x, y, id),
+      undo: (redo) => mapCalls.current?.undo(redo),
+      toast: (key) => toast(key),
+      measure: !new URLSearchParams(window.location.search).has('plain'),
     };
 
     /** Where the screen is: the view, the network or cluster, the camera, the selection. */
@@ -617,10 +686,13 @@ export function WorkspaceScreen(props: {
       const v = viewRef.current;
       const three = view3dRef.current !== '2d';
       const selection = editor.current?.selected ?? [];
+      // A 3D place keeps its camera too: a quick mark flies back to it (09 §6.2).
+      const camera3d = three ? map3d.current?.cameraNow() : null;
       return {
         mode: three ? '3d' : '2d',
         net: three ? (map3d.current?.focusId() ?? netRef.current) : netRef.current,
         ...(v && !three ? { camera: { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom } } : {}),
+        ...(camera3d ? { camera3d } : {}),
         ...(selection.length > 0 && !three ? { selection } : {}),
         at: Date.now(),
       };
@@ -646,17 +718,26 @@ export function WorkspaceScreen(props: {
       try {
         const now = view3dRef.current;
         if (e.mode === '2d') {
-          // From the star map: the place shows once the canvas is back.
+          // From the star map: the bridge lands straight in the place's
+          // network and camera (08 §7.2); its selection once the canvas is back.
           if (now === '3d') {
-            pending.current = e;
-            map3d.current?.toggle();
+            const { camera: _, ...rest } = e;
+            pending.current = rest;
+            map3d.current?.leaveTo(e.net, e.camera);
             return;
           }
           if (now === '2d') await place(e);
           return;
         }
+        // A place on the map: from the map, a flight to its camera; from the
+        // canvas, the bridge first (09 §6.2).
+        if (now === '3d') {
+          map3d.current?.goPlace(e.net, e.camera3d);
+          return;
+        }
         if (now !== '2d') return;
         if (e.net !== netRef.current) await loadRef.current(e.net);
+        pending3d.current = e;
         map3d.current?.toggle();
       } finally {
         walking.current = false;
@@ -719,7 +800,10 @@ export function WorkspaceScreen(props: {
       }
       editor.current?.destroy();
       sync.current?.destroy();
-      map3d.current?.destroy();
+      // The star map asked for this network (08 §7.2): it stays and lands
+      // here; any other load ends it.
+      const keep = keepMap.current && map3d.current !== null && map3d.current.state !== '2d';
+      if (!keep) map3d.current?.destroy();
       const g = graphOf(
         nv,
         (k) => v.iconFor(k),
@@ -750,10 +834,14 @@ export function WorkspaceScreen(props: {
       ed.minimap.open = minimapRef.current;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
-      map3d.current = new Map3D(el, v, g, setView3d, mapNav);
-      // A network loads onto the canvas: the screen is in 2D with the new map,
-      // even when the old one was open (another tab under the star map).
-      setView3d('2d');
+      if (keep && map3d.current) {
+        map3d.current.adopt(g);
+      } else {
+        map3d.current = new Map3D(el, v, g, setView3d, mapNav);
+        // A network loads onto the canvas: the screen is in 2D with the new map,
+        // even when the old one was open (another tab under the star map).
+        setView3d('2d');
+      }
       netRef.current = id;
       setNet(nv);
       setMenu(null);
@@ -1014,11 +1102,16 @@ export function WorkspaceScreen(props: {
         return;
       }
       const search = mod && !e.altKey && !e.shiftKey && (e.code === 'KeyO' || e.code === 'KeyF');
+      // A note's or a list's own search keeps its keys; so does any field,
+      // and a window over the star map (08 §5.4) — `Esc` gives the keys back.
+      const target = e.target as HTMLElement | null;
+      const typing =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable ||
+          (view3d !== '2d' && target.closest('.window, .dialog, .context-menu') !== null));
       if (view3d === '2d') {
-        // A note's or a list's own search keeps its keys; so does any field.
-        const t = e.target as HTMLElement | null;
-        const typing =
-          t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable);
         if (!search || typing || menu || name) return;
         e.preventDefault();
         if (e.code === 'KeyO') {
@@ -1029,6 +1122,7 @@ export function WorkspaceScreen(props: {
         }
         return;
       }
+      if (typing || menu || name || mapCtx || removal) return;
       if (search) {
         e.preventDefault();
         if (e.code === 'KeyF') {
@@ -1048,7 +1142,27 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, finder, palette, covered, menu, name]);
+  }, [view3d, finder, palette, covered, menu, name, mapCtx, removal]);
+
+  // A window opened over the star map belongs to it (08 §6.3): back in 2D it
+  // stays only for a node of the canvas's network.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: on the view's change only
+  useEffect(() => {
+    setMapCtx(null);
+    if (view3d !== '2d') return;
+    const now = graph.current;
+    const off = (id: string | undefined) => id !== undefined && !now?.nodes.has(id);
+    if (off(note?.id) || off(board?.id)) void docs.current?.flush();
+    if (off(note?.id)) setNote(null);
+    if (off(board?.id)) {
+      setBoard(null);
+      setBoardFocus(false);
+    }
+    if (off(viewer?.id)) {
+      setViewer(null);
+      setViewerFocus(false);
+    }
+  }, [view3d]);
 
   // A search of one view closes with it (2D ↔ 3D).
   useEffect(() => {
@@ -1056,9 +1170,15 @@ export function WorkspaceScreen(props: {
     setFinding(false);
   }, [view3d]);
 
-  // The history's place in 2D, once the star map has gone (09 §6.1).
+  // The history's place in 2D, once the star map has gone (09 §6.1); its
+  // place on the map once the map is there.
   useEffect(() => {
     view3dRef.current = view3d;
+    const e3 = pending3d.current;
+    if (view3d === '3d' && e3) {
+      pending3d.current = null;
+      map3d.current?.goPlace(e3.net, e3.camera3d);
+    }
     const e = pending.current;
     if (view3d !== '2d' || !e) return;
     pending.current = null;
@@ -1171,11 +1291,17 @@ export function WorkspaceScreen(props: {
     return new DOMRect(r.left, r.top, Math.max(0, r.width - covered), r.height);
   };
 
+  const mapChooseRef = useRef<(item: MenuItem, m: MapTarget) => void>(() => undefined);
   const choose = useCallback(
     (item: MenuItem) => {
+      const m = menu?.map;
       setMenu(null);
-      editor.current?.setOverlayOpen(false);
-      editor.current?.menuChoose(item.choice);
+      if (m) {
+        mapChooseRef.current(item, m);
+      } else {
+        editor.current?.setOverlayOpen(false);
+        editor.current?.menuChoose(item.choice);
+      }
       const next = remember(recent, item);
       setRecent(next);
       try {
@@ -1185,7 +1311,7 @@ export function WorkspaceScreen(props: {
       }
       focusCanvas();
     },
-    [recent, focusCanvas],
+    [recent, focusCanvas, menu?.map],
   );
 
   /** Back to the home screen: everything written, a picture for the card. */
@@ -1198,8 +1324,11 @@ export function WorkspaceScreen(props: {
     };
     props.bridge.current = {
       save,
-      undo: () => editor.current?.undo(),
-      redo: () => editor.current?.redo(),
+      // On the star map the bar's undo is the core's (08 §6.4: one step).
+      undo: () =>
+        view3dRef.current === '3d' ? mapCalls.current?.undo(false) : editor.current?.undo(),
+      redo: () =>
+        view3dRef.current === '3d' ? mapCalls.current?.undo(true) : editor.current?.redo(),
       map: () => map3d.current?.toggle(),
       back: () => walk('back'),
       forward: () => walk('forward'),
@@ -1680,6 +1809,276 @@ export function WorkspaceScreen(props: {
     return true;
   };
 
+  /**
+   * After a step on the star map (08 §3.4): the map reads the space again —
+   * a new star by its source — and the canvas its network before 2D; a
+   * network gone with the step leaves the root on the canvas.
+   */
+  const afterMapStep = async (born?: { id: string; from: string | null }) => {
+    canvasStale.current = true;
+    const items = await core.tree();
+    setTree(items);
+    if (!items.some((i) => i.id === netRef.current)) {
+      keepMap.current = true;
+      try {
+        canvasStale.current = false;
+        await loadRef.current(openedRef.current.root);
+      } finally {
+        keepMap.current = false;
+      }
+    }
+    await map3d.current?.refresh(born);
+  };
+
+  /** A star's node out of the canvas's network: «Убрать отсюда» or «Удалить везде» (08 §6.7). */
+  const mapRemoveNow = async (id: string, net: string, everywhere: boolean, places: number) => {
+    await sync.current?.settled();
+    const view = await core.view(net);
+    const stay = !everywhere && places > 1;
+    await coreStep(
+      removeOps(id, view, everywhere),
+      stay ? 'proto.change.unplace' : 'proto.change.delete',
+      { n: 1 },
+    );
+    toast(stay ? 'proto.toast.unplaced' : 'proto.toast.deleted', { n: 1 });
+    await afterMapStep();
+  };
+
+  /** Removing on the map asks first as on the canvas (06 §12.3). */
+  const mapRemove = async (id: string, net: string, everywhere: boolean) => {
+    await sync.current?.settled();
+    const d = await core.node(id);
+    const going = everywhere || d.places.length <= 1;
+    const placed = everywhere && d.places.length > 1;
+    const preview = going ? await core.trashPreview([id]) : { trashed: [], staying: [] };
+    const nested = preview.trashed.length > 1 || preview.staying.length > 0;
+    if (placed || nested) {
+      setRemoval({ ids: [id], everywhere, placed: placed ? [d] : [], preview, map: net });
+      return;
+    }
+    await mapRemoveNow(id, net, everywhere, d.places.length);
+  };
+
+  /** A page point in this screen's points, where windows and the name field lie. */
+  const screenPoint = (page: { x: number; y: number }) => {
+    const el = host.current;
+    const r = el?.getBoundingClientRect();
+    return {
+      x: page.x - (r?.left ?? 0) + (el?.offsetLeft ?? 0),
+      y: page.y - (r?.top ?? 0) + (el?.offsetTop ?? 0),
+    };
+  };
+
+  /**
+   * A star's content over the map (08 §6.3, 06 §13): a note or a picture
+   * beside it, a board in its window; anything else has none there.
+   */
+  const openOverMap = (id: string, at: { x: number; y: number; r: number }): boolean => {
+    const item = treeRef.current.find((i) => i.id === id);
+    const d = docs.current;
+    const el = host.current;
+    if (!item || !d || !el) return false;
+    const r = el.getBoundingClientRect();
+    const sx = at.x - r.left;
+    const sy = at.y - r.top;
+    const side = sx < r.width / 2 ? 'right' : 'left';
+    const x = el.offsetLeft + (side === 'right' ? sx + at.r + 24 : sx - at.r - 24);
+    const y = el.offsetTop + Math.max(8, Math.min(sy - 120, r.height - 320));
+    const place = { side, x, y } as const;
+    if (item.kind === 'board') {
+      d.doc(id).then((doc) => setBoard({ id, doc }), failed);
+      return true;
+    }
+    if (item.kind === 'note') {
+      d.doc(id).then((doc) => setNote({ id, doc, at: place }), failed);
+      return true;
+    }
+    const type = item.kind === 'asset' ? assetType(item) : null;
+    if (type === null || !viewable(type)) return false;
+    setViewer({ id, type, url: null, at: place });
+    if (item.asset) {
+      urlOf(item.asset, item.mime ?? '')
+        .then((url) => setViewer((w) => (w?.id === id ? { ...w, url } : w)))
+        .catch(failed);
+    }
+    return true;
+  };
+
+  /**
+   * A choice of the Tab menu opened on the map (08 §6.4): the node goes into
+   * the target network where autoPlace puts it, wired from the selected
+   * star; one step of undo; its star is born by its source and selected.
+   */
+  const mapChoose = async (item: MenuItem, m: MapTarget) => {
+    await sync.current?.settled();
+    const c = item.choice;
+    const view = await core.view(m.net);
+    const from = m.from && view.nodes.some((n) => n.id === m.from) ? m.from : null;
+    const inputs = m.from ? [m.from] : [];
+    const at = (kind: NodeKind) => placeIn(view.nodes, view.edges, from, kind);
+    if (c.t === 'template') {
+      const p = at(c.kind);
+      const r = await core.copyNode(c.id, { net: m.net, ...p }, inputs, {
+        key: 'proto.change.template',
+        params: { name: c.name },
+      });
+      graph.current?.clearHistory();
+      setHistory(r.history);
+      await afterMapStep({ id: r.id, from: m.from });
+      map3d.current?.selectId(r.id);
+      return;
+    }
+    if (c.t === 'existing') {
+      const name = treeRef.current.find((i) => i.id === c.id)?.name ?? '';
+      const wires = inputs
+        .filter((f) => f !== c.id)
+        .map((f): CoreOp => ({ op: 'connect', from: f, to: c.id }));
+      const here = view.nodes.some((n) => n.id === c.id);
+      // Another network's node is placed here (05 §5); one here is only wired.
+      if (!here) {
+        const p = at(c.kind);
+        await coreStep([{ op: 'place', id: c.id, net: m.net, ...p }, ...wires], 'ws.change.place', {
+          name,
+        });
+      } else if (wires.length > 0) {
+        await coreStep(wires, 'proto.change.connect', { name });
+      }
+      await afterMapStep();
+      map3d.current?.selectId(c.id);
+      return;
+    }
+    if (c.t !== 'create') return;
+    const id = newId();
+    const p = at(c.kind);
+    await coreStep(
+      [
+        { op: 'createNode', id, kind: c.kind, name: c.name, net: m.net, ...p },
+        ...inputs.map((f): CoreOp => ({ op: 'connect', from: f, to: id })),
+      ],
+      'proto.change.create',
+      { name: c.name },
+    );
+    await afterMapStep({ id, from: m.from });
+    map3d.current?.selectId(id);
+    // A kind without a name: its name is typed under its star, as on the canvas (06 §5.2).
+    const s = c.rename ? map3d.current?.screenOf(id) : null;
+    if (s) {
+      const pt = screenPoint({ x: s.x, y: s.y + 24 });
+      setName({ id, sx: pt.x, sy: pt.y, name: '', map: m });
+    }
+  };
+
+  /** Undo and redo on the map: the core's history (05 §11, 08 §6.4). */
+  const mapUndo = async (redo: boolean) => {
+    await sync.current?.settled();
+    const h = redo ? await core.redo() : await core.undo();
+    graph.current?.clearHistory();
+    setHistory(h);
+    await afterMapStep();
+  };
+
+  /** The quality of the star map by hand, or back to the frames (08 §8.4). */
+  const chooseQuality = (q: Quality | 'auto') => {
+    setMapQuality(q === 'auto' ? null : q);
+    setQuality(q);
+    const now = q === 'auto' ? qualityOf(mapQuality()) : q;
+    const map = map3d.current;
+    map?.applyQuality(now);
+    // Off while it is shown: back to the canvas (08 §8.4).
+    if (now === 'off' && map?.state === '3d') map.toggle();
+  };
+
+  mapChooseRef.current = (item, m) => void mapChoose(item, m).catch(failed);
+  mapCalls.current = {
+    create: ({ x, y, net, from }) => {
+      const path = pathLabel(pathTo(treeRef.current, net));
+      const source = from ? (treeRef.current.find((i) => i.id === from)?.name ?? '') : '';
+      const target = from
+        ? t(locale, 'map.menu.targetFrom', { path, name: source })
+        : t(locale, 'map.menu.target', { path });
+      setMenu({ sx: x, sy: y, query: '', seq: menuOpening(), map: { net, from, target } });
+    },
+    flag: (ids, flag) => {
+      const items = treeRef.current;
+      const on = ids.some((id) => !items.find((i) => i.id === id)?.flags?.includes(flag));
+      void coreStep(
+        ids.map((id): CoreOp => ({ op: 'setFlag', id, flag, on })),
+        `proto.change.flag.${flag}.${on ? 'on' : 'off'}`,
+        { n: ids.length },
+      )
+        .then(() => afterMapStep())
+        .catch(failed);
+    },
+    remove: (id, net, everywhere) => void mapRemove(id, net, everywhere).catch(failed),
+    menu: (x, y, id) => setMapCtx({ x, y, id }),
+    undo: (redo) => void mapUndo(redo).catch(failed),
+    open: openOverMap,
+  };
+
+  /** The right button's menu on the star map (08 §5.4): a star's steps, or the map's. */
+  const mapCtxItems = (id: string | null): MenuEntry[] => {
+    const map = map3d.current;
+    if (!map) return [];
+    if (id === null) {
+      return [
+        { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => map.act('create') },
+        { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => map.act('overview') },
+        ...(['auto', 'high', 'medium', 'economy'] as const).map(
+          (q, i): MenuEntry => ({
+            label: t(locale, `map.quality.${q}` as const),
+            radio: true,
+            checked: quality === q,
+            separated: i === 0,
+            onSelect: () => chooseQuality(q),
+          }),
+        ),
+      ];
+    }
+    const item = tree.find((i) => i.id === id);
+    if (!item) return [];
+    const flags = item.flags ?? [];
+    const flag = (f: Flag, hint: string, separated = false): MenuEntry => ({
+      label: t(locale, `flag.${f}` as MessageKey),
+      hint,
+      separated,
+      checked: flags.includes(f),
+      onSelect: () => map.act(`flag:${f}` as MapAction, id),
+    });
+    return [
+      { label: t(locale, 'ctx.open'), hint: 'Enter', onSelect: () => map.act('open', id) },
+      ...(hasCanvas(item.kind)
+        ? [{ label: t(locale, 'map.ctx.into'), hint: 'I', onSelect: () => map.act('into', id) }]
+        : []),
+      { label: t(locale, 'map.ctx.frame'), hint: 'F', onSelect: () => map.act('frame', id) },
+      { label: t(locale, 'map.ctx.card'), hint: 'Shift+I', onSelect: () => map.act('card', id) },
+      flag('key', 'R', true),
+      flag('pause', 'Q'),
+      flag('template', 'E'),
+      {
+        label: t(locale, 'map.ctx.pin'),
+        hint: 'B',
+        checked: map.pinnedIds().includes(id),
+        onSelect: () => map.act('pin', id),
+      },
+      {
+        label: t(locale, 'ctx.delete'),
+        hint: 'Del',
+        separated: true,
+        onSelect: () => map.act('delete', id),
+      },
+      {
+        label: t(locale, 'ctx.deleteEverywhere'),
+        hint: 'Shift+Del',
+        separated: true,
+        onSelect: () => map.act('deleteEverywhere', id),
+      },
+    ];
+  };
+
+  /** A node's name: on the canvas, or anywhere in the workspace (a window over the map). */
+  const nameOf = (id: string) =>
+    g?.nodes.get(id)?.name ?? tree.find((i) => i.id === id)?.name ?? '';
+
   /** The right button's menu (06 §5): for a node, a wire, or the bare canvas. */
   const ctxItems = (at: MenuTarget): MenuEntry[] => {
     if (!g || !ed) return [];
@@ -1854,6 +2253,9 @@ export function WorkspaceScreen(props: {
     walk,
     setMark,
     goMark,
+    mapAct: (action) => map3d.current?.act(action),
+    quality,
+    setQuality: chooseQuality,
   };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
@@ -1922,15 +2324,17 @@ export function WorkspaceScreen(props: {
           search={searchClient()}
         />
       ) : null}
-      {net && view3d === '2d' ? (
+      {net && (view3d === '2d' || view3d === '3d') ? (
         <PathBar
           locale={locale}
-          path={net.path}
+          // On the map: the way to the cluster in focus (08 §5.1).
+          path={view3d === '3d' ? pathTo(tree, mapFocus ?? net.net) : net.path}
           kindOf={(id) => tree.find((i) => i.id === id)?.kind ?? 'network'}
           panel={details !== null}
           onGo={(id) => {
             leaveRef.current();
-            void loadRef.current(id);
+            if (view3d === '3d') map3d.current?.goPlace(id);
+            else void loadRef.current(id);
           }}
           marks={marks.map((m) => (m ? (tree.find((i) => i.id === m.net)?.name ?? '') : null))}
           onMark={goMark}
@@ -1974,6 +2378,15 @@ export function WorkspaceScreen(props: {
             setCtx(null);
             viewRef.current?.canvas.focus();
           }}
+        />
+      ) : null}
+      {mapCtx && view3d === '3d' ? (
+        <ContextMenu
+          x={mapCtx.x}
+          y={mapCtx.y}
+          label={t(locale, 'ctx.label')}
+          items={mapCtxItems(mapCtx.id)}
+          onClose={() => setMapCtx(null)}
         />
       ) : null}
       <ul className="toasts" aria-live="polite">
@@ -2063,6 +2476,12 @@ export function WorkspaceScreen(props: {
           onConfirm={(everywhere) => {
             setRemoval(null);
             focusCanvas();
+            const [id] = removal.ids;
+            if (removal.map !== undefined && id !== undefined) {
+              const places = removal.placed[0]?.places.length ?? 1;
+              void mapRemoveNow(id, removal.map, everywhere, places).catch(failed);
+              return;
+            }
             editor.current?.removeNodes(removal.ids, everywhere);
           }}
           onCancel={() => {
@@ -2111,8 +2530,9 @@ export function WorkspaceScreen(props: {
           bounds={host.current?.getBoundingClientRect()}
           initialQuery={menu.query}
           named={menu.named}
-          nodes={nodes}
-          ghosts={ghosts}
+          nodes={menu.map ? [] : nodes}
+          ghosts={menu.map ? [] : ghosts}
+          target={menu.map?.target}
           recent={recent}
           templates={templates}
           space={space}
@@ -2120,7 +2540,7 @@ export function WorkspaceScreen(props: {
           onChoose={choose}
           onCancel={() => {
             setMenu(null);
-            ed?.menuCancel();
+            if (!menu.map) ed?.menuCancel();
             focusCanvas();
           }}
         />
@@ -2129,7 +2549,7 @@ export function WorkspaceScreen(props: {
         <BoardWindow
           key={board.id}
           locale={locale}
-          name={g?.nodes.get(board.id)?.name ?? ''}
+          name={nameOf(board.id)}
           doc={board.doc}
           onChange={() => undefined}
           onFocus={setBoardFocus}
@@ -2145,7 +2565,7 @@ export function WorkspaceScreen(props: {
         <AssetWindow
           key={viewer.id}
           locale={locale}
-          name={g?.nodes.get(viewer.id)?.name ?? ''}
+          name={nameOf(viewer.id)}
           type={viewer.type}
           url={viewer.url}
           at={viewer.at}
@@ -2162,7 +2582,7 @@ export function WorkspaceScreen(props: {
         <NoteWindow
           key={note.id}
           locale={locale}
-          name={g?.nodes.get(note.id)?.name ?? ''}
+          name={nameOf(note.id)}
           doc={note.doc}
           at={note.at}
           onChange={() => undefined}
@@ -2182,15 +2602,50 @@ export function WorkspaceScreen(props: {
           initial={name.name}
           onCommit={(text) => {
             setName(null);
-            ed?.nameCommit(text);
             focusCanvas();
+            if (name.map) {
+              void coreStep([{ op: 'rename', id: name.id, name: text }], 'proto.change.rename', {
+                name: text,
+              })
+                .then(() => afterMapStep())
+                .catch(failed);
+              return;
+            }
+            ed?.nameCommit(text);
           }}
           onCancel={() => {
             setName(null);
-            ed?.nameCancel();
             focusCanvas();
+            // A node just made on the map without a name is not made (06 §5.5).
+            if (name.map) {
+              void (async () => {
+                await sync.current?.settled();
+                setHistory(await core.cancel());
+                await afterMapStep();
+              })().catch(failed);
+              return;
+            }
+            ed?.nameCancel();
           }}
-          onMenu={(text) => ed?.nameToMenu(text)}
+          onMenu={(text) => {
+            const m = name.map;
+            if (!m) {
+              ed?.nameToMenu(text);
+              return;
+            }
+            // `Tab` in the field: the menu again with the text as its query.
+            setName(null);
+            void (async () => {
+              await sync.current?.settled();
+              setHistory(await core.cancel());
+              await afterMapStep();
+              const el = host.current;
+              const r = el?.getBoundingClientRect();
+              const sx = name.sx - (el?.offsetLeft ?? 0) + (r?.left ?? 0);
+              const sy = name.sy - (el?.offsetTop ?? 0) + (r?.top ?? 0);
+              setMenu({ sx, sy, query: text, seq: menuOpening(), map: m });
+            })().catch(failed);
+          }}
         />
       ) : null}
     </div>

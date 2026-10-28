@@ -23,6 +23,9 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   walk: () => undefined,
   setMark: () => undefined,
   goMark: () => undefined,
+  mapAct: () => undefined,
+  quality: 'auto',
+  setQuality: () => undefined,
   ...over,
 });
 
@@ -57,6 +60,11 @@ describe('the command palette (09 §3.5)', () => {
     expect(can('nav.back', ctx())).toBe(false);
     expect(can('nav.mark.go.2', ctx({ marks: [false, true, false, false, false] }))).toBe(true);
     expect(can('nav.mark.go.1', ctx({ marks: [false, true, false, false, false] }))).toBe(false);
+    // The map's steps while the map is shown (08 §5.2); its quality anywhere (08 §8.4).
+    expect(can('map.pin', ctx())).toBe(false);
+    expect(can('map.pin', ctx({ view: '3d' }))).toBe(true);
+    expect(can('map.quality.off', ctx())).toBe(true);
+    expect(can('map.quality.auto', ctx())).toBe(false);
   });
 
   it('every command has words to be found by and an id of its own', () => {

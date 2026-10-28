@@ -473,6 +473,12 @@ button:focus-visible {
   outline: none;
 }
 
+/* What the star map lays over its stars (labels, cards, pins) stays under
+   the menus and windows of the screen, whatever its own z-order (08 §6.2). */
+.workspace .proto-canvas {
+  isolation: isolate;
+}
+
 /* A note's window beside its bubble (06 §13.1): the editor fills it. */
 .note-window {
   position: absolute;
@@ -698,6 +704,157 @@ button:focus-visible {
   display: none;
 }
 
+/* The star under the pointer (04 S6, step 3): its name, quieter than the selected one's. */
+.proto-map-label.is-hover {
+  color: var(--st-color-text-muted);
+}
+
+/* Pixel corners round the selected star (08 §4.3), 6u long, 1u thick. */
+.proto-map-corners {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.proto-map-corners[hidden],
+.proto-map-pin[hidden],
+.map-card[hidden] {
+  display: none;
+}
+
+.proto-map-corners span {
+  position: absolute;
+  width: calc(6 * var(--u));
+  height: calc(6 * var(--u));
+  border: 0 solid var(--st-color-text);
+}
+
+.proto-map-corners span:nth-child(1) {
+  left: 0;
+  top: 0;
+  border-width: var(--u) 0 0 var(--u);
+}
+
+.proto-map-corners span:nth-child(2) {
+  right: 0;
+  top: 0;
+  border-width: var(--u) var(--u) 0 0;
+}
+
+.proto-map-corners span:nth-child(3) {
+  left: 0;
+  bottom: 0;
+  border-width: 0 0 var(--u) var(--u);
+}
+
+.proto-map-corners span:nth-child(4) {
+  right: 0;
+  bottom: 0;
+  border-width: 0 var(--u) var(--u) 0;
+}
+
+/* «Закрепить на карте» (08 §4.3): the 8 × 8 pin with an orbit, twice its size. */
+.proto-map-pin {
+  position: absolute;
+  z-index: 2;
+  width: calc(16 * var(--u));
+  height: calc(16 * var(--u));
+  translate: 0 -100%;
+  pointer-events: none;
+  background: var(--st-color-text);
+  -webkit-mask: var(--glyph) center / 100% 100% no-repeat;
+  mask: var(--glyph) center / 100% 100% no-repeat;
+  image-rendering: pixelated;
+}
+
+/* The cards of the star map (08 §6.2): a brief one by a near star, the full
+   one by the flight's target. The width in ch whatever the language. */
+.map-card {
+  position: absolute;
+  z-index: 3;
+  width: 32ch;
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-shadow-menu);
+  pointer-events: none;
+}
+
+.map-card.is-full {
+  z-index: 4;
+  width: 48ch;
+  pointer-events: auto;
+}
+
+.map-card-title {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+  min-height: var(--st-size-row);
+  padding: 0 calc(6 * var(--u));
+}
+
+.map-card.is-full .map-card-title {
+  padding-right: calc(2 * var(--u));
+  background: var(--st-color-title-bg);
+  color: var(--st-color-title-fg);
+}
+
+/* `Shift+I`: the card stays — the accent's line under its title (07 §2.2). */
+.map-card.is-kept .map-card-title {
+  box-shadow: inset 0 calc(-2 * var(--u)) 0 var(--st-color-accent);
+}
+
+.map-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.map-card-line {
+  padding: 0 calc(6 * var(--u)) calc(4 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+.map-card-rows {
+  display: grid;
+  grid-template-columns: 12ch minmax(0, 1fr);
+  gap: calc(4 * var(--u)) calc(8 * var(--u));
+  margin: 0;
+  padding: calc(6 * var(--u)) calc(8 * var(--u)) calc(8 * var(--u));
+}
+
+.map-card-label {
+  color: var(--st-color-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.map-card-value {
+  display: flex;
+  gap: calc(8 * var(--u));
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.map-card-value:not(:has(.map-card-kind)) {
+  display: block;
+}
+
+.map-card-kind {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(2 * var(--u));
+}
+
 .proto-top {
   position: absolute;
   top: calc(6 * var(--u));
@@ -889,6 +1046,15 @@ button:focus-visible {
 
 .tab-menu-empty {
   padding: calc(2 * var(--u)) calc(4 * var(--u));
+  color: var(--st-color-text-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The Tab menu on the star map (08 §6.4): where the node goes, one line. */
+.tab-menu-target {
+  padding: calc(2 * var(--u)) calc(4 * var(--u)) 0;
   color: var(--st-color-text-muted);
   overflow: hidden;
   white-space: nowrap;

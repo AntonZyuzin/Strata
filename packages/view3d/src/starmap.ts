@@ -8,6 +8,7 @@ import {
   InstancedBufferAttribute,
   InstancedBufferGeometry,
   LineSegments,
+  Matrix4,
   Mesh,
   NearestFilter,
   OneFactor,
@@ -297,6 +298,14 @@ export class StarMap {
   private wires: LineSegments | null = null;
   private x: StarMapExtract | null = null;
   private keyIndex = new Uint32Array(0);
+  /** Each star's look as its state gives it: a flash or a fade changes the drawn one only. */
+  private baseSize = new Float32Array(0);
+  private baseAlpha = new Float32Array(0);
+  private baseHalo = new Float32Array(0);
+  /** The halos of «soon»: off in the «economy» preset (08 §8.4). */
+  private halos = true;
+  private readonly viewProjection = new Matrix4();
+  private readonly size = new Vector2();
   /** Radius of the space around its centre, world units. */
   radius = 1;
   readonly centre = new Vector3();
@@ -436,6 +445,10 @@ export class StarMap {
       if (((x.flags[i] ?? 0) & FLAG.key) !== 0 && look.alpha === 1) keys.push(i);
     }
     this.keyIndex = Uint32Array.from(keys);
+    this.baseSize = size.slice();
+    this.baseAlpha = Float32Array.from({ length: n }, (_, i) => tint[i * 4 + 3] ?? 1);
+    this.baseHalo = halo.slice();
+    if (!this.halos) halo.fill(0);
 
     const starGeometry = (count: number) => {
       const g = new InstancedBufferGeometry();
@@ -581,6 +594,31 @@ export class StarMap {
     wf.needsUpdate = true;
   }
 
+  /** The halos of «soon» on or off (08 §8.4: none in «economy»). */
+  setHalos(on: boolean): void {
+    this.halos = on;
+    const attr = this.stars?.geometry.getAttribute('halo') as InstancedBufferAttribute | undefined;
+    if (!attr) return;
+    const a = attr.array as Float32Array;
+    for (let i = 0; i < a.length; i++) a[i] = on ? (this.baseHalo[i] ?? 0) : 0;
+    attr.needsUpdate = true;
+  }
+
+  /**
+   * Star `b` drawn `scale` times its size and `alpha` times its alpha: a new
+   * star's flash, a removed one's fade (08 §3.4); 1, 1 — as its state has it.
+   */
+  setStarLook(b: number, scale: number, alpha: number): void {
+    const x = this.x;
+    if (!x || !this.stars || b < 0 || b >= x.count) return;
+    const size = this.stars.geometry.getAttribute('size') as InstancedBufferAttribute;
+    (size.array as Float32Array)[b] = (this.baseSize[b] ?? 0) * scale;
+    size.needsUpdate = true;
+    const tint = this.stars.geometry.getAttribute('tint') as InstancedBufferAttribute;
+    (tint.array as Float32Array)[b * 4 + 3] = (this.baseAlpha[b] ?? 1) * alpha;
+    tint.needsUpdate = true;
+  }
+
   /** Alphas of the bridge: other stars, other wires, the network's wires (08 §7.2). */
   setFade(others: number, wiresOthers: number, wiresFocus: number): void {
     for (const m of [this.starMaterial, this.bloomMaterial, this.occluderMaterial]) {
@@ -654,6 +692,59 @@ export class StarMap {
     if (v.z < -1 || v.z > 1) return null;
     const size = this.renderer.getSize(new Vector2());
     return { x: ((v.x + 1) / 2) * size.x, y: ((1 - v.y) / 2) * size.y };
+  }
+
+  /**
+   * Screen points of the first `count` bodies at `pos` (3 floats each), at
+   * once (08 §8.2, picking and the cards): x and y in CSS px from the
+   * canvas's top-left, then the depth along the look; 0 behind the camera.
+   */
+  projectAll(pos: Float32Array, count: number, out: Float32Array): void {
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const m = this.viewProjection.multiplyMatrices(
+      cam.projectionMatrix,
+      cam.matrixWorldInverse,
+    ).elements;
+    const size = this.renderer.getSize(this.size);
+    const w = size.x / 2;
+    const h = size.y / 2;
+    for (let i = 0; i < count; i++) {
+      const x = pos[i * 3] ?? 0;
+      const y = pos[i * 3 + 1] ?? 0;
+      const z = pos[i * 3 + 2] ?? 0;
+      const cw = (m[3] ?? 0) * x + (m[7] ?? 0) * y + (m[11] ?? 0) * z + (m[15] ?? 0);
+      if (cw <= 1e-6) {
+        out[i * 3] = -1e9;
+        out[i * 3 + 1] = -1e9;
+        out[i * 3 + 2] = 0;
+        continue;
+      }
+      const cx = (m[0] ?? 0) * x + (m[4] ?? 0) * y + (m[8] ?? 0) * z + (m[12] ?? 0);
+      const cy = (m[1] ?? 0) * x + (m[5] ?? 0) * y + (m[9] ?? 0) * z + (m[13] ?? 0);
+      out[i * 3] = (cx / cw + 1) * w;
+      out[i * 3 + 1] = (1 - cy / cw) * h;
+      out[i * 3 + 2] = cw;
+    }
+  }
+
+  /** The way from the camera through a canvas point, CSS px: a unit vector. */
+  rayAt(x: number, y: number): [number, number, number] {
+    const size = this.renderer.getSize(this.size);
+    const v = new Vector3(
+      (x / Math.max(1, size.x)) * 2 - 1,
+      1 - (y / Math.max(1, size.y)) * 2,
+      0.5,
+    );
+    this.camera.updateMatrixWorld();
+    v.unproject(this.camera).sub(this.camera.position).normalize();
+    return [v.x, v.y, v.z];
+  }
+
+  /** CSS px a world unit spans at distance 1 from the camera. */
+  pxPerUnit(): number {
+    const h = this.renderer.getSize(this.size).y;
+    return h / (2 * Math.tan((this.camera.fov * Math.PI) / 360));
   }
 
   /** Canvas size in CSS px. */

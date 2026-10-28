@@ -4,8 +4,10 @@ import {
   CoreError,
   type HomeBackend,
   type HomeState,
+  type ImportReport,
   type Opened,
   type Profile,
+  toBase64,
   type WorkspaceEntry,
 } from './core';
 
@@ -83,7 +85,7 @@ const HOME = 'home';
 const ws = (id: string) => `ws:${id}`;
 const preview = (id: string) => `preview:${id}`;
 /** Calls that write: the store's bytes go to the shelf after them. */
-const WRITES = new Set(['apply', 'undo', 'redo', 'cancel', 'pushDoc']);
+const WRITES = new Set(['apply', 'undo', 'redo', 'cancel', 'pushDoc', 'importVault']);
 
 /** `HomeBackend` with the WASM core and a shelf. */
 export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise<HomeBackend> {
@@ -239,6 +241,25 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         if (typeof from === 'string') throw new CoreError('a browser imports bytes', true);
         const known = saved.workspaces.some((e) => e.id === WasmCore.archiveId(from));
         return remember(WasmCore.importArchive(from, known));
+      }),
+    // A new workspace named after the vault's folder, the import its first
+    // step of undo; a vault that does not come in leaves none behind.
+    importVault: (from, options) =>
+      later(async () => {
+        if (typeof from === 'string') throw new CoreError('a browser imports picked files', true);
+        const name = from.name.trim() || 'Obsidian';
+        const c = WasmCore.create(name);
+        const files = from.files.map((f) => ({ path: f.path, bytes: toBase64(f.bytes) }));
+        const out = JSON.parse(
+          c.call(JSON.stringify({ call: 'importVault', name, files, options })),
+        ) as
+          | { type: 'imported'; report: ImportReport }
+          | { type: 'error'; message: string; invalid: boolean };
+        if (out.type === 'error') {
+          c.free();
+          throw new CoreError(out.message, out.invalid);
+        }
+        return { ...(await remember(c)), report: out.report };
       }),
   };
 }

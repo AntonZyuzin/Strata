@@ -1,9 +1,17 @@
-import type { HomeBackend, HomeState, Opened, WorkspaceEntry } from '@strata/backend';
+import type {
+  HomeBackend,
+  HomeState,
+  Opened,
+  PickedVault,
+  VaultFile,
+  WorkspaceEntry,
+} from '@strata/backend';
 import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickFolder, pickSavePath } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { IconButton } from '../TabBar';
+import { keepReport } from '../workspace/imports';
 
 /**
  * The home screen (✅ Q-16-12): the workspaces of this device as cards, last
@@ -20,6 +28,22 @@ type Dialog =
 
 function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/**
+ * The files of `<input webkitdirectory>` as a vault (13 §3): the folder
+ * picked is the first part of every relative path, its name the vault's.
+ */
+export async function pickedVault(list: Iterable<File>): Promise<PickedVault | null> {
+  const files = [...list];
+  const first = files[0];
+  if (!first) return null;
+  const name = first.webkitRelativePath.split('/')[0] ?? '';
+  const read = async (f: File): Promise<VaultFile> => ({
+    path: f.webkitRelativePath.split('/').slice(1).join('/') || f.name,
+    bytes: new Uint8Array(await f.arrayBuffer()),
+  });
+  return { name, files: await Promise.all(files.map(read)) };
 }
 
 /** Saves bytes as a file through the browser's download. */
@@ -48,6 +72,7 @@ export function HomeScreen(props: {
   const [note, setNote] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: WorkspaceEntry } | null>(null);
   const busyRef = useRef(false);
+  const vaultInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let live = true;
@@ -124,6 +149,23 @@ export function HomeScreen(props: {
       return undefined;
     });
 
+  /**
+   * «Импорт из Obsidian» (13 §3, S1): the vault's folder becomes a new
+   * workspace, opened; its report waits for the canvas. The names the import
+   * gives what it makes are in the UI's language (13 §3.6).
+   */
+  const importVault = (from: string | PickedVault) =>
+    run(async () => {
+      const name = typeof from === 'string' ? (from.split(/[\\/]/).pop() ?? from) : from.name;
+      setNote(t(locale, 'home.vaultBusy', { name }));
+      const r = await home.importVault(from, {
+        unlinked: t(locale, 'import.unlinked'),
+        text: t(locale, 'import.text'),
+      });
+      keepReport(r.workspace.id, r.report);
+      return { workspace: r.workspace, root: r.root };
+    });
+
   const rename = (w: WorkspaceEntry, name: string) =>
     run(async () => {
       const s = await home.rename(w.id, name);
@@ -197,6 +239,37 @@ export function HomeScreen(props: {
               {t(locale, 'home.open')}
             </button>
           ) : null}
+          <IconButton
+            icon="vault"
+            className="home-vault"
+            label={t(locale, 'home.vaultHint')}
+            disabled={busy}
+            onClick={() => {
+              if (home.where === 'desktop') {
+                void pickFolder().then((path) => {
+                  if (path) void importVault(path);
+                });
+              } else {
+                vaultInput.current?.click();
+              }
+            }}
+          />
+          <input
+            ref={vaultInput}
+            className="sr-only home-vault-input"
+            type="file"
+            multiple
+            tabIndex={-1}
+            aria-label={t(locale, 'home.vault')}
+            {...{ webkitdirectory: '' }}
+            onChange={(e) => {
+              const list = [...(e.currentTarget.files ?? [])];
+              e.currentTarget.value = '';
+              void pickedVault(list).then((v) => {
+                if (v) void importVault(v);
+              });
+            }}
+          />
         </div>
       </div>
       <div className="home-content">

@@ -15,7 +15,7 @@ import { glyphUrl, people as palette } from '@strata/design-tokens';
 import { createNoteEditor } from '@strata/editor';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
-import { type CSSProperties, useEffect, useRef, useState } from 'react';
+import { type CSSProperties, Fragment, useEffect, useRef, useState } from 'react';
 import { ASSET_ICONS, Icon, nodeIcon } from '../icons/Icon';
 import type { Clock, DateFormat } from '../prefs';
 import { Glyph, IconButton } from '../TabBar';
@@ -661,6 +661,7 @@ export function Inspector(props: {
             </div>
           </div>
         </section>
+        <Props locale={locale} node={n} />
         {described ? (
           <section className="ins-section">
             <h3 className="ins-heading">
@@ -761,5 +762,45 @@ export function Inspector(props: {
         ) : null}
       </div>
     </aside>
+  );
+}
+
+/** A user attribute's value as one line: a list by commas, a flag as yes or no. */
+function propText(locale: Locale, v: unknown): string {
+  if (Array.isArray(v)) return v.map((x) => propText(locale, x)).join(', ');
+  if (typeof v === 'boolean') return t(locale, v ? 'ins.yes' : 'ins.no');
+  return String(v ?? '');
+}
+
+/**
+ * Tags, aliases and user attributes (05 §6.1–6.2): a vault's properties
+ * after its import (13 §2.3), read only until attributes get their editor.
+ * A label and a value per line, the whole of each in its tooltip.
+ */
+function Props(props: { locale: Locale; node: NodeDetails }) {
+  const { locale, node } = props;
+  const rows: [string, string][] = [];
+  if (node.tags?.length) {
+    rows.push([t(locale, 'ins.tags'), node.tags.map((x) => `#${x}`).join(' ')]);
+  }
+  if (node.aliases?.length) rows.push([t(locale, 'ins.aliases'), node.aliases.join(', ')]);
+  for (const p of node.props ?? []) rows.push([p.key, propText(locale, p.value)]);
+  if (rows.length === 0) return null;
+  return (
+    <section className="ins-section">
+      <h3 className="ins-heading">{t(locale, 'ins.props')}</h3>
+      <dl className="ins-fields ins-props">
+        {rows.map(([label, value]) => (
+          <Fragment key={label}>
+            <dt className="ins-label" title={label}>
+              {label}
+            </dt>
+            <dd className="ins-value" title={value}>
+              {value}
+            </dd>
+          </Fragment>
+        ))}
+      </dl>
+    </section>
   );
 }

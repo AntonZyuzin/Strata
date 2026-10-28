@@ -32,6 +32,8 @@ export interface CommandContext {
   walk(how: 'back' | 'forward' | 'previous'): void;
   setMark(slot: number): void;
   goMark(slot: number): void;
+  /** The report of this workspace's import (13 §3.6), when there is one. */
+  importReport?: (() => void) | undefined;
 }
 
 export interface Command {
@@ -187,6 +189,14 @@ export const COMMANDS: readonly Command[] = [
     run: (c) => c.walk('previous'),
   },
   canvas('map', 'map', 'M', ['3d', 'звёзды', 'карта', 'star', 'map'], () => true, 'nav'),
+  {
+    id: 'nav.importReport',
+    title: 'cmd.nav.importReport',
+    aliases: ['импорт', 'obsidian', 'отчёт', 'import', 'report', 'vault'],
+    group: 'nav',
+    when: (c) => c.importReport !== undefined,
+    run: (c) => c.importReport?.(),
+  },
   ...[0, 1, 2, 3, 4].flatMap((i): Command[] => [
     {
       id: `nav.mark.set.${i + 1}`,

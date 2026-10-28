@@ -193,7 +193,87 @@ export type CoreRequest =
   | { call: 'external'; net: string; id: string }
   | { call: 'people' }
   | { call: 'putAsset'; bytes: string }
-  | { call: 'asset'; sha: string };
+  | { call: 'asset'; sha: string }
+  | {
+      call: 'importVault';
+      name: string;
+      files: { path: string; bytes: string }[];
+      net?: string;
+      options: ImportOptions;
+    };
+
+/** A file of a vault (13 §2): its path from the vault's folder, `/` between folders. */
+export interface VaultFile {
+  path: string;
+  bytes: Uint8Array;
+}
+
+/** A vault picked in a browser: its folder's name and its files. */
+export interface PickedVault {
+  name: string;
+  files: VaultFile[];
+}
+
+/**
+ * The import window's choices (13 §3.2) the MVP has. The names the import
+ * gives what it makes are in the UI's language at the time (13 §3.6).
+ */
+export interface ImportOptions {
+  /** A note of `- [ ]` items only becomes a list (13 §2.2); on by default. */
+  checklists?: boolean;
+  /** A note with a task's fields becomes a task (13 §2.1); on by default. */
+  tasks?: boolean;
+  /** The network of attachments no note embeds (13 §2.6). */
+  unlinked?: string;
+  /** The word after a drawing's name for the note of its text (13 §2.8). */
+  text?: string;
+}
+
+/** What came in (13 §3.6). */
+export interface ImportCounts {
+  notes: number;
+  tasks: number;
+  lists: number;
+  boards: number;
+  folders: number;
+  canvases: number;
+  assets: number;
+  wires: number;
+  ghosts: number;
+  skipped: number;
+}
+
+/** The sections of the report (13 §3.6), in their order. */
+export const IMPORT_SECTIONS = [
+  'ghost',
+  'ambiguous',
+  'unsupported',
+  'renamed',
+  'property',
+  'canvas',
+  'skipped',
+] as const;
+export type ImportSection = (typeof IMPORT_SECTIONS)[number];
+
+/** A line of the report: `code` is the message `import.item.<code>` of `@strata/i18n`. */
+export interface ImportItem {
+  section: ImportSection;
+  severity: 'info' | 'warn' | 'error';
+  /** The file in the vault. */
+  path: string;
+  /** The node it leads to. */
+  node?: string;
+  code: string;
+  detail?: string;
+}
+
+/** The report of an import (13 §3.6). */
+export interface ImportReport {
+  /** The network the vault came into. */
+  net: string;
+  counts: ImportCounts;
+  items: ImportItem[];
+}
 
 export interface ViewNode extends NodeAttrs {
   id: string;
@@ -252,6 +332,12 @@ export interface NodeDetails extends NodeAttrs {
   fold?: CoreFold;
   /** Where it is placed (05 §5): the primary first, then the oldest. */
   places: Place[];
+  /** Tags (05 §6.1): a vault's `tags` (13 §2.4). */
+  tags?: string[];
+  /** Other names (05 §6.1): a vault's `aliases`. */
+  aliases?: string[];
+  /** User attributes (05 §6.2): a vault's other properties (13 §2.3). */
+  props?: { key: string; value: unknown }[];
 }
 
 /**
@@ -419,6 +505,7 @@ type CoreResponse =
   | { type: 'external'; wires: ExternalWire[] }
   | { type: 'people'; people: Person[] }
   | { type: 'asset'; sha: string; bytes?: string }
+  | { type: 'imported'; report: ImportReport; history: History }
   | { type: 'error'; message: string; invalid: boolean };
 
 /** A call the core refused (`invalid`: the model's rules, nothing written) or failed. */
@@ -601,6 +688,23 @@ export class Core {
     const r = await this.call({ call: 'pushDoc', doc, update: toBase64(update) });
     return expect(r, 'pushed').wires;
   }
+
+  /**
+   * A vault of Obsidian into network `net`, the root when none (13 §2–3):
+   * one step of undo; the report back.
+   */
+  async importVault(
+    vault: PickedVault,
+    options: ImportOptions,
+    net?: string,
+  ): Promise<{ report: ImportReport; history: History }> {
+    const files = vault.files.map((f) => ({ path: f.path, bytes: toBase64(f.bytes) }));
+    const request: CoreRequest = net
+      ? { call: 'importVault', name: vault.name, files, options, net }
+      : { call: 'importVault', name: vault.name, files, options };
+    const r = expect(await this.call(request), 'imported');
+    return { report: r.report, history: r.history };
+  }
 }
 
 /** A workspace on the home screen. */
@@ -660,6 +764,15 @@ export interface HomeBackend {
    * browser. A workspace this device has comes in as a copy (10 §3.6).
    */
   importArchive(from: string | Uint8Array): Promise<Opened>;
+  /**
+   * A vault of Obsidian as a new workspace named after its folder, opened
+   * (13 §3, S1): a folder path on desktop, the picked files in a browser.
+   * The import is the workspace's first step of undo.
+   */
+  importVault(
+    from: string | PickedVault,
+    options: ImportOptions,
+  ): Promise<Opened & { report: ImportReport }>;
   /** Calls for the open workspace. */
   readonly core: Core;
 }
@@ -667,6 +780,7 @@ export interface HomeBackend {
 type HomeResponse =
   | ({ type: 'home' } & HomeState)
   | ({ type: 'opened' } & Opened)
+  | ({ type: 'imported' } & Opened & { report: ImportReport })
   | { type: 'preview'; png: string | null }
   | { type: 'done' };
 
@@ -711,6 +825,12 @@ export function jsonHome(home: Transport, core: Transport): HomeBackend {
     importArchive: (from) => {
       if (typeof from !== 'string') throw new CoreError('the desktop imports a file', true);
       return opened({ call: 'import', path: from });
+    },
+    importVault: async (from, options) => {
+      if (typeof from !== 'string') throw new CoreError('the desktop reads the folder', true);
+      const r = await call({ call: 'importVault', path: from, options });
+      if (r.type !== 'imported') throw new CoreError(`expected imported, got ${r.type}`, false);
+      return { workspace: r.workspace, root: r.root, report: r.report };
     },
   };
 }

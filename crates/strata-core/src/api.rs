@@ -5,9 +5,10 @@
 use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
+use crate::vault::{Vault, VaultFile};
 use crate::workspace::{
-    Edited, ExternalWire, History, NetworkView, NodeDetails, Person, Placeable, TrashItem,
-    TrashPreview, TreeItem, WireEnds, Workspace,
+    Edited, ExternalWire, History, ImportOptions, ImportReport, NetworkView, NodeDetails, Person,
+    Placeable, TrashItem, TrashPreview, TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -106,6 +107,17 @@ pub enum Request {
     Asset {
         sha: String,
     },
+    /// A vault of Obsidian (13 §2–3) into network `net`, the root when
+    /// none: its files, bytes in base64 — what a browser's folder picker
+    /// gives. One step of undo; the report back.
+    ImportVault {
+        name: String,
+        files: Vec<VaultFile>,
+        #[serde(default)]
+        net: Option<String>,
+        #[serde(default)]
+        options: ImportOptions,
+    },
 }
 
 /// A node to copy and where its copy goes.
@@ -197,6 +209,11 @@ pub enum Response {
         sha: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bytes: Option<String>,
+    },
+    /// The vault came in: the report (13 §3.6), the undo and redo steps after it.
+    Imported {
+        report: ImportReport,
+        history: History,
     },
     /// The call failed; `invalid` when the model refused it (nothing was written).
     Error {
@@ -311,6 +328,17 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
         Request::TrashPreview { ids } => ws
             .trash_preview(&ids)
             .map(|preview| Response::TrashPreview { preview }),
+        Request::ImportVault {
+            name,
+            files,
+            net,
+            options,
+        } => ws
+            .import_vault(&Vault::from_files(&name, files), net.as_deref(), &options)
+            .map(|report| Response::Imported {
+                report,
+                history: ws.history(),
+            }),
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, crate::CoreError::Invalid(_)),
@@ -430,6 +458,35 @@ mod tests {
         let view = ask(&mut ws, json!({ "call": "view", "net": net }));
         assert_eq!(view["view"]["nodes"][0]["id"], id);
         assert_eq!(view["view"]["nodes"][0]["x"], 5.0);
+    }
+
+    #[test]
+    fn a_vault_comes_in_through_json() {
+        // 13 §3: the browser's files, bytes in base64; one step of undo.
+        let mut ws = Workspace::create(MemoryStore::default(), "Root").expect("create");
+        let b64 = |s: &str| B64.encode(s.as_bytes());
+        let answer = ask(
+            &mut ws,
+            json!({ "call": "importVault", "name": "Vault", "options": { "unlinked": "Без ссылок" },
+                    "files": [{ "path": "A.md", "bytes": b64("[[B]] [[C]]\n") },
+                              { "path": "Folder/B.md", "bytes": b64("---\ntags: [x]\n---\nB\n") }] }),
+        );
+        assert_eq!(answer["type"], "imported", "{answer}");
+        assert_eq!(answer["report"]["counts"]["notes"], 2);
+        assert_eq!(answer["report"]["counts"]["folders"], 1);
+        let codes: Vec<&str> = answer["report"]["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .filter_map(|i| i["code"].as_str())
+            .collect();
+        assert_eq!(codes, vec!["noConfig", "ghost"]);
+        assert_eq!(answer["history"]["undo"]["key"], "core.change.import");
+        let bad = ask(
+            &mut ws,
+            json!({ "call": "importVault", "name": "x", "files": [{ "path": "a", "bytes": "!" }] }),
+        );
+        assert_eq!(bad["type"], "error");
     }
 
     #[test]

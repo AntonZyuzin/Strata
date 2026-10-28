@@ -86,6 +86,8 @@ const NAMED = {
   checklist: 'table-view',
   import: 'open',
   export: 'save',
+  /** A vault of Obsidian: a book of notes (13 §3). */
+  vault: 'book',
   rename: 'rename',
   trash: 'trash-can',
   undo: 'undo',

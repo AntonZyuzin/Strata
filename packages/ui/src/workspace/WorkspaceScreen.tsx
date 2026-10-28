@@ -17,6 +17,7 @@ import {
   type History,
   type HomeBackend,
   hasCanvas,
+  type ImportReport,
   isTask,
   linkOf,
   type NetworkView,
@@ -79,7 +80,9 @@ import { dueWord } from './due';
 import { ExternalList } from './ExternalList';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
+import { ImportReportWindow } from './ImportReportWindow';
 import { Inspector, type InspectorActions } from './Inspector';
+import { freshReport, reportOf, reportShown } from './imports';
 import { Layers } from './Layers';
 import { NodeSearch } from './NodeSearch';
 import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
@@ -302,6 +305,10 @@ export function WorkspaceScreen(props: {
   const [finder, setFinder] = useState<{ map: boolean } | null>(null);
   /** `Ctrl+F` on the canvas (09 §3.3) and on the star map (08 §6.1). */
   const [finding, setFinding] = useState(false);
+  /** The report of the import that made this workspace (13 §3.6, S1 step 7). */
+  const [importReport, setImportReport] = useState<ImportReport | null>(
+    () => freshReport(opened.workspace.id) ?? null,
+  );
   /** A removal that asks first (06 §12.3), and the question's data. */
   const [removal, setRemoval] = useState<{
     ids: string[];
@@ -1598,12 +1605,16 @@ export function WorkspaceScreen(props: {
     // Nodes cut or copied belong to the workspace they came from.
     clipRef.current = null;
     setClipped(false);
+    setImportReport(freshReport(opened.workspace.id) ?? null);
     navRef.current = NavHistory.load(readLocal(navKey(opened.workspace.id)));
     setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
     setMarks(loadMarks(readLocal(marksKey(opened.workspace.id))));
     netRef.current = opened.root;
     void loadRef.current(opened.root);
   }, [opened]);
+
+  // A report is shown once; the palette opens it again (13 §3.6).
+  useEffect(() => reportShown(opened.workspace.id), [opened.workspace.id]);
 
   /**
    * Goes to a node (09 §3.4): the network of its primary placement on the
@@ -2255,6 +2266,9 @@ export function WorkspaceScreen(props: {
     walk,
     setMark,
     goMark,
+    importReport: reportOf(opened.workspace.id)
+      ? () => setImportReport(reportOf(opened.workspace.id) ?? null)
+      : undefined,
   };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
@@ -2463,6 +2477,21 @@ export function WorkspaceScreen(props: {
           }}
           onClose={() => {
             setExternal(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {importReport ? (
+        <ImportReportWindow
+          locale={locale}
+          report={importReport}
+          onGo={(id) => {
+            setImportReport(null);
+            focusCanvas();
+            goNode(id, false);
+          }}
+          onClose={() => {
+            setImportReport(null);
             focusCanvas();
           }}
         />

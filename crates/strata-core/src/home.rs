@@ -248,6 +248,35 @@ impl Home {
         Ok((ws, entry))
     }
 
+    /// A vault of Obsidian on disk (13 §3, S1) as a new workspace in
+    /// `<data>/Workspaces`, named after the vault's folder, opened. The vault
+    /// is only read (13 §1.4 item 1); a vault that does not come in leaves
+    /// no workspace behind.
+    pub fn import_vault(
+        &mut self,
+        path: &Path,
+        options: &crate::ImportOptions,
+    ) -> Result<(Workspace<SqliteStore>, Entry, crate::ImportReport)> {
+        let vault = crate::vault::Vault::read(path).map_err(io)?;
+        let name = match vault.name.trim() {
+            "" => "Obsidian",
+            n => n,
+        };
+        let folder = self.new_folder(name);
+        let mut ws = create_folder(&folder, name)?;
+        let report = match ws.import_vault(&vault, None, options) {
+            Ok(r) => r,
+            Err(e) => {
+                drop(ws);
+                let _ = std::fs::remove_dir_all(&folder);
+                return Err(e);
+            }
+        };
+        let entry = self.remember(&ws, &folder, now_ms());
+        self.save()?;
+        Ok((ws, entry, report))
+    }
+
     /// Renames a workspace: its root network (05 §3), as a step of its own.
     pub fn rename(&mut self, ws: &mut Workspace<SqliteStore>, name: &str) -> Result<()> {
         let name = name.trim();
@@ -397,6 +426,13 @@ pub enum Request {
     Import {
         path: String,
     },
+    /// The vault of Obsidian at `path` as a new workspace named after its
+    /// folder, opened (13 §3, S1); the import is its first step of undo.
+    ImportVault {
+        path: String,
+        #[serde(default)]
+        options: crate::ImportOptions,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -414,6 +450,12 @@ pub enum Response {
     },
     Preview {
         png: Option<String>,
+    },
+    /// A vault came in as a new workspace, opened; the report (13 §3.6).
+    Imported {
+        workspace: Entry,
+        root: String,
+        report: crate::ImportReport,
     },
     Done,
     Error {
@@ -529,6 +571,17 @@ pub fn handle(
                 .and_then(|b| home.import(&b));
             opened(desk, done)
         }
+        Request::ImportVault { path, options } => home
+            .import_vault(Path::new(&path), &options)
+            .map(|(ws, workspace, report)| {
+                let root = ws.root();
+                desk.put(ws);
+                Response::Imported {
+                    workspace,
+                    root,
+                    report,
+                }
+            }),
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, CoreError::Invalid(_)),
@@ -838,6 +891,49 @@ mod tests {
         assert_eq!(bad["type"], "error");
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn a_vault_comes_in_as_a_new_workspace_and_stays_unchanged() {
+        // 13 §3, S1: the vault's folder name, opened in a tab whose first
+        // step of undo is the import; the vault is only read (13 §1.4).
+        let dir = temp_dir();
+        let vault = temp_dir().join("Мой vault");
+        std::fs::create_dir_all(vault.join("Папка")).expect("vault");
+        std::fs::write(vault.join("Папка/Заметка.md"), "[[Другая]]\n").expect("note");
+        std::fs::write(vault.join("Другая.md"), "Текст\n").expect("note");
+        let mtime = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
+        let before = mtime(&vault.join("Другая.md"));
+        let mut home = Home::load(&dir);
+        let mut desk = Desk::default();
+        let r = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "importVault", "path": vault.to_string_lossy(), "options": { "unlinked": "Без ссылок" } }),
+        );
+        assert_eq!(r["type"], "imported", "{r}");
+        assert_eq!(r["workspace"]["name"], "Мой vault");
+        assert_eq!(r["report"]["counts"]["notes"], 2);
+        let ws = desk.current_mut().expect("open in a tab");
+        assert_eq!(
+            ws.history().undo.map(|l| l.key).as_deref(),
+            Some("core.change.import")
+        );
+        assert_eq!(ws.tree().len(), 4, "root, folder and two notes");
+        assert_eq!(mtime(&vault.join("Другая.md")), before);
+        // A folder with nothing to import leaves no workspace.
+        let empty = temp_dir();
+        std::fs::create_dir_all(&empty).expect("empty");
+        let r = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "importVault", "path": empty.to_string_lossy() }),
+        );
+        assert_eq!(r["type"], "error");
+        assert_eq!(home.list().len(), 1);
+        for d in [dir, vault, empty] {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 
     #[test]

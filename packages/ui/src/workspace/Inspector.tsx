@@ -280,7 +280,11 @@ function Places(props: {
             >
               {path}
             </button>
-            {p.primary ? null : (
+            {/* Two columns in every row, an empty cell where a row has no
+                such step: the house always left of the ×. */}
+            {p.primary ? (
+              <span className="place-slot" />
+            ) : (
               <button
                 type="button"
                 className="icon-button"
@@ -291,7 +295,9 @@ function Places(props: {
                 <Glyph name="home" />
               </button>
             )}
-            {here ? null : (
+            {here ? (
+              <span className="place-slot" />
+            ) : (
               <IconButton
                 icon="close"
                 label={t(locale, 'ins.unplace', { path })}
@@ -684,16 +690,19 @@ export function Inspector(props: {
                 </span>
               ) : null}
             </h3>
-            <Rows
-              locale={locale}
-              rows={n.subtasks}
-              ticked={ticked}
-              onTick={(r, on) => {
-                setMade({ on: n.subtasks, ticks: { ...ticks, [r.id]: on } });
-                a.done(r.id, r.name, on);
-              }}
-              onFocus={a.focus}
-            />
+            {/* No list while there is nothing in it: its gap would double the heading's. */}
+            {n.subtasks.length > 0 ? (
+              <Rows
+                locale={locale}
+                rows={n.subtasks}
+                ticked={ticked}
+                onTick={(r, on) => {
+                  setMade({ on: n.subtasks, ticks: { ...ticks, [r.id]: on } });
+                  a.done(r.id, r.name, on);
+                }}
+                onFocus={a.focus}
+              />
+            ) : null}
             <Commit
               value=""
               label={t(locale, project ? 'ins.newTask' : 'ins.newSubtask')}
@@ -706,12 +715,14 @@ export function Inspector(props: {
         {task ? (
           <section className="ins-section">
             <h3 className="ins-heading">{t(locale, 'ins.materials')}</h3>
-            <Links
-              locale={locale}
-              links={materials}
-              onFocus={a.focus}
-              onUnlink={(l) => a.unlink(n.id, l.id)}
-            />
+            {materials.length > 0 ? (
+              <Links
+                locale={locale}
+                links={materials}
+                onFocus={a.focus}
+                onUnlink={(l) => a.unlink(n.id, l.id)}
+              />
+            ) : null}
             {linkable.length > 0 ? (
               <select
                 className="field ins-add"

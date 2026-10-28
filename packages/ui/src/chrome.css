@@ -2371,9 +2371,11 @@ button.ws-path-step:active:not(:disabled) {
    times the UI face (owner, 2026-10-24: twice was too big): three device
    pixels a font pixel on DPR 2, softer on DPR 1. */
 /* The filter (09 §2): the Tab menu's prompt, under the title. */
+/* 16u on both sides (owner: the sides are 16u): a field shows its edge,
+   the title's 8u on the right is only room for its text. */
 .layers-filter {
   flex: none;
-  margin: 0 calc(8 * var(--u)) calc(6 * var(--u)) calc(16 * var(--u));
+  margin: 0 calc(16 * var(--u)) calc(6 * var(--u));
 }
 
 .layers-title {
@@ -2895,6 +2897,13 @@ button.ws-path-step:active:not(:disabled) {
 .place-mark {
   display: inline-flex;
   flex: none;
+}
+
+/* A row's empty cell in a column of icons (06 §12.2): a button's room. */
+.place-slot {
+  flex: none;
+  width: var(--st-size-control);
+  height: var(--st-size-control);
 }
 
 /* «Где размещена» (06 §12.2): the canvas's own network is plain text, not a

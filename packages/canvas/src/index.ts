@@ -20,6 +20,7 @@ export {
   type MenuChoice,
   type MenuTarget,
   type WheelMode,
+  WIRE_SHAPES,
 } from './editor';
 export {
   createIconAtlas,

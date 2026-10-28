@@ -4,8 +4,8 @@ import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
 import { controls } from './curve';
-import { RING_DELAY_MS, ringSlots, SLOT_U } from './flagring';
-import { chordOf, HEX_IN, perimeterAngle, rimAt } from './hex';
+import { FRAME_U, RING_DELAY_MS, ringSlots, SLOT_U } from './flagring';
+import { chordOf, HEX_IN, hexDist, perimeterAngle, rimAt } from './hex';
 import {
   arrowOn,
   isClosed,
@@ -42,6 +42,8 @@ export interface Interaction {
    * the slot under it; hidden while `Ctrl` is held.
    */
   ring?: { id: string; since: number; slot: Flag | null } | null;
+  /** The rim mark under the cursor: its words show over it (06 §12.2, §14). */
+  mark?: { id: string; mark: RimTarget } | null;
 }
 
 export interface DecorNode {
@@ -95,6 +97,10 @@ interface RimTargetHit {
   y0: number;
   x1: number;
   y1: number;
+  /** The bubble's centre and circumradius on screen: its middle is the bubble's. */
+  cx: number;
+  cy: number;
+  R: number;
 }
 
 const CORNERS = [
@@ -144,6 +150,12 @@ export class Decor {
    * «сегодня», «−3 дн.»; 07 §4.6, Q-07-22); none for the rest.
    */
   dueWord: (n: GraphNode) => string | null = () => null;
+
+  /** A slot's name and key for the flag ring (06 §8), in the viewer's language. */
+  flagWord: (flag: 'key' | 'pause' | 'template') => string | null = () => null;
+
+  /** What a rim mark says, in the viewer's language: the canvas has no titles. */
+  markWord: (mark: RimTarget, n: GraphNode) => string | null = () => null;
   /**
    * World control points of the wire `a → b` as the wire layer draws it, a
    * kinetic wire's lag included (06 §6.8): arrowheads ride the drawn curve.
@@ -212,10 +224,13 @@ export class Decor {
       this.antsStart = now;
     }
     let ringAt: { x: number; y: number; R: number; n: GraphNode } | null = null;
+    // The node whose rim mark the cursor is on, for that mark's words.
+    let pointedNode: { n: GraphNode; x: number } | null = null;
     for (const v of nodes) {
       const s = cam.toScreen(v.x, v.y);
       const R = v.r * cam.zoom;
       if (ia.ring?.id === v.id) ringAt = { x: s.x, y: s.y, R, n: v.node };
+      if (ia.mark?.id === v.id) pointedNode = { n: v.node, x: s.x };
       // A node's rims and rings are hexagons (ADR-0011): offsets go square to the sides.
       const Rin = R * HEX_IN;
       const rim = (offset: number, width: number, style: RingStyle) =>
@@ -357,7 +372,7 @@ export class Decor {
         } else {
           rim(10 * U, 2 * U, { color: ACCENT });
         }
-        const k = R + 12 * U;
+        const k = R + FRAME_U * U;
         const arm = 4 * U;
         for (const [cx, cy] of CORNERS) {
           const x = s.x + cx * k;
@@ -428,7 +443,8 @@ export class Decor {
           const label = `×${n.places}`;
           const t = this.text(label, px, py - this.uiCss / 2);
           // Left of the mark: the 7–8 o'clock side is the bubble's outer one.
-          const left = this.snap(px - (n.appearance ? GLYPH_REACH * U + U : 0) - t.width);
+          // 1u of air between the mark and its count's plate.
+          const left = this.snap(px - (n.appearance ? GLYPH_REACH * U + 2 * U : 0) - t.width);
           t.position.x = left;
           this.plate(left - U, t.position.y - U, t.width + 2 * U, this.uiCss + 2 * U);
           x0 = Math.min(x0, left - U);
@@ -442,19 +458,27 @@ export class Decor {
             y0: py - half,
             x1: px + half,
             y1: py + half,
+            cx: s.x,
+            cy: s.y,
+            R,
           });
         }
         if (n.external > 0) {
           const [ex, ey] = slot(1.5);
           this.badge('external', 'ink', ex, ey);
-          const count = this.text(String(n.external), ex + 7 * U, ey - this.uiCss / 2);
+          // On a plate as «×N»: it may stand on the hover and selection rings.
+          const count = this.text(String(n.external), ex + 8 * U, ey - this.uiCss / 2);
+          this.plate(ex + 7 * U, count.position.y - U, count.width + 2 * U, this.uiCss + 2 * U);
           this.marks.set(`external:${v.id}`, {
             id: v.id,
             mark: 'external',
             x0: ex - half,
             y0: ey - half,
-            x1: Math.max(ex + half, ex + 7 * U + count.width + U),
+            x1: Math.max(ex + half, ex + 8 * U + count.width + U),
             y1: ey + half,
+            cx: s.x,
+            cy: s.y,
+            R,
           });
         }
         if (!n.ghost && this.kindBadge) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
@@ -507,9 +531,30 @@ export class Decor {
             const half = (SLOT_U / 2 + 1) * U;
             g.rect(slot.x - half, slot.y - half, 2 * half, 2 * half);
             corners = true;
+            // The slot's name and key over it, as a title in the Chrome.
+            const word = this.flagWord(flag);
+            if (word) {
+              const t = this.text(word, slot.x, slot.y - half - 4 * U - this.uiCss - U);
+              const left = this.snap(slot.x - t.width / 2);
+              t.position.x = left;
+              this.plate(left - 2 * U, t.position.y - U, t.width + 4 * U, this.uiCss + 2 * U);
+            }
           }
         }
       }
+    }
+    // The words of the rim mark under the cursor over it, as a title in the Chrome.
+    const pointed = ia.mark ? this.marks.get(`${ia.mark.mark}:${ia.mark.id}`) : undefined;
+    const said = pointed && pointedNode ? this.markWord(pointed.mark, pointedNode.n) : null;
+    if (pointed && pointedNode && said) {
+      // Beside the mark on its outer side, level with it: the flag ring is
+      // above the bubble and the body behind the mark.
+      const cy = (pointed.y0 + pointed.y1) / 2;
+      const t = this.text(said, 0, cy - this.uiCss / 2);
+      const right = (pointed.x0 + pointed.x1) / 2 >= pointedNode.x;
+      const left = this.snap(right ? pointed.x1 + 6 * U : pointed.x0 - 6 * U - t.width);
+      t.position.x = left;
+      this.plate(left - 2 * U, t.position.y - U, t.width + 4 * U, this.uiCss + 2 * U);
     }
     // «×N» of the roll-up wires on a plate at their middles (07 §5, 06 §13.3).
     for (const c of counts) {
@@ -588,6 +633,9 @@ export class Decor {
     let near = Number.POSITIVE_INFINITY;
     for (const r of this.marks.values()) {
       if (x < r.x0 || x > r.x1 || y < r.y0 || y > r.y1) continue;
+      // A mark's 24 px target reaches the middle of a small bubble: the
+      // inner half of the body is the bubble's, a click there selects it.
+      if (hexDist(x - r.cx, y - r.cy) < 0.5 * HEX_IN * r.R) continue;
       const d = Math.hypot(x - (r.x0 + r.x1) / 2, y - (r.y0 + r.y1) / 2);
       if (d < near) {
         near = d;

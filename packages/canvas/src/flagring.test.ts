@@ -1,21 +1,21 @@
 import { describe, expect, it } from 'vitest';
-import { RING_FLAGS, ringSlots, SLOT_U, slotAt } from './flagring';
+import { FRAME_U, onTheWay, RING_FLAGS, ringSlots, SLOT_U, slotAt } from './flagring';
 
 describe('the flag ring (06 §8, 07 §4.8)', () => {
-  it('has a radius of 28 px at least, a slot per flag, clockwise from the left', () => {
+  it('is a row over the bubble, 28 px up at least, a slot per flag from the left', () => {
     const slots = ringSlots(100, 100, 1, 1);
     expect(slots.map((s) => s.flag)).toEqual([...RING_FLAGS]);
-    for (const s of slots) expect(Math.hypot(s.x - 100, s.y - 100)).toBeCloseTo(28, 5);
-    // Upper left, the middle one at half past ten.
-    const [, mid] = slots;
-    expect(mid?.x).toBeLessThan(100);
-    expect(mid?.y).toBeLessThan(100);
-    expect(Math.abs((mid?.x ?? 0) - 100)).toBeCloseTo(Math.abs((mid?.y ?? 0) - 100), 5);
+    for (const s of slots) expect(s.y).toBeCloseTo(100 - 28, 5);
+    // Centred on the bubble: the middle one straight above it.
+    const [first, mid, last] = slots;
+    expect(mid?.x).toBeCloseTo(100, 5);
+    expect((first?.x ?? 0) + (last?.x ?? 0)).toBeCloseTo(200, 5);
   });
 
-  it('keeps the slots a slot and a gap apart, clear of a big bubble', () => {
+  it("keeps a gap between the slots and over the selection's corners (owner, 2026-10-28)", () => {
     for (const [R, u] of [
       [10, 1],
+      [20, 1],
       [60, 1],
       [60, 2],
     ] as const) {
@@ -23,16 +23,25 @@ describe('the flag ring (06 §8, 07 §4.8)', () => {
       for (let i = 1; i < slots.length; i++) {
         const a = slots[i - 1];
         const b = slots[i];
-        expect(Math.hypot((b?.x ?? 0) - (a?.x ?? 0), (b?.y ?? 0) - (a?.y ?? 0))).toBeCloseTo(
-          (SLOT_U + 4) * u,
-          5,
-        );
+        expect((b?.x ?? 0) - (a?.x ?? 0) - SLOT_U * u).toBeCloseTo(6 * u, 5);
+        expect(b?.y).toBe(a?.y);
       }
-      // A slot's nearest corner clears the hover ring's corners at R + 11.5u.
+      // A slot's bottom stays 6u above the corners at R + 12u, which the
+      // hover ring's top corner never passes.
       for (const s of slots) {
-        expect(Math.hypot(s.x, s.y) - Math.SQRT2 * (SLOT_U / 2) * u).toBeGreaterThan(R + 11.5 * u);
+        expect(-(s.y + (SLOT_U / 2) * u)).toBeGreaterThanOrEqual(R + (FRAME_U + 6) * u - 1e-9);
       }
     }
+  });
+
+  it('stays up on the way from the bubble to it, not beside it or below', () => {
+    const slots = ringSlots(0, 0, 20, 1);
+    const [first, , last] = slots;
+    if (!first || !last) throw new Error('no slot');
+    expect(onTheWay(slots, 0, 0, -10, 1)).toBe(true);
+    expect(onTheWay(slots, 0, first.x, first.y, 1)).toBe(true);
+    expect(onTheWay(slots, 0, last.x + 20, first.y, 1)).toBe(false);
+    expect(onTheWay(slots, 0, 0, 10, 1)).toBe(false);
   });
 
   it('takes a click 24 px wide at least, the nearest slot first', () => {

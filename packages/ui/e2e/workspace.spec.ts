@@ -1752,9 +1752,14 @@ test.describe('a workspace on the core', () => {
     await page.mouse.move(640, 400);
     await page.keyboard.press('Shift+S');
     expect(await shape()).toBe('kinetic');
-    // The right button on the bare canvas offers the style after it.
+    // The right button on the bare canvas: the three styles, the one the
+    // wires have ticked, Shift+S by the one after it.
     await page.mouse.click(640, 400, { button: 'right' });
-    await page.getByRole('menuitem', { name: 'Нити: прямые' }).click();
+    const style = (name: string) => page.getByRole('menuitemradio', { name });
+    await expect(style('Кинетические нити')).toHaveAttribute('aria-checked', 'true');
+    await expect(style('Нити Безье')).toHaveAttribute('aria-checked', 'false');
+    await expect(style('Прямые нити')).toContainText('Shift+S');
+    await style('Прямые нити').click();
     expect(await shape()).toBe('straight');
     // One step of undo each.
     await page.keyboard.press('Control+z');
@@ -2500,7 +2505,25 @@ test.describe('a workspace on the core', () => {
     await createWorkspace(page, 'Карта');
     const ws = page.locator('.workspace');
     const refs = await appearing(page);
+    // A click in the middle of the bubble selects it: its marks' targets stop
+    // short of it (owner, 2026-10-28), so the keyboard stays on the canvas.
+    await page.keyboard.press('Escape');
+    const middle = await at(page, 'Референсы');
+    await page.mouse.click(middle.x, middle.y);
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Референсы');
+    await expect(page.locator('.ws-inspector .ins-places li')).toHaveCount(2);
+    expect(await page.evaluate(() => document.activeElement?.closest('.ins-places') === null)).toBe(
+      true,
+    );
+    // The house and the × keep a column each in every row, empty where a row has no such step.
+    for (const cell of [3, 4]) {
+      const xs = await page
+        .locator(`.ws-inspector .ins-places li > :nth-child(${cell})`)
+        .evaluateAll((els) => els.map((el) => Math.round(el.getBoundingClientRect().left)));
+      expect(new Set(xs).size, `column ${cell}`).toBe(1);
+    }
     // A click on the shortcut on the bubble: «Где размещена» with the keyboard.
+    await page.mouse.click(400, 650);
     await page.keyboard.press('Escape');
     await clickMark(page, refs, 'places');
     await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Референсы');

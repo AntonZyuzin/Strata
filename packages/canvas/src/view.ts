@@ -214,6 +214,18 @@ export class CanvasView {
     this.invalidate();
   }
 
+  /** A flag ring slot's name and key, shown over it on hover; see `Decor.flagWord`. */
+  set flagWord(word: (flag: 'key' | 'pause' | 'template') => string | null) {
+    this.decor.flagWord = word;
+    this.invalidate();
+  }
+
+  /** What a rim mark says over it on hover; see `Decor.markWord`. */
+  set markWord(word: (mark: RimTarget, n: GraphNode) => string | null) {
+    this.decor.markWord = word;
+    this.invalidate();
+  }
+
   get reducedMotion(): boolean {
     return this.motionReduced;
   }

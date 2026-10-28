@@ -19,7 +19,8 @@ import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
 import { Camera } from './camera';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
-import { RING_DELAY_MS, type RingSlot, ringSlots, SLOT_U, slotAt } from './flagring';
+import type { RimTarget } from './decor';
+import { onTheWay, RING_DELAY_MS, type RingSlot, ringSlots, slotAt } from './flagring';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { Minimap } from './minimap';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
@@ -54,7 +55,7 @@ const CUT_DASH = 4;
 /** Mod of the gestures (06 §17): Cmd on macOS, Ctrl elsewhere. */
 const MAC = /Mac/.test(navigator.platform);
 /** `Shift+S` goes through the styles of 06 §6.2 in the order of its table. */
-const WIRE_SHAPES: WireShape[] = ['straight', 'bezier', 'kinetic'];
+export const WIRE_SHAPES: readonly WireShape[] = ['straight', 'bezier', 'kinetic'];
 
 const PAPER = 0xf2efe6;
 const INK = 0x0b0c0e;
@@ -338,6 +339,8 @@ export class Editor {
    */
   ringMode: 'always' | 'far' | 'never' = 'always';
   private ringSlot: Flag | null = null;
+  /** The rim mark under the cursor (06 §12.2, §14): the decor says what it is. */
+  private markHover: { id: string; mark: RimTarget } | null = null;
   private selectedWire: [string, string] | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
@@ -369,7 +372,8 @@ export class Editor {
       const hover = this.mode.t === 'idle' && (h.t === 'node' || h.t === 'port') ? h.id : null;
       // The decor waits out the ring's delay itself, drawing frames until it shows.
       const ring = this.ringOn() && this.ring ? { ...this.ring, slot: this.ringSlot } : null;
-      return { hover, selection: this.selection, current: this.current, ring };
+      const mark = this.mode.t === 'idle' ? this.markHover : null;
+      return { hover, selection: this.selection, current: this.current, ring, mark };
     };
     this.detach.push(
       view.setGraph(graph),
@@ -551,14 +555,12 @@ export class Editor {
     return ringSlots(s.x, s.y, p.r * this.view.camera.zoom, this.view.unit);
   }
 
-  /** Within the ring that is up: its circle and the slots' half beyond. */
+  /** On the way from the bubble up to the ring that is up (`onTheWay`). */
   private insideRing(sx: number, sy: number): boolean {
-    const [slot] = this.ringSlots();
     const p = this.ring ? this.view.nodeAt(this.ring.id) : null;
-    if (!slot || !p) return false;
+    if (!p) return false;
     const c = this.view.camera.toScreen(p.x, p.y);
-    const radius = Math.hypot(slot.x - c.x, slot.y - c.y);
-    return Math.hypot(sx - c.x, sy - c.y) <= radius + (SLOT_U / 2) * this.view.unit;
+    return onTheWay(this.ringSlots(), c.y, sx, sy, this.view.unit);
   }
 
   private slotUnder(sx: number, sy: number): RingSlot | null {
@@ -658,10 +660,14 @@ export class Editor {
 
   /** `Shift+S`: the network's wires in the next style, one step of undo (06 §6.2, 05 §9.2). */
   cycleWireShape(): void {
-    if (this.mode.t !== 'idle') return;
-    const next = this.nextWireShape;
-    const label = { key: `proto.change.wires.${next}` };
-    this.graph.transaction(label, (tx) => tx.wireShape(next));
+    this.setWireShape(this.nextWireShape);
+  }
+
+  /** The network's wires in `shape` (the canvas's menu), one step of undo; none if they are. */
+  setWireShape(shape: WireShape): void {
+    if (this.mode.t !== 'idle' || shape === this.graph.wireShape) return;
+    const label = { key: `proto.change.wires.${shape}` };
+    this.graph.transaction(label, (tx) => tx.wireShape(shape));
     this.events.toast(label);
     this.indexDirty = true;
     this.view.invalidate();
@@ -847,6 +853,7 @@ export class Editor {
       this.pointer.inside = false;
       this.ring = null;
       this.ringSlot = null;
+      this.markHover = null;
       this.view.invalidate();
     });
     on(el, 'contextmenu', (e) => {
@@ -976,6 +983,11 @@ export class Editor {
         if (slot) {
           this.view.invalidate();
           return;
+        }
+        const mark = this.view.markAt(sx, sy);
+        if (mark?.id !== this.markHover?.id || mark?.mark !== this.markHover?.mark) {
+          this.markHover = mark;
+          this.view.invalidate();
         }
         const hit = this.hitTest(sx, sy);
         if (!sameHit(hit, this.hover)) {

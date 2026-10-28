@@ -39,6 +39,7 @@ import {
   type MenuTarget,
   type Pixels,
   processBackdrop,
+  WIRE_SHAPES,
 } from '@strata/canvas';
 import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
@@ -905,6 +906,19 @@ export function WorkspaceScreen(props: {
       v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
       // A near or past deadline in a word under the label (Q-07-22).
       v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
+      // The flag ring's slots: their names and keys, as the menu has them (06 §8).
+      v.flagWord = (flag) =>
+        t(localeRef.current, 'canvas.slot', {
+          name: t(localeRef.current, `flag.${flag}`),
+          key: { key: 'R', pause: 'Q', template: 'E' }[flag],
+        });
+      // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
+      v.markWord = (mark, n) =>
+        mark === 'external'
+          ? t(localeRef.current, 'canvas.mark.external', { n: n.external })
+          : t(localeRef.current, n.appearance ? 'canvas.mark.appearance' : 'canvas.mark.places', {
+              n: n.places,
+            });
       v.setKindIcons(icons);
       // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
       v.wireEnds = 'sockets';
@@ -1676,13 +1690,18 @@ export function WorkspaceScreen(props: {
       return [
         { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => ed.createAt(sx, sy) },
         { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => ed.fitAll() },
-        // The style the network's wires go to next (06 §6.2).
-        {
-          label: t(locale, `proto.change.wires.${ed.nextWireShape}` as MessageKey),
-          hint: 'Shift+S',
-          separated: true,
-          onSelect: () => ed.cycleWireShape(),
-        },
+        // The network's wire styles (06 §6.2): the one they have is ticked,
+        // `Shift+S` stands by the one it turns them to.
+        ...WIRE_SHAPES.map(
+          (shape, i): MenuEntry => ({
+            label: t(locale, `ctx.wires.${shape}` as const),
+            ...(shape === ed.nextWireShape ? { hint: 'Shift+S' } : {}),
+            checked: shape === g.wireShape,
+            radio: true,
+            separated: i === 0,
+            onSelect: () => ed.setWireShape(shape),
+          }),
+        ),
       ];
     }
     if (at.t === 'wire') {

@@ -17,6 +17,8 @@ export interface MenuEntry {
   separated?: boolean;
   /** An entry that is on or off, as a flag (06 §8): a tick on the left. */
   checked?: boolean | undefined;
+  /** One of a choice, as a wire style (06 §6.2): ticked, it is the one chosen. */
+  radio?: boolean;
   onSelect: () => void;
 }
 
@@ -119,6 +121,19 @@ export function ContextMenu(props: {
             {item.hint ? <span className="context-menu-hint">{item.hint}</span> : null}
           </>
         );
+        if (item.checked !== undefined && item.radio) {
+          return (
+            <div
+              key={item.label}
+              role="menuitemradio"
+              aria-checked={item.checked}
+              tabIndex={-1}
+              {...row}
+            >
+              {body}
+            </div>
+          );
+        }
         return item.checked === undefined ? (
           <div key={item.label} role="menuitem" tabIndex={-1} {...row}>
             {body}

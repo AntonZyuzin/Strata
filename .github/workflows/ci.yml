@@ -26,6 +26,14 @@ jobs:
       - name: Clippy of the WASM bindings (strata-layout-wasm, strata-core-wasm, strata-search-wasm)
         run: cargo clippy -p strata-layout-wasm -p strata-core-wasm -p strata-search-wasm --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test
+      - name: The synthetic vaults for importing by hand (V-synth, V-10k; 16 §4.7, milestone 1C)
+        run: cargo run -p strata-core --example write_vaults -- target/vaults
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vaults
+          path: target/vaults
+          include-hidden-files: true
+          retention-days: 30
 
   web:
     name: TypeScript · lint, typecheck, test, build

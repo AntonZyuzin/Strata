@@ -143,8 +143,11 @@ export class Decor {
   private antsStart = 0;
   reducedMotion = false;
   ends: WireEndStyle = 'sockets';
-  /** The kind glyph at six o'clock; off when the icon inside shows the kind. */
-  kindBadge = true;
+  /**
+   * The body shows the node's kind — its kind's icon or its picture: no kind
+   * glyph at six o'clock then (07 §4.1, «только у пресета»).
+   */
+  saysKind: (n: GraphNode) => boolean = () => false;
   /**
    * A near or past deadline in words, in the viewer's language («через 2 дн.»,
    * «сегодня», «−3 дн.»; 07 §4.6, Q-07-22); none for the rest.
@@ -481,7 +484,7 @@ export class Decor {
             R,
           });
         }
-        if (!n.ghost && this.kindBadge) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
+        if (!n.ghost && !this.saysKind(n)) this.badge(kindGlyph(n, false), 'ink', ...slot(6));
       }
 
       // Label under the rings on a plate (07 §4.1, §2.2 scene-label-plate).

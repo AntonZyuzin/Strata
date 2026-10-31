@@ -40,6 +40,21 @@ export function loadIconData(): Promise<IconData> {
   return data;
 }
 
+/** A preset's id (`<author>/<name>`) and its path in a 512 × 512 box. */
+export interface IconPreset {
+  id: string;
+  d: string;
+}
+
+/** The presets with their authors, for the palette `Z` (07 §6.3, ☑ Q-07-21). */
+export async function iconPresets(): Promise<{
+  authors: Record<string, IconAuthor>;
+  icons: IconPreset[];
+}> {
+  const d = await loadIconData();
+  return { authors: d.authors, icons: d.icons };
+}
+
 /** Attribution of the presets for the «Благодарности» screen (07 §6.3). */
 export async function iconCredits(): Promise<IconCredits> {
   const d = await loadIconData();

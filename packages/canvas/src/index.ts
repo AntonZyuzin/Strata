@@ -29,7 +29,9 @@ export {
   type IconAuthor,
   type IconCredits,
   type IconImage,
+  type IconPreset,
   iconCredits,
+  iconPresets,
 } from './icons';
 export {
   DEFAULT_ICONS,

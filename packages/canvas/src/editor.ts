@@ -192,6 +192,11 @@ export interface EditorEvents {
   /** «Обернуть в папку», `Shift+C` (06 §13.3): the nodes into a new folder at (x, y). */
   wrap?(e: { ids: string[]; x: number; y: number }): void;
   /**
+   * `Z` (06 §2, 07 §6.3): the icon palette for `ids` — the selection, or the
+   * node under the cursor outside it — at the screen point (sx, sy).
+   */
+  icons?(e: { ids: string[]; sx: number; sy: number }): void;
+  /**
    * A drag that rested 500 ms on the bubble of a folder or project and was
    * let go there (06 §12.1). `amend` — the gesture wrote a step already (the
    * copy, a shake): this one adds to it, one step of undo.
@@ -232,7 +237,8 @@ export type CanvasAction =
   | 'copy'
   | 'paste'
   | 'pasteAppearance'
-  | 'wrap';
+  | 'wrap'
+  | 'icons';
 
 /** What the right button was pressed on. */
 export type MenuTarget =
@@ -728,6 +734,9 @@ export class Editor {
       }
       case 'wrap':
         this.wrapSelection();
+        return;
+      case 'icons':
+        this.openIcons();
         return;
     }
   }
@@ -1665,7 +1674,13 @@ export class Editor {
         this.view.invalidate();
         return;
       case 'KeyZ':
-        if (!mod) return;
+        // `Z` alone — the icon palette (06 §2, 07 §6.3); with `Ctrl` — undo.
+        if (!mod) {
+          if (e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          this.act('icons');
+          return;
+        }
         e.preventDefault();
         this.act(e.shiftKey ? 'redo' : 'undo');
         return;
@@ -1905,6 +1920,18 @@ export class Editor {
   // ── Commands ──────────────────────────────────────────────────────
 
   /** «Обернуть в папку» (06 §13.3): the chosen nodes into a new folder at their middle. */
+  /** `Z`: the icon palette for the nodes `R` / `Q` / `E` would flag (06 §8); ghosts take none. */
+  private openIcons() {
+    if (this.mode.t !== 'idle' || !this.events.icons) return;
+    const ids = this.flagTargets().filter((id) => {
+      const n = this.graph.nodes.get(id);
+      return n !== undefined && !n.ghostOf;
+    });
+    if (ids.length === 0) return;
+    const { sx, sy } = this.anchorScreen();
+    this.events.icons({ ids, sx, sy });
+  }
+
   private wrapSelection() {
     const nodes = [...this.selection].flatMap((id) => this.graph.nodes.get(id) ?? []);
     if (this.mode.t !== 'idle' || nodes.length === 0) return;

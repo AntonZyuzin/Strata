@@ -1059,6 +1059,15 @@ fn a_picture_is_an_asset_by_its_hash_and_travels_in_the_archive() {
     .expect("link");
     set(&mut w, &media, "icon", Some(Val::str("filetype-video"))).expect("icon");
     assert!(set(&mut w, &media, "icon", Some(Val::str("../x"))).is_err());
+    // A preset of 07 §6.3 too (05 §4.1 `IconRef`).
+    set(
+        &mut w,
+        &media,
+        "icon",
+        Some(Val::str("game-icons/lorc/eyeball")),
+    )
+    .expect("preset");
+    set(&mut w, &media, "icon", Some(Val::str("filetype-video"))).expect("back");
     let d = w.node_details(&media).expect("details");
     assert_eq!(d.attrs.mime.as_deref(), Some("image/png"));
     assert_eq!(d.attrs.icon.as_deref(), Some("filetype-video"));
@@ -1073,6 +1082,55 @@ fn a_picture_is_an_asset_by_its_hash_and_travels_in_the_archive() {
         Workspace::open(MemoryStore::from_bytes(&again.into_store().to_bytes()).expect("bytes"))
             .expect("open");
     assert!(back.asset(&sha).expect("read").is_some());
+}
+
+#[test]
+fn any_node_takes_an_icon_preset_and_only_an_asset_a_chrome_icon() {
+    // 05 §4.1: `icon` is an `IconRef` — a preset `game-icons/<author>/<id>`
+    // (07 §6.3) on any node; a Chrome icon by name is an asset's (05 §4.4).
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    for kind in [
+        NodeKind::Network,
+        NodeKind::Project,
+        NodeKind::Task,
+        NodeKind::Note,
+        NodeKind::Board,
+        NodeKind::Checklist,
+    ] {
+        let n = create(&mut w, &root, kind, "Нода");
+        set(
+            &mut w,
+            &n,
+            "icon",
+            Some(Val::str("game-icons/lorc/compass")),
+        )
+        .expect("preset");
+        assert_eq!(
+            w.node_details(&n).expect("details").attrs.icon.as_deref(),
+            Some("game-icons/lorc/compass")
+        );
+        assert!(
+            set(&mut w, &n, "icon", Some(Val::str("filetype-video"))).is_err(),
+            "{kind:?}: a Chrome icon is an asset's"
+        );
+        set(&mut w, &n, "icon", None).expect("back to the kind's");
+        assert_eq!(w.node_details(&n).expect("details").attrs.icon, None);
+    }
+    let n = create(&mut w, &root, NodeKind::Note, "Заметка");
+    for bad in [
+        "game-icons/lorc",
+        "game-icons/../compass",
+        "game-icons/Lorc/compass",
+        "icons/lorc/compass",
+        "game-icons/lorc/compass/x",
+    ] {
+        assert!(
+            set(&mut w, &n, "icon", Some(Val::str(bad))).is_err(),
+            "{bad}"
+        );
+    }
 }
 
 #[test]

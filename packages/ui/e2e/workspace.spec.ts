@@ -44,6 +44,7 @@ interface WsHook {
   };
   core: {
     tree(): Promise<{ id: string; name: string; parent?: string }[]>;
+    node(id: string): Promise<{ icon?: string }>;
   };
   editor(): {
     selected: string[];
@@ -110,6 +111,16 @@ const idOf = (page: Page, name: string) =>
     if (!n) throw new Error(`no node ${name}`);
     return n.id;
   }, name);
+
+/** What node `id` shows and holds: its body's icon and its `icon` on the canvas and in the core. */
+const iconState = (page: Page, id: string) =>
+  page.evaluate(async (id) => {
+    const ws = window.__strataWs as WsHook;
+    await ws.settled();
+    const icon = ws.graph()?.nodes.get(id)?.attrs.icon ?? null;
+    const core = (await ws.core.node(id)).icon ?? null;
+    return { shows: ws.view.iconOf(id), icon, core };
+  }, id);
 
 /** Screen point of a node's bubble in page px. */
 async function at(page: Page, name: string) {
@@ -912,6 +923,48 @@ for (const deviceScaleFactor of [1, 2]) {
 }
 
 for (const deviceScaleFactor of [1, 2]) {
+  test(`the icon palette keeps its size in RU and EN @${deviceScaleFactor}x (07 §6.3)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Иконки');
+      await createNode(page, 460, 300, 'Карта');
+      await select(page, 'Карта');
+      await page.keyboard.press('KeyZ');
+      const palette = page.locator('.icon-palette');
+      await expect(palette.locator('.icon-cell')).toHaveCount(200);
+      // The longest name under the keys: «Кольцо с бриллиантом» / «Round-bottom flask».
+      await page.keyboard.type(locale === 'ru-RU' ? 'бриллиант' : 'flask');
+      await expect(palette.locator('.icon-cell').first()).toHaveClass(/is-current/);
+      expect(await overflowing(page, '.icon-palette'), `${locale} the palette must fit`).toEqual(
+        [],
+      );
+      boxes.push({
+        palette: await box(page, '.icon-palette'),
+        cell: await box(page, '.icon-palette .icon-cell:first-child'),
+        footer: await box(page, '.icon-palette .icon-palette-footer'),
+        kind: await box(page, '.icon-palette .icon-palette-top button'),
+      });
+      await page.keyboard.press('Escape');
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['palette', 'cell', 'footer', 'kind'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
   test(`«Где размещена» and «Удалить везде?» keep their size in RU and EN @${deviceScaleFactor}x (06 §12.2–12.3)`, async ({
     browser,
   }) => {
@@ -976,14 +1029,14 @@ for (const deviceScaleFactor of [1, 2]) {
       await createWorkspace(page, 'Перенос');
       await makeFolder(page, 'Архив', 520, 320);
       await createNode(page, 760, 480, 'Эскиз');
-      // The node's menu with a copy waiting: cut, copy, paste, as an appearance, wrap.
+      // The node's menu with a copy waiting: cut, copy, paste, as an appearance, wrap, icon.
       await select(page, 'Эскиз');
       await page.evaluate(() => window.__strataWs?.view.canvas.focus());
       await page.keyboard.press('Control+c');
       const sketch = await at(page, 'Эскиз');
       await page.mouse.click(sketch.x, sketch.y, { button: 'right' });
       const menu = page.locator('.context-menu');
-      await expect(menu.locator('.context-menu-row')).toHaveCount(12);
+      await expect(menu.locator('.context-menu-row')).toHaveCount(13);
       expect(await overflowing(page, '.context-menu'), `${locale} the menu must fit`).toEqual([]);
       expect((await box(page, '.context-menu')).width).toBeLessThanOrEqual(
         (await chWidth(page, 40)) + 2,
@@ -2830,6 +2883,80 @@ test.describe('a workspace on the core', () => {
     await list.getByRole('button', { name: 'Показать здесь «Идея» (Alt+Enter)' }).click();
     await expect(list).toHaveCount(0);
     await expect.poll(async () => (await graphNow(page)).names).toEqual(['Идея', 'Эскиз']);
+  });
+
+  test('Z: the icon palette finds a preset in either language and gives it in one step (07 §6.3, ☑ Q-07-21)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Иконки');
+    await createNode(page, 460, 300, 'Карта');
+    await createNode(page, 700, 420, 'План');
+    const [map, plan] = [await idOf(page, 'Карта'), await idOf(page, 'План')];
+    await settled(page);
+    expect(await iconState(page, map)).toEqual({ shows: 'kind', icon: null, core: null });
+    // At the node under the cursor: every preset, the first one's author below.
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    const palette = page.locator('.icon-palette');
+    await expect(palette).toBeVisible();
+    await expect(palette.locator('.icon-cell')).toHaveCount(200);
+    await expect(palette.locator('.icon-palette-by')).toHaveText(
+      'Открытая книга · © Lorc, CC BY 3.0',
+    );
+    await expect(palette.getByRole('button', { name: 'Значок вида' })).toBeDisabled();
+    // By a word in Russian: Enter gives it, the kind's glyph is the body no more.
+    await page.keyboard.type('компас');
+    const compass = palette.locator('.icon-cell[data-icon="lorc/compass"]');
+    await expect(compass).toHaveClass(/is-current/);
+    await expect(palette.locator('.icon-palette-by')).toHaveText('Компас · © Lorc, CC BY 3.0');
+    await page.keyboard.press('Enter');
+    await expect(palette).toHaveCount(0);
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({
+        shows: 'preset',
+        icon: 'game-icons/lorc/compass',
+        core: 'game-icons/lorc/compass',
+      });
+    // One step of undo.
+    await page.keyboard.press('Control+z');
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({ shows: 'kind', icon: null, core: null });
+    // Both nodes, by a word in English; the arrows move along the grid.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('KeyZ');
+    await page.keyboard.type('owl');
+    await expect(palette.locator('.icon-cell').first()).toHaveAttribute('data-icon', 'lorc/owl');
+    await page.keyboard.press('Enter');
+    for (const id of [map, plan]) {
+      await expect.poll(async () => (await iconState(page, id)).core).toBe('game-icons/lorc/owl');
+    }
+    // A node's own preset is pressed in and under the keys; «Значок вида» takes it back.
+    await select(page, 'План');
+    await page.keyboard.press('KeyZ');
+    const owl = palette.locator('.icon-cell[data-icon="lorc/owl"]');
+    await expect(owl).toHaveClass(/is-chosen/);
+    await expect(owl).toHaveClass(/is-current/);
+    await page.keyboard.press('ArrowRight');
+    await expect(owl).not.toHaveClass(/is-current/);
+    await palette.getByRole('button', { name: 'Значок вида' }).click();
+    await expect(palette).toHaveCount(0);
+    await expect
+      .poll(() => iconState(page, plan))
+      .toEqual({ shows: 'kind', icon: null, core: null });
+    expect((await iconState(page, map)).core).toBe('game-icons/lorc/owl');
+    // Esc takes nothing; nothing found says so.
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    await page.keyboard.type('щщщщ');
+    await expect(palette.locator('.icon-none')).toHaveText('Ничего не найдено');
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
+    expect((await iconState(page, map)).core).toBe('game-icons/lorc/owl');
   });
 
   test('«Показать все здесь» asks first past ten nodes (06 §14)', async ({ page }) => {

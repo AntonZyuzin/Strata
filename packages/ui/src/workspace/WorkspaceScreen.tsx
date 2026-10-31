@@ -40,6 +40,9 @@ import {
   Editor,
   type EditorEvents,
   generatePreset,
+  type IconAuthor,
+  type IconPreset,
+  iconPresets,
   type MenuTarget,
   type Pixels,
   processBackdrop,
@@ -62,7 +65,7 @@ import {
 } from 'react';
 import { linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
-import { nodeIconFile, nodeIconImages } from '../icons/Icon';
+import { nodeIcon, nodeIconFile, nodeIconImages } from '../icons/Icon';
 import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
 import { Layouter } from '../proto/layouter';
@@ -89,6 +92,7 @@ import { dueWord } from './due';
 import { ExternalList } from './ExternalList';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
+import { IconPalette, PRESET } from './IconPalette';
 import { ImportReportWindow } from './ImportReportWindow';
 import { Inspector, type InspectorActions } from './Inspector';
 import { freshReport, reportOf, reportShown } from './imports';
@@ -271,6 +275,13 @@ export function WorkspaceScreen(props: {
   );
   const toastId = useRef(0);
   const [net, setNet] = useState<NetworkView | null>(null);
+  /** The icon palette `Z` (07 §6.3): for these nodes, at a page point. */
+  const [iconPick, setIconPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
+  /** The presets with their authors, loaded when the palette first opens. */
+  const [presets, setPresets] = useState<{
+    authors: Record<string, IconAuthor>;
+    icons: IconPreset[];
+  } | null>(null);
   const [menu, setMenu] = useState<{
     sx: number;
     sy: number;
@@ -526,6 +537,12 @@ export function WorkspaceScreen(props: {
     const events: EditorEvents = {
       // The editor speaks in points of the canvas, which sits right of «Слои»:
       // the Tab menu is fixed to the page, the name field lies in this screen.
+      // `Z` (07 §6.3): the palette at the cursor; the presets load once.
+      icons: (e) => {
+        const r = el.getBoundingClientRect();
+        setIconPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
+        void iconPresets().then(setPresets, refused);
+      },
       tabMenu: (e) => {
         const r = el.getBoundingClientRect();
         // The menu ranks the canvas's nodes as they are now (09 §2.7).
@@ -1443,6 +1460,7 @@ export function WorkspaceScreen(props: {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
     editor.current?.setOverlayOpen(
       menu !== null ||
+        iconPick !== null ||
         name !== null ||
         finder !== null ||
         palette ||
@@ -1451,7 +1469,7 @@ export function WorkspaceScreen(props: {
         viewerFocus ||
         covered,
     );
-  }, [menu, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
+  }, [menu, iconPick, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
 
   useEffect(() => {
     ringModeRef.current = props.prefs.ring;
@@ -1817,6 +1835,21 @@ export function WorkspaceScreen(props: {
    * «Показать здесь» (06 §14): appearances of the other ends of node `id`'s
    * wires beside it, by the autoplace (§5.4); one step; their wires show.
    */
+  /**
+   * A preset for the nodes, or back to their kind's icon (07 §6.3): one step
+   * of undo; the core keeps the reference (05 §4.1 `IconRef`).
+   */
+  const setIcon = (ids: readonly string[], preset: string | null) => {
+    const g = graph.current;
+    if (!g) return;
+    const nodes = ids.filter((id) => g.nodes.has(id));
+    if (nodes.length === 0) return;
+    const value = preset === null ? null : `${PRESET}${preset}`;
+    g.transaction({ key: 'change.icon', params: { n: nodes.length } }, (tx) => {
+      for (const id of nodes) tx.attr(id, 'icon', value);
+    });
+  };
+
   const showHere = (id: string, ends: readonly ExternalWire[]) => {
     const net = netRef.current;
     const spots = editor.current?.spotsBeside(id, ends) ?? [];
@@ -2617,6 +2650,15 @@ export function WorkspaceScreen(props: {
       // Beside the node the menu is for, not on it.
       ...pasteItems(() => ({ x: n.x + 160, y: n.y })),
       { label: t(locale, 'ctx.wrap'), hint: 'Shift+C', onSelect: () => ed.act('wrap') },
+      // The palette at the menu's corner, for what the flags would take (06 §8).
+      {
+        label: t(locale, 'ctx.icon'),
+        hint: 'Z',
+        onSelect: () => {
+          setIconPick({ ids: ed.flagTargets(n.id), x: ctx?.x ?? 0, y: ctx?.y ?? 0 });
+          void iconPresets().then(setPresets, failed);
+        },
+      },
     );
     // Two commands, not side by side (06 §12.3): «Убрать отсюда» and «Удалить везде».
     items.push({
@@ -3001,6 +3043,33 @@ export function WorkspaceScreen(props: {
           onClose={() => {
             setFinding(false);
             if (view3d === '2d') focusCanvas();
+          }}
+        />
+      ) : null}
+      {iconPick ? (
+        <IconPalette
+          locale={locale}
+          presets={presets}
+          current={g?.nodes.get(iconPick.ids[0] ?? '')?.attrs.icon ?? null}
+          kind={(() => {
+            const n = g?.nodes.get(iconPick.ids[0] ?? '');
+            if (!n) return 'note';
+            // What «Значок вида» gives back: the icon without the one chosen by hand.
+            const { icon: _chosen, ...rest } = n.attrs;
+            return nodeIcon(n.kind, rest);
+          })()}
+          x={iconPick.x}
+          y={iconPick.y}
+          bounds={seenBounds()}
+          search={searchClient()}
+          onPick={(id) => {
+            setIconPick(null);
+            setIcon(iconPick.ids, id);
+            focusCanvas();
+          }}
+          onClose={() => {
+            setIconPick(null);
+            focusCanvas();
           }}
         />
       ) : null}

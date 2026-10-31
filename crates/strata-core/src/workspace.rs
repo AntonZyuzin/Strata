@@ -149,6 +149,15 @@ fn is_icon_name(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-')
 }
 
+/// An icon preset (05 §4.1 `IconRef`, 07 §6.3): `game-icons/<author>/<id>`.
+/// The core keeps the reference, the Chrome knows the pictures: one it lacks
+/// shows the kind's icon.
+fn is_icon_preset(s: &str) -> bool {
+    s.strip_prefix("game-icons/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(author, id)| is_icon_name(author) && is_icon_name(id))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error(transparent)]
@@ -1343,8 +1352,8 @@ impl<S: Store> Workspace<S> {
                     let clear = value.is_none();
                     let fits = match key.as_str() {
                         "status" | "priority" | "start" | "deadline" => task || clear,
-                        "color" => true,
-                        "asset" | "mime" | "url" | "icon" | "preview" => asset || clear,
+                        "color" | "icon" => true,
+                        "asset" | "mime" | "url" | "preview" => asset || clear,
                         _ => false,
                     };
                     if !fits {
@@ -1364,7 +1373,10 @@ impl<S: Store> Workspace<S> {
                         }
                         ("mime", Some(Val::Str(v))) => is_mime(v),
                         ("url", Some(Val::Str(v))) => is_url(v),
-                        ("icon", Some(Val::Str(v))) => is_icon_name(v),
+                        // A preset on any node; an asset also a Chrome icon by name (05 §4.4).
+                        ("icon", Some(Val::Str(v))) => {
+                            is_icon_preset(v) || (asset && is_icon_name(v))
+                        }
                         _ => false,
                     };
                     if !ok {

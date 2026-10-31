@@ -24,6 +24,8 @@ import { WireLayer, type WireStyle } from './wires';
 
 /** Structure animations: insert, shifts, autoplace, undo (06 §1.4). */
 export const STRUCTURE_MS = 200;
+/** The prefix of a preset reference in a node's `icon` (05 §4.1 `IconRef`). */
+const PRESET = 'game-icons/';
 
 interface NodeView extends DecorNode {
   body: Sprite;
@@ -121,6 +123,7 @@ export class CanvasView {
   ) {
     const dpr = app.renderer.resolution;
     this.decor = new Decor(pixelUnit(dpr), dpr, uiFontPx(dpr));
+    this.decor.saysKind = (n) => this.pictures.has(n.id) || this.kindIcon(n) !== undefined;
     this.wires.setUnit(pixelUnit(dpr) / dpr);
     this.rollupStyle = {
       color: PAPER,
@@ -317,7 +320,6 @@ export class CanvasView {
   setKindIcons(images: Record<string, IconImage>): void {
     const old = this.kindIcons;
     this.kindIcons = createPixelIcons(images);
-    this.decor.kindBadge = this.kindIcons.size === 0;
     for (const v of this.views.values()) {
       this.applyPicture(v);
       this.applyLevel(v);
@@ -327,8 +329,18 @@ export class CanvasView {
     this.invalidate();
   }
 
+  /**
+   * A preset chosen by hand (05 §4.1 `IconRef`, 07 §6.3): its index in the
+   * atlas, or -1 — none, or one this build does not ship.
+   */
+  private chosenPreset(n: GraphNode): number {
+    const ref = n.attrs.icon;
+    return ref?.startsWith(PRESET) ? this.icons.ids.indexOf(ref.slice(PRESET.length)) : -1;
+  }
+
+  /** The kind's icon a node shows; a preset chosen by hand comes first (07 §6.1, §6.3). */
   private kindIcon(n: GraphNode): Texture | undefined {
-    return this.kindIcons.get(this.iconKey(n));
+    return this.chosenPreset(n) >= 0 ? undefined : this.kindIcons.get(this.iconKey(n));
   }
 
   /**
@@ -396,8 +408,9 @@ export class CanvasView {
         v.icon.scale.set(pixelIconScale(2 * v.r));
         return;
       }
-      v.icon.texture =
-        this.icons.textures[v.node.icon % this.icons.textures.length] ?? this.textures.body;
+      const chosen = this.chosenPreset(v.node);
+      const k = chosen >= 0 ? chosen : v.node.icon % this.icons.textures.length;
+      v.icon.texture = this.icons.textures[k] ?? this.textures.body;
       v.icon.scale.set(iconScale(2 * v.r));
     }
   }

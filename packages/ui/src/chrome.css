@@ -1185,6 +1185,85 @@ button:focus-visible {
   max-width: 10ch;
 }
 
+/* The icon palette `Z` (07 §6.3, ☑ Q-07-21): the Tab menu's window, a grid
+   of presets as they look on a bubble — ink on paper — eight to a row; the
+   one under the keys framed in the accent, the node's own pressed in. */
+.icon-palette {
+  --icon-cell: 5ch;
+  --icon-gap: calc(2 * var(--u));
+  width: calc(8 * var(--icon-cell) + 7 * var(--icon-gap) + 8 * var(--u));
+}
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(8, var(--icon-cell));
+  grid-auto-rows: var(--icon-cell);
+  gap: var(--icon-gap);
+  /* Five rows whatever the query finds: the window does not jump while one types. */
+  height: calc(5 * var(--icon-cell) + 4 * var(--icon-gap) + 8 * var(--u));
+  align-content: start;
+  padding: calc(4 * var(--u));
+  overflow-y: auto;
+}
+
+.icon-cell {
+  display: grid;
+  place-items: center;
+  color: var(--st-scene-ink);
+  background: var(--st-scene-paper);
+  box-shadow: var(--st-bevel-raised);
+  cursor: pointer;
+}
+
+.icon-cell svg {
+  width: 70%;
+  height: 70%;
+  fill: currentColor;
+}
+
+.icon-cell.is-chosen {
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.icon-cell.is-current {
+  outline: calc(2 * var(--u)) solid var(--st-color-accent);
+  outline-offset: calc(-1 * var(--u));
+}
+
+.icon-none {
+  grid-column: 1 / -1;
+}
+
+.icon-palette-footer {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  min-height: var(--st-size-row);
+  padding: calc(3 * var(--u)) calc(4 * var(--u));
+  border-top: var(--u) solid var(--st-color-frame);
+}
+
+.icon-palette-by {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+/* The query and, beside it, the kind's icon that takes a preset back. */
+.icon-palette-top {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+}
+
+.icon-palette-top .tab-menu-prompt {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 /* «Показать здесь» at the row's end: the shortcut glyph, flat, in the row's colour. */
 .ext-show {
   display: inline-flex;

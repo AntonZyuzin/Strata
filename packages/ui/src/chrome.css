@@ -2144,11 +2144,36 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   list-style: none;
 }
 
+/* A line and its fix (13 §3.6): the fix's column as wide as its longest
+   word in either language, a tick in its place once fixed. */
+.import-line {
+  display: flex;
+  align-items: center;
+  gap: calc(4 * var(--u));
+}
+
+.import-act,
+.import-fixed {
+  flex: none;
+  width: 12ch;
+}
+
+.import-act {
+  white-space: nowrap;
+}
+
+.import-fixed {
+  display: grid;
+  place-items: center;
+}
+
 .import-row {
   display: grid;
   grid-template-columns: calc(16 * var(--u)) minmax(0, 1fr) minmax(0, 22ch);
   align-items: center;
   gap: calc(6 * var(--u));
+  flex: 1 1 auto;
+  min-width: 0;
   width: 100%;
   min-height: var(--st-size-row);
   padding: 0 calc(4 * var(--u));

@@ -94,11 +94,11 @@ import { ExternalList } from './ExternalList';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { IconPalette, PRESET } from './IconPalette';
-import { ImportReportWindow } from './ImportReportWindow';
+import { ImportReportWindow, type ReportActions } from './ImportReportWindow';
 import { ImportStatus } from './ImportStatus';
 import { Inspector, type InspectorActions } from './Inspector';
 import { InterruptedDialog } from './InterruptedDialog';
-import { freshReport, jobOf, reportOf, reportShown } from './imports';
+import { fixedLines, fixLine, freshReport, jobOf, reportOf, reportShown } from './imports';
 import { Layers } from './Layers';
 import { mapItems, pathTo, placeIn, removeOps } from './mapSteps';
 import { NodeSearch } from './NodeSearch';
@@ -364,6 +364,8 @@ export function WorkspaceScreen(props: {
   importingRef.current = importing !== null;
   /** The vault of an import the app left in the middle (10 §3.3): asked once. */
   const [interrupted, setInterrupted] = useState<string | null>(null);
+  /** The report's lines fixed this session (13 §3.6). */
+  const [fixed, setFixed] = useState<ReadonlySet<number>>(() => fixedLines(opened.workspace.id));
   /** A removal that asks first (06 §12.3), and the question's data. */
   const [removal, setRemoval] = useState<{
     ids: string[];
@@ -1776,6 +1778,7 @@ export function WorkspaceScreen(props: {
     clipRef.current = null;
     setClipped(false);
     setImportReport(freshReport(opened.workspace.id) ?? null);
+    setFixed(fixedLines(opened.workspace.id));
     navRef.current = NavHistory.load(readLocal(navKey(opened.workspace.id)));
     setNavState({ back: navRef.current.canBack, forward: navRef.current.canForward });
     setMarks(loadMarks(readLocal(marksKey(opened.workspace.id))));
@@ -1835,6 +1838,48 @@ export function WorkspaceScreen(props: {
       live = false;
     };
   }, [opened.workspace.id]);
+
+  /**
+   * The report's fixes (13 §3.6), each one step of undo: a ghost's note
+   * where the ghost stands, as a click on it makes; a link written as the
+   * path to the node it is to name (S1 step 8).
+   */
+  const reportActions: ReportActions = {
+    create: async (item) => {
+      if (!item.node || !item.link) return;
+      const d = await core.node(item.node);
+      if (d.parent && d.parent !== netRef.current) await loadRef.current(d.parent);
+      editor.current?.flyTo([item.node]);
+      if (!editor.current?.materializeGhost(item.node, item.link)) {
+        toast('ws.refused', { message: item.link });
+        throw new Error('no ghost');
+      }
+    },
+    bind: async (item) => {
+      if (!item.node || !item.link || !item.target) return;
+      await pinLink(item.node, item.link, item.target, true);
+    },
+    targets: (item) => core.linkTargets(item.node ?? '', item.link ?? ''),
+    choose: async (item, target) => {
+      if (!item.node || !item.link) return;
+      await pinLink(item.node, item.link, target, false);
+    },
+  };
+
+  /** A link fixed by the core: the text, its wire and the undo step. */
+  const pinLink = async (note: string, link: string, target: string, alias: boolean) => {
+    try {
+      await sync.current?.settled();
+      const h = await core.pinLink(note, link, target, alias);
+      graph.current?.clearHistory();
+      setHistory(h);
+      refreshRef.current();
+      await loadRef.current();
+    } catch (e) {
+      failed(e);
+      throw e;
+    }
+  };
 
   /** «Оставить» or «Откатить» the import the app broke off. */
   const settle = (keep: boolean) => {
@@ -3067,6 +3112,12 @@ export function WorkspaceScreen(props: {
         <ImportReportWindow
           locale={locale}
           report={importReport}
+          actions={reportActions}
+          done={fixed}
+          onDone={(i) => {
+            fixLine(opened.workspace.id, i);
+            setFixed(new Set(fixedLines(opened.workspace.id)));
+          }}
           onGo={(id) => {
             setImportReport(null);
             focusCanvas();

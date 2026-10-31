@@ -13,7 +13,7 @@
 //! Loro document and pushed here as updates (15 §3.4); the core stores them
 //! and turns a note's `[[links]]` into its text wires.
 
-use crate::changeset::{Changeset, KeyWrite, Label, RevertReport};
+use crate::changeset::{Changeset, KeyWrite, Label, RevertReport, TextEdit};
 use crate::ops::{Op, WireStyle};
 use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
@@ -33,6 +33,7 @@ mod places;
 pub(crate) use import::TEST_BATCH;
 pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
 pub use importing::{ImportBatch, ImportProgress, ImportShadow, PlannedImport, ReadyBatch};
+pub use links::{LinkTarget, LinkTargets};
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -562,6 +563,7 @@ struct Tx<'a> {
     docs: &'a mut HashMap<String, LoroDoc>,
     before: HashMap<String, VersionVector>,
     writes: Vec<KeyWrite>,
+    texts: Vec<TextEdit>,
 }
 
 fn read(doc: &LoroDoc, map: &str, key: &str) -> Option<Val> {
@@ -572,6 +574,33 @@ fn read(doc: &LoroDoc, map: &str, key: &str) -> Option<Val> {
 }
 
 impl Tx<'_> {
+    /// Replaces `before` at byte `at` of a content document's text with
+    /// `after`, as one of the operation's text edits; false — and nothing
+    /// changes — when `before` is not there (someone edited it since).
+    fn splice(&mut self, doc: &str, at: usize, before: &str, after: &str) -> Result<bool> {
+        let d = self
+            .docs
+            .get(doc)
+            .ok_or_else(|| engine(format!("document {doc} is not loaded")))?;
+        let t = d.get_text("text");
+        let text = t.to_string();
+        if text.get(at..at + before.len()) != Some(before) {
+            return Ok(false);
+        }
+        self.before
+            .entry(doc.to_owned())
+            .or_insert_with(|| d.oplog_vv());
+        t.delete_utf8(at, before.len()).map_err(engine)?;
+        t.insert_utf8(at, after).map_err(engine)?;
+        self.texts.push(TextEdit {
+            doc: doc.to_owned(),
+            at,
+            before: before.to_owned(),
+            after: after.to_owned(),
+        });
+        Ok(true)
+    }
+
     fn set(&mut self, doc: &str, map: &str, key: &str, value: Option<Val>) -> Result<()> {
         let d = self
             .docs
@@ -870,10 +899,16 @@ impl<S: Store> Workspace<S> {
             docs: &mut self.docs,
             before: HashMap::new(),
             writes: Vec::new(),
+            texts: Vec::new(),
         };
         let built = build(&mut tx);
-        let Tx { before, writes, .. } = tx;
-        self.finish(origin, label, before, writes, built)
+        let Tx {
+            before,
+            writes,
+            texts,
+            ..
+        } = tx;
+        self.finish(origin, label, before, (writes, texts), built)
     }
 
     /// The writes of an import in two passes, and back: the first goes into
@@ -891,6 +926,7 @@ impl<S: Store> Workspace<S> {
             docs: &mut self.docs,
             before: HashMap::new(),
             writes: Vec::new(),
+            texts: Vec::new(),
         };
         first
             .into_iter()
@@ -917,7 +953,7 @@ impl<S: Store> Workspace<S> {
         origin: ChangesetOrigin,
         label: Label,
         before: HashMap<String, VersionVector>,
-        writes: Vec<KeyWrite>,
+        (writes, texts): (Vec<KeyWrite>, Vec<TextEdit>),
         built: Result<()>,
     ) -> Result<Changeset> {
         if let Err(e) = built {
@@ -935,6 +971,7 @@ impl<S: Store> Workspace<S> {
             label,
             reverts: None,
             writes,
+            texts,
         };
         let mut updates = Vec::new();
         for (doc, vv) in &before {
@@ -952,6 +989,11 @@ impl<S: Store> Workspace<S> {
                 self.docs.insert(doc.clone(), d);
             }
             return Err(e.into());
+        }
+        // Open editors read again what the core wrote into their texts (15 §3.4).
+        let edited: BTreeSet<&str> = changeset.texts.iter().map(|e| e.doc.as_str()).collect();
+        for doc in edited {
+            self.note_edit(doc);
         }
         Ok(changeset)
     }
@@ -1554,6 +1596,9 @@ impl<S: Store> Workspace<S> {
         for w in &cs.writes {
             self.ensure_doc(&w.doc)?;
         }
+        for e in &cs.texts {
+            self.ensure_doc(&e.doc)?;
+        }
         let mut skipped = Vec::new();
         let mut plan = Vec::new();
         for w in cs.writes.iter().rev() {
@@ -1567,6 +1612,11 @@ impl<S: Store> Workspace<S> {
         let mut out = self.write(cs.origin.clone(), cs.label.clone(), |tx| {
             for w in plan {
                 tx.set(&w.doc, &w.map, &w.key, w.before)?;
+            }
+            // Texts back in the reverse order they were edited; a span
+            // someone changed since stays as it is.
+            for e in cs.texts.iter().rev() {
+                tx.splice(&e.doc, e.at, &e.after, &e.before)?;
             }
             Ok(())
         })?;

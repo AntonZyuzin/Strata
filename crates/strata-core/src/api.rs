@@ -7,8 +7,8 @@ use crate::ops::Op;
 use crate::store::Store;
 use crate::vault::{Vault, VaultFile};
 use crate::workspace::{
-    Edited, ExternalWire, History, ImportOptions, ImportProgress, NetworkView, NodeDetails, Person,
-    Placeable, TrashItem, TrashPreview, TreeItem, WireEnds, Workspace,
+    Edited, ExternalWire, History, ImportOptions, ImportProgress, LinkTargets, NetworkView,
+    NodeDetails, Person, Placeable, TrashItem, TrashPreview, TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -131,6 +131,20 @@ pub enum Request {
     SettleInterrupted {
         keep: bool,
     },
+    /// The nodes a link of `note` may name, the nearest first (13 §3.5).
+    LinkTargets {
+        note: String,
+        link: String,
+    },
+    /// `note`'s links to `link` written as the shortest path to `target`,
+    /// what was written kept as the text with `alias` (13 §3.6): one step.
+    PinLink {
+        note: String,
+        link: String,
+        target: String,
+        #[serde(default)]
+        alias: bool,
+    },
 }
 
 /// A node to copy and where its copy goes.
@@ -232,6 +246,9 @@ pub enum Response {
     /// The long task the app left in the middle, if any.
     Interrupted {
         label: Option<Label>,
+    },
+    LinkTargets {
+        targets: LinkTargets,
     },
     /// The call failed; `invalid` when the model refused it (nothing was written).
     Error {
@@ -374,6 +391,20 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 history: ws.history(),
             })
         }
+        Request::LinkTargets { note, link } => ws
+            .link_targets(&note, &link)
+            .map(|targets| Response::LinkTargets { targets }),
+        Request::PinLink {
+            note,
+            link,
+            target,
+            alias,
+        } => ws
+            .pin_link(&note, &link, &target, alias)
+            .map(|c| Response::Applied {
+                changeset: Some(c.id),
+                history: ws.history(),
+            }),
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, crate::CoreError::Invalid(_)),

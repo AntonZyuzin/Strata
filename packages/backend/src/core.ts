@@ -205,7 +205,9 @@ export type CoreRequest =
   | { call: 'importCancel' }
   | { call: 'importProgress' }
   | { call: 'interrupted' }
-  | { call: 'settleInterrupted'; keep: boolean };
+  | { call: 'settleInterrupted'; keep: boolean }
+  | { call: 'linkTargets'; note: string; link: string }
+  | { call: 'pinLink'; note: string; link: string; target: string; alias?: boolean };
 
 /** A file of a vault (13 §2): its path from the vault's folder, `/` between folders. */
 export interface VaultFile {
@@ -270,6 +272,16 @@ export interface ImportItem {
   node?: string;
   code: string;
   detail?: string;
+  /** A link's target as written, for the row's actions: a ghost's or an ambiguous link's name. */
+  link?: string;
+  /** The node the row's action binds the link to: the alias's owner, the node it went to. */
+  target?: string;
+}
+
+/** The nodes a link may name (13 §3.5), the nearest first, and the one its wire holds. */
+export interface LinkTargets {
+  targets: { id: string; path: string }[];
+  chosen?: string;
 }
 
 /** The report of an import (13 §3.6). */
@@ -567,6 +579,7 @@ type CoreResponse =
   | { type: 'asset'; sha: string; bytes?: string }
   | { type: 'importing'; progress: ImportProgress | null; history: History }
   | { type: 'interrupted'; label: ChangeLabel | null }
+  | { type: 'linkTargets'; targets: LinkTargets }
   | { type: 'error'; message: string; invalid: boolean };
 
 /** A call the core refused (`invalid`: the model's rules, nothing written) or failed. */
@@ -791,6 +804,21 @@ export class Core {
   /** «Оставить» (`keep`) or «Откатить» what that task wrote. */
   async settleInterrupted(keep: boolean): Promise<History> {
     return expect(await this.call({ call: 'settleInterrupted', keep }), 'history').history;
+  }
+
+  /** The nodes a link of `note` may name, the nearest first (13 §3.5). */
+  async linkTargets(note: string, link: string): Promise<LinkTargets> {
+    return expect(await this.call({ call: 'linkTargets', note, link }), 'linkTargets').targets;
+  }
+
+  /**
+   * The report's «Выбрать цель» and «Привязать» (13 §3.6): `note`'s links to
+   * `link` written as the shortest path to `target`, what was written kept
+   * as the text with `alias`; the text and its wire are one step of undo.
+   */
+  async pinLink(note: string, link: string, target: string, alias = false): Promise<History> {
+    const r = await this.call({ call: 'pinLink', note, link, target, alias });
+    return expect(r, 'applied').history;
   }
 }
 

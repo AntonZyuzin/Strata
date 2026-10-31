@@ -200,6 +200,7 @@ impl<S: Store> Workspace<S> {
             label: plan.label.clone(),
             reverts: None,
             writes: Vec::new(),
+            texts: Vec::new(),
         };
         let paths = vault
             .files
@@ -416,6 +417,7 @@ impl<S: Store> Workspace<S> {
             docs: &mut self.docs,
             before: HashMap::new(),
             writes: Vec::new(),
+            texts: Vec::new(),
         };
         let built = writes
             .into_iter()

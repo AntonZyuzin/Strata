@@ -14,7 +14,7 @@
 //! `[[Новое]]`, with point edits in the texts (13 §6.5, ☑ Q-10-9): which
 //! links named it is the rule above with the names as they were.
 
-use super::{Changeset, Store, Val, Workspace, Writes, engine, load, read};
+use super::{Changeset, Store, Val, Workspace, Writes, engine, invalid, load, read};
 use crate::changeset::Label;
 use crate::workspace::Result;
 use loro::{ExportMode, LoroValue, ValueOrContainer};
@@ -55,6 +55,47 @@ fn markdown_path(link: &str) -> Option<(usize, usize, bool)> {
         ),
     };
     Some((start, path.find('#').unwrap_or(path.len()), angle))
+}
+
+/// Where a link's target is written in `text`: its byte offset, the target
+/// as written (`%20` and all in a Markdown link) and whether a name put
+/// there is to be percent-encoded; none for a Markdown link whose path is
+/// not found.
+fn target_span<'t>(text: &'t str, link: &strata_markdown::Link) -> Option<(usize, &'t str, bool)> {
+    let start = link.range.start;
+    match link
+        .markdown
+        .then(|| markdown_path(&text[link.range.clone()]))
+    {
+        Some(Some((at, len, angle))) => {
+            Some((start + at, &text[start + at..start + at + len], !angle))
+        }
+        Some(None) => None,
+        None => {
+            let target = link.target.as_str();
+            let at = text[link.range.clone()].find(target)?;
+            Some((
+                start + at,
+                &text[start + at..start + at + target.len()],
+                false,
+            ))
+        }
+    }
+}
+
+/// The nodes a link may name, the nearest first, and the one its wire holds.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LinkTargets {
+    pub targets: Vec<LinkTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chosen: Option<String>,
+}
+
+/// A node a link may name, with its path from below the root.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LinkTarget {
+    pub id: String,
+    pub path: String,
 }
 
 /// What a link names.
@@ -261,6 +302,11 @@ impl<S: Store> Workspace<S> {
     /// Of several nodes with one name, the nearest to `src` by the tree (the
     /// deeper common network), then the shorter path, then the older (13 §3.5).
     pub(super) fn nearest(&self, src: NodeId, found: &[NodeId]) -> NodeId {
+        self.by_nearness(src, found)[0]
+    }
+
+    /// `found` in the order of [`Self::nearest`], the nearest first.
+    fn by_nearness(&self, src: NodeId, found: &[NodeId]) -> Vec<NodeId> {
         let chain = |n: NodeId| -> Vec<NodeId> { self.ancestors(n).into_iter().rev().collect() };
         let mine = chain(src);
         let created = |n: NodeId| {
@@ -277,7 +323,152 @@ impl<S: Store> Workspace<S> {
             })
             .collect();
         best.sort();
-        best[0].3
+        best.into_iter().map(|b| b.3).collect()
+    }
+
+    /// The nodes a link of `note` may name (13 §3.5 steps 1–2), the nearest
+    /// first, and the one its wire holds now: the report's «Выбрать цель»
+    /// (13 §3.6). `link` is the target as written in the text.
+    pub fn link_targets(&self, note: &str, link: &str) -> Result<LinkTargets> {
+        let src = self.live(note)?;
+        let segs = segments(&link_key(link));
+        let names = self.link_names();
+        let found = match self.candidates(src, &segs, &BTreeSet::new(), &names, &Before::new()) {
+            Found::Some(f) => f,
+            Found::Held(n) => vec![n],
+        };
+        let found: Vec<NodeId> = found.into_iter().filter(|&n| n != src).collect();
+        let held: BTreeSet<NodeId> = self
+            .outgoing_many(&BTreeSet::from([src]))
+            .remove(&src)
+            .unwrap_or_default()
+            .wires
+            .into_keys()
+            .collect();
+        let chosen = found.iter().copied().find(|n| held.contains(n));
+        Ok(LinkTargets {
+            targets: self
+                .by_nearness(src, &found)
+                .into_iter()
+                .map(|n| LinkTarget {
+                    id: n.to_text(),
+                    path: self.path_parts(n).join("/"),
+                })
+                .collect(),
+            chosen: chosen.map(|n| n.to_text()),
+        })
+    }
+
+    /// The names of a node's canonical path from below the root, its own last.
+    fn path_parts(&self, n: NodeId) -> Vec<String> {
+        let mut parts: Vec<String> = self
+            .ancestors(n)
+            .into_iter()
+            .rev()
+            .filter(|a| *a != self.root)
+            .map(|a| self.name(a))
+            .collect();
+        parts.push(self.name(n));
+        parts
+    }
+
+    /// The shortest path that names `to` alone from `src` by 13 §3.5: its
+    /// name, else with its networks one by one from below, else the whole
+    /// path — as Obsidian writes a link to a name several notes share (R2 §2).
+    fn unique_path(&self, src: NodeId, to: NodeId, names: &HashMap<String, Vec<NodeId>>) -> String {
+        let parts = self.path_parts(to);
+        for n in 1..=parts.len() {
+            let tail = &parts[parts.len() - n..];
+            let segs: Vec<String> = tail.iter().map(|p| link_key(p)).collect();
+            let one = matches!(
+                self.candidates(src, &segs, &BTreeSet::new(), names, &Before::new()),
+                Found::Some(f) if f == [to]
+            );
+            if one {
+                return tail.join("/");
+            }
+        }
+        parts.join("/")
+    }
+
+    /// The report's «Выбрать цель» and «Привязать» (13 §3.5 «Исправление»,
+    /// §3.6, S1 step 8): `note`'s links to `link` are written as the
+    /// shortest path that names `target` alone — `[[Проекты/Игра/Диздок]]` —
+    /// anchors and texts kept; with `alias`, what was written stays as the
+    /// text: `[[Сценарий|Сценарий v2]]`. The text and the wire it makes are
+    /// one step of undo: undone, both are as they were.
+    pub fn pin_link(
+        &mut self,
+        note: &str,
+        link: &str,
+        target: &str,
+        alias: bool,
+    ) -> Result<Changeset> {
+        let src = self.live(note)?;
+        let to = self.live(target)?;
+        if src == to {
+            return Err(invalid("a note does not link to itself"));
+        }
+        let doc = format!("content/{}", src.to_text());
+        self.ensure_doc(&doc)?;
+        let text = self.docs[&doc].get_text("text").to_string();
+        let names = self.link_names();
+        let path = self.unique_path(src, to, &names);
+        if path.contains(BREAKS_LINKS) {
+            return Err(invalid(format!("no link can name {path} (13 §3.4)")));
+        }
+        let key = link_key(link);
+        // (byte position, what is there, what it becomes), last first.
+        let mut edits: Vec<(usize, String, String)> = Vec::new();
+        for l in strata_markdown::scan(&text).links {
+            if link_key(&l.target) != key {
+                continue;
+            }
+            let Some((at, written, encode)) = target_span(&text, &l) else {
+                continue;
+            };
+            let name = if encode {
+                strata_markdown::percent_encode(&path)
+            } else {
+                path.clone()
+            };
+            let md = written
+                .get(written.len().saturating_sub(3)..)
+                .filter(|e| e.eq_ignore_ascii_case(".md"))
+                .unwrap_or_default();
+            if alias && !l.markdown && l.alias.is_none() {
+                // Before `]]`: the text after `|` is what was written.
+                edits.push((l.range.end - 2, String::new(), format!("|{}", l.target)));
+            }
+            edits.push((at, written.to_owned(), format!("{name}{md}")));
+        }
+        if edits.is_empty() {
+            return Err(invalid(format!("no link [[{link}]] in the note")));
+        }
+        edits.sort_by_key(|e| std::cmp::Reverse(e.0));
+        let mut fixed = text.clone();
+        for (at, before, after) in &edits {
+            fixed.replace_range(*at..*at + before.len(), after);
+        }
+        // The wires the fixed text makes, written with it (05 §8.2 rule 4).
+        let (wires, _) = self.links_plan(&[(src, fixed.as_str())], now_ms());
+        let mut label = Label::new("core.change.pinLink");
+        label.params.insert("link".into(), link.into());
+        label.params.insert("path".into(), path.into());
+        let cs = self.write(ChangesetOrigin::User, label, |tx| {
+            for (at, before, after) in &edits {
+                if !tx.splice(&doc, *at, before, after)? {
+                    return Err(invalid("the text changed under the fix"));
+                }
+            }
+            for (d, map, key, value) in wires {
+                tx.set(&d, &map, &key, value)?;
+            }
+            Ok(())
+        })?;
+        self.undo.push(cs.clone());
+        self.redo.clear();
+        Ok(cs)
     }
 
     /// The text wires and ghosts that leave each of `notes`, in one pass over
@@ -625,23 +816,8 @@ impl<S: Store> Workspace<S> {
                     continue;
                 }
                 // A Markdown link's path as written, `%20` and all (13 §2.5).
-                let raw = link
-                    .markdown
-                    .then(|| markdown_path(&text[link.range.clone()]))
-                    .flatten();
-                let (target, at, encode) = match raw {
-                    Some((at, len, angle)) => {
-                        let s = &text[link.range.start + at..link.range.start + at + len];
-                        (s, at, !angle)
-                    }
-                    None if link.markdown => continue,
-                    None => {
-                        let target = link.target.as_str();
-                        let Some(at) = text[link.range.clone()].find(target) else {
-                            continue;
-                        };
-                        (target, at, false)
-                    }
+                let Some((at, target, encode)) = target_span(&text, &link) else {
+                    continue;
                 };
                 let name = if encode {
                     strata_markdown::percent_encode(name)
@@ -658,7 +834,7 @@ impl<S: Store> Workspace<S> {
                     .unwrap_or_default();
                 let written = format!("{head}{name}{md}");
                 if written != target {
-                    edits.push((link.range.start + at, target.len(), written));
+                    edits.push((at, target.len(), written));
                 }
             }
             if edits.is_empty() {

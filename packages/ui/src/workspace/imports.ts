@@ -59,3 +59,16 @@ export function watchImports(listener: (e: ImportEvent) => void): () => void {
   watchers.add(listener);
   return () => watchers.delete(listener);
 }
+
+/** The report's lines fixed this session (13 §3.6), by workspace. */
+const fixed = new Map<string, Set<number>>();
+
+export function fixedLines(workspace: string): ReadonlySet<number> {
+  return fixed.get(workspace) ?? new Set();
+}
+
+export function fixLine(workspace: string, index: number): void {
+  const lines = fixed.get(workspace) ?? new Set<number>();
+  lines.add(index);
+  fixed.set(workspace, lines);
+}

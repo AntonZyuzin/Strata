@@ -3,10 +3,12 @@ import {
   type ImportCounts,
   type ImportItem,
   type ImportReport,
+  type LinkTargets,
 } from '@strata/backend';
 import type { GlyphName } from '@strata/design-tokens';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
-import { type ReactNode, useEffect, useRef } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
+import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { Icon, type IconName } from '../icons/Icon';
 import { Glyph } from '../TabBar';
 
@@ -39,21 +41,78 @@ export function itemText(locale: Locale, item: ImportItem): string {
 }
 
 /**
+ * What a line of the report can fix (13 §3.6), each one step of undo: a
+ * ghost's note made beside the note that links to it; a ghost bound to the
+ * owner of the alias it matches; an ambiguous link pinned to the node the
+ * user chooses (S1 step 8).
+ */
+export interface ReportActions {
+  create(item: ImportItem): Promise<void>;
+  bind(item: ImportItem): Promise<void>;
+  targets(item: ImportItem): Promise<LinkTargets>;
+  choose(item: ImportItem, target: string): Promise<void>;
+}
+
+/** What a line can do, by its message. */
+type Act = 'create' | 'bind' | 'choose';
+
+function actOf(item: ImportItem): Act | null {
+  if (!item.node || !item.link) return null;
+  if (item.code === 'ghost') return 'create';
+  if (item.code === 'ghostAlias' && item.target) return 'bind';
+  if (item.code === 'ambiguous') return 'choose';
+  return null;
+}
+
+/**
  * The report of an import (13 §3.6, S1 step 7): what came in, then the
  * sections — ghosts, ambiguous links, unsupported syntax, changed names,
  * properties, canvases, skipped files. A line with a node goes to it (09
- * §3.4). Opens over the canvas once the vault is in; `Ctrl+P` «Отчёт
- * импорта» opens it again. A window of fixed width in `ch`.
+ * §3.4); a ghost's or an ambiguous link's line has its fix beside it, a
+ * fixed line a tick. Opens over the canvas once the vault is in; `Ctrl+P`
+ * «Отчёт импорта» opens it again. A window of fixed width in `ch`.
  */
 export function ImportReportWindow(props: {
   locale: Locale;
   report: ImportReport;
   onGo: (node: string) => void;
   onClose: () => void;
+  actions?: ReportActions | undefined;
+  /** The lines fixed this session, by their place in the report. */
+  done?: ReadonlySet<number> | undefined;
+  onDone?: ((index: number) => void) | undefined;
 }) {
-  const { locale, report } = props;
+  const { locale, report, actions } = props;
   const close = useRef<HTMLButtonElement>(null);
   useEffect(() => close.current?.focus(), []);
+  /** The targets of an ambiguous link, in a menu at its button. */
+  const [menu, setMenu] = useState<{
+    x: number;
+    y: number;
+    items: MenuEntry[];
+    name: string;
+  } | null>(null);
+  const act = (index: number, item: ImportItem, at: DOMRect) => {
+    if (!actions) return;
+    const fixed = () => props.onDone?.(index);
+    const kind = actOf(item);
+    if (kind === 'create') void actions.create(item).then(fixed);
+    if (kind === 'bind') void actions.bind(item).then(fixed);
+    if (kind === 'choose') {
+      void actions.targets(item).then((t) =>
+        setMenu({
+          x: at.left,
+          y: at.bottom,
+          name: item.link ?? '',
+          items: t.targets.map((target) => ({
+            label: target.path,
+            checked: target.id === t.chosen,
+            onSelect: () => void actions.choose(item, target.id).then(fixed),
+          })),
+        }),
+      );
+    }
+  };
   const title = t(locale, 'import.title');
   const counts = COUNTS.filter(([k]) => report.counts[k] > 0);
   return (
@@ -106,13 +165,15 @@ export function ImportReportWindow(props: {
                 title={t(locale, `import.section.${section}` as MessageKey)}
                 n={items.length}
               >
-                {items.map((item, i) => {
+                {items.map((item) => {
+                  const index = report.items.indexOf(item);
                   const text = itemText(locale, item);
                   const severity = t(locale, `import.severity.${item.severity}` as MessageKey);
                   const node = item.node;
+                  const kind = actions ? actOf(item) : null;
+                  const fixed = props.done?.has(index) ?? false;
                   return (
-                    // biome-ignore lint/suspicious/noArrayIndexKey: lines have no id; their order is fixed
-                    <li key={i}>
+                    <li key={index} className="import-line">
                       <button
                         type="button"
                         className="import-row"
@@ -134,6 +195,28 @@ export function ImportReportWindow(props: {
                           {item.path}
                         </span>
                       </button>
+                      {kind && fixed ? (
+                        <span
+                          className="import-fixed"
+                          title={t(locale, 'import.act.done')}
+                          role="img"
+                          aria-label={t(locale, 'import.act.done')}
+                        >
+                          <Glyph name="check" />
+                        </span>
+                      ) : null}
+                      {kind && !fixed ? (
+                        <button
+                          type="button"
+                          className="import-act"
+                          title={t(locale, `import.act.${kind}Hint` as MessageKey, {
+                            name: item.link ?? '',
+                          })}
+                          onClick={(e) => act(index, item, e.currentTarget.getBoundingClientRect())}
+                        >
+                          {t(locale, `import.act.${kind}` as MessageKey)}
+                        </button>
+                      ) : null}
                     </li>
                   );
                 })}
@@ -142,6 +225,15 @@ export function ImportReportWindow(props: {
           })}
         </div>
       </section>
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          label={t(locale, 'import.act.targets', { name: menu.name })}
+          items={menu.items}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
     </div>
   );
 }

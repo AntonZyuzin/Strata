@@ -85,6 +85,14 @@ pub struct ImportItem {
     pub code: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub detail: String,
+    /// A link's target as written, for the row's actions: a ghost's name, an
+    /// ambiguous link's name (13 §3.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<String>,
+    /// The node the row's action binds the link to: the owner of the alias a
+    /// ghost matches, the node an ambiguous link went to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
 }
 
 /// The report of an import (13 §3.6).
@@ -105,7 +113,17 @@ impl ImportReport {
             node: None,
             code: code.to_owned(),
             detail,
+            link: None,
+            target: None,
         });
+    }
+
+    /// The last line's link and the node its action binds it to.
+    fn with_link(&mut self, link: &str, target: Option<NodeId>) {
+        if let Some(last) = self.items.last_mut() {
+            last.link = Some(link.to_owned());
+            last.target = target.map(|t| t.to_text());
+        }
     }
 
     fn at(
@@ -863,14 +881,14 @@ impl<S: Store> Workspace<S> {
             .map(|e| (e.id, e.raw.clone()))
             .chain(cards.iter().map(|c| (c.id, c.path.clone())))
             .collect();
-        let mut aliases: HashMap<String, String> = HashMap::new();
+        let mut aliases: HashMap<String, (String, NodeId)> = HashMap::new();
         for e in &entries {
             for (k, v) in &e.props {
                 if is_one_of(k, &["aliases", "alias"]) {
                     for a in v.texts() {
                         aliases
                             .entry(link_key(&a))
-                            .or_insert_with(|| e.name.clone());
+                            .or_insert_with(|| (e.name.clone(), e.id));
                     }
                 }
             }
@@ -882,15 +900,21 @@ impl<S: Store> Workspace<S> {
             report.counts.ghosts += a.ghosts.len() as u32;
             for (k, name) in &a.ghosts {
                 match aliases.get(k) {
-                    Some(owner) => report.at(
-                        note,
-                        "ghost",
-                        "info",
-                        &path,
-                        "ghostAlias",
-                        format!("[[{name}]] → {owner}"),
-                    ),
-                    None => report.at(note, "ghost", "info", &path, "ghost", format!("[[{name}]]")),
+                    Some((owner, id)) => {
+                        report.at(
+                            note,
+                            "ghost",
+                            "info",
+                            &path,
+                            "ghostAlias",
+                            format!("[[{name}]] → {owner}"),
+                        );
+                        report.with_link(name, Some(*id));
+                    }
+                    None => {
+                        report.at(note, "ghost", "info", &path, "ghost", format!("[[{name}]]"));
+                        report.with_link(name, None);
+                    }
                 }
             }
             for (target, chosen, count) in &a.ambiguous {
@@ -902,6 +926,7 @@ impl<S: Store> Workspace<S> {
                     "ambiguous",
                     format!("[[{target}]] → {} ({count})", self.path_text(*chosen)),
                 );
+                report.with_link(target, Some(*chosen));
             }
         }
         for e in &entries {

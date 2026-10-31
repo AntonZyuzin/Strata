@@ -896,3 +896,88 @@ fn a_vaults_attachments_stay_on_disk_till_their_batch() {
     assert_eq!(w.asset(&sha).expect("bytes"), Some(picture));
     std::fs::remove_dir_all(&dir).expect("clean up");
 }
+
+fn text_of(w: &Workspace<MemoryStore>, id: &str) -> String {
+    doc(w, &format!("content/{id}"))
+        .get_text("text")
+        .to_string()
+}
+
+fn wired(w: &Workspace<MemoryStore>, from: &str, to: &str) -> bool {
+    w.wires().iter().any(|e| e.from == from && e.to == to)
+}
+
+#[test]
+fn the_reports_choose_a_target_writes_the_shortest_path_in_one_step() {
+    // 13 §3.5 «Исправление», §3.6, S1 step 8: «Входящие» has `[[Диздок]]`,
+    // a name two notes share; the report offers both, the nearest first.
+    let (mut w, report) = imported();
+    let inbox = id(&w, "Входящие", "Корень");
+    let game = id(&w, "Диздок", "Игра");
+    let comic = id(&w, "Диздок", "Комикс");
+    let row = report
+        .items
+        .iter()
+        .find(|i| i.code == "ambiguous" && i.link.as_deref() == Some("Диздок"))
+        .expect("the row");
+    assert_eq!(row.node.as_deref(), Some(inbox.as_str()));
+    let targets = w.link_targets(&inbox, "Диздок").expect("targets");
+    let paths: Vec<&str> = targets.targets.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(paths.len(), 2, "{paths:?}");
+    assert!(paths.contains(&"Проекты/Игра/Диздок") && paths.contains(&"Проекты/Комикс/Диздок"));
+    assert_eq!(targets.chosen.as_deref(), row.target.as_deref());
+    let before = text_of(&w, &inbox);
+    // Choose «Комикс»: the shortest path that names it alone.
+    w.pin_link(&inbox, "Диздок", &comic, false).expect("pin");
+    let after = text_of(&w, &inbox);
+    assert!(after.contains("имя дважды: [[Комикс/Диздок]]."), "{after}");
+    assert!(
+        after.contains("[[Проекты/Игра/Диздок]]"),
+        "the path link stays"
+    );
+    assert!(wired(&w, &inbox, &comic) && wired(&w, &inbox, &game));
+    assert_eq!(
+        w.history().undo.map(|l| l.key).as_deref(),
+        Some("core.change.pinLink")
+    );
+    // One step: undone, the text and its wire are as they were.
+    w.undo().expect("undo");
+    assert_eq!(text_of(&w, &inbox), before);
+    assert!(!wired(&w, &inbox, &comic));
+    w.redo().expect("redo");
+    assert_eq!(text_of(&w, &inbox), after);
+    assert!(wired(&w, &inbox, &comic));
+}
+
+#[test]
+fn the_reports_bind_keeps_what_was_written_as_the_links_text() {
+    // 13 §2.4, §3.6: `[[Сценарий]]` names no note but an alias of «Диздок»;
+    // «Привязать» writes `[[Игра/Диздок|Сценарий]]`: the ghost goes.
+    let (mut w, report) = imported();
+    let inbox = id(&w, "Входящие", "Корень");
+    let row = report
+        .items
+        .iter()
+        .find(|i| i.code == "ghostAlias" && i.link.as_deref() == Some("Сценарий"))
+        .expect("the row");
+    let owner = row.target.clone().expect("the alias's owner");
+    let ghosts = |w: &mut Workspace<MemoryStore>| {
+        let root = w.root();
+        w.network_view(&root)
+            .expect("view")
+            .ghosts
+            .iter()
+            .filter(|g| g.name == "Сценарий")
+            .count()
+    };
+    assert_eq!(ghosts(&mut w), 1);
+    w.pin_link(&inbox, "Сценарий", &owner, true).expect("bind");
+    let text = text_of(&w, &inbox);
+    assert!(text.contains("Алиас: [[Игра/Диздок|Сценарий]]."), "{text}");
+    assert_eq!(ghosts(&mut w), 0);
+    assert!(wired(&w, &inbox, &owner));
+    // A link not in the text is refused; nothing is written.
+    assert!(w.pin_link(&inbox, "Нигде", &owner, false).is_err());
+    w.undo().expect("undo");
+    assert_eq!(ghosts(&mut w), 1);
+}

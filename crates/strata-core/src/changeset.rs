@@ -35,6 +35,20 @@ impl Label {
     }
 }
 
+/// A span of a content document's text an operation replaced, by value
+/// (10 §9.1 `contentSpans`): reverting writes `before` back where `after`
+/// still stands, as a key's value is written back. Edits of one changeset
+/// revert in the reverse order they were made: each `at` is a UTF-8 byte
+/// offset in the text as it was when that edit was made.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TextEdit {
+    /// `content/<id>`.
+    pub doc: String,
+    pub at: usize,
+    pub before: String,
+    pub after: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Changeset {
     /// UUIDv7, text form.
@@ -47,6 +61,10 @@ pub struct Changeset {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reverts: Option<String>,
     pub writes: Vec<KeyWrite>,
+    /// Texts it edited: the core's own fixes of links (13 §3.5), not an
+    /// editor's typing, which has its own undo (05 §11).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<TextEdit>,
 }
 
 /// Keys a revert skipped: someone changed them after the changeset.

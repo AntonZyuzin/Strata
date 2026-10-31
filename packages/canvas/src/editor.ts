@@ -844,6 +844,21 @@ export class Editor {
   }
 
   /**
+   * The note of node `from`'s ghost `name` (05 §8.5), in the ghost's place,
+   * as a click on it makes: the import report's «Создать» (13 §3.6). False
+   * when the network on the canvas shows no such ghost.
+   */
+  materializeGhost(from: string, name: string): boolean {
+    for (const n of this.graph.nodes.values()) {
+      if (n.ghostOf === from && n.name === name) {
+        this.resolveGhost(n.id, false);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
    * A ghost clicked (06 §14): a note with its name in its place; with
    * `named`, the Tab menu first, to choose the kind.
    */

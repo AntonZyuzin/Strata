@@ -190,3 +190,109 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter(
     }
   });
 }
+
+/** A vault whose report has a fix of each kind (13 §3.6). */
+function fixesVault(): string {
+  const root = join(mkdtempSync(join(tmpdir(), 'strata-fixes-')), 'Fixes');
+  for (const f of ['A', 'B']) mkdirSync(join(root, f), { recursive: true });
+  writeFileSync(join(root, 'A', 'Dup.md'), 'Dup in A\n');
+  writeFileSync(join(root, 'B', 'Dup.md'), 'Dup in B\n');
+  writeFileSync(join(root, 'Owner.md'), '---\naliases: [Alias Name]\n---\nOwner\n');
+  writeFileSync(join(root, 'Note.md'), 'See [[Dup]], [[Missing]] and [[Alias Name]].\n');
+  return root;
+}
+
+interface FixHook {
+  core: {
+    tree(): Promise<{ id: string; name: string; parent?: string | null }[]>;
+    wires(): Promise<{ from: string; to: string }[]>;
+  };
+  graph(): { nodes: Map<string, { name: string; ghostOf: string | null }> } | null;
+}
+
+async function importFixes(page: Page) {
+  await page.goto('/?plain');
+  await expect(page.locator('.home-vault')).toBeVisible();
+  await page.locator('.home-vault-input').setInputFiles(fixesVault());
+  await expect(page.locator('.import-report')).toBeVisible({ timeout: 60_000 });
+}
+
+const line = (page: Page, text: string) =>
+  page.locator('.import-report .import-line', { hasText: text });
+
+test("the report's lines fix what they say, each one step of undo", async ({ page }) => {
+  test.setTimeout(120_000);
+  await importFixes(page);
+  // An ambiguous link: its targets, the nearest ticked; B is chosen.
+  await line(page, '[[Dup]]').getByRole('button', { name: 'Выбрать…' }).click();
+  const menu = page.locator('.context-menu');
+  await expect(menu.getByRole('menuitemcheckbox')).toHaveText(['A/Dup', 'B/Dup']);
+  await expect(menu.getByRole('menuitemcheckbox', { name: 'A/Dup' })).toBeChecked();
+  await menu.getByRole('menuitemcheckbox', { name: 'B/Dup' }).click();
+  await expect(line(page, '[[Dup]]').locator('.import-fixed')).toBeVisible();
+  const wired = () =>
+    page.evaluate(async () => {
+      const ws = (window as unknown as { __strataWs: FixHook }).__strataWs;
+      const tree = await ws.core.tree();
+      const id = (name: string, parent?: string) =>
+        tree.find(
+          (n) =>
+            n.name === name &&
+            (parent === undefined || tree.find((p) => p.id === n.parent)?.name === parent),
+        )?.id;
+      const note = id('Note');
+      return (await ws.core.wires())
+        .filter((w) => w.from === note)
+        .map((w) => tree.find((n) => n.id === w.to))
+        .map((n) => `${tree.find((p) => p.id === n?.parent)?.name ?? ''}/${n?.name ?? ''}`)
+        .sort();
+    });
+  await expect.poll(wired).toContain('B/Dup');
+  // A ghost: its note made where it stood.
+  await line(page, '[[Missing]]').getByRole('button', { name: 'Создать' }).click();
+  await expect(line(page, '[[Missing]]').locator('.import-fixed')).toBeVisible();
+  await expect.poll(wired).toContain('Fixes/Missing');
+  // A ghost matching an alias: bound to its owner, what was written stays the text.
+  await line(page, '[[Alias Name]]').getByRole('button', { name: 'Привязать' }).click();
+  await expect(line(page, '[[Alias Name]]').locator('.import-fixed')).toBeVisible();
+  await expect.poll(wired).toContain('Fixes/Owner');
+  const ghosts = () =>
+    page.evaluate(() => {
+      const ws = (window as unknown as { __strataWs: FixHook }).__strataWs;
+      return [...(ws.graph()?.nodes.values() ?? [])].filter((n) => n.ghostOf).map((n) => n.name);
+    });
+  await expect.poll(ghosts).toEqual([]);
+  // One undo takes the last fix back: the alias's ghost returns.
+  await page.locator('.import-report .window-close').click();
+  await page
+    .locator('.workspace canvas')
+    .first()
+    .click({ position: { x: 5, y: 5 } });
+  await page.keyboard.press('Control+z');
+  await expect.poll(ghosts).toEqual(['Alias Name']);
+});
+
+for (const { viewport, deviceScaleFactor } of LAYOUTS.filter(
+  (l) => l.viewport.width === 1280 && (l.deviceScaleFactor === 1 || l.deviceScaleFactor === 2),
+)) {
+  test(`the report's fixes keep its size in RU and EN @${deviceScaleFactor}x`, async ({
+    browser,
+  }) => {
+    test.setTimeout(180_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US']) {
+      const context = await browser.newContext({ viewport, deviceScaleFactor, locale });
+      const page = await context.newPage();
+      await importFixes(page);
+      await expect(page.locator('.import-report .import-act')).toHaveCount(3);
+      boxes.push(await box(page, '.import-report'));
+      expect(await overflowing(page, '.import-report'), `${locale} text must fit`).toEqual([]);
+      await page.screenshot({ path: test.info().outputPath(`import-fixes-${locale}.png`) });
+      await context.close();
+    }
+    const [ru, en] = boxes;
+    for (const k of ['x', 'y', 'width', 'height'] as const) {
+      expect(Math.abs((en?.[k] ?? 0) - (ru?.[k] ?? 0)), `report ${k}`).toBeLessThanOrEqual(0.5);
+    }
+  });
+}

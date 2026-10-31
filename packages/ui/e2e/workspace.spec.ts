@@ -228,7 +228,7 @@ const settled = (page: Page) => page.evaluate(() => window.__strataWs?.settled()
  * «Арт», a folder with «Эскиз» inside, and «Идея» at the root whose text
  * links to «Эскиз»: a wire to a node placed elsewhere (05 §8.3).
  */
-async function linkedAway(page: Page) {
+async function linkedAway(page: Page, extra: readonly string[] = []) {
   const ws = page.locator('.workspace');
   await page.mouse.move(420, 300);
   await page.keyboard.press('Tab');
@@ -242,6 +242,10 @@ async function linkedAway(page: Page) {
   await page.keyboard.press('Enter');
   await expect(ws).toHaveAttribute('data-depth', '2');
   await createNode(page, 640, 400, 'Эскиз');
+  // More nodes in «Арт», linked too: two rows of six above «Эскиз».
+  for (const [i, name] of extra.entries()) {
+    await createNode(page, 280 + (i % 6) * 110, 170 + Math.floor(i / 6) * 120, name);
+  }
   await page.keyboard.press('KeyU');
   await expect(ws).toHaveAttribute('data-depth', '1');
   await createNode(page, 760, 520, 'Идея');
@@ -250,13 +254,14 @@ async function linkedAway(page: Page) {
   const editor = page.locator('.note-window .cm-content');
   await expect(editor).toBeVisible();
   await editor.click();
-  await page.keyboard.type('См. [[Эскиз]]', { delay: 30 });
+  const links = ['Эскиз', ...extra].map((n) => `[[${n}]]`).join(' ');
+  await page.keyboard.type(`См. ${links}`, { delay: 20 });
   await page.locator('.note-window .window-close').click();
   await expect(page.locator('.note-window')).toHaveCount(0);
   const idea = await idOf(page, 'Идея');
   await expect
     .poll(() => page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.external, idea))
-    .toBe(1);
+    .toBe(1 + extra.length);
   return idea;
 }
 
@@ -317,11 +322,14 @@ async function clickMark(page: Page, id: string, which: 'external' | 'places') {
 }
 
 /** Opens the list behind node `id`'s «↗N» by a click on the mark. */
-async function openExternal(page: Page, id: string) {
+async function openExternal(page: Page, id: string, rows = 1) {
   await page.keyboard.press('Escape');
   await clickMark(page, id, 'external');
-  await expect(page.locator('.ext-list .tab-menu-row')).toHaveCount(1);
+  await expect(page.locator('.ext-list .tab-menu-row')).toHaveCount(rows);
 }
+
+/** Eleven more ends: with «Эскиз», past the ten «Показать все здесь» shows without asking. */
+const ELEVEN = ['Н1', 'Н2', 'Н3', 'Н4', 'Н5', 'Н6', 'Н7', 'Н8', 'Н9', 'Н10', 'Н11'];
 
 /** A list from the Tab menu, named at once, opened: its items are in the panel. */
 async function openList(page: Page, kind: string, name: string) {
@@ -787,27 +795,35 @@ for (const deviceScaleFactor of [1, 2]) {
       const page = await context.newPage();
       await page.goto('/?plain');
       await createWorkspace(page, 'Связи');
-      const idea = await linkedAway(page);
-      await openExternal(page, idea);
+      const idea = await linkedAway(page, ELEVEN);
+      await openExternal(page, idea, 12);
       const list = page.locator('.ext-list');
-      await expect(list.locator('.ext-origin')).not.toHaveText('');
+      await expect(list.locator('.ext-origin').first()).not.toHaveText('');
       expect(await overflowing(page, '.ext-list'), `${locale} the list must fit`).toEqual([]);
+      const footer = await box(page, '.ext-list .ext-footer');
+      // Past ten nodes «Показать все здесь» asks first, in the same footer.
+      await list.locator('.ext-footer button').click();
+      await expect(list.locator('.ext-ask')).toBeVisible();
+      expect(await overflowing(page, '.ext-list'), `${locale} the question must fit`).toEqual([]);
+      const asking = await box(page, '.ext-list .ext-footer');
       await expect(page.locator('.ws-inspector')).toBeVisible();
       const panel = await box(page, '.ws-inspector');
       const shown = await box(page, '.ext-list');
       expect(shown.x + shown.width, 'left of the panel').toBeLessThanOrEqual(panel.x);
       boxes.push({
         list: await box(page, '.ext-list'),
-        row: await box(page, '.ext-list .tab-menu-row'),
-        path: await box(page, '.ext-list .ext-path'),
-        origin: await box(page, '.ext-list .ext-origin'),
+        row: await box(page, '.ext-list .tab-menu-row:first-child'),
+        path: await box(page, '.ext-list .tab-menu-row:first-child .ext-path'),
+        origin: await box(page, '.ext-list .tab-menu-row:first-child .ext-origin'),
+        footer,
+        asking,
       });
       await page.keyboard.press('Escape');
       await expect(list).toHaveCount(0);
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['list', 'row', 'path', 'origin'] as const) {
+    for (const part of ['list', 'row', 'path', 'origin', 'footer', 'asking'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2657,6 +2673,108 @@ test.describe('a workspace on the core', () => {
     await expect(list.locator('.ext-way')).toHaveAttribute('title', 'Нить входит в «Эскиз»');
     // At the root: the root by its name.
     await expect(list.locator('.ext-path')).toHaveText('Связи');
+  });
+
+  test('«Показать здесь» places the other end beside the node; «Показать все здесь» asks past ten (06 §14)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Связи');
+    const ws = page.locator('.workspace');
+    const idea = await linkedAway(page);
+    const sketch = await idOf(page, 'Эскиз').catch(() => null);
+    expect(sketch, '«Эскиз» lies in «Арт», not here').toBeNull();
+    // The row's shortcut: an appearance of «Эскиз» below «Идея», the wire shows.
+    await openExternal(page, idea);
+    const list = page.locator('.ext-list');
+    const show = list.getByRole('button', { name: 'Показать здесь «Эскиз» (Alt+Enter)' });
+    await expect(list.locator('.ext-footer'), 'one end: no «Показать все»').toHaveCount(0);
+    await show.click();
+    await expect(list).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    expect((await graphNow(page)).edges).toEqual(['Идея→Эскиз']);
+    const placed = await idOf(page, 'Эскиз');
+    await expect.poll(() => placement(page, placed)).toEqual({ appearance: true, places: 2 });
+    const [from, to] = [await at(page, 'Идея'), await at(page, 'Эскиз')];
+    expect(to.y, 'an output goes below').toBeGreaterThan(from.y);
+    await expect
+      .poll(() => page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.external, idea))
+      .toBe(0);
+    // One step: undo takes it away; `Alt+Enter` on the row shows it again.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    await openExternal(page, idea);
+    await page.keyboard.press('Alt+Enter');
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+  });
+
+  test('«Показать здесь» offers no network this one lies inside (05 §5 rule 4, 06 §14)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Связи');
+    const ws = page.locator('.workspace');
+    await linkedAway(page);
+    // Inside «Арт», «Эскиз» links back to «Арт» itself.
+    await select(page, 'Арт');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await select(page, 'Эскиз');
+    await page.keyboard.press('Enter');
+    const editor = page.locator('.note-window .cm-content');
+    await expect(editor).toBeVisible();
+    await editor.click();
+    await page.keyboard.type('Для [[Арт]]', { delay: 20 });
+    await page.locator('.note-window .window-close').click();
+    const sketch = await idOf(page, 'Эскиз');
+    await expect
+      .poll(() =>
+        page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.external, sketch),
+      )
+      .toBe(2);
+    await openExternal(page, sketch, 2);
+    const list = page.locator('.ext-list');
+    // «Арт» would lie in itself: its shortcut is off and says why; one end left, no «Показать все».
+    const art = list.locator('.tab-menu-row', { hasText: 'Арт' }).locator('.ext-show');
+    await expect(art).toBeDisabled();
+    await expect(art).toHaveAttribute('title', '«Арт» не положить сюда: эта сеть лежит внутри неё');
+    await expect(list.locator('.ext-footer')).toHaveCount(0);
+    await list.getByRole('button', { name: 'Показать здесь «Идея» (Alt+Enter)' }).click();
+    await expect(list).toHaveCount(0);
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Идея', 'Эскиз']);
+  });
+
+  test('«Показать все здесь» asks first past ten nodes (06 §14)', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Связи');
+    const ws = page.locator('.workspace');
+    const idea = await linkedAway(page, ELEVEN);
+    await openExternal(page, idea, 12);
+    const list = page.locator('.ext-list');
+    await list.getByRole('button', { name: 'Показать все здесь' }).click();
+    await expect(list.locator('.ext-ask')).toHaveText('Показать здесь 12 нод?');
+    // «Отмена» takes the question back, nothing is shown.
+    await list.getByRole('button', { name: 'Отмена' }).click();
+    await expect(list.locator('.ext-ask')).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    await list.getByRole('button', { name: 'Показать все здесь' }).click();
+    await list.getByRole('button', { name: 'Показать', exact: true }).click();
+    await expect(list).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-nodes', '14');
+    // Never on each other: every two bubbles apart.
+    const spots = await page.evaluate(() =>
+      [...(window.__strataWs?.graph()?.nodes.values() ?? [])].map((n) => [n.x, n.y] as const),
+    );
+    for (const [i, a] of spots.entries()) {
+      for (const b of spots.slice(i + 1)) {
+        expect(Math.hypot(a[0] - b[0], a[1] - b[1])).toBeGreaterThan(40);
+      }
+    }
   });
 
   test('an appearance: Tab places a node of another network, the panel says where it lies (05 §5, 06 §12.2)', async ({

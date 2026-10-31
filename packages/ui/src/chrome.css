@@ -1156,6 +1156,50 @@ button:focus-visible {
   max-width: 10ch;
 }
 
+/* «Показать здесь» at the row's end: the shortcut glyph, flat, in the row's colour. */
+.ext-show {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: calc(20 * var(--u));
+  height: calc(20 * var(--u));
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.ext-show:hover:not(:disabled) {
+  background: transparent;
+  border-color: currentColor;
+}
+
+.ext-show:disabled {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* «Показать все здесь», or its question past ten nodes, under the rows. */
+.ext-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: calc(3 * var(--u));
+  min-height: var(--st-size-row);
+  padding: calc(3 * var(--u)) calc(4 * var(--u));
+  border-top: var(--u) solid var(--st-color-frame);
+}
+
+.ext-ask {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* Kind glyphs: 16u pixel marks (07 §6.2); the Scene draws the same bitmaps. */
 .kind-icon {
   flex: none;

@@ -50,6 +50,8 @@ const PORT_RING = (rs: number) => Math.max(8, 0.25 * rs);
 const INSERT_GAP = 24;
 /** autoPlace (06 §5.4) for a top-down network. */
 const PLACE_DOWN = 110;
+/** A spot taken by a node about to come, world units. */
+type Spot = { x: number; y: number; r: number };
 const PLACE_GAP = 16;
 /** Scissors (06 §6.7): a stroke point every 3 px; dashes of the stroke, px, and of a crossed wire, u (07 §5). */
 const CUT_STEP_PX = 3;
@@ -2034,14 +2036,46 @@ export class Editor {
     return this.freeSpot(m.ax, m.ay, r);
   }
 
-  /** Spiral search with a step of r(M) until nothing is closer than the gap (06 §5.4). */
-  private freeSpot(x: number, y: number, r: number): { x: number; y: number } {
+  /**
+   * Where the other ends of node `id`'s wires go when shown here (06 §14,
+   * autoplace of §5.4): those wired into it above it, those it wires to
+   * below, side by side in the order given; never on a node, nor on each other.
+   */
+  spotsBeside(
+    id: string,
+    ends: readonly { kind: GraphNode['kind']; incoming: boolean }[],
+  ): { x: number; y: number }[] {
+    const n = this.graph.nodes.get(id);
+    if (!n) return [];
+    const total = { in: 0, out: 0 };
+    for (const e of ends) total[e.incoming ? 'in' : 'out']++;
+    const seen = { in: 0, out: 0 };
+    const taken: Spot[] = [];
+    return ends.map((e) => {
+      const side = e.incoming ? 'in' : 'out';
+      const r = radiusOf({ kind: e.kind, key: false });
+      const k = seen[side]++;
+      const x = n.x + (k - (total[side] - 1) / 2) * (2 * r + PLACE_GAP * 3);
+      const y = n.y + (e.incoming ? -PLACE_DOWN : PLACE_DOWN);
+      const at = this.freeSpot(x, y, r, taken);
+      taken.push({ ...at, r });
+      return at;
+    });
+  }
+
+  /**
+   * Spiral search with a step of r(M) until nothing is closer than the gap
+   * (06 §5.4); `taken` — spots chosen for nodes not on the canvas yet.
+   */
+  private freeSpot(x: number, y: number, r: number, taken: readonly Spot[] = []) {
+    const clear = (n: Spot, px: number, py: number) =>
+      // + room for the label below
+      Math.hypot(n.x - px, n.y - py) >= n.r + r + PLACE_GAP + 20;
     const free = (px: number, py: number) => {
       for (const n of this.graph.nodes.values()) {
-        const need = radiusOf(n) + r + PLACE_GAP + 20; // + room for the label below
-        if (Math.hypot(n.x - px, n.y - py) < need) return false;
+        if (!clear({ x: n.x, y: n.y, r: radiusOf(n) }, px, py)) return false;
       }
-      return true;
+      return taken.every((t) => clear(t, px, py));
     };
     if (free(x, y)) return { x, y };
     for (let ring = 1; ring < 40; ring++) {

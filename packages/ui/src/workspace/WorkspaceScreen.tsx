@@ -364,6 +364,8 @@ export function WorkspaceScreen(props: {
     y: number;
     flipX: number;
     wires: ExternalWire[] | null;
+    /** Other ends this network may not hold (05 §5 rule 4): «Показать здесь» is off for them. */
+    cycle: ReadonlySet<string>;
   } | null>(null);
   const [trash, setTrash] = useState<TrashItem[] | null>(null);
   /** The core's undo and redo: the session's, across networks (05 §11). */
@@ -622,11 +624,17 @@ export function WorkspaceScreen(props: {
           y: e.sy + r.top - 12,
           flipX: left + r.left - 16,
         };
-        setExternal({ ...at, wires: null });
+        setExternal({ ...at, wires: null, cycle: new Set() });
         void (sync.current?.settled() ?? Promise.resolve())
-          .then(() => core.external(net, e.id))
-          .then((wires) => {
-            setExternal((x) => (x?.id === e.id && netRef.current === net ? { ...x, wires } : x));
+          .then(async () => {
+            const wires = await core.external(net, e.id);
+            const { cycle } = await core.placeable(
+              net,
+              wires.map((w) => w.id),
+            );
+            setExternal((x) =>
+              x?.id === e.id && netRef.current === net ? { ...x, wires, cycle: new Set(cycle) } : x,
+            );
           })
           .catch(refused);
       },
@@ -1803,6 +1811,22 @@ export function WorkspaceScreen(props: {
     toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
 
   /**
+   * «Показать здесь» (06 §14): appearances of the other ends of node `id`'s
+   * wires beside it, by the autoplace (§5.4); one step; their wires show.
+   */
+  const showHere = (id: string, ends: readonly ExternalWire[]) => {
+    const net = netRef.current;
+    const spots = editor.current?.spotsBeside(id, ends) ?? [];
+    const ops = ends.map(
+      (e, i): CoreOp => ({ op: 'place', id: e.id, net, x: spots[i]?.x ?? 0, y: spots[i]?.y ?? 0 }),
+    );
+    void coreStep(ops, 'ws.change.show', { n: ops.length })
+      .then(() => loadRef.current())
+      .then(() => editor.current?.reveal(id))
+      .catch(failed);
+  };
+
+  /**
    * A new subtask of `parent` (05 §4.3, ADR-0010): a task wired from it,
    * beside it on its canvas; in a project, a task inside. One step of undo.
    */
@@ -2879,6 +2903,7 @@ export function WorkspaceScreen(props: {
           locale={locale}
           name={g?.nodes.get(external.id)?.name ?? ''}
           wires={external.wires}
+          cycle={external.cycle}
           x={external.x}
           y={external.y}
           flipX={external.flipX}
@@ -2887,6 +2912,11 @@ export function WorkspaceScreen(props: {
             setExternal(null);
             focusCanvas();
             goNode(id, false);
+          }}
+          onShow={(ends) => {
+            setExternal(null);
+            focusCanvas();
+            showHere(external.id, ends);
           }}
           onClose={() => {
             setExternal(null);

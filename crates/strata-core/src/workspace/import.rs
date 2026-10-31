@@ -1980,9 +1980,10 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
+        let mut outgoing = self.outgoing_many(notes);
         for &note in notes {
             let path = paths.get(&note).cloned().unwrap_or_default();
-            let have = self.outgoing(note);
+            let have = outgoing.remove(&note).unwrap_or_default();
             report.counts.wires += have.wires.len() as u32;
             for (k, (_, name)) in &have.ghosts {
                 report.counts.ghosts += 1;

@@ -14,7 +14,8 @@
 //! - [`archive`]: `.strata.zip`, a workspace as one file (10 §3.5);
 //! - `preview`: a link's preview fetched from its page (ADR-0012), native only;
 //! - [`vault`]: a vault of Obsidian as files, its config, JSON Canvas and
-//!   Excalidraw drawings; [`Workspace::import_vault`] takes it in (13 §2–3).
+//!   Excalidraw drawings; [`Workspace::import_vault`] takes it in (13 §2–3);
+//!   [`synth`]: V-10k, the vault the import is measured on (14 §1.3).
 
 pub mod api;
 pub mod archive;
@@ -27,6 +28,7 @@ pub mod preview;
 #[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod store;
+pub mod synth;
 pub mod value;
 pub mod vault;
 pub mod workspace;

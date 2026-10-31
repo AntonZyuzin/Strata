@@ -17,7 +17,7 @@
 use super::{Changeset, Store, Val, Workspace, engine, load, read};
 use crate::changeset::Label;
 use crate::workspace::Result;
-use loro::{ExportMode, LoroValue};
+use loro::{ExportMode, LoroValue, ValueOrContainer};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_markdown::link_key;
 use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
@@ -165,14 +165,29 @@ impl<S: Store> Workspace<S> {
         let Some(last) = segs.last() else {
             return Found::Some(Vec::new());
         };
-        let answers = |n: NodeId| self.path_keys(n, was).ends_with(segs);
+        // A bare name — most links — is answered by the name alone: no walk
+        // up the tree for its path.
+        let bare_name = segs.len() == 1;
+        let answers = |n: NodeId| {
+            if bare_name {
+                link_key(&self.name_as(n, was)) == *last
+            } else {
+                self.path_keys(n, was).ends_with(segs)
+            }
+        };
         // Sticking (13 §3.5): a new node with the name takes no link over.
         if let Some(&n) = held.iter().find(|&&n| self.kind(n).is_some() && answers(n)) {
             return Found::Held(n);
         }
+        // `names` is keyed by the names' link keys: its nodes answer a bare name.
         let mut found: Vec<NodeId> = names
             .get(last)
-            .map(|c| c.iter().copied().filter(|&n| answers(n)).collect())
+            .map(|c| {
+                c.iter()
+                    .copied()
+                    .filter(|&n| bare_name || answers(n))
+                    .collect()
+            })
             .unwrap_or_default();
         if found.is_empty() {
             for (ext, canvas) in [(".canvas", true), (".excalidraw", false)] {
@@ -242,30 +257,38 @@ impl<S: Store> Workspace<S> {
         best[0].3
     }
 
-    /// The text wires and ghosts that leave `note`.
-    pub(super) fn outgoing(&self, note: NodeId) -> Outgoing {
-        let mut out = Outgoing::default();
-        let index = &self.docs[&self.index_doc(note)];
-        let from = note.to_text();
-        let LoroValue::Map(edges) = index.get_map("edge").get_value() else {
-            return out;
-        };
-        for (key, v) in edges.iter() {
-            let Some(v) = Val::from_loro(v) else { continue };
-            if v.get("from").and_then(Val::as_str) != Some(from.as_str()) {
+    /// The text wires and ghosts that leave each of `notes`, in one pass over
+    /// the wires of their shards: a wire is kept in its `from`'s shard
+    /// (10 §2.3), and a pass a note would cost an import's thousands of
+    /// notes N × wires.
+    pub(super) fn outgoing_many(&self, notes: &BTreeSet<NodeId>) -> HashMap<NodeId, Outgoing> {
+        let mut out: HashMap<NodeId, Outgoing> =
+            notes.iter().map(|&n| (n, Outgoing::default())).collect();
+        let shards: BTreeSet<String> = notes.iter().map(|&n| self.index_doc(n)).collect();
+        for doc in shards {
+            let Some(index) = self.docs.get(&doc) else {
                 continue;
-            }
-            if let Some(x) = v.get("ghost").and_then(Val::as_str) {
-                out.ghosts.insert(link_key(x), (key.clone(), x.to_owned()));
-            } else if let Some(to) = v
-                .get("to")
-                .and_then(Val::as_str)
-                .and_then(|t| NodeId::parse(t).ok())
-            {
-                if read(index, "edgeOrigin", &format!("{key}|text")).is_some() {
-                    out.wires.insert(to, key.clone());
+            };
+            index.get_map("edge").for_each(|key, v| {
+                let ValueOrContainer::Value(LoroValue::Map(ends)) = v else {
+                    return;
+                };
+                let end = |k: &str| ends.get(k).and_then(LoroValue::as_string);
+                let Some(o) = end("from")
+                    .and_then(|f| NodeId::parse(f).ok())
+                    .and_then(|f| out.get_mut(&f))
+                else {
+                    return;
+                };
+                if let Some(x) = end("ghost") {
+                    o.ghosts
+                        .insert(link_key(x), (key.to_owned(), x.to_string()));
+                } else if let Some(to) = end("to").and_then(|t| NodeId::parse(t).ok()) {
+                    if read(index, "edgeOrigin", &format!("{key}|text")).is_some() {
+                        o.wires.insert(to, key.to_owned());
+                    }
                 }
-            }
+            });
         }
         out
     }
@@ -321,6 +344,7 @@ impl<S: Store> Workspace<S> {
             texts.push(self.docs[&doc].get_text("text").to_string());
         }
         let names = self.link_names();
+        let mut outgoing = self.outgoing_many(&notes.iter().copied().collect());
         let ts = now_ms();
         let at = || Some(Val::map([("at", Val::Int(ts))]));
         let mut plan: Vec<(String, &str, String, Option<Val>)> = Vec::new();
@@ -338,7 +362,7 @@ impl<S: Store> Workspace<S> {
             if read(&self.docs[&index], "itemsDue", &from) != due {
                 plan.push((index.clone(), "itemsDue", from.clone(), due));
             }
-            let have = self.outgoing(note);
+            let have = outgoing.remove(&note).unwrap_or_default();
             let held: BTreeSet<NodeId> = have.wires.keys().copied().collect();
             let Asked {
                 want,
@@ -498,6 +522,7 @@ impl<S: Store> Workspace<S> {
             }
             names.entry(link_key(before)).or_default().push(*n);
         }
+        let mut outgoing = self.outgoing_many(&notes);
         for note in notes {
             if !self.alive(note) || self.kind(note) != Some(NodeKind::Note) {
                 continue;
@@ -505,7 +530,12 @@ impl<S: Store> Workspace<S> {
             let doc = format!("content/{}", note.to_text());
             self.ensure_doc(&doc)?;
             let text = self.docs[&doc].get_text("text").to_string();
-            let held: BTreeSet<NodeId> = self.outgoing(note).wires.keys().copied().collect();
+            let held: BTreeSet<NodeId> = outgoing
+                .remove(&note)
+                .unwrap_or_default()
+                .wires
+                .into_keys()
+                .collect();
             // (byte position, length, the target as it is to be written)
             let mut edits: Vec<(usize, usize, String)> = Vec::new();
             for link in strata_markdown::scan(&text).links {

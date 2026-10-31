@@ -82,6 +82,11 @@ impl<S: Store> Workspace<S> {
     /// while it names a placement in a live network, else the oldest
     /// placement left (10 §8.5). None for the root and the unplaced.
     pub(super) fn primary_of(&self, n: NodeId) -> Option<NodeId> {
+        // The root lies in no network (05 §3): every path up ends here, and
+        // the scan of the placements below is not for it.
+        if n == self.root {
+            return None;
+        }
         let named = self
             .field(n, "primaryNet")
             .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()));

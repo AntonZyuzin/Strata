@@ -89,7 +89,7 @@ export function FontsWindow(props: {
 }) {
   const { locale, prefs } = props;
   const dpr = useDpr();
-  const m = pixelMetrics(dpr, prefs.scale, prefs.rounding);
+  const m = pixelMetrics(dpr, prefs.scale);
   const set = (p: PixelPrefs) => {
     setPixelPrefs(p);
     props.onPrefs(p);
@@ -135,20 +135,6 @@ export function FontsWindow(props: {
                   onChange={() => set({ ...prefs, scale: s })}
                 />
                 <span>{`${s * 100}%`}</span>
-              </label>
-            ))}
-          </fieldset>
-          <fieldset className="segmented">
-            <legend className="sr-only">{t(locale, 'fonts.rounding')}</legend>
-            {(['up', 'down'] as const).map((r) => (
-              <label key={r} className={prefs.rounding === r ? 'is-active' : undefined}>
-                <input
-                  type="radio"
-                  name="rounding"
-                  checked={prefs.rounding === r}
-                  onChange={() => set({ ...prefs, rounding: r })}
-                />
-                <span>{t(locale, `fonts.rounding.${r}` as const)}</span>
               </label>
             ))}
           </fieldset>

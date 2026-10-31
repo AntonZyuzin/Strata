@@ -545,6 +545,35 @@ button:focus-visible {
   background: var(--st-color-surface);
 }
 
+/* A PDF drawn by pdf.js (☑ Q-06-24): the pages one under another at the
+   window's width, white sheets on the sunken body. */
+.pdf-view {
+  align-self: stretch;
+  justify-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: calc(8 * var(--u));
+  min-height: 0;
+  padding: calc(8 * var(--u));
+  overflow-y: auto;
+  outline: none;
+}
+
+.asset-window[data-type="pdf"] .asset-body {
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+}
+
+.pdf-page {
+  flex: none;
+  background: #fff;
+  box-shadow: var(--st-shadow-menu);
+}
+
+.pdf-failed {
+  color: var(--st-color-text-muted);
+}
+
 /* A board's window: 80 % of the canvas (06 §13.1), toolbar on the left (ADR-0006). */
 .board-window {
   position: absolute;

@@ -67,10 +67,10 @@ describe('design tokens', () => {
     }
   });
 
-  it('offers the smaller step at a fractional DPR for comparison', () => {
-    expect(pixelMetrics(1.25, 1, 'down').font.ui.physical).toBe(11);
-    expect(pixelMetrics(1.5, 1, 'down').font.displayS.physical).toBe(24);
-    expect(pixelMetrics(2, 1, 'down').font.ui.physical).toBe(22);
+  it('takes the larger step at a fractional DPR (☑ Q-07-18)', () => {
+    expect(pixelMetrics(1.25).font.ui.physical).toBe(22);
+    expect(pixelMetrics(1.5).font.ui.physical).toBe(22);
+    expect(pixelMetrics(1.5).font.displayS.physical).toBe(24);
   });
 
   it('writes the pixel unit as CSS variables', () => {

@@ -60,23 +60,23 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
   });
 }
 
-test('the smaller step at DPR 1.25 sets Departure Mono to its native 11 device px', async ({
-  browser,
-}) => {
-  const context = await browser.newContext({
-    viewport: { width: 1280, height: 800 },
-    deviceScaleFactor: 1.25,
-    locale: 'en-US',
+for (const deviceScaleFactor of [1.25, 1.5]) {
+  test(`at DPR ${deviceScaleFactor} Departure Mono takes the larger step, 22 device px (☑ Q-07-18)`, async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 800 },
+      deviceScaleFactor,
+      locale: 'en-US',
+    });
+    const page = await context.newPage();
+    // A device that chose «Мельче» while the spike compared both: the choice is gone.
+    await page.addInitScript(() =>
+      localStorage.setItem('strata.pixel', JSON.stringify({ scale: 1, rounding: 'down' })),
+    );
+    await page.goto('/?fonts');
+    await expect(page.locator('.window-fonts')).toBeVisible();
+    expect(await devicePx(page, 'body')).toBeCloseTo(22, 3);
+    await context.close();
   });
-  const page = await context.newPage();
-  await page.goto('/?fonts');
-  await expect(page.locator('.window-fonts')).toBeVisible();
-  expect(await devicePx(page, 'body')).toBeCloseTo(22, 3);
-  await page.locator('.segmented label', { hasText: 'Smaller' }).click();
-  expect(await devicePx(page, 'body')).toBeCloseTo(11, 3);
-  // Remembered on this device.
-  await page.reload();
-  await expect(page.locator('.window-fonts')).toBeVisible();
-  expect(await devicePx(page, 'body')).toBeCloseTo(11, 3);
-  await context.close();
-});
+}

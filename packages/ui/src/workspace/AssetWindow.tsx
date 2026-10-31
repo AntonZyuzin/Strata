@@ -1,5 +1,24 @@
 import { type Locale, t } from '@strata/i18n';
-import { type CSSProperties, useCallback, useLayoutEffect, useRef, useState } from 'react';
+import {
+  type CSSProperties,
+  lazy,
+  Suspense,
+  useCallback,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from 'react';
+
+/** pdf.js only for a PDF the WebView cannot show itself (ADR-0013). */
+const PdfView = lazy(() => import('./PdfView').then((m) => ({ default: m.PdfView })));
+
+/**
+ * The WebView shows a PDF in a frame itself (WebView2, WKWebView); where it
+ * cannot — WebKitGTK, a browser without the viewer — pdf.js draws it (☑ Q-06-24).
+ */
+export function ownPdfViewer(): boolean {
+  return navigator.pdfViewerEnabled === true;
+}
 
 /** Room kept between the window and the panels or the canvas's edge, CSS px. */
 const GAP = 8;
@@ -14,7 +33,7 @@ export function viewable(type: string): type is Viewable {
 /**
  * An asset's viewer (06 §13.1, §13.4): a retro window beside its bubble — a
  * picture to its size within the canvas, a video or sound with its player, a
- * PDF in the WebView's own viewer at the board's size. The panel keeps the
+ * PDF at the board's size, in the WebView's own viewer or drawn by pdf.js. The panel keeps the
  * small preview; this is the large one. While the focus is inside, the
  * canvas's keys are off; `Esc` gives the keyboard back to the canvas and
  * leaves the window and the selection, × closes the window.
@@ -25,6 +44,8 @@ export function AssetWindow(props: {
   type: Viewable;
   /** The file as an object URL, typed; null while it loads. */
   url: string | null;
+  /** The file itself, for pdf.js; null while it loads. */
+  file: Blob | null;
   /** Screen point of the bubble's side and which side the window opens on. */
   at: { x: number; y: number; side: 'left' | 'right' };
   /** The focus came in or went out: inside, the canvas's keys are off. */
@@ -32,7 +53,8 @@ export function AssetWindow(props: {
   onEscape: () => void;
   onClose: () => void;
 }) {
-  const { locale, type, url } = props;
+  const { locale, type, url, file } = props;
+  const [own] = useState(ownPdfViewer);
   const title = props.name || t(locale, 'note.untitled');
   const ref = useRef<HTMLElement>(null);
   /** Where it settled once its content had a size: inside the free canvas. */
@@ -109,7 +131,12 @@ export function AssetWindow(props: {
           // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
           <audio src={url} controls />
         ) : null}
-        {url && type === 'pdf' ? <iframe src={url} title={title} /> : null}
+        {url && type === 'pdf' && own ? <iframe src={url} title={title} /> : null}
+        {file && type === 'pdf' && !own ? (
+          <Suspense fallback={null}>
+            <PdfView locale={locale} title={title} file={file} />
+          </Suspense>
+        ) : null}
       </div>
     </section>
   );

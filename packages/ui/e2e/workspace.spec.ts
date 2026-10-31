@@ -146,7 +146,13 @@ async function select(page: Page, name: string) {
 }
 
 /** A file made in the page and dropped on the canvas: a picture, a sound or a PDF. */
-async function dropMade(page: Page, kind: 'png' | 'wav' | 'pdf', name: string, x = 600, y = 400) {
+async function dropMade(
+  page: Page,
+  kind: 'png' | 'wav' | 'pdf' | 'broken-pdf',
+  name: string,
+  x = 600,
+  y = 400,
+) {
   await page.evaluate(
     async ([kind, name, x, y]) => {
       let file: File;
@@ -183,16 +189,24 @@ async function dropMade(page: Page, kind: 'png' | 'wav' | 'pdf', name: string, x
         word(36, 'data');
         v.setUint32(40, n * 2, true);
         file = new File([buf], `${name}.wav`, { type: 'audio/wav' });
-      } else {
+      } else if (kind === 'pdf') {
+        // Two pages, a green square on each; no xref, which readers rebuild.
+        const ink = '0.7 0.95 0.42 rg 20 20 160 160 re f';
         const pdf = [
           '%PDF-1.4',
           '1 0 obj <</Type/Catalog/Pages 2 0 R>> endobj',
-          '2 0 obj <</Type/Pages/Kids[3 0 R]/Count 1>> endobj',
-          '3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]>> endobj',
+          '2 0 obj <</Type/Pages/Kids[3 0 R 4 0 R]/Count 2>> endobj',
+          '3 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 5 0 R>> endobj',
+          '4 0 obj <</Type/Page/Parent 2 0 R/MediaBox[0 0 200 200]/Contents 5 0 R>> endobj',
+          `5 0 obj <</Length ${ink.length}>> stream`,
+          ink,
+          'endstream endobj',
           'trailer <</Root 1 0 R>>',
           '%%EOF',
         ].join('\n');
         file = new File([pdf], `${name}.pdf`, { type: 'application/pdf' });
+      } else {
+        file = new File(['not a PDF at all'], `${name}.pdf`, { type: 'application/pdf' });
       }
       const dt = new DataTransfer();
       dt.items.add(file);
@@ -1528,6 +1542,10 @@ test.describe('a workspace on the core', () => {
   test('an asset opens large in its viewer: a picture, a sound, a PDF (06 §13.4)', async ({
     page,
   }) => {
+    // The WebView's own PDF viewer (WebView2, WKWebView): a frame.
+    await page.addInitScript(() =>
+      Object.defineProperty(Navigator.prototype, 'pdfViewerEnabled', { get: () => true }),
+    );
     await page.goto('/?plain');
     await createWorkspace(page, 'Просмотр');
     const blocked: string[] = [];
@@ -1589,6 +1607,72 @@ test.describe('a workspace on the core', () => {
     const w = await box(page, '.asset-window');
     expect(Math.abs(w.width - board.width * 0.8)).toBeLessThanOrEqual(2);
     // The desktop's CSP, served by the preview too, let the media and the frame in.
+    expect(blocked).toEqual([]);
+  });
+
+  test('where the WebView has no PDF viewer, pdf.js draws the pages (☑ Q-06-24)', async ({
+    page,
+  }) => {
+    test.setTimeout(60_000);
+    // WebKitGTK and a browser without the viewer.
+    await page.addInitScript(() =>
+      Object.defineProperty(Navigator.prototype, 'pdfViewerEnabled', { get: () => false }),
+    );
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Сметы');
+    const blocked: string[] = [];
+    page.on('console', (m) => {
+      if (/Content Security Policy|Refused to/i.test(m.text())) blocked.push(m.text());
+    });
+    const win = page.locator('.asset-window');
+    const open = async (name: string) => {
+      await settled(page);
+      await select(page, name);
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      await expect(win).toBeVisible();
+    };
+    await dropMade(page, 'pdf', 'Смета', 780, 300);
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Смета']);
+    await open('Смета');
+    await expect(win).toHaveAttribute('data-type', 'pdf');
+    await expect(win.locator('iframe')).toHaveCount(0);
+    // Both pages, each at the window's width, square as the sheet; drawn.
+    const pages = win.locator('.pdf-page');
+    await expect(pages).toHaveCount(2);
+    await expect(pages.first()).toHaveAttribute('data-drawn', 'true', { timeout: 15_000 });
+    const sheet = await box(page, '.pdf-page:first-child');
+    expect(Math.abs(sheet.width - sheet.height)).toBeLessThanOrEqual(1);
+    const view = await box(page, '.pdf-view');
+    expect(sheet.width).toBeGreaterThan(view.width * 0.8);
+    // The green square in the middle, white at the corner.
+    const colour = (fx: number, fy: number) =>
+      pages.first().evaluate(
+        (c: HTMLCanvasElement, [fx, fy]) => {
+          const px = c.getContext('2d')?.getImageData(c.width * fx, c.height * fy, 1, 1).data;
+          return px ? ([px[0] ?? 0, px[1] ?? 0, px[2] ?? 0] as const) : null;
+        },
+        [fx, fy] as const,
+      );
+    const [r, g, b] = (await colour(0.5, 0.5)) ?? [0, 0, 0];
+    expect(g).toBeGreaterThan(200);
+    expect(r).toBeLessThan(g);
+    expect(b).toBeLessThan(150);
+    expect(await colour(0.02, 0.02)).toEqual([255, 255, 255]);
+    // The keys scroll the pages once they have the focus; Esc gives them back.
+    await win.locator('.pdf-view').focus();
+    await page.keyboard.press('End');
+    await expect(pages.last()).toHaveAttribute('data-drawn', 'true');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.proto-canvas canvas').first()).toBeFocused();
+    await win.locator('.window-close').click();
+    await expect(win).toHaveCount(0);
+    // A file that is no PDF says so in the window, on one line.
+    await dropMade(page, 'broken-pdf', 'Обрывок', 420, 300);
+    await expect.poll(async () => (await graphNow(page)).names).toContain('Обрывок');
+    await open('Обрывок');
+    await expect(win.locator('.pdf-failed')).toHaveText('PDF не открылся');
+    expect(await overflowing(page, '.asset-window')).toEqual([]);
     expect(blocked).toEqual([]);
   });
 

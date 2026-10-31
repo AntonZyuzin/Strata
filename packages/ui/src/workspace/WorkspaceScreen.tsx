@@ -326,6 +326,7 @@ export function WorkspaceScreen(props: {
     id: string;
     type: Viewable;
     url: string | null;
+    file: Blob | null;
     at: { x: number; y: number; side: 'left' | 'right' };
   } | null>(null);
   /** A list opened: its items are in the panel, the keyboard goes there once. */
@@ -401,6 +402,8 @@ export function WorkspaceScreen(props: {
   /** Pictures shown in bubbles: node → asset; and asset → object URL for the panel. */
   const shown = useRef(new Map<string, string>());
   const urls = useRef(new Map<string, string>());
+  /** The file behind each object URL: pdf.js reads it, the CSP lets no fetch of `blob:` (ADR-0013). */
+  const blobs = useRef(new Map<string, Blob>());
   const [fileUrl, setFileUrl] = useState<string | null>(null);
   const refreshRef = useRef<() => void>(() => undefined);
   /** Fetches the previews of these link assets (✅ Q-13-16); set with the canvas. */
@@ -726,10 +729,10 @@ export function WorkspaceScreen(props: {
         const at = { side, x, y } as const;
         if (type !== null && viewable(type)) {
           const sha = n.attrs.asset;
-          setViewer({ id, type, url: null, at });
+          setViewer({ id, type, url: null, file: null, at });
           if (!sha) return;
-          urlOf(sha, n.attrs.mime ?? '')
-            .then((url) => setViewer((w) => (w?.id === id ? { ...w, url } : w)))
+          viewerFile(sha, n.attrs.mime ?? '')
+            .then((f) => setViewer((w) => (w?.id === id ? { ...w, ...f } : w)))
             .catch(refused);
           return;
         }
@@ -1866,9 +1869,16 @@ export function WorkspaceScreen(props: {
     const known = urls.current.get(key);
     if (known) return known;
     const bytes = await core.asset(sha);
-    const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: mime }));
+    const blob = new Blob([new Uint8Array(bytes)], { type: mime });
+    const url = URL.createObjectURL(blob);
     urls.current.set(key, url);
+    blobs.current.set(url, blob);
     return url;
+  };
+  /** An asset's file for its viewer: the object URL, and the file itself for pdf.js (ADR-0013). */
+  const viewerFile = async (sha: string, mime: string) => {
+    const url = await urlOf(sha, mime);
+    return { url, file: blobs.current.get(url) ?? null };
   };
   const urlRef = useRef(urlOf);
   urlRef.current = urlOf;
@@ -2314,10 +2324,10 @@ export function WorkspaceScreen(props: {
     }
     const type = item.kind === 'asset' ? assetType(item) : null;
     if (type === null || !viewable(type)) return false;
-    setViewer({ id, type, url: null, at: place });
+    setViewer({ id, type, url: null, file: null, at: place });
     if (item.asset) {
-      urlOf(item.asset, item.mime ?? '')
-        .then((url) => setViewer((w) => (w?.id === id ? { ...w, url } : w)))
+      viewerFile(item.asset, item.mime ?? '')
+        .then((f) => setViewer((w) => (w?.id === id ? { ...w, ...f } : w)))
         .catch(failed);
     }
     return true;
@@ -3041,6 +3051,7 @@ export function WorkspaceScreen(props: {
           name={nameOf(viewer.id)}
           type={viewer.type}
           url={viewer.url}
+          file={viewer.file}
           at={viewer.at}
           onFocus={setViewerFocus}
           onEscape={focusCanvas}

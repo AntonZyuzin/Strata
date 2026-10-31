@@ -9,7 +9,8 @@ import bsdText from './icons/serenity/LICENSE?raw';
  * «Благодарности» (07 §3.5, §6.3, ☑ Q-07-3, Q-07-11): Strata's licence, the
  * bundled fonts with their copyright lines and the OFL text, and every
  * game-icons author whose icons ship, with the change CC BY 3.0 §4(b) asks to
- * state, and SerenityOS's Chrome icons with their BSD 2-Clause text. Font lines are copied from each font's LICENSE or, for the board's
+ * state, SerenityOS's Chrome icons with their BSD 2-Clause text, and pdf.js
+ * with the files it ships. Font lines are copied from each font's LICENSE or, for the board's
  * fonts, from the font's name table and its maker's page.
  */
 
@@ -50,6 +51,29 @@ const SERENITY = {
   name: 'SerenityOS',
   line: 'Copyright (c) 2018-2026, the SerenityOS developers. BSD 2-Clause · github.com/SerenityOS/serenity',
 };
+
+/**
+ * pdf.js and what it fetches beside its code (ADR-0013), shipped in `pdfjs/`
+ * with each licence text (vite.config.ts); for PDFs a WebView cannot show.
+ */
+const PDF: { name: string; line: string }[] = [
+  { name: 'pdf.js', line: 'Copyright Mozilla Foundation. Apache-2.0 · github.com/mozilla/pdf.js' },
+  { name: 'Foxit', line: 'Copyright 2014 PDFium Authors. BSD 3-Clause' },
+  { name: 'Adobe CMaps', line: 'Copyright 1990–2009 Adobe Systems Incorporated. BSD 3-Clause' },
+  {
+    name: 'OpenJPEG',
+    line: 'Copyright 2002–2014 Université catholique de Louvain (UCL) and the OpenJPEG authors; 2024 Mozilla Foundation. BSD 2-Clause',
+  },
+  {
+    name: 'JBIG2',
+    line: 'Copyright 2014 The PDFium Authors. BSD 3-Clause; 2026 Mozilla Foundation. Apache-2.0',
+  },
+  {
+    name: 'qcms',
+    line: 'Copyright 2009–2024 Mozilla Corporation, 1998–2007 Marti Maria. MIT',
+  },
+  { name: 'CGATS001Compat', line: 'ICC profile. CC0 1.0' },
+];
 
 /** The OFL itself, without Departure Mono's copyright header. */
 const OFL = oflText.slice(oflText.indexOf('This Font Software'));
@@ -113,6 +137,16 @@ export function CreditsWindow(props: { locale: Locale; onBack: () => void }) {
           <summary>{t(locale, 'credits.bsd')}</summary>
           <pre>{bsdText}</pre>
         </details>
+        <div className="divider" />
+        <h2 className="fonts-heading">{t(locale, 'credits.pdf')}</h2>
+        <dl className="credits-list">
+          {PDF.map((p) => (
+            <div key={p.name} className="fonts-row">
+              <dt title={p.name}>{p.name}</dt>
+              <dd title={p.line}>{p.line}</dd>
+            </div>
+          ))}
+        </dl>
         <div className="divider" />
         <h2 className="fonts-heading">{t(locale, 'credits.icons')}</h2>
         <p className="credits-line" title={t(locale, 'credits.iconsNote')}>

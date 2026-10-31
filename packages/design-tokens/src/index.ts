@@ -154,23 +154,19 @@ export interface PixelFontSize {
 }
 
 /**
- * How a fractional multiple is rounded: `up` is 07 §2.4 (at DPR 1.25 Departure
- * Mono is 17.6 px, «берём больший»); `down` is the smaller step, offered by the
- * design spike so the owner can compare both on a 125 % or 150 % screen.
+ * A fractional multiple rounds up: at DPR 1.25 Departure Mono is 17.6 px, not
+ * 8.8 — «берём больший» (07 §2.4, ☑ Q-07-18).
  */
-export type PixelRounding = 'up' | 'down';
-
 export function pixelFontSize(
   native: number,
   minCss: number,
   lineGrid: number,
   dpr: number,
   scale = 1,
-  rounding: PixelRounding = 'up',
 ): PixelFontSize {
   // toFixed guards 1.25 × 8.8 = 11.000000000000002 style noise.
   const exact = Number(((minCss * scale * dpr) / native).toFixed(6));
-  const m = Math.max(1, rounding === 'up' ? Math.ceil(exact) : Math.floor(exact));
+  const m = Math.max(1, Math.ceil(exact));
   return { m, physical: m * native, css: (m * native) / dpr, line: (m * lineGrid) / dpr };
 }
 
@@ -198,7 +194,7 @@ export interface PixelMetrics {
 }
 
 /** Everything the Chrome derives from the DPR and the interface scale (07 §2.3, §11.4). */
-export function pixelMetrics(dpr: number, scale = 1, rounding: PixelRounding = 'up'): PixelMetrics {
+export function pixelMetrics(dpr: number, scale = 1): PixelMetrics {
   const u = pixelUnit(dpr);
   const U = u / dpr;
   const snap = (min: number) => Math.ceil(Number(((min * scale) / U).toFixed(6))) * U;
@@ -207,7 +203,7 @@ export function pixelMetrics(dpr: number, scale = 1, rounding: PixelRounding = '
     PixelFontId,
     (typeof PIXEL_FONTS)[PixelFontId],
   ][]) {
-    font[id] = pixelFontSize(f.native, f.min, f.line, dpr, scale, rounding);
+    font[id] = pixelFontSize(f.native, f.min, f.line, dpr, scale);
   }
   return { dpr, u, U, control: snap(24), scrollbar: snap(16), font };
 }
@@ -251,15 +247,11 @@ export function applyTheme(el: HTMLElement, theme: Theme = fog): void {
  * Applies the pixel unit for the current DPR and re-applies it when the DPR
  * changes (browser zoom, a window moved to another screen). Returns a stop function.
  */
-export function applyPixelUnit(
-  el: HTMLElement,
-  scale = 1,
-  rounding: PixelRounding = 'up',
-): () => void {
+export function applyPixelUnit(el: HTMLElement, scale = 1): () => void {
   let query: MediaQueryList | null = null;
   const apply = () => {
     const dpr = window.devicePixelRatio || 1;
-    const vars = pixelVariables(pixelMetrics(dpr, scale, rounding));
+    const vars = pixelVariables(pixelMetrics(dpr, scale));
     for (const [key, value] of Object.entries(vars)) {
       el.style.setProperty(key, value);
     }

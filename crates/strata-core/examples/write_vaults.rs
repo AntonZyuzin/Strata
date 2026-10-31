@@ -25,7 +25,9 @@ fn write(root: &Path, files: &[VaultFile]) -> std::io::Result<()> {
 }
 
 fn main() -> std::io::Result<()> {
-    let out = std::env::args().nth(1).unwrap_or_else(|| "vaults".to_owned());
+    let out = std::env::args()
+        .nth(1)
+        .unwrap_or_else(|| "vaults".to_owned());
     let out = Path::new(&out);
     let vsynth: Vec<VaultFile> =
         serde_json::from_str(include_str!("../src/tests/vsynth-vault.json"))

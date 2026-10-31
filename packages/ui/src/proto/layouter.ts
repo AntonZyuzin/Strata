@@ -9,7 +9,10 @@ import type { LayoutAnswer, LayoutRequest } from '@strata/layout/net-worker';
  * step of the graph (one undo), and the view animates the move (06 §1.4).
  */
 
-/** Gaps of `L`, world units: S bubbles are 32 across, M 48, L 72 (07 §4.2). */
+/**
+ * Gaps of `L`, world units: S bubbles are 32 across, M 48, L 72 (07 §4.2);
+ * `strata_layout::Spacing::DEFAULT`, which the core's import lays out with.
+ */
 export const LAYOUT_SPACING: LayoutSpacing = { gap: 24, layer: 72 };
 
 export class Layouter {

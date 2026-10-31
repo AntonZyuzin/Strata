@@ -4093,6 +4093,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "strata-layout",
  "strata-markdown",
  "strata-model",
  "thiserror 2.0.21",

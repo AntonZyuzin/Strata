@@ -71,6 +71,17 @@ pub(super) enum Found {
     Some(Vec<NodeId>),
 }
 
+/// What a note's text asks for by the rule of 13 §3.5.
+#[derive(Default)]
+pub(super) struct Asked {
+    /// The nodes it links to; none to itself (05 §8.2 rule 2).
+    pub(super) want: BTreeSet<NodeId>,
+    /// Ghosts: link key → the name as first written.
+    pub(super) ghosts: BTreeMap<String, String>,
+    /// Link key → the node it found.
+    pub(super) resolved: HashMap<String, NodeId>,
+}
+
 /// The wires and ghosts a note has, by the edges of its shard.
 #[derive(Default)]
 pub(super) struct Outgoing {
@@ -259,6 +270,38 @@ impl<S: Store> Workspace<S> {
         out
     }
 
+    /// What `note`'s `text` links to by the rule of 13 §3.5: nodes, and
+    /// ghosts by key with the name as first written. `held` — the nodes its
+    /// text wires reach now: a link that still fits one keeps it.
+    pub(super) fn asked(
+        &self,
+        note: NodeId,
+        text: &str,
+        held: &BTreeSet<NodeId>,
+        names: &HashMap<String, Vec<NodeId>>,
+    ) -> Asked {
+        let mut out = Asked::default();
+        for link in strata_markdown::scan(text).links {
+            let k = link_key(&link.target);
+            let segs = segments(&k);
+            if segs.is_empty() {
+                continue;
+            }
+            match self.resolve(note, &segs, held, names, &Before::new()) {
+                // A link to itself makes no wire (05 §8.2 rule 2).
+                Target::Node(n) if n == note => {}
+                Target::Node(n) => {
+                    out.want.insert(n);
+                    out.resolved.insert(k, n);
+                }
+                Target::Ghost => {
+                    out.ghosts.entry(k).or_insert_with(|| link.target.clone());
+                }
+            }
+        }
+        out
+    }
+
     /// The notes' wires and ghosts follow their `[[links]]` (05 §8.2 rule 4,
     /// §8.5): a link to a node adds the origin `text` to the wire, a link
     /// gone takes it away, a wire with no origin left goes; a link to no node
@@ -297,29 +340,11 @@ impl<S: Store> Workspace<S> {
             }
             let have = self.outgoing(note);
             let held: BTreeSet<NodeId> = have.wires.keys().copied().collect();
-            // What the text asks for: nodes, and ghosts by key with the name
-            // as first written.
-            let mut want: BTreeSet<NodeId> = BTreeSet::new();
-            let mut ghosts: BTreeMap<String, String> = BTreeMap::new();
-            let mut resolved: HashMap<String, NodeId> = HashMap::new();
-            for link in strata_markdown::scan(text).links {
-                let k = link_key(&link.target);
-                let segs = segments(&k);
-                if segs.is_empty() {
-                    continue;
-                }
-                match self.resolve(note, &segs, &held, &names, &Before::new()) {
-                    // A link to itself makes no wire (05 §8.2 rule 2).
-                    Target::Node(n) if n == note => {}
-                    Target::Node(n) => {
-                        want.insert(n);
-                        resolved.insert(k, n);
-                    }
-                    Target::Ghost => {
-                        ghosts.entry(k).or_insert_with(|| link.target.clone());
-                    }
-                }
-            }
+            let Asked {
+                want,
+                ghosts,
+                resolved,
+            } = self.asked(note, text, &held, &names);
             let origins = |key: &str| -> Vec<&'static str> {
                 ORIGINS
                     .into_iter()

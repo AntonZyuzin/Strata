@@ -21,6 +21,7 @@ use crate::vault::{self, Canvas, Colour, Config, Drawing, Vault, VaultFile};
 use loro::{ExportMode, LoroDoc, LoroValue};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use strata_layout::{Kind as LayoutKind, Net as LayoutNet, Spacing};
 use strata_markdown::{Checklist, Value, link_key};
 use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
 
@@ -321,6 +322,39 @@ fn grid(i: usize, n: usize) -> (f64, f64) {
     ((i % cols) as f64 * STEP, (i / cols) as f64 * STEP)
 }
 
+/// What the import placed in one network (06 §9.3): where its grid began —
+/// the free corner beside what the network held — and each node.
+struct Laying {
+    net: NodeId,
+    corner: (f64, f64),
+    nodes: Vec<Laid>,
+}
+
+/// A node the import placed: where it stands, and whether a canvas put it there.
+struct Laid {
+    id: NodeId,
+    at: (f64, f64),
+    pinned: bool,
+}
+
+/// A bubble's radius for `L`: folders and projects M, 48 across; the rest S, 32 (07 §4.2).
+fn radius(kind: Option<NodeKind>) -> f32 {
+    match kind {
+        Some(NodeKind::Network | NodeKind::Project) => 24.0,
+        _ => 16.0,
+    }
+}
+
+/// A wire's ends as its record has them; none for a ghost's.
+fn ends(v: &Val) -> Option<(NodeId, NodeId)> {
+    let end = |k: &str| {
+        v.get(k)
+            .and_then(Val::as_str)
+            .and_then(|s| NodeId::parse(s).ok())
+    };
+    Some((end("from")?, end("to")?))
+}
+
 /// A JSON value as a Loro value: an Excalidraw element kept whole.
 fn loro_of(v: &serde_json::Value) -> LoroValue {
     match v {
@@ -589,17 +623,30 @@ impl<S: Store> Workspace<S> {
                 .push((2, link_key(&c.name), c.id));
         }
         let mut pos: HashMap<NodeId, (f64, f64)> = HashMap::new();
+        let mut laying: Vec<Laying> = Vec::new();
         for (net, list) in members.iter_mut() {
             list.sort();
-            // Beside what the network holds already.
+            // Beside what the network holds already; `L` comes in the step.
             let (dx, dy) = self.free_corner(*net);
+            let mut lay = Laying {
+                net: *net,
+                corner: (dx, dy),
+                nodes: Vec::with_capacity(list.len()),
+            };
             for (i, (_, _, id)) in list.iter().enumerate() {
-                let p = layout.get(&(*net, *id)).copied().unwrap_or_else(|| {
+                let canvas = layout.get(&(*net, *id)).copied();
+                let p = canvas.unwrap_or_else(|| {
                     let (x, y) = grid(i, list.len());
                     (x + dx, y + dy)
                 });
                 pos.insert(*id, p);
+                lay.nodes.push(Laid {
+                    id: *id,
+                    at: p,
+                    pinned: canvas.is_some(),
+                });
             }
+            laying.push(lay);
         }
         for c in &cards {
             if c.pos != (0.0, 0.0) {
@@ -785,6 +832,17 @@ impl<S: Store> Workspace<S> {
                     Found::Held(to) => ws.import_wire(&mut out, *from, to, None, now_ms()),
                 }
             }
+            // `L` once, in this same step (06 §9.3, ☑ Q-13-19).
+            let texts = entries
+                .iter()
+                .filter_map(|e| Some((e.id, e.text.as_deref()?)))
+                .chain(
+                    cards
+                        .iter()
+                        .filter_map(|c| Some((c.id, c.text.as_deref()?))),
+                );
+            let moves = ws.lay_out(&laying, &out, texts, &names);
+            out.extend(moves);
             Ok(out)
         })?;
         report.counts.ghosts += unresolved.len() as u32;
@@ -1712,6 +1770,99 @@ impl<S: Store> Workspace<S> {
 
     /// The lowest free row below what a network holds: imported nodes go
     /// there, not over what is there (13 §3.1 step 8).
+    /// `L` once on what the import placed without a canvas's coordinates
+    /// (06 §9.3, 13 §3.1 step 8, ☑ Q-13-19): per network, the layered layout
+    /// of `strata-layout` over the wires among the imported nodes — those of
+    /// canvases and properties first, those only from text second (☑ Q-13-3);
+    /// a node a canvas placed stays where it put it. A network with nothing
+    /// of a canvas keeps its grid's corner, clear of what it held. The
+    /// step's own wires are not written yet: `written` holds the imported
+    /// ones, the texts give the rest by the rule of 13 §3.5. Positions come
+    /// back as key writes for the import's own changeset.
+    fn lay_out<'t>(
+        &self,
+        laying: &[Laying],
+        written: &Writes,
+        texts: impl Iterator<Item = (NodeId, &'t str)>,
+        names: &HashMap<String, Vec<NodeId>>,
+    ) -> Writes {
+        // Every wire the import brings: (from, to) → only from text.
+        let mut wires: BTreeMap<(NodeId, NodeId), bool> = BTreeMap::new();
+        let mut add = |a: NodeId, b: NodeId, text: bool| {
+            let only = wires.entry((a, b)).or_insert(text);
+            *only = *only && text;
+        };
+        for shard in self.index_shards() {
+            if let LoroValue::Map(all) = shard.get_map("edge").get_value() {
+                for v in all.values() {
+                    if let Some((a, b)) = Val::from_loro(v).as_ref().and_then(ends) {
+                        add(a, b, false);
+                    }
+                }
+            }
+        }
+        for (_, map, _, v) in written {
+            if map == "edge"
+                && let Some((a, b)) = v.as_ref().and_then(ends)
+            {
+                add(a, b, false);
+            }
+        }
+        for (note, text) in texts {
+            for to in self.asked(note, text, &BTreeSet::new(), names).want {
+                add(note, to, true);
+            }
+        }
+        let mut out = Writes::new();
+        for lay in laying {
+            if lay.nodes.iter().filter(|n| !n.pinned).count() < 2 {
+                continue;
+            }
+            let index: HashMap<NodeId, usize> = lay
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (n.id, i))
+                .collect();
+            let mut net = LayoutNet::default();
+            for n in &lay.nodes {
+                net.pos.extend([n.at.0 as f32, n.at.1 as f32]);
+                net.radius.push(radius(self.kind(n.id)));
+                net.pinned.push(n.pinned);
+            }
+            for (&(a, b), &text) in &wires {
+                if let (Some(&i), Some(&j)) = (index.get(&a), index.get(&b)) {
+                    net.edges.push([i as u32, j as u32]);
+                    net.text.push(text);
+                }
+            }
+            let at = strata_layout::layout(&net, LayoutKind::Layered, Spacing::DEFAULT);
+            // Nothing of a canvas: the layout starts where the grid did.
+            let (mut sx, mut sy) = (0.0, 0.0);
+            if !lay.nodes.iter().any(|n| n.pinned) {
+                let min = |k: usize| {
+                    at.iter()
+                        .skip(k)
+                        .step_by(2)
+                        .fold(f32::INFINITY, |m, &v| m.min(v))
+                };
+                sx = lay.corner.0 - f64::from(min(0));
+                sy = lay.corner.1 - f64::from(min(1));
+            }
+            for (i, n) in lay.nodes.iter().enumerate().filter(|(_, n)| !n.pinned) {
+                let x = f64::from(at[2 * i]) + sx;
+                let y = f64::from(at[2 * i + 1]) + sy;
+                out.push((
+                    format!("net/{}", lay.net.to_text()),
+                    "pos".to_owned(),
+                    n.id.to_text(),
+                    Some(Val::List(vec![Val::Float(x), Val::Float(y)])),
+                ));
+            }
+        }
+        out
+    }
+
     fn free_corner(&self, net: NodeId) -> (f64, f64) {
         let Some(doc) = self.docs.get(&format!("net/{}", net.to_text())) else {
             return (0.0, 0.0);

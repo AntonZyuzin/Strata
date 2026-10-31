@@ -649,3 +649,56 @@ fn a_vault_is_read_from_disk_without_following_links() {
     assert_eq!(id(&w, "Заметка", "Папка").len(), 26);
     std::fs::remove_dir_all(&dir).expect("clean up");
 }
+
+#[test]
+fn import_lays_a_folder_out_by_l_once_in_its_step() {
+    // 06 §9.3, 13 §3.1 step 8, ☑ Q-13-19: a folder without a canvas is laid
+    // out by `L` (layered, top to bottom) along the wires its notes' links
+    // make, not left in a grid by name; the moves are the import's step.
+    let file = |path: &str, text: &str| VaultFile {
+        path: path.to_owned(),
+        bytes: text.as_bytes().to_vec(),
+    };
+    let vault = Vault::from_files(
+        "Цепочка",
+        vec![
+            file("Сеть/А.md", "Дальше [[Б]]\n"),
+            file("Сеть/Б.md", "Дальше [[В]]\n"),
+            file("Сеть/В.md", "Конец\n"),
+            file("Сеть/Г.md", "Сам по себе\n"),
+        ],
+    );
+    let mut w = super::ws();
+    w.import_vault(&vault, None, &options())
+        .expect("the import");
+    let net = id(&w, "Сеть", "Корень");
+    let view = w.network_view(&net).expect("view");
+    let at = |name: &str| {
+        let n = view.nodes.iter().find(|n| n.name == name).expect(name);
+        (n.x, n.y)
+    };
+    // А → Б → В: three layers down; by name in a grid А and Б would share a row.
+    let (a, b, c) = (at("А"), at("Б"), at("В"));
+    assert!(a.1 < b.1 && b.1 < c.1, "{a:?} {b:?} {c:?}");
+    // No two bubbles of 32 closer than the gap of `L` (24).
+    let all: Vec<(f64, f64)> = view.nodes.iter().map(|n| (n.x, n.y)).collect();
+    for (i, p) in all.iter().enumerate() {
+        for q in &all[i + 1..] {
+            assert!(
+                (p.0 - q.0).hypot(p.1 - q.1) >= 32.0 + 24.0 - 1e-3,
+                "{p:?} {q:?}"
+            );
+        }
+    }
+    // The text wires are there, and one undo takes the vault and its layout back.
+    assert_eq!(
+        origins(&w, &id(&w, "А", "Сеть"), &id(&w, "Б", "Сеть")),
+        vec!["text"]
+    );
+    assert_eq!(
+        w.history().undo.map(|l| l.key).as_deref(),
+        Some("core.change.import")
+    );
+    w.undo().expect("undo");
+    assert_eq!(w.tree().len(), 1, "the root only");
+}

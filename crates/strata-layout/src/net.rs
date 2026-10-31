@@ -51,6 +51,15 @@ pub struct Spacing {
     pub layer: f32,
 }
 
+impl Spacing {
+    /// The gaps of `L` (06 §9): bubbles 32, 48 or 72 across (07 §4.2) stand
+    /// 24 apart, layers 72; the core's import and the UI's worker use them.
+    pub const DEFAULT: Self = Self {
+        gap: 24.0,
+        layer: 72.0,
+    };
+}
+
 /// A wire the layout uses, local to a part.
 pub(crate) type Edge = [usize; 2];
 

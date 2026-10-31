@@ -11,7 +11,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickFolder, pickSavePath } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { IconButton } from '../TabBar';
-import { keepReport } from '../workspace/imports';
+import { keepJob } from '../workspace/imports';
 
 /**
  * The home screen (✅ Q-16-12): the workspaces of this device as cards, last
@@ -151,8 +151,9 @@ export function HomeScreen(props: {
 
   /**
    * «Импорт из Obsidian» (13 §3, S1): the vault's folder becomes a new
-   * workspace, opened; its report waits for the canvas. The names the import
-   * gives what it makes are in the UI's language (13 §3.6).
+   * workspace, open at once; its batches land in the background and the
+   * workspace shows them (13 §3.3), its report at the end. The names the
+   * import gives what it makes are in the UI's language (13 §3.6).
    */
   const importVault = (from: string | PickedVault) =>
     run(async () => {
@@ -162,7 +163,7 @@ export function HomeScreen(props: {
         unlinked: t(locale, 'import.unlinked'),
         text: t(locale, 'import.text'),
       });
-      keepReport(r.workspace.id, r.report);
+      keepJob(r.job);
       return { workspace: r.workspace, root: r.root };
     });
 

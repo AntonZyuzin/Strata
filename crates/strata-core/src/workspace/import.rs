@@ -6,16 +6,16 @@
 //! after the import.
 //!
 //! The whole import is one changeset with the origin `import` and one step
-//! of undo (13 §1.4 item 3): the content documents and the text wires
-//! follow it as they follow any step — the documents as an editor's pushes,
-//! the wires as the system's (05 §11). The vault is only read (item 1).
-//! Every loss is a line of the report (item 2, §3.6).
+//! of undo (13 §1.4 item 3), its text wires in it (§3.1 step 7): undoing
+//! it leaves none behind. It is planned here, on a shadow of the workspace,
+//! and written in batches by `importing.rs` (§3.3). The vault is only read
+//! (item 1). Every loss is a line of the report (item 2, §3.6).
 
 use super::{
     LIST_ITEMS, Result, STATUSES, Store, Val, Workspace, Writes, engine, invalid, is_date, is_when,
     links::{Found, segments},
 };
-use crate::changeset::Label;
+use crate::changeset::{KeyWrite, Label};
 use crate::ops::Op;
 use crate::vault::{self, Canvas, Colour, Config, Drawing, Vault, VaultFile};
 use loro::{ExportMode, LoroDoc, LoroValue};
@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_layout::{Kind as LayoutKind, Net as LayoutNet, Spacing};
 use strata_markdown::{Checklist, Value, link_key};
-use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
+use strata_model::{EdgeKey, NodeId, NodeKind};
 
 /// The choices of the import window (13 §3.2) the MVP has.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,8 +171,9 @@ struct Entry {
     /// A canvas `X/X.canvas`: the layout of folder `X` itself (13 §2.7.1).
     layout: bool,
     props: Vec<(String, Value)>,
-    /// The file's SHA-256 and type, for an asset.
-    file: Option<(String, Option<&'static str>)>,
+    /// The file's type, for an asset; its SHA-256 comes as its batch copies
+    /// its bytes (13 §3.3).
+    mime: Option<&'static str>,
     /// Link keys of what it embeds, by path segments (13 §2.6).
     embeds: Vec<Vec<String>>,
 }
@@ -464,18 +465,15 @@ fn unsupported(text: &str) -> Vec<&'static str> {
 }
 
 impl<S: Store> Workspace<S> {
-    /// A vault into network `net` (the root when none) as one changeset with
-    /// the origin `import` and one step of undo; the report back (13 §3.6).
-    pub fn import_vault(
+    /// A vault into network `target`, planned on a shadow of the workspace
+    /// (13 §3.3): every key the import writes, its content documents and
+    /// assets by batch, the report (13 §3.6). Nothing reaches a store.
+    pub(super) fn plan_vault(
         &mut self,
         vault: &Vault,
-        net: Option<&str>,
+        target: NodeId,
         options: &ImportOptions,
-    ) -> Result<ImportReport> {
-        let target = match net {
-            Some(n) => self.network(n)?,
-            None => self.root,
-        };
+    ) -> Result<Plan> {
         let cfg = vault::config(&vault.files);
         let mut report = ImportReport {
             net: target.to_text(),
@@ -685,19 +683,12 @@ impl<S: Store> Workspace<S> {
                 x,
                 y,
             });
-            if let Some((sha, mime)) = &e.file {
+            if let Some(m) = e.mime.filter(|_| e.role == Role::Asset) {
                 ops.push(Op::SetAttr {
                     id: e.id.to_text(),
-                    key: "asset".to_owned(),
-                    value: Some(Val::str(sha.clone())),
+                    key: "mime".to_owned(),
+                    value: Some(Val::str(m)),
                 });
-                if let Some(m) = mime {
-                    ops.push(Op::SetAttr {
-                        id: e.id.to_text(),
-                        key: "mime".to_owned(),
-                        value: Some(Val::str(*m)),
-                    });
-                }
             }
         }
         for c in &cards {
@@ -780,19 +771,9 @@ impl<S: Store> Workspace<S> {
             }
         }
 
-        // Assets' bytes go in before the step that names them (10 §11).
-        let assets: HashSet<&str> = entries
-            .iter()
-            .filter(|e| e.file.is_some())
-            .map(|e| e.raw.as_str())
-            .collect();
-        for f in vault
-            .files
-            .iter()
-            .filter(|f| assets.contains(f.path.trim_start_matches('/')))
-        {
-            self.put_asset(&f.bytes)?;
-        }
+        // Every key the import writes, on this shadow: networks and nodes
+        // first, then what is found among them by the rule of 13 §3.5
+        // (§3.1 step 7). The assets' bytes come with their batches.
         for op in &ops {
             if let Op::CreateNode { net, .. } | Op::Place { net, .. } = op {
                 self.ensure_doc(&format!("net/{net}"))?;
@@ -803,48 +784,65 @@ impl<S: Store> Workspace<S> {
         }
         let mut first = self.plan(&ops)?;
         first.extend(raw);
-        let label = {
-            let mut l = Label::new("core.change.import");
-            l.params.insert("name".into(), vault.name.clone().into());
-            l
-        };
+        // The wires `L` reads (☑ Q-13-3): (from, to) → only from text.
+        let mut wires: BTreeMap<(NodeId, NodeId), bool> = BTreeMap::new();
+        for (_, map, _, v) in &first {
+            if map == "edge"
+                && let Some((a, b)) = v.as_ref().and_then(ends)
+            {
+                wires.insert((a, b), false);
+            }
+        }
+        let notes: Vec<(NodeId, &str)> = entries
+            .iter()
+            .filter(|e| e.role == Role::Note)
+            .filter_map(|e| Some((e.id, e.text.as_deref()?)))
+            .chain(
+                cards
+                    .iter()
+                    .filter(|c| c.kind == NodeKind::Note)
+                    .filter_map(|c| Some((c.id, c.text.as_deref()?))),
+            )
+            .collect();
         let mut unresolved: Vec<(NodeId, String, String)> = Vec::new();
-        let step = self.write_two(ChangesetOrigin::Import, label, first, |ws| {
-            // Links of properties and drawings, among the nodes just made (13 §3.5).
+        let mut asks = Vec::new();
+        let writes = self.apply_two(first, |ws| {
+            // Links of properties and drawings, among the nodes just made.
             let names = ws.link_names();
             let mut out: Writes = Vec::new();
             for (from, target, path) in &links {
                 let segs = segments(&link_key(target));
-                match ws.candidates(*from, &segs, &BTreeSet::new(), &names, &HashMap::new()) {
-                    Found::Some(f) if f.is_empty() => {
-                        unresolved.push((*from, target.clone(), path.clone()))
-                    }
-                    Found::Some(f) => {
-                        let to = if f.len() == 1 {
-                            f[0]
-                        } else {
-                            ws.nearest(*from, &f)
-                        };
-                        if to != *from {
-                            ws.import_wire(&mut out, *from, to, None, now_ms());
+                let to =
+                    match ws.candidates(*from, &segs, &BTreeSet::new(), &names, &HashMap::new()) {
+                        Found::Some(f) if f.is_empty() => {
+                            unresolved.push((*from, target.clone(), path.clone()));
+                            continue;
                         }
-                    }
-                    Found::Held(to) => ws.import_wire(&mut out, *from, to, None, now_ms()),
+                        Found::Some(f) if f.len() == 1 => f[0],
+                        Found::Some(f) => ws.nearest(*from, &f),
+                        Found::Held(to) => to,
+                    };
+                if to != *from {
+                    ws.import_wire(&mut out, *from, to, None, ts);
+                    wires.insert((*from, to), false);
                 }
             }
+            // The notes' text wires and ghosts, as the core keeps them after
+            // any edit (05 §8.2 rule 4, §8.5), in this same step.
+            let (text, asked) = ws.links_plan(&notes, ts);
+            for (&(note, _), a) in notes.iter().zip(&asked) {
+                for &to in &a.want {
+                    wires.entry((note, to)).or_insert(true);
+                }
+            }
+            out.extend(text);
+            asks = asked;
             // `L` once, in this same step (06 §9.3, ☑ Q-13-19).
-            let texts = entries
-                .iter()
-                .filter_map(|e| Some((e.id, e.text.as_deref()?)))
-                .chain(
-                    cards
-                        .iter()
-                        .filter_map(|c| Some((c.id, c.text.as_deref()?))),
-                );
-            let moves = ws.lay_out(&laying, &out, texts, &names);
-            out.extend(moves);
+            out.extend(ws.lay_out(&laying, &wires));
             Ok(out)
         })?;
+
+        // The report: what came in, ghosts and ambiguous links (13 §3.6).
         report.counts.ghosts += unresolved.len() as u32;
         for (from, target, path) in unresolved {
             report.at(
@@ -856,41 +854,56 @@ impl<S: Store> Workspace<S> {
                 format!("[[{target}]]"),
             );
         }
-        report.counts.wires += step
-            .writes
+        report.counts.wires += writes
             .iter()
             .filter(|w| w.map == "edgeOrigin" && w.key.ends_with("|import"))
             .count() as u32;
-        if !step.writes.is_empty() {
-            self.undo.push(step.clone());
-            self.redo.clear();
-        }
-        self.links_after(&step, false)?;
-
-        // Content documents, as an editor's pushes are: outside the step.
-        let mut notes = BTreeSet::new();
+        let paths: HashMap<NodeId, String> = entries
+            .iter()
+            .map(|e| (e.id, e.raw.clone()))
+            .chain(cards.iter().map(|c| (c.id, c.path.clone())))
+            .collect();
+        let mut aliases: HashMap<String, String> = HashMap::new();
         for e in &entries {
-            if self.write_content(
-                e.id,
-                e.text.as_deref(),
-                &e.meta,
-                e.list.as_ref(),
-                e.drawing.as_ref(),
-                vault,
-                &cfg,
-            )? {
-                notes.insert(e.id);
+            for (k, v) in &e.props {
+                if is_one_of(k, &["aliases", "alias"]) {
+                    for a in v.texts() {
+                        aliases
+                            .entry(link_key(&a))
+                            .or_insert_with(|| e.name.clone());
+                    }
+                }
             }
         }
-        for c in &cards {
-            if let Some(text) = &c.text {
-                self.write_content(c.id, Some(text), &[], None, None, vault, &cfg)?;
-                notes.insert(c.id);
+        let imported: BTreeSet<NodeId> = notes.iter().map(|&(n, _)| n).collect();
+        for (&(note, _), a) in notes.iter().zip(&asks) {
+            let path = paths.get(&note).cloned().unwrap_or_default();
+            report.counts.wires += a.want.len() as u32;
+            report.counts.ghosts += a.ghosts.len() as u32;
+            for (k, name) in &a.ghosts {
+                match aliases.get(k) {
+                    Some(owner) => report.at(
+                        note,
+                        "ghost",
+                        "info",
+                        &path,
+                        "ghostAlias",
+                        format!("[[{name}]] → {owner}"),
+                    ),
+                    None => report.at(note, "ghost", "info", &path, "ghost", format!("[[{name}]]")),
+                }
+            }
+            for (target, chosen, count) in &a.ambiguous {
+                report.at(
+                    note,
+                    "ambiguous",
+                    "warn",
+                    &path,
+                    "ambiguous",
+                    format!("[[{target}]] → {} ({count})", self.path_text(*chosen)),
+                );
             }
         }
-        self.relink(&notes)?;
-
-        // The report: what came in, ghosts and ambiguous links (13 §3.6).
         for e in &entries {
             match e.role {
                 Role::Note => report.counts.notes += 1,
@@ -907,13 +920,77 @@ impl<S: Store> Workspace<S> {
                 _ => report.counts.notes += 1,
             }
         }
-        let paths: HashMap<NodeId, String> = entries
-            .iter()
-            .map(|e| (e.id, e.raw.clone()))
-            .chain(cards.iter().map(|c| (c.id, c.path.clone())))
-            .collect();
-        self.link_report(&notes, &paths, &entries, &mut report);
-        Ok(report)
+
+        // Batches (13 §3.3): the networks and what the canvases bring first,
+        // then the files network by network, `BATCH_FILES` a batch.
+        let mut rank: HashMap<NodeId, usize> = HashMap::new();
+        let mut files: Vec<u32> = vec![0];
+        for id in folders.values() {
+            rank.insert(*id, 0);
+        }
+        for e in entries.iter().filter(|e| e.role == Role::Canvas) {
+            rank.insert(e.id, 0);
+            files[0] += 1;
+        }
+        for c in &cards {
+            rank.insert(c.id, 0);
+        }
+        let mut order: Vec<&Entry> = entries.iter().filter(|e| e.role != Role::Canvas).collect();
+        order.sort_by(|a, b| (&a.folder, &a.path).cmp(&(&b.folder, &b.path)));
+        let size = batch_files().max(1);
+        for (i, e) in order.iter().enumerate() {
+            let b = 1 + i / size;
+            rank.insert(e.id, b);
+            if files.len() <= b {
+                files.push(0);
+            }
+            files[b] += 1;
+        }
+        let batches = files.len();
+        let mut contents: Vec<Vec<Content>> = (0..batches).map(|_| Vec::new()).collect();
+        let mut assets: Vec<Vec<(NodeId, String)>> = (0..batches).map(|_| Vec::new()).collect();
+        for e in entries {
+            let b = rank.get(&e.id).copied().unwrap_or(0);
+            if e.role == Role::Asset {
+                assets[b].push((e.id, e.raw.clone()));
+            }
+            let c = Content {
+                node: e.id,
+                text: e.text,
+                meta: e.meta,
+                list: e.list,
+                drawing: e.drawing,
+            };
+            if !c.is_empty() {
+                contents[b].push(c);
+            }
+        }
+        for c in cards {
+            if let Some(text) = c.text {
+                contents[0].push(Content {
+                    node: c.id,
+                    text: Some(text),
+                    meta: Vec::new(),
+                    list: None,
+                    drawing: None,
+                });
+            }
+        }
+        let label = {
+            let mut l = Label::new("core.change.import");
+            l.params.insert("name".into(), vault.name.clone().into());
+            l
+        };
+        Ok(Plan {
+            label,
+            writes: by_batch(writes, &rank, batches),
+            files,
+            contents,
+            assets,
+            report,
+            notes: imported,
+            config: cfg,
+        })
     }
 
     /// `types.json` of the config folder (R2 §1): key → type.
@@ -1014,7 +1091,7 @@ impl<S: Store> Workspace<S> {
                 canvas: None,
                 layout: false,
                 props: Vec::new(),
-                file: None,
+                mime: None,
                 embeds: Vec::new(),
             };
             // Names (13 §3.4): NFC, edges trimmed, what breaks links.
@@ -1070,12 +1147,7 @@ impl<S: Store> Workspace<S> {
             }
             if e.role == Role::Asset {
                 e.name = clean(&nfc(file));
-                use sha2::Digest;
-                let sha: String = sha2::Sha256::digest(&f.bytes)
-                    .iter()
-                    .map(|b| format!("{b:02x}"))
-                    .collect();
-                e.file = Some((sha, mime_of(file)));
+                e.mime = mime_of(file);
             }
             out.push(e);
         }
@@ -1768,73 +1840,44 @@ impl<S: Store> Workspace<S> {
         }
     }
 
-    /// The lowest free row below what a network holds: imported nodes go
-    /// there, not over what is there (13 §3.1 step 8).
     /// `L` once on what the import placed without a canvas's coordinates
     /// (06 §9.3, 13 §3.1 step 8, ☑ Q-13-19): per network, the layered layout
     /// of `strata-layout` over the wires among the imported nodes — those of
     /// canvases and properties first, those only from text second (☑ Q-13-3);
     /// a node a canvas placed stays where it put it. A network with nothing
-    /// of a canvas keeps its grid's corner, clear of what it held. The
-    /// step's own wires are not written yet: `written` holds the imported
-    /// ones, the texts give the rest by the rule of 13 §3.5. Positions come
+    /// of a canvas keeps its grid's corner, clear of what it held. `wires`
+    /// are the import's own: (from, to) → only from text. Positions come
     /// back as key writes for the import's own changeset.
-    fn lay_out<'t>(
-        &self,
-        laying: &[Laying],
-        written: &Writes,
-        texts: impl Iterator<Item = (NodeId, &'t str)>,
-        names: &HashMap<String, Vec<NodeId>>,
-    ) -> Writes {
-        // Every wire the import brings: (from, to) → only from text.
-        let mut wires: BTreeMap<(NodeId, NodeId), bool> = BTreeMap::new();
-        let mut add = |a: NodeId, b: NodeId, text: bool| {
-            let only = wires.entry((a, b)).or_insert(text);
-            *only = *only && text;
-        };
-        for shard in self.index_shards() {
-            if let LoroValue::Map(all) = shard.get_map("edge").get_value() {
-                for v in all.values() {
-                    if let Some((a, b)) = Val::from_loro(v).as_ref().and_then(ends) {
-                        add(a, b, false);
-                    }
-                }
+    fn lay_out(&self, laying: &[Laying], wires: &BTreeMap<(NodeId, NodeId), bool>) -> Writes {
+        // Each node's network and place in it: one pass over the wires.
+        let mut at: HashMap<NodeId, (usize, usize)> = HashMap::new();
+        for (l, lay) in laying.iter().enumerate() {
+            for (i, n) in lay.nodes.iter().enumerate() {
+                at.insert(n.id, (l, i));
             }
         }
-        for (_, map, _, v) in written {
-            if map == "edge"
-                && let Some((a, b)) = v.as_ref().and_then(ends)
+        let mut edges: Vec<Vec<([u32; 2], bool)>> = laying.iter().map(|_| Vec::new()).collect();
+        for (&(a, b), &text) in wires {
+            if let (Some(&(la, i)), Some(&(lb, j))) = (at.get(&a), at.get(&b))
+                && la == lb
             {
-                add(a, b, false);
-            }
-        }
-        for (note, text) in texts {
-            for to in self.asked(note, text, &BTreeSet::new(), names).want {
-                add(note, to, true);
+                edges[la].push(([i as u32, j as u32], text));
             }
         }
         let mut out = Writes::new();
-        for lay in laying {
+        for (lay, edges) in laying.iter().zip(edges) {
             if lay.nodes.iter().filter(|n| !n.pinned).count() < 2 {
                 continue;
             }
-            let index: HashMap<NodeId, usize> = lay
-                .nodes
-                .iter()
-                .enumerate()
-                .map(|(i, n)| (n.id, i))
-                .collect();
             let mut net = LayoutNet::default();
             for n in &lay.nodes {
                 net.pos.extend([n.at.0 as f32, n.at.1 as f32]);
                 net.radius.push(radius(self.kind(n.id)));
                 net.pinned.push(n.pinned);
             }
-            for (&(a, b), &text) in &wires {
-                if let (Some(&i), Some(&j)) = (index.get(&a), index.get(&b)) {
-                    net.edges.push([i as u32, j as u32]);
-                    net.text.push(text);
-                }
+            for (e, text) in edges {
+                net.edges.push(e);
+                net.text.push(text);
             }
             let at = strata_layout::layout(&net, LayoutKind::Layered, Spacing::DEFAULT);
             // Nothing of a canvas: the layout starts where the grid did.
@@ -1863,6 +1906,8 @@ impl<S: Store> Workspace<S> {
         out
     }
 
+    /// The lowest free row below what a network holds: imported nodes go
+    /// there, not over what is there (13 §3.1 step 8).
     fn free_corner(&self, net: NodeId) -> (f64, f64) {
         let Some(doc) = self.docs.get(&format!("net/{}", net.to_text())) else {
             return (0.0, 0.0);
@@ -1888,28 +1933,82 @@ impl<S: Store> Workspace<S> {
         }
     }
 
-    /// A content document as an editor would push it (15 §3.4); true for a
-    /// note, whose links are to become wires.
-    #[allow(clippy::too_many_arguments)]
-    fn write_content(
-        &mut self,
-        node: NodeId,
-        text: Option<&str>,
-        meta: &[(&'static str, LoroValue)],
-        list: Option<&Checklist>,
-        drawing: Option<&Drawing>,
-        vault: &Vault,
-        cfg: &Config,
-    ) -> Result<bool> {
+    /// A node's canonical path, `/Проекты/Игра/Референсы` (05 §9.3).
+    fn path_text(&self, n: NodeId) -> String {
+        let mut parts: Vec<String> = self
+            .ancestors(n)
+            .into_iter()
+            .rev()
+            .filter(|a| *a != self.root)
+            .map(|a| self.name(a))
+            .collect();
+        parts.push(self.name(n));
+        format!("/{}", parts.join("/"))
+    }
+}
+
+/// Files a batch of an import brings at most (13 §3.3): each batch is one
+/// transaction of the store.
+pub(super) const BATCH_FILES: usize = 500;
+
+#[cfg(test)]
+thread_local! {
+    /// Tests write V-synth's few dozen files in batches of a few.
+    pub(crate) static TEST_BATCH: std::cell::Cell<usize> = const { std::cell::Cell::new(BATCH_FILES) };
+}
+
+fn batch_files() -> usize {
+    #[cfg(test)]
+    return TEST_BATCH.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    BATCH_FILES
+}
+
+/// An import planned on a shadow (13 §3.3), batch by batch: batch 0 holds
+/// the networks — folders and canvases — and what the canvases bring, the
+/// next ones the files network by network.
+pub(super) struct Plan {
+    pub(super) label: Label,
+    /// The keys each batch writes, in order.
+    pub(super) writes: Vec<Vec<KeyWrite>>,
+    /// Vault files each batch brings: the progress «1 840 из 3 200».
+    pub(super) files: Vec<u32>,
+    pub(super) contents: Vec<Vec<Content>>,
+    /// Assets each batch copies: the node and its file's path in the vault.
+    pub(super) assets: Vec<Vec<(NodeId, String)>>,
+    pub(super) report: ImportReport,
+    /// The notes the import brings: their wires are its own (step 7).
+    pub(super) notes: BTreeSet<NodeId>,
+    pub(super) config: Config,
+}
+
+/// A content document an import writes (10 §2.4).
+pub(super) struct Content {
+    pub(super) node: NodeId,
+    text: Option<String>,
+    meta: Vec<(&'static str, LoroValue)>,
+    list: Option<Checklist>,
+    drawing: Option<Drawing>,
+}
+
+impl Content {
+    fn is_empty(&self) -> bool {
+        self.text.is_none() && self.list.is_none() && self.drawing.is_none() && self.meta.is_empty()
+    }
+
+    /// The document as a snapshot, as an editor would push it (15 §3.4):
+    /// the text, its `meta`, a list's items, a drawing's elements and the
+    /// pictures it embeds, read from the vault.
+    pub(super) fn snapshot(&self, vault: &Vault, cfg: &Config) -> Result<Vec<u8>> {
         let doc = LoroDoc::new();
-        if let Some(text) = text {
+        if let Some(text) = &self.text {
             doc.get_text("text").insert(0, text).map_err(engine)?;
         }
         let m = doc.get_map("meta");
-        for (k, v) in meta {
+        for (k, v) in &self.meta {
             m.insert(k, v.clone()).map_err(engine)?;
         }
-        if let Some(list) = list {
+        if let Some(list) = &self.list {
             let tree = doc.get_tree(LIST_ITEMS);
             tree.enable_fractional_index(0);
             let mut parents: Vec<loro::TreeID> = Vec::new();
@@ -1923,7 +2022,7 @@ impl<S: Store> Workspace<S> {
                 parents.push(id);
             }
         }
-        if let Some(d) = drawing {
+        if let Some(d) = &self.drawing {
             let elements = doc.get_map("elements");
             for el in &d.elements {
                 if let Some(id) = el.get("id").and_then(serde_json::Value::as_str) {
@@ -1937,121 +2036,81 @@ impl<S: Store> Workspace<S> {
                     continue;
                 };
                 use base64::Engine as _;
+                let bytes = vault.bytes_of(f).map_err(|e| invalid(e.to_string()))?;
                 let mime = mime_of(&f.path).unwrap_or("application/octet-stream");
                 let url = format!(
                     "data:{mime};base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(&f.bytes)
+                    base64::engine::general_purpose::STANDARD.encode(&bytes)
                 );
                 let file = serde_json::json!({ "id": fid, "mimeType": mime, "dataURL": url, "created": 0 });
                 files.insert(fid, loro_of(&file)).map_err(engine)?;
             }
         }
         doc.commit();
-        let empty = text.is_none() && list.is_none() && drawing.is_none() && meta.is_empty();
-        if empty {
-            return Ok(false);
-        }
-        let name = format!("content/{}", node.to_text());
-        let bytes = doc.export(ExportMode::Snapshot).map_err(engine)?;
-        self.store.append(&name, &bytes, now_ms())?;
-        self.docs.insert(name, doc);
-        Ok(text.is_some())
+        doc.export(ExportMode::Snapshot).map_err(engine)
     }
+}
 
-    /// Ghosts and ambiguous links of the imported notes (13 §3.6), with the
-    /// hint of an alias that answers a ghost (13 §2.4).
-    fn link_report(
-        &self,
-        notes: &BTreeSet<NodeId>,
-        paths: &HashMap<NodeId, String>,
-        entries: &[Entry],
-        report: &mut ImportReport,
-    ) {
-        let names = self.link_names();
-        let mut aliases: HashMap<String, String> = HashMap::new();
-        for e in entries {
-            for (k, v) in &e.props {
-                if is_one_of(k, &["aliases", "alias"]) {
-                    for a in v.texts() {
-                        aliases
-                            .entry(link_key(&a))
-                            .or_insert_with(|| e.name.clone());
-                    }
-                }
-            }
-        }
-        let mut outgoing = self.outgoing_many(notes);
-        for &note in notes {
-            let path = paths.get(&note).cloned().unwrap_or_default();
-            let have = outgoing.remove(&note).unwrap_or_default();
-            report.counts.wires += have.wires.len() as u32;
-            for (k, (_, name)) in &have.ghosts {
-                report.counts.ghosts += 1;
-                match aliases.get(k) {
-                    Some(owner) => report.at(
-                        note,
-                        "ghost",
-                        "info",
-                        &path,
-                        "ghostAlias",
-                        format!("[[{name}]] → {owner}"),
-                    ),
-                    None => report.at(note, "ghost", "info", &path, "ghost", format!("[[{name}]]")),
-                }
-            }
-            let doc = format!("content/{}", note.to_text());
-            let Some(d) = self.docs.get(&doc) else {
-                continue;
+/// The import's keys by batch (13 §3.3): a node's keys go with the node — its
+/// fields, placements, position, properties; a wire with the later of its
+/// ends, so it never comes before a node it joins; a network's own keys
+/// with the network; the rest — the people — with batch 0. A key written
+/// twice keeps its last value only.
+fn by_batch(
+    writes: Vec<KeyWrite>,
+    rank: &HashMap<NodeId, usize>,
+    batches: usize,
+) -> Vec<Vec<KeyWrite>> {
+    let of = |id: &str| {
+        NodeId::parse(id)
+            .ok()
+            .and_then(|n| rank.get(&n))
+            .copied()
+            .unwrap_or(0)
+    };
+    let mut wire: HashMap<&str, usize> = HashMap::new();
+    for w in &writes {
+        if w.map == "edge" && w.doc.starts_with("index/") {
+            let ends = w.after.as_ref().or(w.before.as_ref());
+            let end = |k: &str| {
+                ends.and_then(|v| v.get(k))
+                    .and_then(Val::as_str)
+                    .map_or(0, of)
             };
-            let text = d.get_text("text").to_string();
-            let held: BTreeSet<NodeId> = have.wires.keys().copied().collect();
-            let mut said = HashSet::new();
-            for link in strata_markdown::scan(&text).links {
-                let segs = segments(&link_key(&link.target));
-                if segs.is_empty() || !said.insert(segs.clone()) {
-                    continue;
-                }
-                let Found::Some(found) =
-                    self.candidates(note, &segs, &BTreeSet::new(), &names, &HashMap::new())
-                else {
-                    continue;
-                };
-                if found.len() > 1 {
-                    let chosen = match self.candidates(note, &segs, &held, &names, &HashMap::new())
-                    {
-                        Found::Held(n) => n,
-                        Found::Some(_) => self.nearest(note, &found),
-                    };
-                    report.at(
-                        note,
-                        "ambiguous",
-                        "warn",
-                        &path,
-                        "ambiguous",
-                        format!(
-                            "[[{}]] → {} ({})",
-                            link.target,
-                            self.path_text(chosen),
-                            found.len()
-                        ),
-                    );
-                }
-            }
+            wire.insert(&w.key, end("from").max(end("to")));
         }
     }
-
-    /// A node's canonical path, `/Проекты/Игра/Референсы` (05 §9.3).
-    fn path_text(&self, n: NodeId) -> String {
-        let mut parts: Vec<String> = self
-            .ancestors(n)
-            .into_iter()
-            .rev()
-            .filter(|a| *a != self.root)
-            .map(|a| self.name(a))
-            .collect();
-        parts.push(self.name(n));
-        format!("/{}", parts.join("/"))
+    let mut out: Vec<Vec<KeyWrite>> = (0..batches.max(1)).map(|_| Vec::new()).collect();
+    let mut last: HashMap<(String, String, String), (usize, usize)> = HashMap::new();
+    let mut placed: Vec<(usize, KeyWrite)> = Vec::with_capacity(writes.len());
+    for w in &writes {
+        let b = if let Some(net) = w.doc.strip_prefix("net/") {
+            if w.map == "pos" { of(&w.key) } else { of(net) }
+        } else if w.doc.starts_with("index/") {
+            match w.map.as_str() {
+                "edge" | "edgeLabel" => wire.get(w.key.as_str()).copied().unwrap_or(0),
+                "edgeOrigin" => {
+                    let key = w.key.rsplit_once('|').map_or(w.key.as_str(), |(k, _)| k);
+                    wire.get(key).copied().unwrap_or(0)
+                }
+                "placement" => of(w.key.split_once('/').map_or("", |(_, n)| n)),
+                _ => of(w.key.split('|').next().unwrap_or_default()),
+            }
+        } else {
+            0
+        };
+        placed.push((b.min(out.len() - 1), w.clone()));
     }
+    drop(wire);
+    for (i, (b, w)) in placed.iter().enumerate() {
+        last.insert((w.doc.clone(), w.map.clone(), w.key.clone()), (*b, i));
+    }
+    for (i, (b, w)) in placed.into_iter().enumerate() {
+        if last.get(&(w.doc.clone(), w.map.clone(), w.key.clone())) == Some(&(b, i)) {
+            out[b].push(w);
+        }
+    }
+    out
 }
 
 /// `file` without `suffix`, its case aside.

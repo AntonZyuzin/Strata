@@ -25,10 +25,14 @@ use strata_model::{
 };
 
 mod import;
+mod importing;
 mod links;
 mod places;
 
+#[cfg(test)]
+pub(crate) use import::TEST_BATCH;
 pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
+pub use importing::{ImportBatch, ImportProgress, ImportShadow, PlannedImport, ReadyBatch};
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -519,6 +523,12 @@ pub struct Workspace<S: Store> {
     /// them again (15 §3.4). The last `EDITS_KEPT` only.
     edits: Vec<(u64, String)>,
     edit_seq: u64,
+    /// The import being written batch by batch (13 §3.3): until it ends the
+    /// workspace takes no other change, so the import stays one changeset.
+    job: Option<Box<importing::Job>>,
+    /// A long task's changeset the app left in progress (10 §3.3, NFR-71):
+    /// it waits for «Откатить» or «Оставить».
+    interrupted: Option<Changeset>,
 }
 
 /// Edits of content documents kept for editors to catch up with.
@@ -604,6 +614,8 @@ impl<S: Store> Workspace<S> {
             redo: Vec::new(),
             edits: Vec::new(),
             edit_seq: 0,
+            job: None,
+            interrupted: None,
         };
         for doc in ["manifest", "sys"] {
             ws.docs.insert(doc.to_owned(), LoroDoc::new());
@@ -658,9 +670,52 @@ impl<S: Store> Workspace<S> {
             redo: Vec::new(),
             edits: Vec::new(),
             edit_seq: 0,
+            job: None,
+            interrupted: None,
         };
         ws.load_index()?;
+        ws.interrupted = ws.store.unfinished()?.into_iter().next();
         Ok(ws)
+    }
+
+    /// A copy of the documents in memory with nothing behind it — a store
+    /// in memory, no undo: an import is planned there off the workspace's
+    /// lock and written here in batches (13 §3.3). Documents not loaded yet
+    /// are read from the store first.
+    pub(super) fn shadow(&mut self, docs: &[String]) -> Result<Workspace<crate::MemoryStore>> {
+        for d in docs {
+            self.ensure_doc(d)?;
+        }
+        let mut copies = HashMap::new();
+        for (id, d) in &self.docs {
+            if !id.starts_with("content/") {
+                copies.insert(id.clone(), d.fork());
+            }
+        }
+        Ok(Workspace {
+            store: crate::MemoryStore::default(),
+            docs: copies,
+            k: self.k,
+            id: self.id.clone(),
+            root: self.root,
+            clock: self.clock,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            edits: Vec::new(),
+            edit_seq: 0,
+            job: None,
+            interrupted: None,
+        })
+    }
+
+    /// Changes wait while an import is being written (13 §3.3).
+    fn writable(&self) -> Result<()> {
+        if self.job.is_some() {
+            return Err(invalid(
+                "an import is being written: changes wait for its end",
+            ));
+        }
+        Ok(())
     }
 
     pub fn id(&self) -> &str {
@@ -810,6 +865,7 @@ impl<S: Store> Workspace<S> {
         label: Label,
         build: impl FnOnce(&mut Tx<'_>) -> Result<()>,
     ) -> Result<Changeset> {
+        self.writable()?;
         let mut tx = Tx {
             docs: &mut self.docs,
             before: HashMap::new(),
@@ -820,45 +876,38 @@ impl<S: Store> Workspace<S> {
         self.finish(origin, label, before, writes, built)
     }
 
-    /// [`Self::write`] in two passes, one changeset: the second pass sees
-    /// what the first wrote — the import finds the nodes its wires join by
-    /// the rule of 13 §3.5 among the nodes it has just made.
-    fn write_two(
+    /// The writes of an import in two passes, and back: the first goes into
+    /// the documents in memory, for the second to see — the import finds the
+    /// nodes its wires join by the rule of 13 §3.5 among the nodes it has
+    /// just made. The second is only planned: nothing reads it here. A
+    /// shadow plans so (13 §3.3); nothing reaches a store, and the batches
+    /// read each key's value before as they write it.
+    fn apply_two(
         &mut self,
-        origin: ChangesetOrigin,
-        label: Label,
         first: Writes,
         second: impl FnOnce(&Self) -> Result<Writes>,
-    ) -> Result<Changeset> {
+    ) -> Result<Vec<KeyWrite>> {
         let mut tx = Tx {
             docs: &mut self.docs,
             before: HashMap::new(),
             writes: Vec::new(),
         };
-        let mut built = first
+        first
             .into_iter()
-            .try_for_each(|(doc, map, key, value)| tx.set(&doc, &map, &key, value));
-        let Tx {
-            mut before,
-            mut writes,
-            ..
-        } = tx;
-        if built.is_ok() {
-            built = second(self).and_then(|more| {
-                let mut tx = Tx {
-                    docs: &mut self.docs,
-                    before: std::mem::take(&mut before),
-                    writes: std::mem::take(&mut writes),
-                };
-                let done = more
-                    .into_iter()
-                    .try_for_each(|(doc, map, key, value)| tx.set(&doc, &map, &key, value));
-                before = tx.before;
-                writes = tx.writes;
-                done
-            });
-        }
-        self.finish(origin, label, before, writes, built)
+            .try_for_each(|(doc, map, key, value)| tx.set(&doc, &map, &key, value))?;
+        let mut writes = tx.writes;
+        writes.extend(
+            second(self)?
+                .into_iter()
+                .map(|(doc, map, key, after)| KeyWrite {
+                    doc,
+                    map,
+                    key,
+                    before: None,
+                    after,
+                }),
+        );
+        Ok(writes)
     }
 
     /// Commits the writes of an operation as one changeset, or — when it
@@ -1576,6 +1625,7 @@ impl<S: Store> Workspace<S> {
     /// they come, outside undo — the editor keeps its own. A note's links
     /// then become its text wires; the answer says whether they changed.
     pub fn doc_push(&mut self, doc: &str, update: &[u8]) -> Result<bool> {
+        self.writable()?;
         let node = self.content_node(doc)?;
         self.unlocked(node)?;
         self.ensure_doc(doc)?;

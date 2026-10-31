@@ -10,7 +10,26 @@ use crate::changeset::Changeset;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// Where a changeset stands (10 §9.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// A long task's changeset while its parts are being written.
+    InProgress,
+    Applied,
+    Reverted,
+}
+
+impl Status {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InProgress => "in-progress",
+            Self::Applied => "applied",
+            Self::Reverted => "reverted",
+        }
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -34,7 +53,22 @@ pub trait Store {
         changeset: &Changeset,
         updates: &[(String, Vec<u8>)],
     ) -> Result<(), StoreError>;
-    /// Every changeset, oldest first.
+    /// A part of a long task's changeset (10 §3.3): its updates and its
+    /// writes (`changeset.writes` — this part's only) in one transaction.
+    /// The first part opens the changeset as `in-progress`; every part
+    /// carries its id; it stays in progress until [`Store::close`].
+    fn commit_part(
+        &mut self,
+        changeset: &Changeset,
+        updates: &[(String, Vec<u8>)],
+    ) -> Result<(), StoreError>;
+    /// A long task's changeset ends: `applied` — every part is written,
+    /// `reverted` — taken back after it broke off (10 §9.1, §9.3).
+    fn close(&mut self, id: &str, status: Status) -> Result<(), StoreError>;
+    /// Changesets a long task left `in-progress`, every part's writes in
+    /// them: the app stopped in the middle (10 §3.3, NFR-71).
+    fn unfinished(&self) -> Result<Vec<Changeset>, StoreError>;
+    /// Every changeset, oldest first; a long one with all its parts' writes.
     fn changesets(&self) -> Result<Vec<Changeset>, StoreError>;
     /// An update of a content document outside any changeset: an editor's
     /// typing (15 §3.4), which has its own undo.
@@ -61,6 +95,8 @@ pub trait Store {
 pub struct MemoryStore {
     docs: BTreeMap<String, StoredDoc>,
     changesets: Vec<Changeset>,
+    /// Long tasks' changesets still in progress, by id.
+    open: BTreeSet<String>,
     assets: BTreeMap<String, Vec<u8>>,
 }
 
@@ -69,6 +105,8 @@ pub struct MemoryStore {
 struct Dump {
     docs: BTreeMap<String, Vec<String>>,
     changesets: Vec<Changeset>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    open: BTreeSet<String>,
     #[serde(default)]
     assets: BTreeMap<String, String>,
 }
@@ -86,6 +124,7 @@ impl MemoryStore {
                 })
                 .collect(),
             changesets: self.changesets.clone(),
+            open: self.open.clone(),
             assets: self
                 .assets
                 .iter()
@@ -123,6 +162,7 @@ impl MemoryStore {
         Ok(Self {
             docs,
             changesets: dump.changesets,
+            open: dump.open,
             assets,
         })
     }
@@ -147,6 +187,42 @@ impl Store for MemoryStore {
         }
         self.changesets.push(changeset.clone());
         Ok(())
+    }
+
+    fn commit_part(
+        &mut self,
+        changeset: &Changeset,
+        updates: &[(String, Vec<u8>)],
+    ) -> Result<(), StoreError> {
+        for (doc, bytes) in updates {
+            self.docs
+                .entry(doc.clone())
+                .or_default()
+                .updates
+                .push(bytes.clone());
+        }
+        match self.changesets.iter_mut().find(|c| c.id == changeset.id) {
+            Some(c) => c.writes.extend(changeset.writes.iter().cloned()),
+            None => {
+                self.changesets.push(changeset.clone());
+                self.open.insert(changeset.id.clone());
+            }
+        }
+        Ok(())
+    }
+
+    fn close(&mut self, id: &str, _status: Status) -> Result<(), StoreError> {
+        self.open.remove(id);
+        Ok(())
+    }
+
+    fn unfinished(&self) -> Result<Vec<Changeset>, StoreError> {
+        Ok(self
+            .changesets
+            .iter()
+            .filter(|c| self.open.contains(&c.id))
+            .cloned()
+            .collect())
     }
 
     fn changesets(&self) -> Result<Vec<Changeset>, StoreError> {

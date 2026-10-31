@@ -17,6 +17,7 @@ import {
   type History,
   type HomeBackend,
   hasCanvas,
+  type ImportProgress,
   type ImportReport,
   isTask,
   linkOf,
@@ -94,8 +95,10 @@ import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { IconPalette, PRESET } from './IconPalette';
 import { ImportReportWindow } from './ImportReportWindow';
+import { ImportStatus } from './ImportStatus';
 import { Inspector, type InspectorActions } from './Inspector';
-import { freshReport, reportOf, reportShown } from './imports';
+import { InterruptedDialog } from './InterruptedDialog';
+import { freshReport, jobOf, reportOf, reportShown } from './imports';
 import { Layers } from './Layers';
 import { mapItems, pathTo, placeIn, removeOps } from './mapSteps';
 import { NodeSearch } from './NodeSearch';
@@ -355,6 +358,12 @@ export function WorkspaceScreen(props: {
   const [importReport, setImportReport] = useState<ImportReport | null>(
     () => freshReport(opened.workspace.id) ?? null,
   );
+  /** The import coming into this workspace (13 §3.3): its batches so far. */
+  const [importing, setImporting] = useState<ImportProgress | null>(null);
+  const importingRef = useRef(false);
+  importingRef.current = importing !== null;
+  /** The vault of an import the app left in the middle (10 §3.3): asked once. */
+  const [interrupted, setInterrupted] = useState<string | null>(null);
   /** A removal that asks first (06 §12.3), and the question's data. */
   const [removal, setRemoval] = useState<{
     ids: string[];
@@ -530,7 +539,9 @@ export function WorkspaceScreen(props: {
 
     const refused = (e: unknown) => {
       if (cancelled) return;
-      toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
+      // Changes wait while an import is written (13 §3.3).
+      if (importingRef.current) toast('import.busy');
+      else toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
       void loadRef.current();
     };
 
@@ -1775,6 +1786,70 @@ export function WorkspaceScreen(props: {
   // A report is shown once; the palette opens it again (13 §3.6).
   useEffect(() => reportShown(opened.workspace.id), [opened.workspace.id]);
 
+  // The import coming into this workspace (13 §3.3, S1 step 5): the canvas
+  // reads the core again as each batch lands, the networks appearing; the
+  // last batch brings the report and the step of undo.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the refs are stable
+  useEffect(() => {
+    const job = jobOf(opened.workspace.id);
+    setImporting(null);
+    if (!job) return;
+    let landed = -1;
+    return job.watch((e) => {
+      if (e.type !== 'progress') {
+        setImporting(null);
+        return;
+      }
+      const report = e.progress.report;
+      if (report) {
+        setImporting(null);
+        setImportReport(report);
+        reportShown(e.workspace);
+        void core.history().then(setHistory);
+      } else {
+        setImporting(e.progress);
+        if (e.progress.done === landed) return;
+      }
+      landed = e.progress.done;
+      void loadRef.current();
+      refreshRef.current();
+    });
+  }, [opened.workspace.id]);
+
+  // An import the app left in the middle (10 §3.3, NFR-71): asked as its
+  // workspace opens.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the core is the workspace's
+  useEffect(() => {
+    setInterrupted(null);
+    if (jobOf(opened.workspace.id)) return;
+    let live = true;
+    void core
+      .interrupted()
+      .then((label) => {
+        if (live && label?.key === 'core.change.import') {
+          setInterrupted(String(label.params?.name ?? ''));
+        }
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [opened.workspace.id]);
+
+  /** «Оставить» or «Откатить» the import the app broke off. */
+  const settle = (keep: boolean) => {
+    setInterrupted(null);
+    focusCanvas();
+    void core
+      .settleInterrupted(keep)
+      .then((h) => {
+        setHistory(h);
+        refreshRef.current();
+        return loadRef.current();
+      })
+      .catch(failed);
+  };
+
   /**
    * Goes to a node (09 §3.4): the network of its primary placement on the
    * canvas, a flight to it, the node selected (06 §10.3); `open` — into a
@@ -1829,7 +1904,9 @@ export function WorkspaceScreen(props: {
   };
 
   const failed = (e: unknown) =>
-    toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
+    importingRef.current
+      ? toast('import.busy')
+      : toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
 
   /**
    * «Показать здесь» (06 §14): appearances of the other ends of node `id`'s
@@ -2912,6 +2989,13 @@ export function WorkspaceScreen(props: {
             ) : null}
           </li>
         ))}
+        {importing ? (
+          <ImportStatus
+            locale={locale}
+            progress={importing}
+            onCancel={() => void jobOf(opened.workspace.id)?.cancel()}
+          />
+        ) : null}
       </ul>
       {finder && (view3d === '3d') === finder.map ? (
         <NodeSearch
@@ -2975,6 +3059,9 @@ export function WorkspaceScreen(props: {
             focusCanvas();
           }}
         />
+      ) : null}
+      {interrupted !== null ? (
+        <InterruptedDialog locale={locale} name={interrupted} onSettle={settle} />
       ) : null}
       {importReport ? (
         <ImportReportWindow

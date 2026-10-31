@@ -19,6 +19,33 @@ pub struct VaultFile {
     pub path: String,
     #[serde(with = "b64")]
     pub bytes: Vec<u8>,
+    /// Where the bytes are when they are not here: an attachment of a vault
+    /// read from disk stays there until its batch copies it (13 §3.3), so
+    /// gigabytes of pictures never sit in memory at once.
+    #[serde(skip)]
+    pub disk: Option<std::path::PathBuf>,
+}
+
+impl VaultFile {
+    pub fn new(path: impl Into<String>, bytes: Vec<u8>) -> Self {
+        Self {
+            path: path.into(),
+            bytes,
+            disk: None,
+        }
+    }
+}
+
+/// Files the import reads whole as it plans: Markdown, canvases, drawings
+/// and the config folder's JSON (13 §3.1 steps 1–5). The rest are read in
+/// their batches.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_now(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".md")
+        || lower.ends_with(".canvas")
+        || lower.ends_with(".excalidraw")
+        || lower.ends_with(".json")
 }
 
 mod b64 {
@@ -48,6 +75,17 @@ pub struct Vault {
 }
 
 impl Vault {
+    /// A file's bytes: here, or read from the disk now.
+    pub fn bytes_of<'a>(&self, f: &'a VaultFile) -> std::io::Result<std::borrow::Cow<'a, [u8]>> {
+        match &f.disk {
+            #[cfg(not(target_arch = "wasm32"))]
+            Some(path) => std::fs::read(path).map(std::borrow::Cow::Owned),
+            #[cfg(target_arch = "wasm32")]
+            Some(_) => Err(std::io::Error::other("no disk in a browser")),
+            None => Ok(std::borrow::Cow::Borrowed(&f.bytes)),
+        }
+    }
+
     /// A vault from files handed over: a browser's folder picker.
     pub fn from_files(name: &str, files: Vec<VaultFile>) -> Self {
         Self {
@@ -88,10 +126,16 @@ impl Vault {
                         stack.push((e.path(), path));
                     }
                 } else if kind.is_file() {
-                    vault.files.push(VaultFile {
-                        path,
-                        bytes: std::fs::read(e.path())?,
-                    });
+                    let file = if read_now(&path) {
+                        VaultFile::new(path, std::fs::read(e.path())?)
+                    } else {
+                        VaultFile {
+                            path,
+                            bytes: Vec::new(),
+                            disk: Some(e.path()),
+                        }
+                    };
+                    vault.files.push(file);
                 }
             }
         }
@@ -517,6 +561,7 @@ mod tests {
 
     fn file(path: &str, text: &str) -> VaultFile {
         VaultFile {
+            disk: None,
             path: path.to_owned(),
             bytes: text.as_bytes().to_vec(),
         }

@@ -4,7 +4,8 @@ import {
   CoreError,
   type HomeBackend,
   type HomeState,
-  type ImportReport,
+  type ImportProgress,
+  importJob,
   type Opened,
   type Profile,
   toBase64,
@@ -85,10 +86,26 @@ const HOME = 'home';
 const ws = (id: string) => `ws:${id}`;
 const preview = (id: string) => `preview:${id}`;
 /** Calls that write: the store's bytes go to the shelf after them. */
-const WRITES = new Set(['apply', 'undo', 'redo', 'cancel', 'pushDoc', 'importVault']);
+const WRITES = new Set([
+  'apply',
+  'undo',
+  'redo',
+  'cancel',
+  'pushDoc',
+  'importCancel',
+  'settleInterrupted',
+]);
 
-/** `HomeBackend` with the WASM core and a shelf. */
-export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise<HomeBackend> {
+/**
+ * `HomeBackend` with the WASM core and a shelf. `pause` — milliseconds
+ * between an import's batches: layout tests slow them down to watch them
+ * (`?batchPause=`); 0 — the next task.
+ */
+export async function browserHome(
+  shelf: Shelf,
+  now = () => Date.now(),
+  pause = 0,
+): Promise<HomeBackend> {
   await loadCore();
   const raw = await shelf.get(HOME);
   let saved: Saved = { workspaces: [], profile: { name: '' } };
@@ -149,7 +166,9 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         return JSON.stringify({ type: 'error', message: 'no workspace is open', invalid: false });
       const out = c.core.call(json);
       const call = (JSON.parse(json) as { call: string }).call;
-      if (WRITES.has(call) && !out.includes('"type":"error"')) {
+      // An import driven batch by batch is kept once, as its last one lands.
+      const ended = call === 'importStep' && out.includes('"report":');
+      if ((WRITES.has(call) || ended) && !out.includes('"type":"error"')) {
         await shelf.set(ws(c.id), c.core.bytes());
       }
       return out;
@@ -242,8 +261,10 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         const known = saved.workspaces.some((e) => e.id === WasmCore.archiveId(from));
         return remember(WasmCore.importArchive(from, known));
       }),
-    // A new workspace named after the vault's folder, the import its first
-    // step of undo; a vault that does not come in leaves none behind.
+    // A new workspace named after the vault's folder, open at once; its
+    // batches land one a task, the page drawing between them (13 §3.3); the
+    // import is its first step of undo. A vault that does not come in, or
+    // whose import is cancelled, leaves no workspace behind.
     importVault: (from, options) =>
       later(async () => {
         if (typeof from === 'string') throw new CoreError('a browser imports picked files', true);
@@ -252,14 +273,53 @@ export async function browserHome(shelf: Shelf, now = () => Date.now()): Promise
         const files = from.files.map((f) => ({ path: f.path, bytes: toBase64(f.bytes) }));
         const out = JSON.parse(
           c.call(JSON.stringify({ call: 'importVault', name, files, options })),
-        ) as
-          | { type: 'imported'; report: ImportReport }
-          | { type: 'error'; message: string; invalid: boolean };
+        ) as Answer;
         if (out.type === 'error') {
           c.free();
           throw new CoreError(out.message, out.invalid);
         }
-        return { ...(await remember(c)), report: out.report };
+        const opened = await remember(c);
+        const id = opened.workspace.id;
+        let stopped = false;
+        const job = importJob(id, async () => {
+          stopped = true;
+        });
+        const drop = () =>
+          later(async () => {
+            release(id);
+            saved.workspaces = saved.workspaces.filter((e) => e.id !== id);
+            await shelf.delete(ws(id));
+            await save();
+          });
+        if (out.progress) job.tell({ type: 'progress', workspace: id, progress: out.progress });
+        void (async () => {
+          for (;;) {
+            await new Promise((done) => setTimeout(done, pause));
+            if (stopped || tabs.get(id) !== c) {
+              await drop();
+              return job.tell({ type: 'cancelled', workspace: id });
+            }
+            const r = JSON.parse(c.call(JSON.stringify({ call: 'importStep' }))) as Answer;
+            if (r.type === 'error') {
+              await drop();
+              return job.tell({ type: 'failed', workspace: id, message: r.message });
+            }
+            if (!r.progress) continue;
+            if (r.progress.report) {
+              // Kept once whole: the bytes after each batch would cost the
+              // whole store each time.
+              await later(() => shelf.set(ws(id), c.bytes()));
+            }
+            job.tell({ type: 'progress', workspace: id, progress: r.progress });
+            if (r.progress.report) return;
+          }
+        })();
+        return { ...opened, job };
       }),
   };
 }
+
+/** The core's answer to an import's call. */
+type Answer =
+  | { type: 'importing'; progress: ImportProgress | null }
+  | { type: 'error'; message: string; invalid: boolean };

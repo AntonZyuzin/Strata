@@ -33,7 +33,7 @@ fn options() -> ImportOptions {
 fn imported() -> (Workspace<MemoryStore>, ImportReport) {
     let mut w = super::ws();
     let report = w
-        .import_vault(&vsynth(), None, &options())
+        .import_vault(vsynth(), None, &options())
         .expect("the import");
     (w, report)
 }
@@ -609,7 +609,7 @@ fn import_into_a_network_goes_below_what_is_there() {
     let mut w = super::ws();
     let root = w.root();
     super::create(&mut w, &root, NodeKind::Note, "Была");
-    w.import_vault(&vsynth(), Some(&root), &options())
+    w.import_vault(vsynth(), Some(&root), &options())
         .expect("import");
     let view = w.network_view(&root).expect("view");
     let was = view.nodes.iter().find(|n| n.name == "Была").expect("Была");
@@ -621,7 +621,7 @@ fn import_into_a_network_goes_below_what_is_there() {
         assert!(n.y >= was.y + 300.0, "{} at {}", n.name, n.y);
     }
     assert!(
-        w.import_vault(&Vault::from_files("x", Vec::new()), None, &options())
+        w.import_vault(Vault::from_files("x", Vec::new()), None, &options())
             .is_err()
     );
 }
@@ -644,7 +644,7 @@ fn a_vault_is_read_from_disk_without_following_links() {
     assert_eq!(paths, vec!["Папка/Заметка.md"]);
     assert_eq!(vault.symlinks, vec!["Ссылка"]);
     let mut w = super::ws();
-    let report = w.import_vault(&vault, None, &options()).expect("import");
+    let report = w.import_vault(vault, None, &options()).expect("import");
     assert_eq!(lines(&report, "symlink").len(), 1);
     assert_eq!(id(&w, "Заметка", "Папка").len(), 26);
     std::fs::remove_dir_all(&dir).expect("clean up");
@@ -655,10 +655,7 @@ fn import_lays_a_folder_out_by_l_once_in_its_step() {
     // 06 §9.3, 13 §3.1 step 8, ☑ Q-13-19: a folder without a canvas is laid
     // out by `L` (layered, top to bottom) along the wires its notes' links
     // make, not left in a grid by name; the moves are the import's step.
-    let file = |path: &str, text: &str| VaultFile {
-        path: path.to_owned(),
-        bytes: text.as_bytes().to_vec(),
-    };
+    let file = |path: &str, text: &str| VaultFile::new(path, text.as_bytes().to_vec());
     let vault = Vault::from_files(
         "Цепочка",
         vec![
@@ -669,8 +666,7 @@ fn import_lays_a_folder_out_by_l_once_in_its_step() {
         ],
     );
     let mut w = super::ws();
-    w.import_vault(&vault, None, &options())
-        .expect("the import");
+    w.import_vault(vault, None, &options()).expect("the import");
     let net = id(&w, "Сеть", "Корень");
     let view = w.network_view(&net).expect("view");
     let at = |name: &str| {
@@ -701,4 +697,202 @@ fn import_lays_a_folder_out_by_l_once_in_its_step() {
     );
     w.undo().expect("undo");
     assert_eq!(w.tree().len(), 1, "the root only");
+}
+
+/// Batches of `n` files for one test: V-synth's few dozen files go in several.
+struct Batches(usize);
+
+impl Batches {
+    fn of(n: usize) -> Self {
+        let was = crate::workspace::TEST_BATCH.with(|b| b.replace(n));
+        Self(was)
+    }
+}
+
+impl Drop for Batches {
+    fn drop(&mut self) {
+        crate::workspace::TEST_BATCH.with(|b| b.set(self.0));
+    }
+}
+
+fn begun<S: Store>(w: &mut Workspace<S>, vault: Vault) -> crate::ImportProgress {
+    let shadow = w.import_start(None).expect("start");
+    let planned = shadow.plan(vault, &options()).expect("plan");
+    w.import_begin(planned).expect("begin")
+}
+
+#[test]
+fn import_writes_its_batches_as_parts_of_one_changeset() {
+    // 13 §3.3, 10 §3.3: each batch is one transaction carrying the import's
+    // changeset, `in-progress` until the last; the networks come first;
+    // the workspace takes no other change meanwhile; one step of undo.
+    let _b = Batches::of(4);
+    let mut w = super::ws();
+    let p = begun(&mut w, vsynth());
+    assert_eq!(p.done, 0);
+    assert!(p.total > 30, "{p:?}");
+    let p = w.import_step().expect("the networks");
+    assert_eq!(named(&w, "Игра").len(), 1);
+    assert!(named(&w, "Диздок").is_empty());
+    assert!(p.done < p.total && p.report.is_none());
+    assert_eq!(w.store().unfinished().expect("journal").len(), 1);
+    let root = w.root();
+    let refused = w.apply(
+        &[crate::Op::Rename {
+            id: root,
+            name: "Другое".to_owned(),
+        }],
+        crate::Label::new("x"),
+    );
+    assert!(matches!(refused, Err(crate::CoreError::Invalid(_))));
+    let mut steps = 1;
+    let report = loop {
+        let p = w.import_step().expect("a batch");
+        steps += 1;
+        if let Some(r) = p.report {
+            assert_eq!(p.done, p.total);
+            break r;
+        }
+    };
+    assert!(steps > 5, "{steps}");
+    assert!(w.store().unfinished().expect("journal").is_empty());
+    assert!(w.import_progress().is_none());
+    let imports: Vec<_> = w
+        .store()
+        .changesets()
+        .expect("journal")
+        .into_iter()
+        .filter(|c| c.origin == ChangesetOrigin::Import)
+        .collect();
+    assert_eq!(imports.len(), 1);
+    assert!(report.counts.notes > 20);
+    w.undo().expect("undo");
+    assert_eq!(w.tree().len(), 1, "the root only");
+}
+
+#[test]
+fn import_in_batches_lands_as_one_at_once() {
+    // 13 §3.3: a wire comes with the later of its ends, a node's keys with
+    // the node — the batches add up to the same workspace and report.
+    let at_once = imported();
+    let _b = Batches::of(3);
+    let batched = imported();
+    let names = |w: &Workspace<MemoryStore>| {
+        let mut n: Vec<(String, NodeKind)> =
+            w.tree().into_iter().map(|t| (t.name, t.kind)).collect();
+        n.sort_by(|a, b| a.0.cmp(&b.0));
+        n
+    };
+    assert_eq!(names(&at_once.0), names(&batched.0));
+    assert_eq!(at_once.0.wires().len(), batched.0.wires().len());
+    let codes = |r: &ImportReport| {
+        let mut c: Vec<(String, String)> = r
+            .items
+            .iter()
+            .map(|i| (i.code.clone(), i.detail.clone()))
+            .collect();
+        c.sort();
+        c
+    };
+    assert_eq!(codes(&at_once.1), codes(&batched.1));
+    assert_eq!(at_once.1.counts, batched.1.counts);
+}
+
+#[test]
+fn a_cancelled_import_is_taken_back_whole() {
+    // 13 §3.3 «Отмена»: what the batches wrote goes; the changeset is closed.
+    let _b = Batches::of(4);
+    let mut w = super::ws();
+    begun(&mut w, vsynth());
+    w.import_step().expect("the networks");
+    w.import_step().expect("a batch");
+    assert!(w.tree().len() > 5);
+    w.import_cancel().expect("cancel");
+    assert_eq!(w.tree().len(), 1, "the root only");
+    assert!(w.import_progress().is_none());
+    assert!(w.store().unfinished().expect("journal").is_empty());
+    assert_eq!(w.history().undo, None);
+    // The workspace takes changes again.
+    let root = w.root();
+    w.apply(
+        &[crate::Op::Rename {
+            id: root,
+            name: "Снова".to_owned(),
+        }],
+        crate::Label::new("x"),
+    )
+    .expect("a change");
+}
+
+#[test]
+fn an_import_the_app_broke_off_waits_for_откатить_or_оставить() {
+    // 10 §3.3, NFR-71: each batch is whole in the store; the changeset left
+    // `in-progress` is found on the next opening.
+    let _b = Batches::of(1);
+    let file = |path: &str, text: &str| VaultFile::new(path, text.as_bytes().to_vec());
+    let vault = || {
+        Vault::from_files(
+            "Обрыв",
+            vec![file("А.md", "Ссылка на [[Б]]\n"), file("Б.md", "Б\n")],
+        )
+    };
+    for keep in [false, true] {
+        let dir = std::env::temp_dir().join(format!("strata-broken-{}-{keep}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut w = crate::sqlite::create_folder(&dir, "Обрыв").expect("folder");
+        begun(&mut w, vault());
+        w.import_step().expect("the networks");
+        w.import_step().expect("А");
+        drop(w);
+        let mut w = crate::sqlite::open_folder(&dir).expect("open");
+        assert_eq!(
+            w.interrupted().map(|l| l.key).as_deref(),
+            Some("core.change.import")
+        );
+        w.settle_interrupted(keep).expect("settle");
+        assert_eq!(w.interrupted(), None);
+        let mut names: Vec<String> = w.tree().into_iter().map(|t| t.name).collect();
+        names.sort();
+        if keep {
+            // А stays; Б never came: its link is a ghost now (05 §8.5).
+            assert_eq!(names, vec!["А", "Обрыв"]);
+            let view = w.network_view(&w.root()).expect("view");
+            assert_eq!(view.ghosts.len(), 1, "{:?}", view.ghosts);
+        } else {
+            assert_eq!(names, vec!["Обрыв"]);
+        }
+        drop(w);
+        let w = crate::sqlite::open_folder(&dir).expect("open again");
+        assert_eq!(w.interrupted(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[test]
+fn a_vaults_attachments_stay_on_disk_till_their_batch() {
+    // 13 §3.3 «Память»: pictures are read when their batch copies them.
+    let dir = std::env::temp_dir().join(format!("strata-lazy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    std::fs::write(dir.join("Заметка.md"), "![[фото.png]]\n").expect("note");
+    let picture = b"\x89PNG\r\n\x1a\nnot really".to_vec();
+    std::fs::write(dir.join("фото.png"), &picture).expect("picture");
+    let vault = Vault::read(&dir).expect("read");
+    let pic = vault
+        .files
+        .iter()
+        .find(|f| f.path == "фото.png")
+        .expect("listed");
+    assert!(pic.bytes.is_empty() && pic.disk.is_some());
+    let mut w = super::ws();
+    w.import_vault(vault, None, &options()).expect("import");
+    let id = id(&w, "фото.png", "Корень");
+    let sha = w
+        .node_details(&id)
+        .expect("node")
+        .attrs
+        .asset
+        .expect("asset");
+    assert_eq!(w.asset(&sha).expect("bytes"), Some(picture));
+    std::fs::remove_dir_all(&dir).expect("clean up");
 }

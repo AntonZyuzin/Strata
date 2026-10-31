@@ -158,14 +158,14 @@ const AREAS: &[&str] = &[
 pub fn vault(spec: Spec) -> Vault {
     let mut r = Rng::new(spec.seed);
     let mut files: Vec<VaultFile> = Vec::new();
-    files.push(VaultFile {
-        path: ".obsidian/app.json".to_owned(),
-        bytes: r#"{"attachmentFolderPath": "Вложения"}"#.as_bytes().to_vec(),
-    });
-    files.push(VaultFile {
-        path: ".obsidian/community-plugins.json".to_owned(),
-        bytes: br#"["obsidian-tasks-plugin", "obsidian-excalidraw-plugin"]"#.to_vec(),
-    });
+    files.push(VaultFile::new(
+        ".obsidian/app.json".to_owned(),
+        r#"{"attachmentFolderPath": "Вложения"}"#.as_bytes().to_vec(),
+    ));
+    files.push(VaultFile::new(
+        ".obsidian/community-plugins.json".to_owned(),
+        br#"["obsidian-tasks-plugin", "obsidian-excalidraw-plugin"]"#.to_vec(),
+    ));
 
     // Folders: areas, their topics, a third level under some.
     let mut folders: Vec<String> = vec![String::new()];
@@ -239,10 +239,7 @@ pub fn vault(spec: Spec) -> Vault {
                 let done = if r.chance(0.3) { "x" } else { " " };
                 text.push_str(&format!("- [{done}] {} {k}\n", cap(r.pick(FILLER))));
             }
-            files.push(VaultFile {
-                path: path_of(name, *folder),
-                bytes: text.into_bytes(),
-            });
+            files.push(VaultFile::new(path_of(name, *folder), text.into_bytes()));
             continue;
         }
         text.push_str(&format!("# {name}\n\n"));
@@ -278,10 +275,7 @@ pub fn vault(spec: Spec) -> Vault {
                 text.push_str(&format!("![[{}]]\n\n", pictures[r.below(pictures.len())]));
             }
         }
-        files.push(VaultFile {
-            path: path_of(name, *folder),
-            bytes: text.into_bytes(),
-        });
+        files.push(VaultFile::new(path_of(name, *folder), text.into_bytes()));
     }
 
     // Canvases (13 §2.7): file cards on notes, a text card, edges.
@@ -314,11 +308,11 @@ pub fn vault(spec: Spec) -> Vault {
             "x": 0, "y": -240, "width": 250, "height": 100,
         }));
         let at = &folders[folder];
-        files.push(VaultFile {
-            path: format!("{at}/Канвас {c}.canvas"),
-            bytes: serde_json::to_vec(&serde_json::json!({ "nodes": nodes, "edges": edges }))
+        files.push(VaultFile::new(
+            format!("{at}/Канвас {c}.canvas"),
+            serde_json::to_vec(&serde_json::json!({ "nodes": nodes, "edges": edges }))
                 .unwrap_or_default(),
-        });
+        ));
     }
 
     // Drawings of the Excalidraw plugin (13 §2.8), packed and not.
@@ -346,13 +340,13 @@ pub fn vault(spec: Spec) -> Vault {
             format!("```json\n{json}\n```")
         };
         let folder = &folders[1 + r.below(folders.len() - 1)];
-        files.push(VaultFile {
-            path: format!("{folder}/Рисунок {d}.excalidraw.md"),
-            bytes: format!(
+        files.push(VaultFile::new(
+            format!("{folder}/Рисунок {d}.excalidraw.md"),
+            format!(
                 "---\nexcalidraw-plugin: parsed\n---\n# Excalidraw Data\n\n## Drawing\n{block}\n%%\n"
             )
             .into_bytes(),
-        });
+        ));
     }
 
     // Pictures: bytes of their own, so every one is an asset of its own.
@@ -364,10 +358,7 @@ pub fn vault(spec: Spec) -> Vault {
             bytes.extend_from_slice(&x.next().to_le_bytes());
         }
         bytes.truncate(spec.picture_bytes.max(8));
-        files.push(VaultFile {
-            path: format!("Вложения/{p}"),
-            bytes,
-        });
+        files.push(VaultFile::new(format!("Вложения/{p}"), bytes));
     }
     files.sort_by(|a, b| a.path.cmp(&b.path));
     Vault::from_files("V-10k", files)

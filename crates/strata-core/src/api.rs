@@ -7,7 +7,7 @@ use crate::ops::Op;
 use crate::store::Store;
 use crate::vault::{Vault, VaultFile};
 use crate::workspace::{
-    Edited, ExternalWire, History, ImportOptions, ImportReport, NetworkView, NodeDetails, Person,
+    Edited, ExternalWire, History, ImportOptions, ImportProgress, NetworkView, NodeDetails, Person,
     Placeable, TrashItem, TrashPreview, TreeItem, WireEnds, Workspace,
 };
 use base64::Engine as _;
@@ -109,7 +109,8 @@ pub enum Request {
     },
     /// A vault of Obsidian (13 §2–3) into network `net`, the root when
     /// none: its files, bytes in base64 — what a browser's folder picker
-    /// gives. One step of undo; the report back.
+    /// gives. The import is planned; its batches follow by `importStep`
+    /// (13 §3.3), and the workspace takes no other change till its end.
     ImportVault {
         name: String,
         files: Vec<VaultFile>,
@@ -117,6 +118,18 @@ pub enum Request {
         net: Option<String>,
         #[serde(default)]
         options: ImportOptions,
+    },
+    /// The import's next batch; the last one gives the report.
+    ImportStep,
+    /// The import stops and is taken back whole.
+    ImportCancel,
+    /// Where an import stands, if one is under way.
+    ImportProgress,
+    /// A long task the app left in the middle (10 §3.3, NFR-71).
+    Interrupted,
+    /// «Оставить» (`keep`) or «Откатить» what that task wrote.
+    SettleInterrupted {
+        keep: bool,
     },
 }
 
@@ -210,10 +223,15 @@ pub enum Response {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         bytes: Option<String>,
     },
-    /// The vault came in: the report (13 §3.6), the undo and redo steps after it.
-    Imported {
-        report: ImportReport,
+    /// Where the import stands (13 §3.3): none when there is none; its
+    /// report (13 §3.6) once the last batch is in. The undo and redo steps.
+    Importing {
+        progress: Option<ImportProgress>,
         history: History,
+    },
+    /// The long task the app left in the middle, if any.
+    Interrupted {
+        label: Option<Label>,
     },
     /// The call failed; `invalid` when the model refused it (nothing was written).
     Error {
@@ -333,17 +351,41 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             files,
             net,
             options,
-        } => ws
-            .import_vault(&Vault::from_files(&name, files), net.as_deref(), &options)
-            .map(|report| Response::Imported {
-                report,
+        } => ws.import_start(net.as_deref()).and_then(|shadow| {
+            let planned = shadow.plan(Vault::from_files(&name, files), &options);
+            match planned {
+                Ok(p) => ws.import_begin(p).map(|p| importing(ws, Some(p))),
+                Err(e) => {
+                    ws.import_cancel()?;
+                    Err(e)
+                }
+            }
+        }),
+        Request::ImportStep => ws.import_step().map(|p| importing(ws, Some(p))),
+        Request::ImportCancel => ws.import_cancel().map(|()| Response::History {
+            history: ws.history(),
+        }),
+        Request::ImportProgress => Ok(importing(ws, ws.import_progress())),
+        Request::Interrupted => Ok(Response::Interrupted {
+            label: ws.interrupted(),
+        }),
+        Request::SettleInterrupted { keep } => {
+            ws.settle_interrupted(keep).map(|()| Response::History {
                 history: ws.history(),
-            }),
+            })
+        }
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, crate::CoreError::Invalid(_)),
         message: e.to_string(),
     })
+}
+
+fn importing<S: Store>(ws: &Workspace<S>, progress: Option<ImportProgress>) -> Response {
+    Response::Importing {
+        progress,
+        history: ws.history(),
+    }
 }
 
 /// [`handle`] on JSON: a request in, a response out; a request that does
@@ -461,20 +503,38 @@ mod tests {
     }
 
     #[test]
-    fn a_vault_comes_in_through_json() {
-        // 13 §3: the browser's files, bytes in base64; one step of undo.
+    fn a_vault_comes_in_through_json_batch_by_batch() {
+        // 13 §3, §3.3: the browser's files, bytes in base64; the import is
+        // planned, then written by `importStep`; one step of undo.
         let mut ws = Workspace::create(MemoryStore::default(), "Root").expect("create");
         let b64 = |s: &str| B64.encode(s.as_bytes());
-        let answer = ask(
+        let started = ask(
             &mut ws,
             json!({ "call": "importVault", "name": "Vault", "options": { "unlinked": "Без ссылок" },
                     "files": [{ "path": "A.md", "bytes": b64("[[B]] [[C]]\n") },
                               { "path": "Folder/B.md", "bytes": b64("---\ntags: [x]\n---\nB\n") }] }),
         );
-        assert_eq!(answer["type"], "imported", "{answer}");
-        assert_eq!(answer["report"]["counts"]["notes"], 2);
-        assert_eq!(answer["report"]["counts"]["folders"], 1);
-        let codes: Vec<&str> = answer["report"]["items"]
+        assert_eq!(started["type"], "importing", "{started}");
+        assert_eq!(started["progress"]["done"], 0);
+        assert_eq!(started["progress"]["total"], 2);
+        // While it is written, the workspace takes no other change.
+        let root = ws.root();
+        let refused = ask(
+            &mut ws,
+            json!({ "call": "apply", "label": { "key": "x" },
+                    "ops": [{ "op": "createNode", "kind": "note", "name": "X", "net": root, "x": 0, "y": 0 }] }),
+        );
+        assert_eq!(refused["type"], "error", "{refused}");
+        let mut answer = ask(&mut ws, json!({ "call": "importStep" }));
+        while answer["progress"]["report"].is_null() {
+            assert_eq!(answer["type"], "importing", "{answer}");
+            answer = ask(&mut ws, json!({ "call": "importStep" }));
+        }
+        let report = &answer["progress"]["report"];
+        assert_eq!(answer["progress"]["done"], 2);
+        assert_eq!(report["counts"]["notes"], 2);
+        assert_eq!(report["counts"]["folders"], 1);
+        let codes: Vec<&str> = report["items"]
             .as_array()
             .expect("items")
             .iter()
@@ -482,11 +542,25 @@ mod tests {
             .collect();
         assert_eq!(codes, vec!["noConfig", "ghost"]);
         assert_eq!(answer["history"]["undo"]["key"], "core.change.import");
+        let idle = ask(&mut ws, json!({ "call": "importProgress" }));
+        assert!(idle["progress"].is_null(), "{idle}");
         let bad = ask(
             &mut ws,
             json!({ "call": "importVault", "name": "x", "files": [{ "path": "a", "bytes": "!" }] }),
         );
         assert_eq!(bad["type"], "error");
+        // A cancelled import takes back what its batches wrote.
+        let before = ws.tree().len();
+        ask(
+            &mut ws,
+            json!({ "call": "importVault", "name": "More",
+                    "files": [{ "path": "C.md", "bytes": b64("C\n") }] }),
+        );
+        ask(&mut ws, json!({ "call": "importStep" }));
+        let cancelled = ask(&mut ws, json!({ "call": "importCancel" }));
+        assert_eq!(cancelled["type"], "history", "{cancelled}");
+        assert_eq!(ws.tree().len(), before);
+        assert_eq!(cancelled["history"]["undo"]["key"], "core.change.import");
     }
 
     #[test]

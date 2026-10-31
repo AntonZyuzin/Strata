@@ -3,13 +3,15 @@
 //! the workspaces of this device, ✅ Q-16-12; the tabs' workspaces stay in
 //! memory with their undo, `home::Desk`), `core` the calls for the workspace
 //! on the canvas (`strata_core::api`); `preview` fetches a link asset's preview
-//! (ADR-0012); `build_info` feeds «О программе» and the benchmark.
+//! (ADR-0012); `build_info` feeds «О программе» and the benchmark. An import
+//! of a vault runs on a thread of its own and tells the UI each batch as an
+//! `import` event (13 §3.3).
 
 use serde::Serialize;
 use std::sync::Mutex;
 use strata_core::home::{Desk, Home};
 use sysinfo::{CpuRefreshKind, MemoryRefreshKind, RefreshKind, System};
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 /// The home screen's list and the workspaces open in tabs.
 #[derive(Debug)]
@@ -88,16 +90,45 @@ fn core(state: tauri::State<'_, Core>, request: String) -> String {
 }
 
 /// One call of the home screen as JSON. A removed workspace's folder goes
-/// to the system trash, so it can be brought back by hand.
+/// to the system trash, so it can be brought back by hand. An import the
+/// call started goes on on a thread of its own (13 §3.3).
 #[tauri::command]
-fn home(state: tauri::State<'_, Core>, request: String) -> String {
+fn home(handle: tauri::AppHandle, state: tauri::State<'_, Core>, request: String) -> String {
     let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
-    match guard.as_mut() {
-        Ok(app) => strata_core::home::call(&mut app.home, &mut app.desk, &request, &|p| {
-            trash::delete(p).map_err(|e| e.to_string())
-        }),
-        Err(e) => error(e),
+    let (answer, started) = match guard.as_mut() {
+        Ok(app) => {
+            let answer = strata_core::home::call(&mut app.home, &mut app.desk, &request, &|p| {
+                trash::delete(p).map_err(|e| e.to_string())
+            });
+            (answer, app.desk.take_imports())
+        }
+        Err(e) => (error(e), Vec::new()),
+    };
+    drop(guard);
+    for task in started {
+        let handle = handle.clone();
+        std::thread::spawn(move || import(&handle, task));
     }
+    answer
+}
+
+/// An import's long part (13 §3.3): the vault read and planned off the
+/// core's lock, each batch written under it; every step reaches the UI as
+/// an `import` event.
+fn import(handle: &tauri::AppHandle, task: strata_core::home::ImportTask) {
+    let state = handle.state::<Core>();
+    strata_core::home::run_import(
+        task,
+        &|f| {
+            let mut guard = state.0.lock().unwrap_or_else(|e| e.into_inner());
+            if let Ok(app) = guard.as_mut() {
+                f(&mut app.home, &mut app.desk);
+            }
+        },
+        &|event| {
+            let _ = handle.emit("import", event);
+        },
+    );
 }
 
 /// A link asset's preview (05 §4.4, ✅ Q-13-16, ADR-0012): the link is read

@@ -2058,6 +2058,29 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin-top: calc(8 * var(--u));
 }
 
+/* An import the app left in the middle (10 §3.3): the vault's name on one
+   row, what the choice means in the tooltip. */
+.interrupted-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* An import going on (13 §3.3): the last line of the toasts at the foot of
+   the canvas, as wide as they are, the batches counted and on a segmented
+   track (07 §8.2). */
+.ws-import-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.ws-import .progress-track {
+  flex: none;
+}
+
 /* The report of an import (13 §3.6): what came in as icons and numbers, the
    sections with a line each; a line with a node goes to it. One line per
    message with an ellipsis and its whole text in the tooltip; the window

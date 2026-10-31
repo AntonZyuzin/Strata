@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { vsynthVault, vsynthVaultJson } from '../../editor/src/vsynth-vault';
 import { browserHome, loadCore, memoryShelf } from './browser';
+import type { ImportJob, ImportReport } from './core';
 
 /**
  * One corpus for the import (13 §7.2): the core's tests read V-synth's vault
@@ -31,8 +32,10 @@ describe('V-synth vault', () => {
       { unlinked: 'Вложения без ссылок', text: 'текст' },
     );
     expect(r.workspace.name).toBe('V-synth');
-    expect(r.report.counts.boards).toBe(3);
-    expect(r.report.items.some((i) => i.code === 'ambiguous')).toBe(true);
+    // Open at once; the batches land after (13 §3.3).
+    const report = await ended(r.job);
+    expect(report.counts.boards).toBe(3);
+    expect(report.items.some((i) => i.code === 'ambiguous')).toBe(true);
     const history = await home.core.history();
     expect(history.undo).toEqual({ key: 'core.change.import', params: { name: 'V-synth' } });
     const tree = await home.core.tree();
@@ -52,4 +55,27 @@ describe('V-synth vault', () => {
     await expect(home.importVault({ name: 'Пусто', files: [] }, {})).rejects.toThrow();
     expect((await home.home()).workspaces).toEqual([]);
   });
+
+  it('a cancelled import leaves no workspace either', async () => {
+    // 13 §3.3 «Отмена»: the workspace made for the vault goes with it.
+    const shelf = memoryShelf();
+    const home = await browserHome(shelf);
+    const r = await home.importVault({ name: 'V-synth', files: vsynthVault() }, {});
+    expect((await home.home()).workspaces.map((w) => w.id)).toEqual([r.workspace.id]);
+    await r.job.cancel();
+    await expect(ended(r.job)).rejects.toThrow('cancelled');
+    expect((await home.home()).workspaces).toEqual([]);
+    expect(await shelf.get(`ws:${r.workspace.id}`)).toBeUndefined();
+  });
 });
+
+/** The end of an import: its report, or why there is none. */
+function ended(job: ImportJob): Promise<ImportReport> {
+  return new Promise((ok, fail) => {
+    job.watch((e) => {
+      if (e.type === 'progress' && e.progress.report) ok(e.progress.report);
+      else if (e.type === 'failed') fail(new Error(e.message));
+      else if (e.type === 'cancelled') fail(new Error('cancelled'));
+    });
+  });
+}

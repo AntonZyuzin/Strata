@@ -48,7 +48,9 @@ fn main() {
     // In memory: the core alone.
     let mut ws = Workspace::create(MemoryStore::default(), "V-10k").expect("a workspace");
     let t = Instant::now();
-    let report = ws.import_vault(&vault, None, &options).expect("the import");
+    let report = ws
+        .import_vault(vault.clone(), None, &options)
+        .expect("the import");
     println!(
         "into memory: {:.2} s — {} notes, {} folders, {} wires, {} ghosts, {} lines of the report",
         secs(t),
@@ -61,15 +63,37 @@ fn main() {
     let t = Instant::now();
     ws.undo().expect("undo");
     println!("its rollback: {:.2} s (NFR-45 ≤ 10 s)", secs(t));
+    drop(ws);
 
-    // Into a workspace folder, as on desktop.
+    // Into a workspace folder, as on desktop: planned off the lock, then
+    // written batch by batch (13 §3.3).
     let dir = std::env::temp_dir().join(format!("strata-import-speed-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     let mut ws = strata_core::sqlite::create_folder(&dir, "V-10k").expect("a folder");
-    let t = Instant::now();
-    ws.import_vault(&vault, None, &options).expect("the import");
-    let took = secs(t);
-    println!("into a folder: {took:.2} s (NFR-40 ≤ 60 s on M1)");
+    let start = Instant::now();
+    let shadow = ws.import_start(None).expect("start");
+    let planned = shadow.plan(vault, &options).expect("the plan");
+    let planning = secs(start);
+    let mut p = ws.import_begin(planned).expect("begin");
+    let mut first = None;
+    let mut longest: f64 = 0.0;
+    let mut batches = 0;
+    while p.report.is_none() {
+        // Made ready off the lock; the lock is held only to write it.
+        let ready = ws.import_take().expect("a batch").prepare().expect("ready");
+        let t = Instant::now();
+        p = ws.import_put(ready).expect("written");
+        longest = longest.max(secs(t));
+        batches += 1;
+        first.get_or_insert_with(|| secs(start));
+    }
+    let took = secs(start);
+    println!(
+        "into a folder: {took:.2} s (NFR-40 ≤ 60 s on M1) — the plan {planning:.2} s, \
+         the networks on the canvas at {:.2} s (≤ 5 s), {batches} batches, the lock held ≤ {:.0} ms",
+        first.unwrap_or(took),
+        longest * 1e3
+    );
     if spec.pictures > 0 {
         let mb = (spec.pictures * spec.picture_bytes) as f64 / 1e6;
         println!("  of it {mb:.0} MB of pictures");

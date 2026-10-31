@@ -6,6 +6,7 @@ import { download, HomeScreen } from './home/HomeScreen';
 import type { Prefs } from './prefs';
 import { SettingsScreen } from './settings/SettingsScreen';
 import { type Tab, TabBar } from './TabBar';
+import { jobOf, watchImports } from './workspace/imports';
 import { type UndoState, type WorkspaceBridge, WorkspaceScreen } from './workspace/WorkspaceScreen';
 
 /**
@@ -128,6 +129,24 @@ export function Shell(props: {
   };
 
   const active = opened?.workspace.id ?? null;
+  const activeRef = useRef(active);
+  activeRef.current = active;
+
+  // An import that does not come in takes its workspace with it (13 §3.3):
+  // its tab closes; on the canvas, the home screen comes back.
+  useEffect(
+    () =>
+      watchImports((e) => {
+        if (e.type === 'progress') return;
+        setTabs((ts) => ts.filter((x) => x.id !== e.workspace));
+        if (e.type === 'failed') setError(e.message);
+        if (activeRef.current !== e.workspace) return;
+        bridge.current = null;
+        setOpened(null);
+        setHomeKey((k) => k + 1);
+      }),
+    [],
+  );
 
   return (
     <div className="app">
@@ -197,6 +216,12 @@ export function Shell(props: {
             const at = tabs.findIndex((x) => x.id === id);
             const rest = tabs.filter((x) => x.id !== id);
             setTabs(rest);
+            // A tab whose vault is still coming in: closing it cancels the import.
+            const job = jobOf(id);
+            if (job) {
+              await job.cancel();
+              return;
+            }
             // The tab's workspace leaves memory, its undo with it (05 §11).
             if (id !== active) {
               await home.release(id);

@@ -200,7 +200,12 @@ export type CoreRequest =
       files: { path: string; bytes: string }[];
       net?: string;
       options: ImportOptions;
-    };
+    }
+  | { call: 'importStep' }
+  | { call: 'importCancel' }
+  | { call: 'importProgress' }
+  | { call: 'interrupted' }
+  | { call: 'settleInterrupted'; keep: boolean };
 
 /** A file of a vault (13 §2): its path from the vault's folder, `/` between folders. */
 export interface VaultFile {
@@ -273,6 +278,61 @@ export interface ImportReport {
   net: string;
   counts: ImportCounts;
   items: ImportItem[];
+}
+
+/** What an import has written (13 §3.3): «Импорт: 1 840 из 3 200». */
+export interface ImportProgress {
+  /** Files of the vault written so far. */
+  done: number;
+  /** Files the import brings; 0 while it is being planned. */
+  total: number;
+  /** The report, once the last batch is in. */
+  report?: ImportReport;
+}
+
+/** A step of an import running in the background (13 §3.3). */
+export type ImportEvent =
+  | { type: 'progress'; workspace: string; progress: ImportProgress }
+  /** The vault did not come in; its workspace is gone. */
+  | { type: 'failed'; workspace: string; message: string }
+  /** The import was cancelled; its workspace is gone. */
+  | { type: 'cancelled'; workspace: string };
+
+/**
+ * An import going on in the background (13 §3.3): its workspace is open
+ * while the batches land. A listener hears the last step at once, then
+ * every step after it.
+ */
+export interface ImportJob {
+  readonly workspace: string;
+  watch(listener: (e: ImportEvent) => void): () => void;
+  /** The import stops; its workspace goes with it. */
+  cancel(): Promise<void>;
+}
+
+/**
+ * An import job's listeners and its last step: the shell or the loop that
+ * runs the batches tells it each one.
+ */
+export function importJob(
+  workspace: string,
+  cancel: () => Promise<void>,
+): ImportJob & { tell(e: ImportEvent): void } {
+  const listeners = new Set<(e: ImportEvent) => void>();
+  let last: ImportEvent | null = null;
+  return {
+    workspace,
+    cancel,
+    tell(e) {
+      last = e;
+      for (const l of [...listeners]) l(e);
+    },
+    watch(listener) {
+      listeners.add(listener);
+      if (last) listener(last);
+      return () => listeners.delete(listener);
+    },
+  };
 }
 
 export interface ViewNode extends NodeAttrs {
@@ -505,7 +565,8 @@ type CoreResponse =
   | { type: 'external'; wires: ExternalWire[] }
   | { type: 'people'; people: Person[] }
   | { type: 'asset'; sha: string; bytes?: string }
-  | { type: 'imported'; report: ImportReport; history: History }
+  | { type: 'importing'; progress: ImportProgress | null; history: History }
+  | { type: 'interrupted'; label: ChangeLabel | null }
   | { type: 'error'; message: string; invalid: boolean };
 
 /** A call the core refused (`invalid`: the model's rules, nothing written) or failed. */
@@ -691,20 +752,51 @@ export class Core {
 
   /**
    * A vault of Obsidian into network `net`, the root when none (13 §2–3):
-   * one step of undo; the report back.
+   * planned at once; its batches follow by [`Core.importStep`] (13 §3.3),
+   * and the workspace takes no other change till its end.
    */
   async importVault(
     vault: PickedVault,
     options: ImportOptions,
     net?: string,
-  ): Promise<{ report: ImportReport; history: History }> {
+  ): Promise<ImportProgress> {
     const files = vault.files.map((f) => ({ path: f.path, bytes: toBase64(f.bytes) }));
     const request: CoreRequest = net
       ? { call: 'importVault', name: vault.name, files, options, net }
       : { call: 'importVault', name: vault.name, files, options };
-    const r = expect(await this.call(request), 'imported');
-    return { report: r.report, history: r.history };
+    return progressOf(expect(await this.call(request), 'importing'));
   }
+
+  /** The import's next batch; the last one brings the report and its step of undo. */
+  async importStep(): Promise<{ progress: ImportProgress; history: History }> {
+    const r = expect(await this.call({ call: 'importStep' }), 'importing');
+    return { progress: progressOf(r), history: r.history };
+  }
+
+  /** The import stops and is taken back whole. */
+  async importCancel(): Promise<History> {
+    return expect(await this.call({ call: 'importCancel' }), 'history').history;
+  }
+
+  /** Where an import stands; null when none is under way. */
+  async importProgress(): Promise<ImportProgress | null> {
+    return expect(await this.call({ call: 'importProgress' }), 'importing').progress;
+  }
+
+  /** A long task the app left in the middle (10 §3.3, NFR-71): its label, or null. */
+  async interrupted(): Promise<ChangeLabel | null> {
+    return expect(await this.call({ call: 'interrupted' }), 'interrupted').label;
+  }
+
+  /** «Оставить» (`keep`) or «Откатить» what that task wrote. */
+  async settleInterrupted(keep: boolean): Promise<History> {
+    return expect(await this.call({ call: 'settleInterrupted', keep }), 'history').history;
+  }
+}
+
+function progressOf(r: { progress: ImportProgress | null }): ImportProgress {
+  if (!r.progress) throw new CoreError('no import is under way', false);
+  return r.progress;
 }
 
 /** A workspace on the home screen. */
@@ -765,14 +857,15 @@ export interface HomeBackend {
    */
   importArchive(from: string | Uint8Array): Promise<Opened>;
   /**
-   * A vault of Obsidian as a new workspace named after its folder, opened
-   * (13 §3, S1): a folder path on desktop, the picked files in a browser.
-   * The import is the workspace's first step of undo.
+   * A vault of Obsidian as a new workspace named after its folder, open at
+   * once (13 §3, S1): a folder path on desktop, the picked files in a
+   * browser. Its batches land in the background (13 §3.3), told to the
+   * job; the import becomes the workspace's first step of undo.
    */
   importVault(
     from: string | PickedVault,
     options: ImportOptions,
-  ): Promise<Opened & { report: ImportReport }>;
+  ): Promise<Opened & { job: ImportJob }>;
   /** Calls for the open workspace. */
   readonly core: Core;
 }
@@ -780,13 +873,34 @@ export interface HomeBackend {
 type HomeResponse =
   | ({ type: 'home' } & HomeState)
   | ({ type: 'opened' } & Opened)
-  | ({ type: 'imported' } & Opened & { report: ImportReport })
+  | ({ type: 'importing' } & Opened)
   | { type: 'preview'; png: string | null }
   | { type: 'done' };
 
-/** `HomeBackend` over the JSON of `strata_core::home` (the desktop). */
-export function jsonHome(home: Transport, core: Transport): HomeBackend {
+/**
+ * `HomeBackend` over the JSON of `strata_core::home` (the desktop). `listen`
+ * hears the shell's `import` events (13 §3.3): the batches of an import run
+ * on a thread of their own.
+ */
+export function jsonHome(
+  home: Transport,
+  core: Transport,
+  listen: (handler: (e: ImportEvent) => void) => void = () => undefined,
+): HomeBackend {
   const call = (request: Record<string, unknown>) => ask<HomeResponse>(home, request);
+  const jobs = new Map<string, ReturnType<typeof importJob>>();
+  // A step that comes before its job is known: a small vault can be in
+  // before `importVault` answers. The last one is what counts.
+  const early = new Map<string, ImportEvent>();
+  const tell = (job: ReturnType<typeof importJob>, e: ImportEvent) => {
+    if (e.type !== 'progress' || e.progress.report) jobs.delete(e.workspace);
+    job.tell(e);
+  };
+  listen((e) => {
+    const job = jobs.get(e.workspace);
+    if (job) tell(job, e);
+    else early.set(e.workspace, e);
+  });
   const state = async (request: Record<string, unknown>): Promise<HomeState> => {
     const r = await call(request);
     if (r.type !== 'home') throw new CoreError(`expected home, got ${r.type}`, false);
@@ -829,8 +943,18 @@ export function jsonHome(home: Transport, core: Transport): HomeBackend {
     importVault: async (from, options) => {
       if (typeof from !== 'string') throw new CoreError('the desktop reads the folder', true);
       const r = await call({ call: 'importVault', path: from, options });
-      if (r.type !== 'imported') throw new CoreError(`expected imported, got ${r.type}`, false);
-      return { workspace: r.workspace, root: r.root, report: r.report };
+      if (r.type !== 'importing') throw new CoreError(`expected importing, got ${r.type}`, false);
+      const id = r.workspace.id;
+      const job = importJob(id, async () => {
+        await call({ call: 'cancelImport', id });
+      });
+      jobs.set(id, job);
+      const was = early.get(id);
+      if (was) {
+        early.delete(id);
+        tell(job, was);
+      }
+      return { workspace: r.workspace, root: r.root, job };
     },
   };
 }

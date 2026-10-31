@@ -4,7 +4,7 @@
 //! small, one per gesture, and a crash keeps all of a changeset or none.
 
 use crate::changeset::Changeset;
-use crate::store::{Store, StoreError, StoredDoc};
+use crate::store::{Status, Store, StoreError, StoredDoc};
 use crate::workspace::{CoreError, Result, Workspace};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -45,10 +45,53 @@ CREATE TABLE IF NOT EXISTS changesets (
   status  TEXT NOT NULL,
   body    BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS changeset_parts (
+  changeset TEXT NOT NULL,
+  seq       INTEGER NOT NULL,
+  body      BLOB NOT NULL,
+  PRIMARY KEY (changeset, seq)
+);
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB);
 ";
 
 impl SqliteStore {
+    /// Changesets of the journal by `filter`, oldest first, the writes of a
+    /// long task's parts in them in order (10 §3.3).
+    fn journal(&self, filter: &str) -> std::result::Result<Vec<Changeset>, StoreError> {
+        let mut stmt = self
+            .db
+            .prepare(&format!(
+                "SELECT body FROM changesets {filter} ORDER BY ts, rowid"
+            ))
+            .map_err(io)?;
+        let rows: Vec<Vec<u8>> = stmt
+            .query_map([], |r| r.get(0))
+            .map_err(io)?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(io)?;
+        let mut out: Vec<Changeset> = rows
+            .iter()
+            .map(|b| serde_json::from_slice(b).map_err(io))
+            .collect::<std::result::Result<_, _>>()?;
+        let mut parts = self
+            .db
+            .prepare("SELECT body FROM changeset_parts WHERE changeset = ?1 ORDER BY seq")
+            .map_err(io)?;
+        for c in &mut out {
+            let bodies: Vec<Vec<u8>> = parts
+                .query_map(params![c.id], |r| r.get(0))
+                .map_err(io)?
+                .collect::<rusqlite::Result<_>>()
+                .map_err(io)?;
+            for b in bodies {
+                let writes: Vec<crate::changeset::KeyWrite> =
+                    serde_json::from_slice(&b).map_err(io)?;
+                c.writes.extend(writes);
+            }
+        }
+        Ok(out)
+    }
+
     pub fn open(path: &Path) -> std::result::Result<Self, StoreError> {
         let db = Connection::open(path).map_err(io)?;
         db.pragma_update(None, "journal_mode", "WAL").map_err(io)?;
@@ -136,7 +179,7 @@ impl Store for SqliteStore {
         let label = serde_json::to_string(&changeset.label).map_err(io)?;
         tx.execute(
             "INSERT INTO changesets (id, ts, origin, label, reverts, status, body)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6)",
+             VALUES (?1, ?2, ?3, ?4, ?5, 'applied', ?6)",
             params![
                 changeset.id,
                 changeset.ts,
@@ -202,7 +245,7 @@ impl Store for SqliteStore {
             let label = serde_json::to_string(&c.label).map_err(io)?;
             tx.execute(
                 "INSERT INTO changesets (id, ts, origin, label, reverts, status, body)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 'done', ?6)",
+                 VALUES (?1, ?2, ?3, ?4, ?5, 'applied', ?6)",
                 params![c.id, c.ts, origin, label, c.reverts, body],
             )
             .map_err(io)?;
@@ -253,19 +296,73 @@ impl Store for SqliteStore {
         Ok(out)
     }
 
+    fn commit_part(
+        &mut self,
+        changeset: &Changeset,
+        updates: &[(String, Vec<u8>)],
+    ) -> std::result::Result<(), StoreError> {
+        let tx = self.db.transaction().map_err(io)?;
+        for (doc, bytes) in updates {
+            tx.execute(
+                "INSERT INTO docs (doc_id, kind, snapshot, updated_at) VALUES (?1, ?2, NULL, ?3)
+                 ON CONFLICT (doc_id) DO UPDATE SET updated_at = excluded.updated_at",
+                params![doc, doc_kind(doc), changeset.ts],
+            )
+            .map_err(io)?;
+            tx.execute(
+                "INSERT INTO updates (doc_id, bytes, changeset, ts) VALUES (?1, ?2, ?3, ?4)",
+                params![doc, bytes, changeset.id, changeset.ts],
+            )
+            .map_err(io)?;
+        }
+        // The changeset's row once, without writes: they are in its parts.
+        let header = Changeset {
+            writes: Vec::new(),
+            ..changeset.clone()
+        };
+        let body = serde_json::to_vec(&header).map_err(io)?;
+        let origin = serde_json::to_string(&changeset.origin).map_err(io)?;
+        let label = serde_json::to_string(&changeset.label).map_err(io)?;
+        tx.execute(
+            "INSERT INTO changesets (id, ts, origin, label, reverts, status, body)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'in-progress', ?6)
+             ON CONFLICT (id) DO NOTHING",
+            params![
+                changeset.id,
+                changeset.ts,
+                origin,
+                label,
+                changeset.reverts,
+                body
+            ],
+        )
+        .map_err(io)?;
+        let part = serde_json::to_vec(&changeset.writes).map_err(io)?;
+        tx.execute(
+            "INSERT INTO changeset_parts (changeset, seq, body) VALUES (?1,
+               (SELECT COALESCE(MAX(seq), 0) + 1 FROM changeset_parts WHERE changeset = ?1), ?2)",
+            params![changeset.id, part],
+        )
+        .map_err(io)?;
+        tx.commit().map_err(io)
+    }
+
+    fn close(&mut self, id: &str, status: Status) -> std::result::Result<(), StoreError> {
+        self.db
+            .execute(
+                "UPDATE changesets SET status = ?2 WHERE id = ?1",
+                params![id, status.as_str()],
+            )
+            .map_err(io)?;
+        Ok(())
+    }
+
+    fn unfinished(&self) -> std::result::Result<Vec<Changeset>, StoreError> {
+        self.journal("WHERE status = 'in-progress'")
+    }
+
     fn changesets(&self) -> std::result::Result<Vec<Changeset>, StoreError> {
-        let mut stmt = self
-            .db
-            .prepare("SELECT body FROM changesets ORDER BY ts, rowid")
-            .map_err(io)?;
-        let rows: Vec<Vec<u8>> = stmt
-            .query_map([], |r| r.get(0))
-            .map_err(io)?
-            .collect::<rusqlite::Result<_>>()
-            .map_err(io)?;
-        rows.iter()
-            .map(|b| serde_json::from_slice(b).map_err(io))
-            .collect()
+        self.journal("")
     }
 }
 

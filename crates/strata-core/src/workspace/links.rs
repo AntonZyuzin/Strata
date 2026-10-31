@@ -14,7 +14,7 @@
 //! `[[Новое]]`, with point edits in the texts (13 §6.5, ☑ Q-10-9): which
 //! links named it is the rule above with the names as they were.
 
-use super::{Changeset, Store, Val, Workspace, engine, load, read};
+use super::{Changeset, Store, Val, Workspace, Writes, engine, load, read};
 use crate::changeset::Label;
 use crate::workspace::Result;
 use loro::{ExportMode, LoroValue, ValueOrContainer};
@@ -80,6 +80,9 @@ pub(super) struct Asked {
     pub(super) ghosts: BTreeMap<String, String>,
     /// Link key → the node it found.
     pub(super) resolved: HashMap<String, NodeId>,
+    /// Links several nodes answer, once each: the link as written, the
+    /// node it went to and how many answered (13 §3.6 «Неоднозначная ссылка»).
+    pub(super) ambiguous: Vec<(String, NodeId, usize)>,
 }
 
 /// The wires and ghosts a note has, by the edges of its shard.
@@ -109,6 +112,26 @@ impl<S: Store> Workspace<S> {
             }
         }
         out
+    }
+
+    /// A live note is here that is not one of `done`.
+    fn notes_besides(&self, done: &BTreeSet<NodeId>) -> bool {
+        let mut found = false;
+        for shard in self.index_shards() {
+            shard.get_map("kind").for_each(|id, v| {
+                if found {
+                    return;
+                }
+                let note = matches!(&v, ValueOrContainer::Value(LoroValue::String(k)) if k.as_str() == "note");
+                if note && let Ok(n) = NodeId::parse(id) {
+                    found = !done.contains(&n) && self.alive(n);
+                }
+            });
+            if found {
+                break;
+            }
+        }
+        found
     }
 
     fn name_as(&self, n: NodeId, was: &Before) -> String {
@@ -304,13 +327,28 @@ impl<S: Store> Workspace<S> {
         names: &HashMap<String, Vec<NodeId>>,
     ) -> Asked {
         let mut out = Asked::default();
+        let mut seen: HashSet<String> = HashSet::new();
         for link in strata_markdown::scan(text).links {
             let k = link_key(&link.target);
             let segs = segments(&k);
             if segs.is_empty() {
                 continue;
             }
-            match self.resolve(note, &segs, held, names, &Before::new()) {
+            let target = match self.candidates(note, &segs, held, names, &Before::new()) {
+                Found::Held(n) => Target::Node(n),
+                Found::Some(found) => match found.len() {
+                    0 => Target::Ghost,
+                    1 => Target::Node(found[0]),
+                    count => {
+                        let n = self.nearest(note, &found);
+                        if seen.insert(k.clone()) {
+                            out.ambiguous.push((link.target.clone(), n, count));
+                        }
+                        Target::Node(n)
+                    }
+                },
+            };
+            match target {
                 // A link to itself makes no wire (05 §8.2 rule 2).
                 Target::Node(n) if n == note => {}
                 Target::Node(n) => {
@@ -343,12 +381,39 @@ impl<S: Store> Workspace<S> {
             self.ensure_doc(&doc)?;
             texts.push(self.docs[&doc].get_text("text").to_string());
         }
+        let pairs: Vec<(NodeId, &str)> = notes
+            .iter()
+            .copied()
+            .zip(texts.iter().map(String::as_str))
+            .collect();
+        let (plan, _) = self.links_plan(&pairs, now_ms());
+        if plan.is_empty() {
+            return Ok(None);
+        }
+        self.write(
+            ChangesetOrigin::System,
+            Label::new("core.change.links"),
+            |tx| {
+                for (doc, map, key, value) in plan {
+                    tx.set(&doc, &map, &key, value)?;
+                }
+                Ok(())
+            },
+        )
+        .map(|c| Some(c).filter(|c| !c.writes.is_empty()))
+    }
+
+    /// The writes that make the notes' wires, ghosts and `itemsDue` follow
+    /// their texts as they are now — [`Self::relink`]'s, and an import's for
+    /// the notes it brings, in its own step (13 §3.1 step 7) — and what each
+    /// text asked for, in the order of `notes`.
+    pub(super) fn links_plan(&self, notes: &[(NodeId, &str)], ts: i64) -> (Writes, Vec<Asked>) {
         let names = self.link_names();
-        let mut outgoing = self.outgoing_many(&notes.iter().copied().collect());
-        let ts = now_ms();
+        let mut outgoing = self.outgoing_many(&notes.iter().map(|&(n, _)| n).collect());
         let at = || Some(Val::map([("at", Val::Int(ts))]));
-        let mut plan: Vec<(String, &str, String, Option<Val>)> = Vec::new();
-        for (&note, text) in notes.iter().zip(&texts) {
+        let mut plan: Writes = Vec::new();
+        let mut asks: Vec<Asked> = Vec::with_capacity(notes.len());
+        for &(note, text) in notes {
             let index = self.index_doc(note);
             let from = note.to_text();
             // The nearest open deadline of the note's Tasks items (13 §2.9.1,
@@ -360,15 +425,12 @@ impl<S: Store> Workspace<S> {
                 .min()
                 .map(Val::Str);
             if read(&self.docs[&index], "itemsDue", &from) != due {
-                plan.push((index.clone(), "itemsDue", from.clone(), due));
+                plan.push((index.clone(), "itemsDue".to_owned(), from.clone(), due));
             }
             let have = outgoing.remove(&note).unwrap_or_default();
             let held: BTreeSet<NodeId> = have.wires.keys().copied().collect();
-            let Asked {
-                want,
-                ghosts,
-                resolved,
-            } = self.asked(note, text, &held, &names);
+            let asked = self.asked(note, text, &held, &names);
+            let (want, ghosts, resolved) = (&asked.want, &asked.ghosts, &asked.resolved);
             let origins = |key: &str| -> Vec<&'static str> {
                 ORIGINS
                     .into_iter()
@@ -391,14 +453,19 @@ impl<S: Store> Workspace<S> {
                         None if o != "text" => continue,
                         None => {}
                     }
-                    plan.push((index.clone(), "edgeOrigin", format!("{key}|{o}"), None));
+                    plan.push((
+                        index.clone(),
+                        "edgeOrigin".to_owned(),
+                        format!("{key}|{o}"),
+                        None,
+                    ));
                     left -= 1;
                 }
                 if left == 0 {
-                    plan.push((index.clone(), "edge", key.clone(), None));
+                    plan.push((index.clone(), "edge".to_owned(), key.clone(), None));
                 }
             }
-            for (k, x) in &ghosts {
+            for (k, x) in ghosts {
                 let key = EdgeKey::to_ghost(note, k).to_text();
                 let ends = Val::map([
                     ("from", Val::str(from.clone())),
@@ -407,24 +474,34 @@ impl<S: Store> Workspace<S> {
                 match have.ghosts.get(k) {
                     // The name as the text spells it now.
                     Some((_, was)) if was != x => {
-                        plan.push((index.clone(), "edge", key, Some(ends)))
+                        plan.push((index.clone(), "edge".to_owned(), key, Some(ends)))
                     }
                     Some(_) => {}
                     None => {
-                        plan.push((index.clone(), "edgeOrigin", format!("{key}|text"), at()));
-                        plan.push((index.clone(), "edge", key, Some(ends)));
+                        plan.push((
+                            index.clone(),
+                            "edgeOrigin".to_owned(),
+                            format!("{key}|text"),
+                            at(),
+                        ));
+                        plan.push((index.clone(), "edge".to_owned(), key, Some(ends)));
                     }
                 }
             }
-            for &to in &want {
+            for &to in want {
                 let key = EdgeKey::between(note, to).to_text();
                 if !have.wires.contains_key(&to) {
                     let ends = Val::map([
                         ("from", Val::str(from.clone())),
                         ("to", Val::str(to.to_text())),
                     ]);
-                    plan.push((index.clone(), "edgeOrigin", format!("{key}|text"), at()));
-                    plan.push((index.clone(), "edge", key.clone(), Some(ends)));
+                    plan.push((
+                        index.clone(),
+                        "edgeOrigin".to_owned(),
+                        format!("{key}|text"),
+                        at(),
+                    ));
+                    plan.push((index.clone(), "edge".to_owned(), key.clone(), Some(ends)));
                 }
                 for o in carried
                     .get(&to)
@@ -432,34 +509,32 @@ impl<S: Store> Workspace<S> {
                     .flatten()
                     .filter(|o| **o != "text")
                 {
-                    plan.push((index.clone(), "edgeOrigin", format!("{key}|{o}"), at()));
+                    plan.push((
+                        index.clone(),
+                        "edgeOrigin".to_owned(),
+                        format!("{key}|{o}"),
+                        at(),
+                    ));
                 }
             }
             for (to, key) in &have.wires {
                 if want.contains(to) {
                     continue;
                 }
-                plan.push((index.clone(), "edgeOrigin", format!("{key}|text"), None));
+                plan.push((
+                    index.clone(),
+                    "edgeOrigin".to_owned(),
+                    format!("{key}|text"),
+                    None,
+                ));
                 // The wire lives while it has an origin (10 §2.3).
                 if origins(key).iter().all(|o| *o == "text") {
-                    plan.push((index.clone(), "edge", key.clone(), None));
+                    plan.push((index.clone(), "edge".to_owned(), key.clone(), None));
                 }
             }
+            asks.push(asked);
         }
-        if plan.is_empty() {
-            return Ok(None);
-        }
-        self.write(
-            ChangesetOrigin::System,
-            Label::new("core.change.links"),
-            |tx| {
-                for (doc, map, key, value) in plan {
-                    tx.set(&doc, map, &key, value)?;
-                }
-                Ok(())
-            },
-        )
-        .map(|c| Some(c).filter(|c| !c.writes.is_empty()))
+        (plan, asks)
     }
 
     /// `[[Старое]]` → `[[Новое]]` in the notes whose links named a node the
@@ -619,8 +694,24 @@ impl<S: Store> Workspace<S> {
         step: &Changeset,
         rewrite: bool,
     ) -> Result<Option<Changeset>> {
+        self.links_after_but(step, rewrite, &BTreeSet::new())
+    }
+
+    /// [`Self::links_after`] for every note but `done`: an import's notes,
+    /// whose wires its own step made (13 §3.1 step 7).
+    pub(super) fn links_after_but(
+        &mut self,
+        step: &Changeset,
+        rewrite: bool,
+        done: &BTreeSet<NodeId>,
+    ) -> Result<Option<Changeset>> {
         if rewrite {
             self.rewrite_links(step)?;
+        }
+        // A workspace with no note besides `done` — a new one an import
+        // filled — has nothing to look for: no pass over its wires.
+        if !done.is_empty() && !self.notes_besides(done) {
+            return Ok(None);
         }
         let mut changed: BTreeSet<NodeId> = BTreeSet::new();
         let mut paths = false;
@@ -705,6 +796,7 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
+        notes.retain(|n| !done.contains(n));
         self.relink(&notes)
     }
 }

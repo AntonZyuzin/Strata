@@ -3,7 +3,7 @@
  * the window, the home screen's backend and the folder picker.
  */
 
-import { type HomeBackend, jsonHome } from '@strata/backend';
+import { type HomeBackend, type ImportEvent, jsonHome } from '@strata/backend';
 
 export interface BuildInfo {
   core: string;
@@ -56,13 +56,23 @@ export async function linkPreview(id: string): Promise<boolean> {
 export async function openHome(): Promise<HomeBackend> {
   if (isTauri()) {
     const { invoke } = await import('@tauri-apps/api/core');
+    const { listen } = await import('@tauri-apps/api/event');
+    let hear: (e: ImportEvent) => void = () => undefined;
+    // An import's batches run on a thread of the shell (13 §3.3): each is
+    // an `import` event. Heard from the start, before any import begins.
+    await listen<ImportEvent>('import', (e) => hear(e.payload));
     return jsonHome(
       (request) => invoke<string>('home', { request }),
       (request) => invoke<string>('core', { request }),
+      (handler) => {
+        hear = handler;
+      },
     );
   }
   const { browserHome, indexedDbShelf } = await import('@strata/backend/browser');
-  return browserHome(await indexedDbShelf());
+  // Layout tests watch an import's batches land (13 §3.3): `?batchPause=ms`.
+  const pause = Number(new URLSearchParams(window.location.search).get('batchPause')) || 0;
+  return browserHome(await indexedDbShelf(), undefined, pause);
 }
 
 /** «Импорт…» on desktop: an archive picked in the system dialog; null when cancelled. */

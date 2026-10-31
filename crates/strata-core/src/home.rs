@@ -249,32 +249,44 @@ impl Home {
     }
 
     /// A vault of Obsidian on disk (13 §3, S1) as a new workspace in
-    /// `<data>/Workspaces`, named after the vault's folder, opened. The vault
-    /// is only read (13 §1.4 item 1); a vault that does not come in leaves
-    /// no workspace behind.
-    pub fn import_vault(
+    /// `<data>/Workspaces`, named after the vault's folder, open and waiting
+    /// for its import (13 §3.3): the vault is read, planned and written by
+    /// [`run_import`] on the caller's thread. The vault is only read (13
+    /// §1.4 item 1).
+    fn start_import(
         &mut self,
         path: &Path,
         options: &crate::ImportOptions,
-    ) -> Result<(Workspace<SqliteStore>, Entry, crate::ImportReport)> {
-        let vault = crate::vault::Vault::read(path).map_err(io)?;
-        let name = match vault.name.trim() {
-            "" => "Obsidian",
-            n => n,
-        };
-        let folder = self.new_folder(name);
-        let mut ws = create_folder(&folder, name)?;
-        let report = match ws.import_vault(&vault, None, options) {
-            Ok(r) => r,
-            Err(e) => {
-                drop(ws);
-                let _ = std::fs::remove_dir_all(&folder);
-                return Err(e);
-            }
-        };
+    ) -> Result<(Workspace<SqliteStore>, Entry, ImportTask)> {
+        if !path.is_dir() {
+            return Err(invalid(format!("{} is no folder", path.display())));
+        }
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().trim().to_owned())
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| "Obsidian".to_owned());
+        let folder = self.new_folder(&name);
+        let mut ws = create_folder(&folder, &name)?;
+        let shadow = ws.import_start(None)?;
         let entry = self.remember(&ws, &folder, now_ms());
         self.save()?;
-        Ok((ws, entry, report))
+        let task = ImportTask {
+            workspace: entry.id.clone(),
+            vault: path.to_owned(),
+            options: options.clone(),
+            shadow,
+        };
+        Ok((ws, entry, task))
+    }
+
+    /// A half-made workspace goes: an import that did not come in leaves
+    /// none behind (13 §3).
+    fn drop_import(&mut self, desk: &mut Desk, id: &str) {
+        desk.release(id);
+        if let Ok(path) = self.forget(id) {
+            let _ = std::fs::remove_dir_all(path);
+        }
     }
 
     /// Renames a workspace: its root network (05 §3), as a step of its own.
@@ -332,6 +344,8 @@ impl Home {
 pub struct Desk {
     tabs: Vec<Workspace<SqliteStore>>,
     current: Option<String>,
+    /// Imports started and not yet handed to a thread.
+    started: Vec<ImportTask>,
 }
 
 impl Desk {
@@ -355,6 +369,12 @@ impl Desk {
         self.tabs.iter().any(|w| w.id() == id)
     }
 
+    /// The imports `importVault` started: the shell runs each on a thread
+    /// of its own with [`run_import`] (13 §3.3).
+    pub fn take_imports(&mut self) -> Vec<ImportTask> {
+        std::mem::take(&mut self.started)
+    }
+
     /// A workspace into its tab, on the canvas; one there with its id gives way.
     fn put(&mut self, ws: Workspace<SqliteStore>) -> String {
         let id = ws.id().to_owned();
@@ -370,6 +390,114 @@ impl Desk {
         if self.current.as_deref() == Some(id) {
             self.current = None;
         }
+    }
+}
+
+/// An import `importVault` started (13 §3.3): its workspace is open and
+/// waits; [`run_import`] reads, plans and writes the vault.
+pub struct ImportTask {
+    /// The workspace the vault comes into.
+    pub workspace: String,
+    vault: PathBuf,
+    options: crate::ImportOptions,
+    shadow: crate::ImportShadow,
+}
+
+impl std::fmt::Debug for ImportTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ImportTask")
+            .field("workspace", &self.workspace)
+            .field("vault", &self.vault)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What an import tells the UI as it goes (13 §3.3): «Импорт: 1 840 из
+/// 3 200», the report with the last batch, or its end without one.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ImportEvent {
+    Progress {
+        workspace: String,
+        progress: crate::ImportProgress,
+    },
+    /// The vault did not come in; its workspace is gone.
+    Failed { workspace: String, message: String },
+    /// The import was cancelled, or its tab closed.
+    Cancelled { workspace: String },
+}
+
+/// Lends the home list and the desk under the shell's lock for the time of
+/// one call.
+pub type Lend<'a> = &'a dyn Fn(&mut dyn FnMut(&mut Home, &mut Desk));
+
+/// Runs an import [`handle`] started to its end on the caller's thread:
+/// the vault is read and planned with no lock (13 §3.3), each batch under
+/// `with`, which lends the home list and the desk while it holds the lock;
+/// `tell` hears every step. A vault that does not come in leaves no
+/// workspace behind; one whose workspace went meanwhile stops.
+pub fn run_import(task: ImportTask, with: Lend<'_>, tell: &dyn Fn(ImportEvent)) {
+    let ImportTask {
+        workspace: id,
+        vault,
+        options,
+        shadow,
+        ..
+    } = task;
+    let fail = |e: CoreError| {
+        with(&mut |home, desk| home.drop_import(desk, &id));
+        tell(ImportEvent::Failed {
+            workspace: id.clone(),
+            message: e.to_string(),
+        });
+    };
+    let planned = match crate::vault::Vault::read(&vault)
+        .map_err(io)
+        .and_then(|v| shadow.plan(v, &options))
+    {
+        Ok(p) => p,
+        Err(e) => return fail(e),
+    };
+    let mut planned = Some(planned);
+    let mut step: Option<Result<crate::ImportProgress>> = None;
+    with(&mut |_, desk| {
+        if let (Some(ws), Some(p)) = (desk.get_mut(&id), planned.take()) {
+            step = Some(ws.import_begin(p));
+        }
+    });
+    loop {
+        match step.take() {
+            None => {
+                return tell(ImportEvent::Cancelled {
+                    workspace: id.clone(),
+                });
+            }
+            Some(Err(e)) => return fail(e),
+            Some(Ok(progress)) => {
+                let done = progress.report.is_some();
+                tell(ImportEvent::Progress {
+                    workspace: id.clone(),
+                    progress,
+                });
+                if done {
+                    return;
+                }
+            }
+        }
+        // The next batch, made ready off the lock: only its writing holds it.
+        let mut batch = None;
+        with(&mut |_, desk| batch = desk.get_mut(&id).map(Workspace::import_take));
+        let ready = match batch.map(|b| b.and_then(crate::ImportBatch::prepare)) {
+            None => continue,
+            Some(Err(e)) => return fail(e),
+            Some(Ok(r)) => r,
+        };
+        let mut ready = Some(ready);
+        with(&mut |_, desk| {
+            if let (Some(ws), Some(r)) = (desk.get_mut(&id), ready.take()) {
+                step = Some(ws.import_put(r));
+            }
+        });
     }
 }
 
@@ -427,11 +555,16 @@ pub enum Request {
         path: String,
     },
     /// The vault of Obsidian at `path` as a new workspace named after its
-    /// folder, opened (13 §3, S1); the import is its first step of undo.
+    /// folder, opened (13 §3, S1); its import goes on in the background
+    /// (13 §3.3) and becomes its first step of undo.
     ImportVault {
         path: String,
         #[serde(default)]
         options: crate::ImportOptions,
+    },
+    /// The import into workspace `id` stops; the workspace goes with it.
+    CancelImport {
+        id: String,
     },
 }
 
@@ -451,11 +584,11 @@ pub enum Response {
     Preview {
         png: Option<String>,
     },
-    /// A vault came in as a new workspace, opened; the report (13 §3.6).
-    Imported {
+    /// A vault is coming in as a new workspace, open: its batches follow
+    /// as `import` events (13 §3.3).
+    Importing {
         workspace: Entry,
         root: String,
-        report: crate::ImportReport,
     },
     Done,
     Error {
@@ -572,16 +705,17 @@ pub fn handle(
             opened(desk, done)
         }
         Request::ImportVault { path, options } => home
-            .import_vault(Path::new(&path), &options)
-            .map(|(ws, workspace, report)| {
+            .start_import(Path::new(&path), &options)
+            .map(|(ws, workspace, task)| {
                 let root = ws.root();
                 desk.put(ws);
-                Response::Imported {
-                    workspace,
-                    root,
-                    report,
-                }
+                desk.started.push(task);
+                Response::Importing { workspace, root }
             }),
+        Request::CancelImport { id } => {
+            home.drop_import(desk, &id);
+            Ok(home_of(home, desk))
+        }
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, CoreError::Invalid(_)),
@@ -911,9 +1045,17 @@ mod tests {
             &mut desk,
             json!({ "call": "importVault", "path": vault.to_string_lossy(), "options": { "unlinked": "Без ссылок" } }),
         );
-        assert_eq!(r["type"], "imported", "{r}");
+        assert_eq!(r["type"], "importing", "{r}");
         assert_eq!(r["workspace"]["name"], "Мой vault");
-        assert_eq!(r["report"]["counts"]["notes"], 2);
+        // Open in its tab and waiting: no other change till the import ends.
+        let ws = desk.current_mut().expect("open in a tab");
+        assert!(ws.import_progress().is_some());
+        let events = run(&mut home, &mut desk);
+        let Some(ImportEvent::Progress { progress, .. }) = events.last() else {
+            panic!("{events:?}");
+        };
+        assert_eq!(progress.report.as_ref().map(|r| r.counts.notes), Some(2));
+        assert_eq!((progress.done, progress.total), (2, 2));
         let ws = desk.current_mut().expect("open in a tab");
         assert_eq!(
             ws.history().undo.map(|l| l.key).as_deref(),
@@ -929,11 +1071,64 @@ mod tests {
             &mut desk,
             json!({ "call": "importVault", "path": empty.to_string_lossy() }),
         );
-        assert_eq!(r["type"], "error");
+        assert_eq!(r["type"], "importing");
+        let events = run(&mut home, &mut desk);
+        assert!(
+            matches!(events.last(), Some(ImportEvent::Failed { .. })),
+            "{events:?}"
+        );
+        assert_eq!(home.list().len(), 1);
+        // A cancelled one neither: its tab and its folder go.
+        let r = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "importVault", "path": vault.to_string_lossy() }),
+        );
+        let id = r["workspace"]["id"].as_str().expect("id").to_owned();
+        let folder = home.entry(&id).expect("listed").path.clone();
+        ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "cancelImport", "id": id }),
+        );
+        let events = run(&mut home, &mut desk);
+        assert!(
+            matches!(events.last(), Some(ImportEvent::Cancelled { .. })),
+            "{events:?}"
+        );
+        assert!(!desk.is_open(&id) && !folder.exists());
         assert_eq!(home.list().len(), 1);
         for d in [dir, vault, empty] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn an_import_goes_to_a_thread_of_its_own() {
+        // 13 §3.3: the shell moves the task to a thread and lends the desk.
+        fn send<T: Send>() {}
+        send::<ImportTask>();
+        send::<ImportEvent>();
+        send::<crate::ReadyBatch>();
+    }
+
+    /// The imports a call started, run here to their end as a shell's thread would.
+    fn run(home: &mut Home, desk: &mut Desk) -> Vec<ImportEvent> {
+        let tasks = desk.take_imports();
+        let events = std::cell::RefCell::new(Vec::new());
+        let lent = std::cell::RefCell::new((home, desk));
+        for task in tasks {
+            run_import(
+                task,
+                &|f| {
+                    let mut l = lent.borrow_mut();
+                    let (h, d) = &mut *l;
+                    f(h, d);
+                },
+                &|e| events.borrow_mut().push(e),
+            );
+        }
+        events.into_inner()
     }
 
     #[test]

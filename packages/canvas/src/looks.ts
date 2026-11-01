@@ -31,7 +31,8 @@ export function radiusOf(
   let step = node.kind === 'network' || node.kind === 'project' ? 1 : 0;
   if (wires >= BUSY_WIRES) step++;
   if (node.key) step++;
-  return STEPS[Math.min(step, STEPS.length - 1)] / 2;
+  // Clamped to the table: XL at most.
+  return (STEPS[Math.min(step, STEPS.length - 1)] ?? SIZE.xl) / 2;
 }
 
 /** Semantic zoom by the on-screen diameter (07 §4.9). */

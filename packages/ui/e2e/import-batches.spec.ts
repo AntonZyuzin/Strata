@@ -27,27 +27,56 @@ function bigVault(n: number): string {
 
 const status = (page: Page) => page.locator('.ws-import');
 
-/** What the page shows of an import: a failed wait prints it (13 §3.3). */
-const importState = (page: Page) =>
-  page.evaluate(() => ({
-    report: document.querySelector('.import-report') !== null,
-    status: document.querySelector('.ws-import-text')?.textContent ?? null,
-    tab: document.querySelector('.tab.is-active')?.textContent ?? null,
-    nodes: document.querySelector('.workspace')?.getAttribute('data-nodes') ?? null,
-    error: document.querySelector('.shell-error, .home-error, .toast')?.textContent ?? null,
-  }));
+/** What each page said in its console, its errors and crashes. */
+const said = new WeakMap<Page, string[]>();
 
-/** The report of the import that ended, or what the page shows instead. */
-async function reportShown(page: Page, timeout = 60_000) {
-  await expect.poll(() => importState(page), { timeout }).toMatchObject({ report: true });
+function listen(page: Page): void {
+  if (said.has(page)) return;
+  const lines: string[] = [];
+  said.set(page, lines);
+  page.on('console', (m) => lines.push(`${m.type()}: ${m.text()}`));
+  page.on('pageerror', (e) => lines.push(`pageerror: ${e.message}`));
+  page.on('crash', () => lines.push('crash'));
 }
+
+/** What the page shows of an import, as one line (13 §3.3). */
+const importState = (page: Page) =>
+  page
+    .evaluate(() =>
+      JSON.stringify({
+        report: document.querySelector('.import-report') !== null,
+        status: document.querySelector('.ws-import-text')?.textContent ?? null,
+        tab: document.querySelector('.tab.is-active')?.textContent ?? null,
+        nodes: document.querySelector('.workspace')?.getAttribute('data-nodes') ?? null,
+        dialog: document.querySelector('.interrupted-dialog') !== null,
+        error: document.querySelector('.shell-error, .home-error, .toast')?.textContent ?? null,
+      }),
+    )
+    .catch((e: unknown) => `no answer: ${String(e)}`);
+
+/**
+ * Waits for `part` in the page's state; a wait that fails says what the
+ * page showed and what it said, not only that it timed out.
+ */
+async function waitFor(page: Page, part: string, timeout = 60_000) {
+  try {
+    await expect.poll(() => importState(page), { timeout }).toContain(part);
+  } catch (e) {
+    const tail = (said.get(page) ?? []).slice(-40).join('\n');
+    throw new Error(`${(e as Error).message}\n--- the page said ---\n${tail}`);
+  }
+}
+
+/** The report of the import that ended. */
+const reportShown = (page: Page) => waitFor(page, '"report":true');
 
 /** Imports `n` notes; the batches land `pause` ms apart, to be watched. */
 async function startImport(page: Page, n = 2000, pause = 400) {
+  listen(page);
   await page.goto(`/?plain&batchPause=${pause}`);
   await expect(page.locator('.home-vault')).toBeVisible();
   await page.locator('.home-vault-input').setInputFiles(bigVault(n));
-  await expect(page.locator('.tab.is-active')).toHaveText('Batches', { timeout: 60_000 });
+  await waitFor(page, '"tab":"Batches"');
 }
 
 test.use({ locale: 'ru-RU' });
@@ -166,7 +195,7 @@ test('an import the app broke off asks «Откатить» or «Оставит�
   test.setTimeout(120_000);
   await breakOff(page);
   const dialog = page.locator('.interrupted-dialog');
-  await expect(dialog).toBeVisible({ timeout: 30_000 });
+  await waitFor(page, '"dialog":true', 30_000);
   await expect(dialog.locator('h2')).toHaveText('Импорт прерван');
   await expect(dialog.locator('.interrupted-name')).toHaveText('Batches');
   // «Откатить» is the default: what the batches wrote goes.
@@ -189,7 +218,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter(
       const page = await context.newPage();
       await breakOff(page);
       const dialog = page.locator('.interrupted-dialog');
-      await expect(dialog).toBeVisible({ timeout: 30_000 });
+      await waitFor(page, '"dialog":true', 30_000);
       boxes.push(await box(page, '.interrupted-dialog'));
       expect(await overflowing(page, '.interrupted-dialog'), `${locale} text must fit`).toEqual([]);
       await page.screenshot({ path: test.info().outputPath(`import-interrupted-${locale}.png`) });
@@ -226,6 +255,7 @@ interface FixHook {
 }
 
 async function importFixes(page: Page) {
+  listen(page);
   await page.goto('/?plain');
   await expect(page.locator('.home-vault')).toBeVisible();
   await page.locator('.home-vault-input').setInputFiles(fixesVault());

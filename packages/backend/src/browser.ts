@@ -46,23 +46,36 @@ function request<T>(r: IDBRequest<T>): Promise<T> {
   });
 }
 
+/**
+ * A write's end: kept once its transaction commits. A request's success
+ * comes before that, and a commit can still fail — the disk full — and
+ * abort the transaction: what was written is then not there.
+ */
+function committed(t: IDBTransaction): Promise<void> {
+  return new Promise((ok, fail) => {
+    t.oncomplete = () => ok();
+    t.onerror = () => fail(t.error);
+    t.onabort = () => fail(t.error ?? new DOMException('the write was aborted', 'AbortError'));
+  });
+}
+
 /** A shelf in IndexedDB: one store of byte arrays. */
 export async function indexedDbShelf(name = 'strata'): Promise<Shelf> {
   const open = indexedDB.open(name, 1);
   open.onupgradeneeded = () => open.result.createObjectStore('kv');
   const db = await request(open);
-  const store = (mode: IDBTransactionMode) => db.transaction('kv', mode).objectStore('kv');
+  const write = (f: (store: IDBObjectStore) => void) => {
+    const t = db.transaction('kv', 'readwrite');
+    f(t.objectStore('kv'));
+    return committed(t);
+  };
   return {
     get: async (k) => {
-      const v: unknown = await request(store('readonly').get(k));
+      const v: unknown = await request(db.transaction('kv', 'readonly').objectStore('kv').get(k));
       return v instanceof Uint8Array ? v : undefined;
     },
-    set: async (k, v) => {
-      await request(store('readwrite').put(v, k));
-    },
-    delete: async (k) => {
-      await request(store('readwrite').delete(k));
-    },
+    set: (k, v) => write((store) => store.put(v, k)),
+    delete: (k) => write((store) => store.delete(k)),
   };
 }
 

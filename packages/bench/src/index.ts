@@ -4,6 +4,7 @@ import { runCanvasScenario } from './canvas';
 import { collectEnvironment, type Environment } from './env';
 import { describeError } from './errors';
 import { onStallWait } from './frame-loop';
+import { type ImportHost, runImportScenario } from './import';
 import { runLayoutScenario } from './layout';
 import { runLookScenario } from './look';
 import { runLoroIndex, runLoroText } from './loro';
@@ -46,7 +47,12 @@ async function requestWakeLock(): Promise<{ release(): Promise<void> } | null> {
  */
 const QUICK_STALL_MS = 60_000;
 
-export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
+/** What only the app can run: the `import` scenario needs its workspace screen. */
+export interface Hosts {
+  import?: ImportHost;
+}
+
+export function scenarios(profile: Profile = 'full', hosts: Hosts = {}): readonly Scenario[] {
   const q = profile === 'quick';
   // Frame method of 14 §1.4: 2 s warmup, 5 runs of 10 s, median p95.
   // N-5k has 7 500 wires, N-10k 15 000 (14 §1.3).
@@ -164,6 +170,18 @@ export function scenarios(profile: Profile = 'full'): readonly Scenario[] {
       draws: true,
       run: (s) => runNoteScenario(s, q ? 200_000 : 1_000_000, q ? 20 : 120),
     },
+    // Milestone 1C (spike 11's import): the canvas while V-10k comes in (NFR-40, NFR-41).
+    {
+      id: 'import-v10k',
+      spike: 11,
+      draws: true,
+      run: (s, env) =>
+        runImportScenario(s, hosts.import, {
+          notes: q ? 500 : 10_000,
+          vsyncMs: env.vsyncMs,
+          cycleMs: 10_000,
+        }),
+    },
   ];
 }
 
@@ -174,13 +192,15 @@ export async function runBench(opts: {
   app: AppInfo;
   profile?: Profile;
   only?: readonly ScenarioId[];
+  /** The app's part of the scenarios that need it. */
+  hosts?: Hosts;
   /** Called before each scenario with its id, and after each with its outcome. */
   onProgress?: ProgressFn;
   /** The runs wait for the window to come back (it was hidden or the display slept). */
   onWait?: (waiting: boolean) => void;
 }): Promise<BenchReport> {
   const profile = opts.profile ?? 'full';
-  const list = scenarios(profile).filter((s) => !opts.only || opts.only.includes(s.id));
+  const list = scenarios(profile, opts.hosts).filter((s) => !opts.only || opts.only.includes(s.id));
   // Keep the display on: on battery a Mac sleeps it after 2 minutes, the run takes 6.
   // Asked first, while the click on «Запустить» still counts as user activation.
   // Runs that stall anyway are voided by runFrames, which waits for the window.

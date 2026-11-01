@@ -489,9 +489,14 @@ export class Editor {
   }
 
   fitAll(): void {
-    const box = this.boxOf([...this.graph.nodes.keys()]);
+    const box = this.bounds();
     if (box) this.view.camera.fit(box, this.seen(), this.view.height);
     this.view.invalidate();
+  }
+
+  /** Where the network's nodes lie, rims and labels in, world units; null while there are none. */
+  bounds(): { minX: number; minY: number; maxX: number; maxY: number } | null {
+    return this.boxOf([...this.graph.nodes.keys()]);
   }
 
   /** Width of the canvas one can see: the Chrome on the right taken off. */

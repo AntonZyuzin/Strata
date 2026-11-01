@@ -2,6 +2,7 @@ import type { BoardResult } from './board';
 import type { BridgeResult } from './bridge';
 import type { CanvasResult } from './canvas';
 import type { Environment } from './env';
+import type { ImportHost, ImportResult, ImportSession } from './import';
 import type { LayoutResult } from './layout';
 import type { LookResult } from './look';
 import type { LoroIndexResult, LoroTextResult } from './loro';
@@ -18,6 +19,9 @@ export type {
   BridgeResult,
   CanvasResult,
   Environment,
+  ImportHost,
+  ImportResult,
+  ImportSession,
   LayoutResult,
   LookResult,
   LoroIndexResult,
@@ -46,6 +50,7 @@ export const SCENARIO_IDS = [
   'board-b2k',
   'layout-l',
   'note-1mb',
+  'import-v10k',
 ] as const;
 
 export type ScenarioId = (typeof SCENARIO_IDS)[number];
@@ -86,6 +91,7 @@ export interface BenchReport {
 /** The numbers the results table shows; the UI formats them through i18n. */
 export type Headline =
   | { kind: 'canvas'; fps: number; p95: number }
+  | { kind: 'import'; importMs: number; firstMs: number; p95: number; mainGap: number }
   | { kind: 'bridge'; p95: number; firstFrame: number; diff: number }
   | { kind: 'note'; openMs: number; keyP95: number }
   | { kind: 'board'; fps: number; p95: number; openMs: number }
@@ -107,11 +113,21 @@ export function headline(o: ScenarioOutcome): Headline {
     CanvasResult &
       BridgeResult &
       BoardResult &
+      ImportResult &
       LayoutResult &
       LoroIndexResult &
       LoroTextResult &
       NoteResult
   >;
+  // Before the canvas: an import has frames too.
+  if (r.firstMs !== undefined && r.importMs !== undefined && r.mainGapMs !== undefined)
+    return {
+      kind: 'import',
+      importMs: r.importMs,
+      firstMs: r.firstMs,
+      p95: r.p95Ms ?? 0,
+      mainGap: r.mainGapMs,
+    };
   if (r.openMs !== undefined && r.keyWorkMs)
     return { kind: 'note', openMs: r.openMs, keyP95: r.keyWorkMs.p95 };
   if (r.smallMs !== undefined && r.largeMs !== undefined && r.sizes && r.mainGapMs !== undefined)
@@ -190,6 +206,12 @@ export const THRESHOLDS = {
   firstEditMs: 1000 / 60,
   textInsertMs: 200,
   keystrokeMs: 16,
+  /** NFR-41: the canvas while V-10k comes in — p95 ≤ 33 ms, no task over 50 ms (+ the 10 ms timer). */
+  importFrameP95Ms: 1000 / 30,
+  importMainGapMs: 60,
+  /** NFR-40: the first networks on the canvas ≤ 5 s, the whole of V-10k ≤ 60 s on M1. */
+  importFirstMs: 5_000,
+  importMs: 60_000,
 } as const;
 
 export type Verdict = 'pass' | 'fail';
@@ -238,6 +260,13 @@ export function verdict(o: ScenarioOutcome, timerResolutionMs = 0): Verdict {
         : 'fail';
     case 'text':
       return h.insertMs <= THRESHOLDS.textInsertMs && h.keyMean <= THRESHOLDS.keystrokeMs
+        ? 'pass'
+        : 'fail';
+    case 'import':
+      return h.p95 <= THRESHOLDS.importFrameP95Ms + slack &&
+        h.mainGap <= THRESHOLDS.importMainGapMs &&
+        h.firstMs <= THRESHOLDS.importFirstMs &&
+        h.importMs <= THRESHOLDS.importMs
         ? 'pass'
         : 'fail';
     case 'error':

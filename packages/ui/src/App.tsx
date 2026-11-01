@@ -1,7 +1,7 @@
 import type { HomeBackend } from '@strata/backend';
 import { type Profile, SCENARIO_IDS, type ScenarioId } from '@strata/bench/report';
 import { detectLocale, type Locale, t } from '@strata/i18n';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { BenchWindow } from './BenchWindow';
 import { type BuildInfo, closeAppWindow, loadBuildInfo, openHome } from './backend';
 import { CreditsWindow } from './CreditsWindow';
@@ -95,6 +95,17 @@ export function App() {
     if (!(await closeAppWindow())) setOpen(false);
   };
 
+  // The benchmark's `import` scenario imports with the home's backend: the
+  // one open, or one opened then and kept (one listener of `import` events).
+  const homeRef = useRef(home);
+  homeRef.current = home;
+  const homeOf = useCallback(async () => {
+    const open = homeRef.current ?? (await openHome());
+    homeRef.current = open;
+    setHome(open);
+    return open;
+  }, []);
+
   if (!open) {
     return (
       <main className="scene">
@@ -133,6 +144,8 @@ export function App() {
           profile={bench}
           only={onlyFromUrl()}
           autorun={info !== undefined && new URLSearchParams(window.location.search).has('autorun')}
+          prefs={prefs}
+          home={homeOf}
           onBack={() => setScreen('about')}
         />
       </main>

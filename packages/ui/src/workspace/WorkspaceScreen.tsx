@@ -224,6 +224,11 @@ export interface WorkspaceBridge {
   /** Back and forward over the places left (09 §6.1), as `Alt+←` / `Alt+→`. */
   back(): void;
   forward(): void;
+  /**
+   * The canvas as it is now, for a driver that is not a person: the
+   * benchmark's `import` scenario flies its camera as batches land (NFR-41).
+   */
+  canvas(): { view: CanvasView; editor: Editor } | null;
 }
 
 /** What the bar shows of the open workspace: undo and redo, the star map. */
@@ -1801,6 +1806,11 @@ export function WorkspaceScreen(props: {
       map: () => map3d.current?.toggle(),
       back: () => walk('back'),
       forward: () => walk('forward'),
+      canvas: () => {
+        const view = viewRef.current;
+        const ed = editor.current;
+        return view && ed ? { view, editor: ed } : null;
+      },
       leave: async () => {
         if (leaving.current) return { picture: Promise.resolve() };
         leaving.current = true;

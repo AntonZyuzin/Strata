@@ -438,6 +438,9 @@ button:focus-visible {
 .bench-canvas {
   position: absolute;
   inset: 0;
+  /* What a scenario puts here — the import's workspace with its panels —
+     stays under the HUD. */
+  isolation: isolate;
 }
 
 .bench-canvas canvas {

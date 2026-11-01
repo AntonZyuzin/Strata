@@ -1,3 +1,4 @@
+import type { HomeBackend } from '@strata/backend';
 import {
   type AppInfo,
   type BenchReport,
@@ -11,7 +12,9 @@ import {
 } from '@strata/bench/report';
 import { formatNumber, type Locale, t } from '@strata/i18n';
 import { useEffect, useRef, useState } from 'react';
+import { importHost } from './benchImport';
 import { copyText } from './clipboard';
+import type { Prefs } from './prefs';
 
 type Run =
   | { state: 'idle'; failed?: string }
@@ -31,6 +34,10 @@ export function BenchWindow(props: {
   only?: readonly ScenarioId[] | undefined;
   /** Start at once: smoke runs of a desktop build, where nobody clicks (`?autorun`). */
   autorun?: boolean;
+  /** How the workspace of the `import` scenario reads dates (✅ Q-06-23). */
+  prefs: Prefs;
+  /** The home backend the `import` scenario imports with, opened when it runs. */
+  home: () => Promise<HomeBackend>;
   onBack: () => void;
 }) {
   const { locale } = props;
@@ -50,6 +57,7 @@ export function BenchWindow(props: {
         app: props.app,
         profile: props.profile,
         ...(props.only ? { only: props.only } : {}),
+        hosts: { import: importHost(locale, props.prefs, props.home) },
         onProgress: (current, done) =>
           setRun({ state: 'running', current: current?.id ?? null, outcomes: [...done] }),
         onWait: setWaiting,
@@ -172,6 +180,13 @@ function formatHeadline(locale: Locale, h: Headline): string {
   switch (h.kind) {
     case 'canvas':
       return t(locale, 'bench.r.canvas', { fps: n(h.fps), p95: n(h.p95) });
+    case 'import':
+      return t(locale, 'bench.r.import', {
+        import: n(h.importMs / 1000),
+        first: n(h.firstMs / 1000),
+        p95: n(h.p95),
+        gap: n(h.mainGap, 0),
+      });
     case 'layout':
       return t(locale, 'bench.r.layout', {
         a: n(h.sizes[0], 0),

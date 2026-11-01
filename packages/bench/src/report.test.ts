@@ -3,6 +3,13 @@ import { headline, type ScenarioOutcome, verdict } from './report';
 
 const base = { spike: 1, ok: true, wallMs: 1 } as const;
 const summary = (p95: number) => ({ n: 1, mean: p95, p50: p95, p95, p99: p95, max: p95 });
+/** V-10k coming in (NFR-40, NFR-41): 30 s, the first networks at 4 s. */
+const imported = (p95Ms: number, mainGapMs: number, firstMs = 4_000): ScenarioOutcome => ({
+  ...base,
+  id: 'import-v10k',
+  spike: 11,
+  result: { importMs: 30_000, firstMs, fps: 60, p95Ms, mainGapMs, longTasks: 0 },
+});
 
 describe('headline', () => {
   it('summarizes each kind of result', () => {
@@ -36,6 +43,14 @@ describe('headline', () => {
       result: { insert1MbMs: 19, keystrokeMs: summary(1), keystrokeMeanMs: 0.03 },
     };
     expect(headline(text)).toEqual({ kind: 'text', insertMs: 19, keyMean: 0.03, keyMax: 1 });
+    // An import has frames too: read as an import, not as a canvas.
+    expect(headline(imported(16.7, 40))).toEqual({
+      kind: 'import',
+      importMs: 30_000,
+      firstMs: 4_000,
+      p95: 16.7,
+      mainGap: 40,
+    });
   });
 
   it('keeps the first line of an error', () => {
@@ -81,6 +96,14 @@ describe('verdict', () => {
     });
     expect(verdict(index(48))).toBe('pass');
     expect(verdict(index(478))).toBe('fail');
+  });
+
+  it('judges the import by its frame, its longest task and its first networks (NFR-40, NFR-41)', () => {
+    expect(verdict(imported(33, 60), 1)).toBe('pass');
+    expect(verdict(imported(50, 20), 1)).toBe('fail');
+    // A 10 ms timer that waited over 60 ms: a task over 50 ms.
+    expect(verdict(imported(16.7, 61), 1)).toBe('fail');
+    expect(verdict(imported(16.7, 20, 6_000), 1)).toBe('fail');
   });
 
   it('fails errors', () => {

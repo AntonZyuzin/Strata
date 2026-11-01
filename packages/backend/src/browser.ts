@@ -59,8 +59,22 @@ function committed(t: IDBTransaction): Promise<void> {
   });
 }
 
-/** A shelf in IndexedDB: one store of byte arrays. */
-export async function indexedDbShelf(name = 'strata'): Promise<Shelf> {
+/**
+ * Values over this go to IndexedDB as Blobs. Chromium serializes a value of
+ * at most 127 MiB — V-10k's store is 163 MB — while a Blob's bytes are kept
+ * aside, as a file; smaller values stay byte arrays.
+ */
+const BLOB_OVER = 64 * 1024 * 1024;
+
+/** Bytes as a Blob's part: those on a shared buffer are copied first, the rest go as they are. */
+const part = (v: Uint8Array): Uint8Array<ArrayBuffer> =>
+  v.buffer instanceof ArrayBuffer ? (v as Uint8Array<ArrayBuffer>) : new Uint8Array(v);
+
+/**
+ * A shelf in IndexedDB: one store of byte arrays, a large one as a Blob.
+ * `blobOver` — the size from which a value goes as a Blob.
+ */
+export async function indexedDbShelf(name = 'strata', blobOver = BLOB_OVER): Promise<Shelf> {
   const open = indexedDB.open(name, 1);
   open.onupgradeneeded = () => open.result.createObjectStore('kv');
   const db = await request(open);
@@ -72,9 +86,11 @@ export async function indexedDbShelf(name = 'strata'): Promise<Shelf> {
   return {
     get: async (k) => {
       const v: unknown = await request(db.transaction('kv', 'readonly').objectStore('kv').get(k));
-      return v instanceof Uint8Array ? v : undefined;
+      if (v instanceof Uint8Array) return v;
+      return v instanceof Blob ? new Uint8Array(await v.arrayBuffer()) : undefined;
     },
-    set: (k, v) => write((store) => store.put(v, k)),
+    set: (k, v) =>
+      write((store) => store.put(v.byteLength > blobOver ? new Blob([part(v)]) : v, k)),
     delete: (k) => write((store) => store.delete(k)),
   };
 }

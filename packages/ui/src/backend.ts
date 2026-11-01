@@ -70,9 +70,12 @@ export async function openHome(): Promise<HomeBackend> {
     );
   }
   const { browserHome, indexedDbShelf } = await import('@strata/backend/browser');
+  const q = new URLSearchParams(window.location.search);
   // Layout tests watch an import's batches land (13 §3.3): `?batchPause=ms`.
-  const pause = Number(new URLSearchParams(window.location.search).get('batchPause')) || 0;
-  return browserHome(await indexedDbShelf(), undefined, pause);
+  const pause = Number(q.get('batchPause')) || 0;
+  // Tests keep every value as a Blob, as only a large one is (`?shelfBlobs`).
+  const shelf = await indexedDbShelf('strata', q.has('shelfBlobs') ? 0 : undefined);
+  return browserHome(shelf, undefined, pause);
 }
 
 /** «Импорт…» on desktop: an archive picked in the system dialog; null when cancelled. */

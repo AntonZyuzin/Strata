@@ -3666,6 +3666,21 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
   });
 
+  test('a store kept as a Blob, as a large one is (V-10k), comes back after a reload', async ({
+    page,
+  }) => {
+    // `shelfBlobs`: every value goes to IndexedDB as a Blob, not only one over 64 MiB.
+    await page.goto('/?plain&shelfBlobs');
+    await createWorkspace(page, 'Блоб');
+    await createNode(page, 640, 400, 'Эскиз');
+    await settled(page);
+    await page.reload();
+    await expect(page.locator('.home-card', { hasText: 'Блоб' })).toHaveCount(1);
+    await page.locator('.home-open').click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    await expect.poll(() => named(page, 'Эскиз')).toBe(1);
+  });
+
   test('Shift+C wraps the chosen nodes in a folder, one step; several are named next (06 §13.3)', async ({
     page,
   }) => {

@@ -3643,6 +3643,29 @@ test.describe('a workspace on the core', () => {
     await expect(note).toHaveCount(0);
   });
 
+  test('a network the core does not give says why; the canvas stays on the one it had', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Отказ');
+    await makeFolder(page, 'Архив', 520, 320);
+    const archive = await idOf(page, 'Архив');
+    // The core cannot give «Архив», as with a store it cannot read.
+    await page.evaluate((id) => {
+      const core = (window.__strataWs as WsHook).core;
+      const view = core.view.bind(core);
+      core.view = (net) => (net === id ? Promise.reject(new Error('диск недоступен')) : view(net));
+    }, archive);
+    await select(page, 'Архив');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(
+      page.locator('.toast', { hasText: 'Сеть не открылась: диск недоступен' }),
+    ).toBeVisible();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+  });
+
   test('Shift+C wraps the chosen nodes in a folder, one step; several are named next (06 §13.3)', async ({
     page,
   }) => {

@@ -282,6 +282,8 @@ const ru = {
   'ws.restore': 'Вернуть',
   'ws.change.restore': 'Вернуть «{name}» из корзины',
   'ws.refused': 'Ядро не приняло шаг: {message}',
+  'ws.unopened': 'Сеть не открылась: {message}',
+  'ws.noCanvas': 'Холст не открылся: {message}',
   'gecko.label':
     'Гекон. Щелчок — погладить, двойной — погулять, стрелки — передвинуть, Esc — домой',
   'gecko.hint': 'Погладить · дважды — погулять · можно перетащить',
@@ -1060,6 +1062,8 @@ const en: Catalog = {
   'ws.restore': 'Restore',
   'ws.change.restore': 'Restore “{name}” from the trash',
   'ws.refused': 'The core refused a step: {message}',
+  'ws.unopened': 'The network did not open: {message}',
+  'ws.noCanvas': 'The canvas did not open: {message}',
   'gecko.label': 'Gecko. Click to pet, double-click to walk, arrows to move, Esc to send it home',
   'gecko.hint': 'Pet · double-click to walk · drag to move',
   'due.today': 'today',

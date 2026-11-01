@@ -1408,7 +1408,12 @@ export function WorkspaceScreen(props: {
           if (still()) setDetails(null);
         });
     };
-    const load = (id?: string) => queue(() => show(id ?? netRef.current));
+    // A network the core does not give is said, not left an empty canvas.
+    const load = (id?: string) =>
+      queue(() => show(id ?? netRef.current)).catch((e: unknown) => {
+        if (!cancelled)
+          toast('ws.unopened', { message: e instanceof Error ? e.message : String(e) });
+      });
     loadRef.current = load;
     eventsRef.current = events;
 
@@ -1427,56 +1432,62 @@ export function WorkspaceScreen(props: {
       );
     docs.current = makeDocs.current();
 
-    Promise.all([CanvasView.create(el), nodeIconImages()]).then(([v, icons]) => {
-      if (cancelled) {
-        v.destroy();
-        return;
-      }
-      view = v;
-      viewRef.current = v;
-      // The Chrome's icons on the nodes too (owner, 2026-10-24); an asset's by its content.
-      v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
-      // A near or past deadline in a word under the label (Q-07-22).
-      v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
-      // The flag ring's slots: their names and keys, as the menu has them (06 §8).
-      v.flagWord = (flag) =>
-        t(localeRef.current, 'canvas.slot', {
-          name: t(localeRef.current, `flag.${flag}`),
-          key: { key: 'R', pause: 'Q', template: 'E' }[flag],
-        });
-      // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
-      v.markWord = (mark, n) =>
-        mark === 'external'
-          ? t(localeRef.current, 'canvas.mark.external', { n: n.external })
-          : t(localeRef.current, n.appearance ? 'canvas.mark.appearance' : 'canvas.mark.places', {
-              n: n.places,
-            });
-      v.setKindIcons(icons);
-      // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
-      v.wireEnds = 'sockets';
-      v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-      // `&plain`: no background, for e2e on software WebGL (see Prototype).
-      if (new URLSearchParams(window.location.search).has('plain')) {
-        v.background.container.visible = false;
-      } else {
-        v.setBackground(fog());
-      }
-      // Test hook for e2e: the canvas, the graph and when the core has it all.
-      (window as unknown as { __strataWs: unknown }).__strataWs = {
-        view: v,
-        graph: () => graph.current,
-        editor: () => editor.current,
-        core,
-        net: () => netRef.current,
-        map: () => map3d.current,
-        settled: async () => {
-          await busy.current;
-          await docs.current?.flush();
-          await sync.current?.settled();
-        },
-      };
-      void load(openedRef.current.root);
-    });
+    Promise.all([CanvasView.create(el), nodeIconImages()])
+      .then(([v, icons]) => {
+        if (cancelled) {
+          v.destroy();
+          return;
+        }
+        view = v;
+        viewRef.current = v;
+        // The Chrome's icons on the nodes too (owner, 2026-10-24); an asset's by its content.
+        v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
+        // A near or past deadline in a word under the label (Q-07-22).
+        v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
+        // The flag ring's slots: their names and keys, as the menu has them (06 §8).
+        v.flagWord = (flag) =>
+          t(localeRef.current, 'canvas.slot', {
+            name: t(localeRef.current, `flag.${flag}`),
+            key: { key: 'R', pause: 'Q', template: 'E' }[flag],
+          });
+        // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
+        v.markWord = (mark, n) =>
+          mark === 'external'
+            ? t(localeRef.current, 'canvas.mark.external', { n: n.external })
+            : t(localeRef.current, n.appearance ? 'canvas.mark.appearance' : 'canvas.mark.places', {
+                n: n.places,
+              });
+        v.setKindIcons(icons);
+        // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
+        v.wireEnds = 'sockets';
+        v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        // `&plain`: no background, for e2e on software WebGL (see Prototype).
+        if (new URLSearchParams(window.location.search).has('plain')) {
+          v.background.container.visible = false;
+        } else {
+          v.setBackground(fog());
+        }
+        // Test hook for e2e: the canvas, the graph and when the core has it all.
+        (window as unknown as { __strataWs: unknown }).__strataWs = {
+          view: v,
+          graph: () => graph.current,
+          editor: () => editor.current,
+          core,
+          net: () => netRef.current,
+          map: () => map3d.current,
+          settled: async () => {
+            await busy.current;
+            await docs.current?.flush();
+            await sync.current?.settled();
+          },
+        };
+        void load(openedRef.current.root);
+      })
+      .catch((e: unknown) => {
+        // A canvas the page cannot have (no WebGL context) is said, not an empty screen.
+        if (!cancelled)
+          toast('ws.noCanvas', { message: e instanceof Error ? e.message : String(e) });
+      });
 
     const leave = () => void docs.current?.flush();
     window.addEventListener('pagehide', leave);

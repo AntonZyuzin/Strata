@@ -23,10 +23,11 @@ import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBoun
 import type { RimTarget } from './decor';
 import { onTheWay, RING_DELAY_MS, type RingSlot, ringSlots, slotAt } from './flagring';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
+import { radiusOf } from './looks';
 import { Minimap } from './minimap';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
 import { arrowStep, chainStep, type Dir, siblingStep } from './traverse';
-import { type CanvasView, NORMAL_WIRE, radiusOf } from './view';
+import { type CanvasView, NORMAL_WIRE } from './view';
 import type { WireStyle } from './wires';
 
 /**
@@ -1528,7 +1529,7 @@ export class Editor {
       const b = this.view.nodeAt(c.to);
       if (node && a && b) {
         const len = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1e-4);
-        const shift = 2 * radiusOf(node) + INSERT_GAP;
+        const shift = 2 * this.radius(node) + INSERT_GAP;
         const ux = ((b.x - a.x) / len) * shift;
         const uy = ((b.y - a.y) / len) * shift;
         const from = this.graph.nodes.get(c.from)?.name ?? '';
@@ -2084,7 +2085,7 @@ export class Editor {
     if (m.atAnchor) return { x: m.ax, y: m.ay };
     if (m.sibling) {
       const s = this.graph.nodes.get(m.sibling);
-      if (s) return this.freeSpot(s.x + 2 * radiusOf(s) + r + PLACE_GAP * 2, s.y, r);
+      if (s) return this.freeSpot(s.x + 2 * this.radius(s) + r + PLACE_GAP * 2, s.y, r);
     }
     const parents = m.sources
       .map((id) => this.graph.nodes.get(id))
@@ -2095,8 +2096,8 @@ export class Editor {
       let x = p.x;
       for (const c of this.graph.outputs(p.id)) {
         const n = this.graph.nodes.get(c);
-        if (n && n.y > p.y && n.x + radiusOf(n) + r + PLACE_GAP >= x)
-          x = n.x + radiusOf(n) + r + PLACE_GAP * 3;
+        if (n && n.y > p.y && n.x + this.radius(n) + r + PLACE_GAP >= x)
+          x = n.x + this.radius(n) + r + PLACE_GAP * 3;
       }
       return this.freeSpot(x, p.y + PLACE_DOWN, r);
     }
@@ -2147,7 +2148,7 @@ export class Editor {
       Math.hypot(n.x - px, n.y - py) >= n.r + r + PLACE_GAP + 20;
     const free = (px: number, py: number) => {
       for (const n of this.graph.nodes.values()) {
-        if (!clear({ x: n.x, y: n.y, r: radiusOf(n) }, px, py)) return false;
+        if (!clear({ x: n.x, y: n.y, r: this.radius(n) }, px, py)) return false;
       }
       return taken.every((t) => clear(t, px, py));
     };
@@ -2201,12 +2202,17 @@ export class Editor {
     this.view.invalidate();
   }
 
+  /** A bubble's radius as the view draws it (07 §4.2); by the rules for one not drawn yet. */
+  private radius(n: GraphNode): number {
+    return this.view.nodeAt(n.id)?.r ?? radiusOf(n);
+  }
+
   private boxOf(ids: string[]) {
     let box: { minX: number; minY: number; maxX: number; maxY: number } | null = null;
     for (const id of ids) {
       const n = this.graph.nodes.get(id);
       if (!n) continue;
-      const r = radiusOf(n);
+      const r = this.radius(n);
       box = box
         ? {
             minX: Math.min(box.minX, n.x - r),
@@ -2439,7 +2445,7 @@ export class Editor {
         const b = this.view.nodeAt(m.candidate.to);
         if (node && a && b) {
           const len = Math.max(Math.hypot(b.x - a.x, b.y - a.y), 1e-4);
-          const shift = 2 * radiusOf(node) + INSERT_GAP;
+          const shift = 2 * this.radius(node) + INSERT_GAP;
           for (const id of m.candidate.shifted) {
             const p = this.view.nodeAt(id);
             if (!p) continue;

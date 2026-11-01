@@ -34,9 +34,11 @@ export {
   iconPresets,
 } from './icons';
 export {
+  BUSY_WIRES,
   DEFAULT_ICONS,
   defaultIcon,
   levelOf,
+  radiusOf,
   WIRE_END_STYLES,
   type WireEndStyle,
 } from './looks';
@@ -51,5 +53,5 @@ export {
   type StyleResult,
   stylize,
 } from './stylize';
-export { CanvasView, NORMAL_WIRE, radiusOf } from './view';
+export { CanvasView, NORMAL_WIRE } from './view';
 export { WireLayer, type WireStyle } from './wires';

@@ -3143,6 +3143,33 @@ test.describe('a workspace on the core', () => {
     await expect.poll(async () => (await graphNow(page)).edges).toContain('Идеи→Миссия');
   });
 
+  test('eight wires seen here make a bubble a step larger (06 §4.2)', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Узлы');
+    await createNode(page, 480, 260, 'Узел');
+    const hub = await idOf(page, 'Узел');
+    const radius = () =>
+      page.evaluate(async (id) => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        return ws.view.nodeAt(id)?.r ?? null;
+      }, hub);
+    // Each new node from the chosen one: a wire from «Узел». Two rows well
+    // inside the canvas, clear of the panel: the camera stays where it is.
+    for (let i = 0; i < 8; i++) {
+      await select(page, 'Узел');
+      await createNode(page, 360 + 80 * (i % 4), i < 4 ? 480 : 580, `Н${i + 1}`);
+      if (i === 6) expect(await radius(), 'seven wires: S').toBe(16);
+    }
+    expect((await graphNow(page)).edges).toHaveLength(8);
+    await expect.poll(radius).toBe(24);
+    // One step of undo takes the eighth away, and the bubble back to S.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect.poll(radius).toBe(16);
+  });
+
   test('two clicks with a key between them are two clicks, not a double click (06 §5)', async ({
     page,
   }) => {

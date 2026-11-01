@@ -4,6 +4,7 @@ import icons from './assets/game-icons.json';
 import { controls } from './curve';
 import {
   arrowOn,
+  BUSY_WIRES,
   DEFAULT_ICONS,
   defaultIcon,
   dotColor,
@@ -11,6 +12,7 @@ import {
   nodeAlpha,
   over,
   type RimMark,
+  radiusOf,
   rimSlot,
   socketAt,
   statusGlyph,
@@ -126,5 +128,29 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
     }
     expect(defaultIcon('note')).toBe(DEFAULT_ICONS.note);
     expect(defaultIcon('task')).toBe(DEFAULT_ICONS.task);
+  });
+});
+
+describe('bubble sizes (07 §4.2, 06 §4.2)', () => {
+  const note = { kind: 'note' as const, key: false };
+  const net = { kind: 'network' as const, key: false };
+  it('networks and projects M, other kinds S', () => {
+    expect(radiusOf(note) * 2).toBe(32);
+    expect(radiusOf(net) * 2).toBe(48);
+    expect(radiusOf({ kind: 'project', key: false }) * 2).toBe(48);
+  });
+
+  it('eight wires seen here or more, a step up; a key node a step up; XL at most', () => {
+    expect(radiusOf(note, BUSY_WIRES - 1) * 2).toBe(32);
+    expect(radiusOf(note, BUSY_WIRES) * 2).toBe(48);
+    expect(radiusOf({ ...note, key: true }, BUSY_WIRES) * 2).toBe(72);
+    expect(radiusOf({ ...net, key: true }, BUSY_WIRES) * 2).toBe(108);
+    expect(radiusOf({ ...net, key: true }, 40) * 2).toBe(108);
+  });
+
+  it('a size set by hand wins over the rules', () => {
+    expect(radiusOf({ ...net, key: true, size: 's' }, BUSY_WIRES) * 2).toBe(32);
+    expect(radiusOf({ ...note, size: 'xl' }) * 2).toBe(108);
+    expect(radiusOf({ ...note, size: null }, BUSY_WIRES) * 2).toBe(48);
   });
 });

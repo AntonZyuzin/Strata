@@ -1,4 +1,4 @@
-import type { Graph, GraphNode, NodeSize, Rollup } from '@strata/backend';
+import type { Graph, GraphNode, Rollup } from '@strata/backend';
 import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-tokens';
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
@@ -18,7 +18,15 @@ import {
   pixelIconScale,
 } from './icons';
 import { Kinetics } from './kinetic';
-import { defaultIcon, dotColor, isClosed, levelOf, nodeAlpha, type WireEndStyle } from './looks';
+import {
+  defaultIcon,
+  dotColor,
+  isClosed,
+  levelOf,
+  nodeAlpha,
+  radiusOf,
+  type WireEndStyle,
+} from './looks';
 import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
 
@@ -42,19 +50,6 @@ interface Tween {
   toX: number;
   toY: number;
   start: number;
-}
-
-/**
- * Radius of a bubble: networks M, other kinds S, key nodes one step up
- * (07 §4.2); a size set by hand on the placement wins over the rules (06 §4.2).
- */
-export function radiusOf(
-  node: Pick<GraphNode, 'kind' | 'key'> & { size?: NodeSize | null | undefined },
-): number {
-  if (node.size) return SIZE[node.size] / 2;
-  const base = node.kind === 'network' || node.kind === 'project' ? 'm' : 's';
-  const d = node.key ? (base === 'm' ? SIZE.l : SIZE.m) : SIZE[base];
-  return d / 2;
 }
 
 const PAPER = hex(palette.paper);
@@ -722,27 +717,32 @@ export class CanvasView {
         this.views.delete(id);
       }
     }
+    // Wires seen here, by node: eight or more make a bubble a step larger (06 §4.2).
+    const edges = graph.edges();
+    const seen = new Map<string, number>();
+    for (const [from, to] of edges) {
+      seen.set(from, (seen.get(from) ?? 0) + 1);
+      seen.set(to, (seen.get(to) ?? 0) + 1);
+    }
     const moved: string[] = [];
     for (const node of graph.nodes.values()) {
+      const r = radiusOf(node, seen.get(node.id) ?? 0);
       const v = this.views.get(node.id);
       if (!v) {
-        this.views.set(node.id, this.createView(node));
+        this.views.set(node.id, this.createView(node, r));
+        continue;
+      }
+      // The «soon» halo and the sprites' scales are made with the view: a
+      // deadline, icon or radius change remakes it — a wire too, past eight.
+      const remade = v.node !== node && (v.node.due !== node.due || v.node.icon !== node.icon);
+      if (remade || v.r !== r) {
+        v.body.destroy();
+        v.icon.destroy();
+        v.halo?.destroy();
+        this.views.set(node.id, this.createView(node, r));
         continue;
       }
       if (v.node !== node) {
-        // The «soon» halo and the sprites' scales are made with the view: a
-        // deadline, icon or radius change remakes it.
-        if (
-          v.node.due !== node.due ||
-          v.node.icon !== node.icon ||
-          radiusOf(v.node) !== radiusOf(node)
-        ) {
-          v.body.destroy();
-          v.icon.destroy();
-          v.halo?.destroy();
-          this.views.set(node.id, this.createView(node));
-          continue;
-        }
         v.node = node;
         // An asset's icon follows its file, link or the one chosen by hand.
         this.applyPicture(v);
@@ -750,7 +750,7 @@ export class CanvasView {
       }
       if (v.x !== node.x || v.y !== node.y) moved.push(node.id);
     }
-    this.wireList = graph.edges();
+    this.wireList = edges;
     this.kinetics.bind(this.wireList.map(([from, to]) => wireKey(from, to)));
     for (const v of this.views.values()) {
       v.inputs.length = 0;
@@ -775,8 +775,7 @@ export class CanvasView {
     this.invalidate();
   }
 
-  private createView(node: GraphNode): NodeView {
-    const r = radiusOf(node);
+  private createView(node: GraphNode, r: number): NodeView {
     const t = this.textures;
     const body = new Sprite({ texture: t.body, anchor: 0.5 });
     body.scale.set((2 * r) / BODY_DIAMETER);

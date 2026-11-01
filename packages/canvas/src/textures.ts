@@ -2,8 +2,7 @@ import { fog, GLYPHS, type GlyphName, palette } from '@strata/design-tokens';
 import { BitmapFont, CanvasSource, Texture } from 'pixi.js';
 import { hexPath } from './hex';
 
-/** Bubble diameters S, M, L, XL in world units (07 §4.2, 06 §4.2). */
-export const SIZE = { s: 32, m: 48, l: 72, xl: 108 } as const;
+export { SIZE } from './looks';
 
 /** Body texture circumradius: drawn once, large, with mips for every zoom. */
 const BODY_R = 128;

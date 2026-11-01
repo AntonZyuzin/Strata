@@ -1,4 +1,4 @@
-import type { GraphNode, NodeKind } from '@strata/backend';
+import type { GraphNode, NodeKind, NodeSize } from '@strata/backend';
 import { fog, type GlyphName, hex, palette } from '@strata/design-tokens';
 import { pointAt } from './curve';
 import { cornerToward } from './hex';
@@ -9,6 +9,30 @@ import type { Plate } from './textures';
  * colour and the status glyph. Pure, so the rules are unit-tested; Decor and
  * the view apply them.
  */
+
+/** Bubble diameters S, M, L, XL in world units (07 §4.2, 06 §4.2). */
+export const SIZE = { s: 32, m: 48, l: 72, xl: 108 } as const;
+
+/** Wires seen in a network that make a bubble a step larger (06 §4.2, 07 §4.2). */
+export const BUSY_WIRES = 8;
+
+const STEPS = [SIZE.s, SIZE.m, SIZE.l, SIZE.xl] as const;
+
+/**
+ * Radius of a bubble (07 §4.2, 06 §4.2): networks and projects M, other
+ * kinds S; `wires` seen in this network, eight or more, a step up; a key
+ * node a step up; XL at most. A size set by hand on the placement wins.
+ */
+export function radiusOf(
+  node: Pick<GraphNode, 'kind' | 'key'> & { size?: NodeSize | null | undefined },
+  wires = 0,
+): number {
+  if (node.size) return SIZE[node.size] / 2;
+  let step = node.kind === 'network' || node.kind === 'project' ? 1 : 0;
+  if (wires >= BUSY_WIRES) step++;
+  if (node.key) step++;
+  return STEPS[Math.min(step, STEPS.length - 1)] / 2;
+}
 
 /** Semantic zoom by the on-screen diameter (07 §4.9). */
 export type Level = 'dot' | 'glyph' | 'icon' | 'full';

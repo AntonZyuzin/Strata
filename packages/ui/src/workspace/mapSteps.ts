@@ -23,9 +23,6 @@ interface Placed {
   size?: NodeSize | undefined;
 }
 
-const radius = (n: Placed) =>
-  radiusOf({ kind: n.kind, key: n.flags?.includes('key') ?? false, size: n.size });
-
 /**
  * autoPlace (06 §5.4) on a network not on the canvas: under the parent `from`
  * right of its last child below it; with no parent, right of what is there;
@@ -37,6 +34,17 @@ export function placeIn(
   from: string | null,
   kind: NodeKind,
 ): { x: number; y: number } {
+  // As the canvas draws them (07 §4.2): eight wires or more, a step larger.
+  const wires = new Map<string, number>();
+  for (const e of edges) {
+    wires.set(e.from, (wires.get(e.from) ?? 0) + 1);
+    wires.set(e.to, (wires.get(e.to) ?? 0) + 1);
+  }
+  const radius = (n: Placed) =>
+    radiusOf(
+      { kind: n.kind, key: n.flags?.includes('key') ?? false, size: n.size },
+      wires.get(n.id) ?? 0,
+    );
   const r = radiusOf({ kind, key: false });
   const free = (px: number, py: number) =>
     nodes.every((n) => Math.hypot(n.x - px, n.y - py) >= radius(n) + r + PLACE_GAP + 20);

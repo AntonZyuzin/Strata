@@ -638,7 +638,9 @@ export function WorkspaceScreen(props: {
       },
       wrap: (e) => void wrap(e),
       into: (e) => void dropInto(e),
-      // The word comes and goes with a render; it follows the cursor without one.
+      // The word comes and goes with a render; it follows the cursor without
+      // one. Until it is drawn each move goes into its state: the moves made
+      // before that render would leave it where the drag first crossed.
       cursorNote: (e) => {
         if (!e) {
           setCursorNote(null);
@@ -647,11 +649,12 @@ export function WorkspaceScreen(props: {
         const r = el.getBoundingClientRect();
         const x = e.sx + r.left;
         const y = e.sy + r.top;
-        if (noteEl.current) {
-          noteEl.current.style.left = `${x}px`;
-          noteEl.current.style.top = `${y}px`;
+        const shown = noteEl.current;
+        if (shown) {
+          shown.style.left = `${x}px`;
+          shown.style.top = `${y}px`;
         }
-        setCursorNote((c) => (c?.key === e.key ? c : { x, y, key: e.key }));
+        setCursorNote((c) => (shown && c?.key === e.key ? c : { x, y, key: e.key }));
       },
       // «↗N» (06 §14): the list opens beside the mark at once, its top level
       // with it, clear of the label under the bubble; the rows come from the core.

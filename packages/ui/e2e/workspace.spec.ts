@@ -3594,6 +3594,54 @@ test.describe('a workspace on the core', () => {
     expect(Math.round(moved.x - from.x)).toBe(40);
   });
 
+  test('the word by the cursor stands where the cursor is, moved before the word was drawn (06 §12.1)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Курсор');
+    await createNode(page, 760, 480, 'Эскиз');
+    const from = await at(page, 'Эскиз');
+    const to = { x: from.x + 60, y: from.y + 40 };
+    const mods = ['Alt', 'ControlOrMeta', 'Shift'];
+    for (const m of mods) await page.keyboard.down(m);
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    // Six moves in one task: the word is asked for at the first and drawn
+    // after the last, as a WebKit under load coalesces them (run 118).
+    await page.evaluate(
+      ({ from, to }) => {
+        const canvas = (window.__strataWs as WsHook).view.canvas;
+        for (let i = 1; i <= 6; i++) {
+          canvas.dispatchEvent(
+            new PointerEvent('pointermove', {
+              bubbles: true,
+              clientX: from.x + ((to.x - from.x) * i) / 6,
+              clientY: from.y + ((to.y - from.y) * i) / 6,
+              pointerId: 1,
+              pointerType: 'mouse',
+              isPrimary: true,
+              buttons: 1,
+            }),
+          );
+        }
+      },
+      { from, to },
+    );
+    const note = page.locator('.ws-cursor-note');
+    await expect(note).toHaveText('Нода уже здесь');
+    const off = await note.evaluate((el, at) => {
+      const s = (el as HTMLElement).style;
+      return Math.max(
+        Math.abs(Number.parseFloat(s.left) - at.x),
+        Math.abs(Number.parseFloat(s.top) - at.y),
+      );
+    }, to);
+    expect(off).toBeLessThanOrEqual(1);
+    await page.mouse.up();
+    for (const m of [...mods].reverse()) await page.keyboard.up(m);
+    await expect(note).toHaveCount(0);
+  });
+
   test('Shift+C wraps the chosen nodes in a folder, one step; several are named next (06 §13.3)', async ({
     page,
   }) => {

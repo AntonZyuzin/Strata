@@ -13,7 +13,7 @@
 
 use super::{
     LIST_ITEMS, Result, STATUSES, Store, Val, Workspace, Writes, engine, invalid, is_date, is_when,
-    links::{Found, segments},
+    links::{Found, drawing_text, segments},
 };
 use crate::changeset::{KeyWrite, Label};
 use crate::ops::Op;
@@ -782,12 +782,6 @@ impl<S: Store> Workspace<S> {
                 self.import_wire(&mut raw, from, to, None, ts);
             }
         }
-        // A drawing's links (13 §2.8), found as text's are.
-        for e in &entries {
-            for target in e.drawing.iter().flat_map(drawing_links) {
-                links.push((e.id, target, e.raw.clone()));
-            }
-        }
 
         // Every key the import writes, on this shadow: networks and nodes
         // first, then what is found among them by the rule of 13 §3.5
@@ -811,6 +805,14 @@ impl<S: Store> Workspace<S> {
                 wires.insert((a, b), false);
             }
         }
+        // What the drawings say: their links are text wires and ghosts, as
+        // a note's (13 §2.8), kept by the core as the board changes.
+        let drawn: Vec<(NodeId, String)> = entries
+            .iter()
+            .filter(|e| e.role == Role::Board)
+            .filter_map(|e| Some((e.id, drawing_text(&e.drawing.as_ref()?.elements))))
+            .collect();
+        let boards: HashSet<NodeId> = drawn.iter().map(|(n, _)| *n).collect();
         let notes: Vec<(NodeId, &str)> = entries
             .iter()
             .filter(|e| e.role == Role::Note)
@@ -821,11 +823,12 @@ impl<S: Store> Workspace<S> {
                     .filter(|c| c.kind == NodeKind::Note)
                     .filter_map(|c| Some((c.id, c.text.as_deref()?))),
             )
+            .chain(drawn.iter().map(|(n, t)| (*n, t.as_str())))
             .collect();
         let mut unresolved: Vec<(NodeId, String, String)> = Vec::new();
         let mut asks = Vec::new();
         let writes = self.apply_two(first, |ws| {
-            // Links of properties and drawings, among the nodes just made.
+            // Links of properties, among the nodes just made.
             let names = ws.link_names();
             let mut out: Writes = Vec::new();
             for (from, target, path) in &links {
@@ -845,8 +848,9 @@ impl<S: Store> Workspace<S> {
                     wires.insert((*from, to), false);
                 }
             }
-            // The notes' text wires and ghosts, as the core keeps them after
-            // any edit (05 §8.2 rule 4, §8.5), in this same step.
+            // The notes' and drawings' text wires and ghosts, as the core
+            // keeps them after any edit (05 §8.2 rule 4, §8.5), in this same
+            // step.
             let (text, asked) = ws.links_plan(&notes, ts);
             for (&(note, _), a) in notes.iter().zip(&asked) {
                 for &to in &a.want {
@@ -898,6 +902,9 @@ impl<S: Store> Workspace<S> {
             let path = paths.get(&note).cloned().unwrap_or_default();
             report.counts.wires += a.want.len() as u32;
             report.counts.ghosts += a.ghosts.len() as u32;
+            // A board's links are fixed on the board: its lines offer only
+            // «Создать», which needs no edit of what it says (13 §3.6).
+            let board = boards.contains(&note);
             for (k, name) in &a.ghosts {
                 match aliases.get(k) {
                     Some((owner, id)) => {
@@ -909,7 +916,9 @@ impl<S: Store> Workspace<S> {
                             "ghostAlias",
                             format!("[[{name}]] → {owner}"),
                         );
-                        report.with_link(name, Some(*id));
+                        if !board {
+                            report.with_link(name, Some(*id));
+                        }
                     }
                     None => {
                         report.at(note, "ghost", "info", &path, "ghost", format!("[[{name}]]"));
@@ -926,7 +935,9 @@ impl<S: Store> Workspace<S> {
                     "ambiguous",
                     format!("[[{target}]] → {} ({count})", self.path_text(*chosen)),
                 );
-                report.with_link(target, Some(*chosen));
+                if !board {
+                    report.with_link(target, Some(*chosen));
+                }
             }
         }
         for e in &entries {
@@ -2167,26 +2178,6 @@ fn host_of(url: &str) -> String {
     } else {
         host.to_owned()
     }
-}
-
-/// `[[links]]` of a drawing (13 §2.8): in its texts and its elements' `link`.
-fn drawing_links(d: &Drawing) -> Vec<String> {
-    let mut out = Vec::new();
-    for el in &d.elements {
-        for field in ["text", "originalText", "rawText"] {
-            if let Some(t) = el.get(field).and_then(serde_json::Value::as_str) {
-                out.extend(strata_markdown::scan(t).links.into_iter().map(|l| l.target));
-            }
-        }
-        if let Some(l) = el.get("link").and_then(serde_json::Value::as_str) {
-            if let Some(t) = property_link(l) {
-                out.push(t);
-            }
-        }
-    }
-    let mut seen = HashSet::new();
-    out.retain(|t| seen.insert(link_key(t)));
-    out
 }
 
 /// A file of the vault a drawing names: by its path, else by its name.

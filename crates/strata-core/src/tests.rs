@@ -448,6 +448,181 @@ impl Editor {
     }
 }
 
+impl Editor {
+    /// A board's element as Excalidraw writes it (ADR-0006): whole, by id.
+    fn draw(
+        &mut self,
+        w: &mut Workspace<MemoryStore>,
+        board: &str,
+        id: &str,
+        fields: &[(&str, loro::LoroValue)],
+    ) -> bool {
+        use loro::LoroValue;
+        let mut el: std::collections::HashMap<String, LoroValue> = [
+            ("id", LoroValue::from(id)),
+            ("type", LoroValue::from("text")),
+            ("version", LoroValue::I64(1)),
+            ("versionNonce", LoroValue::I64(7)),
+            ("isDeleted", LoroValue::Bool(false)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v))
+        .collect();
+        for (k, v) in fields {
+            el.insert((*k).to_owned(), v.clone());
+        }
+        self.doc
+            .get_map("elements")
+            .insert(id, LoroValue::from(el))
+            .expect("draw");
+        self.doc.commit();
+        let update = self
+            .doc
+            .export(loro::ExportMode::updates(&self.sent))
+            .expect("export");
+        self.sent = self.doc.oplog_vv();
+        w.doc_push(&format!("content/{board}"), &update)
+            .expect("push")
+    }
+
+    /// A board's element as the core keeps it now.
+    fn element(w: &mut Workspace<MemoryStore>, board: &str, id: &str) -> loro::LoroMapValue {
+        let doc = loro::LoroDoc::new();
+        doc.import(
+            &w.doc_snapshot(&format!("content/{board}"))
+                .expect("snapshot"),
+        )
+        .expect("import");
+        match doc.get_map("elements").get(id) {
+            Some(loro::ValueOrContainer::Value(loro::LoroValue::Map(m))) => m,
+            other => panic!("no element {id}: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn a_boards_links_are_its_text_wires_as_a_notes_are() {
+    // 13 §2.8, 05 §8.2 rule 4, §8.5: `[[links]]` in a board's texts and in
+    // its elements' `link` are its text wires and ghosts, kept by the core
+    // as the board changes, outside undo; a deleted element says nothing.
+    use loro::LoroValue;
+    let mut w = ws();
+    let root = w.root();
+    let board = create(&mut w, &root, NodeKind::Board, "Доска");
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let other = create(&mut w, &root, NodeKind::Note, "Другая");
+    let steps = w.history();
+    let mut ed = Editor::open(&mut w, &board);
+    assert!(ed.draw(
+        &mut w,
+        &board,
+        "t1",
+        &[
+            ("text", LoroValue::from("См. [[Цель]]\nи [[Нигде]]")),
+            ("originalText", LoroValue::from("См. [[Цель]] и [[Нигде]]")),
+        ],
+    ));
+    assert!(ed.draw(
+        &mut w,
+        &board,
+        "r1",
+        &[
+            ("type", LoroValue::from("rectangle")),
+            ("link", LoroValue::from("[[Другая]]")),
+        ],
+    ));
+    let (mut wires, ghosts) = links(&mut w, &root);
+    wires.sort();
+    let mut want = vec![
+        (board.clone(), goal.clone()),
+        (board.clone(), other.clone()),
+    ];
+    want.sort();
+    assert_eq!(wires, want);
+    assert_eq!(ghosts, vec![(board.clone(), "Нигде".to_owned())]);
+    assert_eq!(
+        w.history(),
+        steps,
+        "drawing is no step of the canvas's undo"
+    );
+    // The same scene again changes nothing; a deleted element, its links go.
+    assert!(!ed.draw(
+        &mut w,
+        &board,
+        "t1",
+        &[
+            ("text", LoroValue::from("См. [[Цель]]\nи [[Нигде]]")),
+            ("originalText", LoroValue::from("См. [[Цель]] и [[Нигде]]")),
+            ("version", LoroValue::I64(2)),
+        ],
+    ));
+    assert!(ed.draw(
+        &mut w,
+        &board,
+        "t1",
+        &[
+            ("isDeleted", LoroValue::Bool(true)),
+            ("version", LoroValue::I64(3))
+        ],
+    ));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(board.clone(), other.clone())], vec![])
+    );
+    // A board's Tasks-like text lights nothing: only notes have items (13 §2.9.1).
+    assert!(!ed.draw(
+        &mut w,
+        &board,
+        "t2",
+        &[("text", LoroValue::from("- [ ] сдать 📅 2026-11-02"))],
+    ));
+    let v = w.network_view(&root).expect("view");
+    assert!(
+        v.nodes
+            .iter()
+            .find(|n| n.id == board)
+            .expect("board")
+            .fold
+            .is_none()
+    );
+}
+
+#[test]
+fn a_rename_rewrites_a_boards_links_with_a_version_excalidraw_takes() {
+    // 13 §6.5 on a board (13 §2.8): the texts and links that named the node
+    // say its new name; the element's version goes up, so Excalidraw takes
+    // the core's element over its own (ADR-0006); the wire stays.
+    use loro::LoroValue;
+    let mut w = ws();
+    let root = w.root();
+    let board = create(&mut w, &root, NodeKind::Board, "Доска");
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let mut ed = Editor::open(&mut w, &board);
+    ed.draw(
+        &mut w,
+        &board,
+        "t1",
+        &[
+            ("text", LoroValue::from("См. [[Цель]]")),
+            ("originalText", LoroValue::from("См. [[Цель]]")),
+            ("link", LoroValue::from("[[Цель|к цели]]")),
+            ("version", LoroValue::I64(4)),
+        ],
+    );
+    let seen = w.edited(0).seq;
+    rename(&mut w, &goal, "Миссия");
+    let el = Editor::element(&mut w, &board, "t1");
+    let field = |k: &str| el.get(k).and_then(|v| v.as_string()).map(|s| s.to_string());
+    assert_eq!(field("text").as_deref(), Some("См. [[Миссия]]"));
+    assert_eq!(field("originalText").as_deref(), Some("См. [[Миссия]]"));
+    assert_eq!(field("link").as_deref(), Some("[[Миссия|к цели]]"));
+    assert_eq!(el.get("version"), Some(&LoroValue::I64(5)));
+    assert_ne!(el.get("versionNonce"), Some(&LoroValue::I64(7)));
+    assert_eq!(links(&mut w, &root).0, vec![(board.clone(), goal.clone())]);
+    // The open board reads the core's edit (15 §3.4).
+    assert_eq!(w.edited(seen).docs, Some(vec![format!("content/{board}")]));
+}
+
 #[test]
 fn links_in_a_note_become_its_text_wires() {
     let mut w = ws();

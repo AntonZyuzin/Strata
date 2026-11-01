@@ -1735,7 +1735,8 @@ impl<S: Store> Workspace<S> {
 
     /// Updates of a content document from an editor (15 §3.4): stored as
     /// they come, outside undo — the editor keeps its own. A note's links
-    /// then become its text wires; the answer says whether they changed.
+    /// then become its text wires, and a board's (13 §2.8); the answer says
+    /// whether they changed.
     pub fn doc_push(&mut self, doc: &str, update: &[u8]) -> Result<bool> {
         self.writable()?;
         let node = self.content_node(doc)?;
@@ -1754,7 +1755,7 @@ impl<S: Store> Workspace<S> {
             self.docs.insert(doc.to_owned(), d);
             return Err(e.into());
         }
-        if self.kind(node) == Some(NodeKind::Note) {
+        if links::links_from(self.kind(node)) {
             return self.relink(&BTreeSet::from([node])).map(|c| c.is_some());
         }
         Ok(false)

@@ -3307,6 +3307,11 @@ export function WorkspaceScreen(props: {
           doc={board.doc}
           onChange={() => undefined}
           onFocus={setBoardFocus}
+          onReady={(handle) => {
+            // For e2e: the scene of the open board.
+            const hook = (window as unknown as { __strataWs?: Record<string, unknown> }).__strataWs;
+            if (hook) hook.board = handle;
+          }}
           onClose={() => {
             void docs.current?.flush();
             setBoard(null);

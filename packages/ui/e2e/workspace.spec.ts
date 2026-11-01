@@ -62,6 +62,8 @@ interface WsHook {
   } | null;
   net(): string;
   settled(): Promise<void>;
+  /** The open board's scene (13 §2.8). */
+  board?: { elements(): { type: string; text?: string; originalText?: string }[] };
   map(): {
     state: string;
     selectedId(): string | null;
@@ -3073,6 +3075,72 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(async () => (await graphNow(page)).names.filter((n) => n === 'План').length)
       .toBe(2);
+  });
+
+  test("a board's [[links]] are its wires and ghosts; a rename rewrites them (13 §2.8, §6.5)", async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Доски');
+    await createNode(page, 760, 520, 'Цель');
+    // A board through the Tab menu, named at once.
+    await page.mouse.move(460, 300);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('доска');
+    const kind = page.locator('.tab-menu-label', { hasText: /^(Доска|Board)$/ });
+    await page.locator('.tab-menu-row', { has: kind }).first().click();
+    await page.keyboard.type('Идеи');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
+    await settled(page);
+    await select(page, 'Идеи');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    const win = page.locator('.board-window');
+    await expect(win.locator('.excalidraw')).toBeVisible({ timeout: 30_000 });
+    // Text on the board: its links are wires and ghosts as a note's are.
+    await win.locator('.board-tools label', { has: page.locator('input[value="text"]') }).click();
+    const stage = await box(page, '.board-stage');
+    await page.mouse.click(stage.x + stage.width * 0.4, stage.y + stage.height * 0.4);
+    await expect(win.locator('textarea')).toBeFocused();
+    await page.keyboard.type('См. [[Цель]] и [[Нигде]]');
+    await page.keyboard.press('Escape');
+    await expect
+      .poll(async () => (await graphNow(page)).edges, { timeout: 15_000 })
+      .toContain('Идеи→Цель');
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          [...(window.__strataWs?.graph()?.nodes.values() ?? [])]
+            .filter((n) => n.ghostOf !== null)
+            .map((n) => n.name),
+        ),
+      )
+      .toEqual(['Нигде']);
+    // A rename says the new name on the open board, the wire kept.
+    const goal = await idOf(page, 'Цель');
+    await page.evaluate((id) => {
+      window.__strataWs
+        ?.graph()
+        ?.transaction({ key: 't.rename' }, (tx) =>
+          (tx as { rename(id: string, name: string): void }).rename(id, 'Миссия'),
+        );
+    }, goal);
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              window.__strataWs?.board
+                ?.elements()
+                .filter((e) => e.type === 'text')
+                .map((e) => e.originalText ?? e.text) ?? [],
+          ),
+        { timeout: 15_000 },
+      )
+      .toEqual(['См. [[Миссия]] и [[Нигде]]']);
+    await expect.poll(async () => (await graphNow(page)).edges).toContain('Идеи→Миссия');
   });
 
   test('two clicks with a key between them are two clicks, not a double click (06 §5)', async ({

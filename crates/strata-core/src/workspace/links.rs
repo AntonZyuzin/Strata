@@ -1,4 +1,5 @@
-//! A note's `[[links]]` as its wires (05 §8.2 rule 4) and ghosts (05 §8.5).
+//! A note's `[[links]]` as its wires (05 §8.2 rule 4) and ghosts (05 §8.5),
+//! and a board's, in its elements' texts and links (13 §2.8).
 //! A link finds its node by the rule of 13 §3.5, the same for import and for
 //! the workspace after it: a wire keeps its node while the node still answers
 //! the link; a path names its node from the root, then from the note's
@@ -17,7 +18,7 @@
 use super::{Changeset, Store, Val, Workspace, Writes, engine, invalid, load, read};
 use crate::changeset::Label;
 use crate::workspace::Result;
-use loro::{ExportMode, LoroValue, ValueOrContainer};
+use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_markdown::link_key;
 use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
@@ -28,6 +29,69 @@ const NAMING: [&str; 4] = ["name", "kind", "trashedAt", "primaryNet"];
 const ORIGINS: [&str; 3] = ["text", "manual", "import"];
 /// A name with these breaks a link (13 §3.4): no link is rewritten to it.
 const BREAKS_LINKS: [char; 5] = ['[', ']', '|', '#', '^'];
+/// The fields of a board's element that may hold `[[links]]` (13 §2.8): its
+/// text as Excalidraw keeps it, wrapped and as typed, the raw Markdown of
+/// Obsidian's plugin, and the element's own link.
+pub(super) const BOARD_FIELDS: [&str; 4] = ["text", "originalText", "rawText", "link"];
+
+/// Kinds whose content makes text wires (05 §8.2 rule 4): a note's text, a
+/// board's elements (13 §2.8).
+pub(super) fn links_from(kind: Option<NodeKind>) -> bool {
+    matches!(kind, Some(NodeKind::Note | NodeKind::Board))
+}
+
+/// A board's elements that are not tombstones (ADR-0006), by id: the order
+/// of a board's say does not depend on a map's.
+fn live_elements(doc: &LoroDoc) -> Vec<(String, loro::LoroMapValue)> {
+    let LoroValue::Map(all) = doc.get_map("elements").get_value() else {
+        return Vec::new();
+    };
+    let mut out: Vec<(String, loro::LoroMapValue)> = all
+        .iter()
+        .filter_map(|(id, v)| match v {
+            LoroValue::Map(el) if !matches!(el.get("isDeleted"), Some(LoroValue::Bool(true))) => {
+                Some((id.clone(), el.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// What a board says, to its wires what a note's text is to a note's (13
+/// §2.8): the link fields of its live elements, a paragraph each.
+pub(super) fn board_text(doc: &LoroDoc) -> String {
+    let mut out: Vec<String> = Vec::new();
+    for (_, el) in live_elements(doc) {
+        for f in BOARD_FIELDS {
+            if let Some(LoroValue::String(t)) = el.get(f) {
+                out.push(t.to_string());
+            }
+        }
+    }
+    out.join("\n\n")
+}
+
+/// [`board_text`] of a drawing as a vault has it (13 §2.8), its elements
+/// in the same order.
+pub(super) fn drawing_text(elements: &[serde_json::Value]) -> String {
+    let mut els: Vec<(&str, &serde_json::Value)> = elements
+        .iter()
+        .filter(|el| el.get("isDeleted").and_then(serde_json::Value::as_bool) != Some(true))
+        .filter_map(|el| Some((el.get("id")?.as_str()?, el)))
+        .collect();
+    els.sort_by(|a, b| a.0.cmp(b.0));
+    let mut out: Vec<&str> = Vec::new();
+    for (_, el) in els {
+        for f in BOARD_FIELDS {
+            if let Some(t) = el.get(f).and_then(serde_json::Value::as_str) {
+                out.push(t);
+            }
+        }
+    }
+    out.join("\n\n")
+}
 
 /// Names of nodes as they were before a step, by node; empty — as they are.
 type Before = HashMap<NodeId, String>;
@@ -98,6 +162,14 @@ pub struct LinkTarget {
     pub path: String,
 }
 
+/// An element's `versionNonce` for a version the core writes (ADR-0006):
+/// Excalidraw breaks a tie of versions by it, below 2³¹ as its own are.
+fn nonce(id: &str, version: i64) -> i64 {
+    use sha2::{Digest, Sha256};
+    let h = Sha256::digest(format!("{id}|{version}|{}", now_ms()));
+    i64::from(u32::from_le_bytes([h[0], h[1], h[2], h[3]]) >> 1)
+}
+
 /// What a link names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
@@ -155,7 +227,8 @@ impl<S: Store> Workspace<S> {
         out
     }
 
-    /// A live note is here that is not one of `done`.
+    /// A live note or board is here that is not one of `done`: something
+    /// whose links may find a node anew (13 §2.8).
     fn notes_besides(&self, done: &BTreeSet<NodeId>) -> bool {
         let mut found = false;
         for shard in self.index_shards() {
@@ -163,7 +236,7 @@ impl<S: Store> Workspace<S> {
                 if found {
                     return;
                 }
-                let note = matches!(&v, ValueOrContainer::Value(LoroValue::String(k)) if k.as_str() == "note");
+                let note = matches!(&v, ValueOrContainer::Value(LoroValue::String(k)) if k.as_str() == "note" || k.as_str() == "board");
                 if note && let Ok(n) = NodeId::parse(id) {
                     found = !done.contains(&n) && self.alive(n);
                 }
@@ -409,6 +482,10 @@ impl<S: Store> Workspace<S> {
         if src == to {
             return Err(invalid("a note does not link to itself"));
         }
+        // A board's links are fixed on the board, in its own editor.
+        if self.kind(src) != Some(NodeKind::Note) {
+            return Err(invalid("only a note's links are fixed from the report"));
+        }
         let doc = format!("content/{}", src.to_text());
         self.ensure_doc(&doc)?;
         let text = self.docs[&doc].get_text("text").to_string();
@@ -554,29 +631,41 @@ impl<S: Store> Workspace<S> {
         out
     }
 
-    /// The notes' wires and ghosts follow their `[[links]]` (05 §8.2 rule 4,
-    /// §8.5): a link to a node adds the origin `text` to the wire, a link
-    /// gone takes it away, a wire with no origin left goes; a link to no node
-    /// is a ghost, and a ghost whose link now finds a node resolves. One
-    /// system changeset for all the notes, outside undo (05 §11). A note in
-    /// the trash keeps what it has: its wires are hidden with it.
-    pub(super) fn relink(&mut self, notes: &BTreeSet<NodeId>) -> Result<Option<Changeset>> {
-        let notes: Vec<NodeId> = notes
-            .iter()
-            .copied()
-            .filter(|&n| self.alive(n) && self.kind(n) == Some(NodeKind::Note))
-            .collect();
-        let mut texts = Vec::with_capacity(notes.len());
-        for &note in &notes {
-            let doc = format!("content/{}", note.to_text());
-            self.ensure_doc(&doc)?;
-            texts.push(self.docs[&doc].get_text("text").to_string());
+    /// The text whose `[[links]]` are node `n`'s text wires (05 §8.2 rule
+    /// 4): a note's Markdown, what a board's elements say (13 §2.8); none
+    /// for the other kinds.
+    pub(super) fn linking_text(&mut self, n: NodeId) -> Result<Option<String>> {
+        let kind = self.kind(n);
+        if !links_from(kind) {
+            return Ok(None);
         }
-        let pairs: Vec<(NodeId, &str)> = notes
-            .iter()
-            .copied()
-            .zip(texts.iter().map(String::as_str))
-            .collect();
+        let doc = format!("content/{}", n.to_text());
+        self.ensure_doc(&doc)?;
+        let d = &self.docs[&doc];
+        Ok(Some(if kind == Some(NodeKind::Board) {
+            board_text(d)
+        } else {
+            d.get_text("text").to_string()
+        }))
+    }
+
+    /// The notes' wires and ghosts follow their `[[links]]` (05 §8.2 rule 4,
+    /// §8.5), and the boards' (13 §2.8): a link to a node adds the origin
+    /// `text` to the wire, a link gone takes it away, a wire with no origin
+    /// left goes; a link to no node is a ghost, and a ghost whose link now
+    /// finds a node resolves. One system changeset for all of them, outside
+    /// undo (05 §11). A note in the trash keeps what it has: its wires are
+    /// hidden with it. Other kinds have no text wires: they are left out.
+    pub(super) fn relink(&mut self, notes: &BTreeSet<NodeId>) -> Result<Option<Changeset>> {
+        let mut texts: Vec<(NodeId, String)> = Vec::with_capacity(notes.len());
+        for &n in notes {
+            if self.alive(n)
+                && let Some(text) = self.linking_text(n)?
+            {
+                texts.push((n, text));
+            }
+        }
+        let pairs: Vec<(NodeId, &str)> = texts.iter().map(|(n, t)| (*n, t.as_str())).collect();
         let (plan, _) = self.links_plan(&pairs, now_ms());
         if plan.is_empty() {
             return Ok(None);
@@ -608,15 +697,18 @@ impl<S: Store> Workspace<S> {
             let index = self.index_doc(note);
             let from = note.to_text();
             // The nearest open deadline of the note's Tasks items (13 §2.9.1,
-            // ☑ Q-13-10): derived from the text, as its wires are.
-            let due = strata_markdown::task_items(text)
-                .into_iter()
-                .filter(strata_markdown::TaskItem::open)
-                .filter_map(|i| i.due)
-                .min()
-                .map(Val::Str);
-            if read(&self.docs[&index], "itemsDue", &from) != due {
-                plan.push((index.clone(), "itemsDue".to_owned(), from.clone(), due));
+            // ☑ Q-13-10): derived from the text, as its wires are. A board's
+            // texts have no Tasks items.
+            if self.kind(note) == Some(NodeKind::Note) {
+                let due = strata_markdown::task_items(text)
+                    .into_iter()
+                    .filter(strata_markdown::TaskItem::open)
+                    .filter_map(|i| i.due)
+                    .min()
+                    .map(Val::Str);
+                if read(&self.docs[&index], "itemsDue", &from) != due {
+                    plan.push((index.clone(), "itemsDue".to_owned(), from.clone(), due));
+                }
             }
             let have = outgoing.remove(&note).unwrap_or_default();
             let held: BTreeSet<NodeId> = have.wires.keys().copied().collect();
@@ -790,53 +882,23 @@ impl<S: Store> Workspace<S> {
         }
         let mut outgoing = self.outgoing_many(&notes);
         for note in notes {
-            if !self.alive(note) || self.kind(note) != Some(NodeKind::Note) {
+            if !self.alive(note) || !links_from(self.kind(note)) {
                 continue;
             }
-            let doc = format!("content/{}", note.to_text());
-            self.ensure_doc(&doc)?;
-            let text = self.docs[&doc].get_text("text").to_string();
             let held: BTreeSet<NodeId> = outgoing
                 .remove(&note)
                 .unwrap_or_default()
                 .wires
                 .into_keys()
                 .collect();
-            // (byte position, length, the target as it is to be written)
-            let mut edits: Vec<(usize, usize, String)> = Vec::new();
-            for link in strata_markdown::scan(&text).links {
-                let segs = segments(&link_key(&link.target));
-                let Target::Node(n) = self.resolve(note, &segs, &held, &names, &was) else {
-                    continue;
-                };
-                let Some(name) = now.get(&n).filter(|_| was.contains_key(&n)) else {
-                    continue;
-                };
-                if name.contains(BREAKS_LINKS) {
-                    continue;
-                }
-                // A Markdown link's path as written, `%20` and all (13 §2.5).
-                let Some((at, target, encode)) = target_span(&text, &link) else {
-                    continue;
-                };
-                let name = if encode {
-                    strata_markdown::percent_encode(name)
-                } else {
-                    name.clone()
-                };
-                let (head, last) = match target.rfind('/') {
-                    Some(i) => (&target[..=i], &target[i + 1..]),
-                    None => ("", target),
-                };
-                let md = last
-                    .get(last.len().saturating_sub(3)..)
-                    .filter(|e| e.eq_ignore_ascii_case(".md"))
-                    .unwrap_or_default();
-                let written = format!("{head}{name}{md}");
-                if written != target {
-                    edits.push((at, target.len(), written));
-                }
+            if self.kind(note) == Some(NodeKind::Board) {
+                self.rewrite_board(note, &held, &names, &was, &now)?;
+                continue;
             }
+            let doc = format!("content/{}", note.to_text());
+            self.ensure_doc(&doc)?;
+            let text = self.docs[&doc].get_text("text").to_string();
+            let edits = self.renamed_in(note, &text, &held, &names, &was, &now);
             if edits.is_empty() {
                 continue;
             }
@@ -848,15 +910,136 @@ impl<S: Store> Workspace<S> {
                 t.insert_utf8(*at, written).map_err(engine)?;
             }
             d.commit();
-            let bytes = d.export(ExportMode::updates(&vv)).map_err(engine)?;
-            if let Err(e) = self.store.append(&doc, &bytes, now_ms()) {
-                // Memory goes back to what the store holds (10 §3.3).
-                let d = load(&self.store, &doc)?.unwrap_or_default();
-                self.docs.insert(doc, d);
-                return Err(e.into());
-            }
-            self.note_edit(&doc);
+            self.keep_core_edit(&doc, &vv)?;
         }
+        Ok(())
+    }
+
+    /// Where `text` of `src` names a node the step renamed, and what to write
+    /// there: (byte position, length, the target as it is to be written),
+    /// first to last. A path keeps its networks, a Markdown link its
+    /// encoding, an `.md` stays; a name that breaks links is not written.
+    fn renamed_in(
+        &self,
+        src: NodeId,
+        text: &str,
+        held: &BTreeSet<NodeId>,
+        names: &HashMap<String, Vec<NodeId>>,
+        was: &Before,
+        now: &HashMap<NodeId, String>,
+    ) -> Vec<(usize, usize, String)> {
+        let mut edits: Vec<(usize, usize, String)> = Vec::new();
+        for link in strata_markdown::scan(text).links {
+            let segs = segments(&link_key(&link.target));
+            let Target::Node(n) = self.resolve(src, &segs, held, names, was) else {
+                continue;
+            };
+            let Some(name) = now.get(&n).filter(|_| was.contains_key(&n)) else {
+                continue;
+            };
+            if name.contains(BREAKS_LINKS) {
+                continue;
+            }
+            // A Markdown link's path as written, `%20` and all (13 §2.5).
+            let Some((at, target, encode)) = target_span(text, &link) else {
+                continue;
+            };
+            let name = if encode {
+                strata_markdown::percent_encode(name)
+            } else {
+                name.clone()
+            };
+            let (head, last) = match target.rfind('/') {
+                Some(i) => (&target[..=i], &target[i + 1..]),
+                None => ("", target),
+            };
+            let md = last
+                .get(last.len().saturating_sub(3)..)
+                .filter(|e| e.eq_ignore_ascii_case(".md"))
+                .unwrap_or_default();
+            let written = format!("{head}{name}{md}");
+            if written != target {
+                edits.push((at, target.len(), written));
+            }
+        }
+        edits
+    }
+
+    /// [`Self::rewrite_links`] on a board (13 §2.8, §6.5): an element whose
+    /// text or link named a renamed node gets it anew, with a version that
+    /// Excalidraw takes over its own (ADR-0006: the higher version wins).
+    fn rewrite_board(
+        &mut self,
+        board: NodeId,
+        held: &BTreeSet<NodeId>,
+        names: &HashMap<String, Vec<NodeId>>,
+        was: &Before,
+        now: &HashMap<NodeId, String>,
+    ) -> Result<()> {
+        let doc = format!("content/{}", board.to_text());
+        self.ensure_doc(&doc)?;
+        let mut changed: Vec<(String, LoroValue)> = Vec::new();
+        for (id, el) in live_elements(&self.docs[&doc]) {
+            let mut fields: HashMap<String, LoroValue> =
+                el.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            let mut edited = false;
+            for f in BOARD_FIELDS {
+                let Some(LoroValue::String(t)) = el.get(f) else {
+                    continue;
+                };
+                let edits = self.renamed_in(board, t, held, names, was, now);
+                if edits.is_empty() {
+                    continue;
+                }
+                let mut text = t.to_string();
+                for (at, len, written) in edits.iter().rev() {
+                    text.replace_range(*at..*at + *len, written);
+                }
+                fields.insert(f.to_owned(), LoroValue::from(text.as_str()));
+                edited = true;
+            }
+            if !edited {
+                continue;
+            }
+            let version = match el.get("version") {
+                Some(LoroValue::I64(v)) => *v,
+                Some(LoroValue::Double(v)) => *v as i64,
+                _ => 0,
+            } + 1;
+            fields.insert("version".to_owned(), LoroValue::I64(version));
+            fields.insert(
+                "versionNonce".to_owned(),
+                LoroValue::I64(nonce(&id, version)),
+            );
+            fields.insert("updated".to_owned(), LoroValue::I64(now_ms()));
+            changed.push((id, LoroValue::from(fields)));
+        }
+        if changed.is_empty() {
+            return Ok(());
+        }
+        let d = &self.docs[&doc];
+        let vv = d.oplog_vv();
+        let elements = d.get_map("elements");
+        for (id, v) in changed {
+            elements.insert(&id, v).map_err(engine)?;
+        }
+        d.commit();
+        self.keep_core_edit(&doc, &vv)
+    }
+
+    /// The core's own edit of a content document since `vv`, stored as an
+    /// editor's push is, outside undo (15 §3.4); the editors read it again.
+    fn keep_core_edit(&mut self, doc: &str, vv: &loro::VersionVector) -> Result<()> {
+        let bytes = self.docs[doc]
+            .export(ExportMode::updates(vv))
+            .map_err(engine)?;
+        if let Err(e) = self.store.append(doc, &bytes, now_ms()) {
+            // Memory goes back to what the store holds (10 §3.3).
+            let d = load(&self.store, doc)?.unwrap_or_default();
+            self.docs.insert(doc.to_owned(), d);
+            return Err(e.into());
+        }
+        self.note_edit(doc);
         Ok(())
     }
 
@@ -938,7 +1121,7 @@ impl<S: Store> Workspace<S> {
         let mut notes: BTreeSet<NodeId> = changed
             .iter()
             .copied()
-            .filter(|&n| self.kind(n) == Some(NodeKind::Note))
+            .filter(|&n| links_from(self.kind(n)))
             .collect();
         for shard in self.index_shards() {
             let LoroValue::Map(edges) = shard.get_map("edge").get_value() else {

@@ -479,9 +479,10 @@ fn import_drawings_become_boards() {
             .and_then(|v| v.as_string())
             .is_some_and(|s| s.starts_with("data:image/png;base64,"))
     );
-    // Its link is a wire; the text above it, a note beside it.
+    // Its link is a text wire, kept as the board changes (13 §2.8); the
+    // text above it, a note beside it.
     let inbox = id(&w, "Входящие", "Корень");
-    assert_eq!(origins(&w, &drawing, &inbox), vec!["import"]);
+    assert_eq!(origins(&w, &drawing, &inbox), vec!["text"]);
     let words = id(&w, "Рисунок — текст", "Корень");
     assert_eq!(origins(&w, &drawing, &words), vec!["import"]);
     assert_eq!(
@@ -492,13 +493,16 @@ fn import_drawings_become_boards() {
     );
     let plain = id(&w, "Без сжатия", "Корень");
     let deeds = id(&w, "Дела", "Проекты");
-    assert_eq!(origins(&w, &plain, &deeds), vec!["import"]);
+    assert_eq!(origins(&w, &plain, &deeds), vec!["text"]);
+    let old = id(&w, "Старый", "Корень");
     assert_eq!(named(&w, "Старый")[0].1, NodeKind::Board);
-    assert!(
-        lines(&report, "ghostProperty")
-            .iter()
-            .any(|i| i.detail == "[[Нигде]]")
-    );
+    // A link to no node is the board's ghost; its line offers «Создать».
+    let nowhere = lines(&report, "ghost")
+        .into_iter()
+        .find(|i| i.detail == "[[Нигде]]")
+        .expect("the ghost's line");
+    assert_eq!(nowhere.node.as_deref(), Some(old.as_str()));
+    assert_eq!(nowhere.link.as_deref(), Some("Нигде"));
     // «Local Font» of the plugin's fork becomes the default font (R5 §6).
     assert_eq!(lines(&report, "localFont").len(), 2);
 }

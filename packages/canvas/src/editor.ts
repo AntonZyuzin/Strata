@@ -1023,7 +1023,16 @@ export class Editor {
     };
     on(el, 'pointerdown', (e) => this.onDown(e));
     on(el, 'pointermove', (e) => this.onMove(e));
-    on(el, 'pointerup', (e) => this.onUp(e));
+    on(el, 'pointerup', (e) => {
+      // The middle button pans (06 §3). On Linux its release would paste the
+      // primary selection (X11, GTK): the canvas took that for a paste and
+      // made a note of it at every pan.
+      if (e.button === 1) e.preventDefault();
+      this.onUp(e);
+    });
+    on(el, 'auxclick', (e) => {
+      if (e.button === 1) e.preventDefault();
+    });
     on(el, 'pointercancel', () => this.cancelGesture());
     on(el, 'pointerleave', () => {
       this.pointer.inside = false;

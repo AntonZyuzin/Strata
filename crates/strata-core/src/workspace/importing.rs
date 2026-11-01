@@ -365,8 +365,9 @@ impl<S: Store> Workspace<S> {
     }
 
     /// «Откатить» (`keep` false): what the task wrote goes, as a changeset
-    /// of its own. «Оставить»: it stays as it is, and the notes it brought
-    /// take up their links again — the files that never came are ghosts.
+    /// of its own. «Оставить»: it stays as it is, and the notes and boards it
+    /// brought take up their links again (13 §2.8) — the files that never
+    /// came are ghosts.
     pub fn settle_interrupted(&mut self, keep: bool) -> Result<()> {
         let Some(cs) = self.interrupted.take() else {
             return Ok(());
@@ -375,11 +376,13 @@ impl<S: Store> Workspace<S> {
             return self.revert_long(cs);
         }
         self.store.close(&cs.id, Status::Applied)?;
-        let note = Some(Val::str("note"));
+        let linking = [Some(Val::str("note")), Some(Val::str("board"))];
         let notes: BTreeSet<NodeId> = cs
             .writes
             .iter()
-            .filter(|w| w.doc.starts_with("index/") && w.map == "kind" && w.after == note)
+            .filter(|w| {
+                w.doc.starts_with("index/") && w.map == "kind" && linking.contains(&w.after)
+            })
             .filter_map(|w| NodeId::parse(&w.key).ok())
             .collect();
         self.relink(&notes)?;

@@ -834,10 +834,16 @@ fn an_import_the_app_broke_off_waits_for_откатить_or_оставить() 
     // `in-progress` is found on the next opening.
     let _b = Batches::of(1);
     let file = |path: &str, text: &str| VaultFile::new(path, text.as_bytes().to_vec());
+    // A drawing beside the note links to Б too (13 §2.8).
+    let drawing = r#"{"type":"excalidraw","version":2,"elements":[{"id":"t","type":"text","text":"[[Б]]","originalText":"[[Б]]","version":1,"versionNonce":1,"isDeleted":false}]}"#;
     let vault = || {
         Vault::from_files(
             "Обрыв",
-            vec![file("А.md", "Ссылка на [[Б]]\n"), file("Б.md", "Б\n")],
+            vec![
+                file("А.md", "Ссылка на [[Б]]\n"),
+                file("Аа.excalidraw", drawing),
+                file("Б.md", "Б\n"),
+            ],
         )
     };
     for keep in [false, true] {
@@ -847,6 +853,7 @@ fn an_import_the_app_broke_off_waits_for_откатить_or_оставить() 
         begun(&mut w, vault());
         w.import_step().expect("the networks");
         w.import_step().expect("А");
+        w.import_step().expect("Аа");
         drop(w);
         let mut w = crate::sqlite::open_folder(&dir).expect("open");
         assert_eq!(
@@ -858,10 +865,11 @@ fn an_import_the_app_broke_off_waits_for_откатить_or_оставить() 
         let mut names: Vec<String> = w.tree().into_iter().map(|t| t.name).collect();
         names.sort();
         if keep {
-            // А stays; Б never came: its link is a ghost now (05 §8.5).
-            assert_eq!(names, vec!["А", "Обрыв"]);
+            // А and the board stay; Б never came: their links are ghosts now
+            // (05 §8.5, 13 §2.8).
+            assert_eq!(names, vec!["А", "Аа", "Обрыв"]);
             let view = w.network_view(&w.root()).expect("view");
-            assert_eq!(view.ghosts.len(), 1, "{:?}", view.ghosts);
+            assert_eq!(view.ghosts.len(), 2, "{:?}", view.ghosts);
         } else {
             assert_eq!(names, vec!["Обрыв"]);
         }

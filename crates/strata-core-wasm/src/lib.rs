@@ -6,6 +6,23 @@ use strata_core::{MemoryStore, Workspace};
 use wasm_bindgen::prelude::*;
 
 #[wasm_bindgen]
+extern "C" {
+    /// `console.error`: where a panic says what it was.
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(message: &str);
+}
+
+/// The core's panics, said in the console before WASM traps: alone, the
+/// page sees only «unreachable» (WebKit: «Unreachable code should not be
+/// executed») and never why. Run once, as the module loads.
+#[wasm_bindgen(start)]
+pub fn start() {
+    std::panic::set_hook(Box::new(|info| {
+        console_error(&format!("strata-core panicked: {info}"));
+    }));
+}
+
+#[wasm_bindgen]
 #[derive(Debug)]
 pub struct Core {
     ws: Workspace<MemoryStore>,

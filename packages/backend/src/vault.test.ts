@@ -68,6 +68,28 @@ describe('V-synth vault', () => {
     expect(await shelf.get(`ws:${r.workspace.id}`)).toBeUndefined();
   });
 
+  it('a listener that throws stops neither the import nor the others (13 §3.3)', async () => {
+    const home = await browserHome(memoryShelf());
+    const r = await home.importVault({ name: 'V-synth', files: vsynthVault() }, {});
+    const errors = console.error;
+    console.error = () => undefined;
+    try {
+      // Quiet on the step it is told at once, it throws at the batches.
+      let replayed = false;
+      r.job.watch(() => {
+        if (!replayed) {
+          replayed = true;
+          return;
+        }
+        throw new Error('a screen with a bug');
+      });
+      const report = await ended(r.job);
+      expect(report.counts.boards).toBe(3);
+    } finally {
+      console.error = errors;
+    }
+  });
+
   it('an import that breaks ends as failed, not with a count that stands still', async () => {
     // 13 §3.3: here the shelf refuses the last write; the job ends, and the
     // workspace made for the vault goes with it.

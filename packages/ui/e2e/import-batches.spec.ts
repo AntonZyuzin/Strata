@@ -27,6 +27,21 @@ function bigVault(n: number): string {
 
 const status = (page: Page) => page.locator('.ws-import');
 
+/** What the page shows of an import: a failed wait prints it (13 §3.3). */
+const importState = (page: Page) =>
+  page.evaluate(() => ({
+    report: document.querySelector('.import-report') !== null,
+    status: document.querySelector('.ws-import-text')?.textContent ?? null,
+    tab: document.querySelector('.tab.is-active')?.textContent ?? null,
+    nodes: document.querySelector('.workspace')?.getAttribute('data-nodes') ?? null,
+    error: document.querySelector('.shell-error, .home-error, .toast')?.textContent ?? null,
+  }));
+
+/** The report of the import that ended, or what the page shows instead. */
+async function reportShown(page: Page, timeout = 60_000) {
+  await expect.poll(() => importState(page), { timeout }).toMatchObject({ report: true });
+}
+
 /** Imports `n` notes; the batches land `pause` ms apart, to be watched. */
 async function startImport(page: Page, n = 2000, pause = 400) {
   await page.goto(`/?plain&batchPause=${pause}`);
@@ -104,7 +119,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter(
  */
 async function breakOff(page: Page): Promise<string> {
   await startImport(page, 40, 0);
-  await expect(page.locator('.import-report')).toBeVisible({ timeout: 60_000 });
+  await reportShown(page);
   const id = await page.evaluate(async () => {
     const db = await new Promise<IDBDatabase>((ok, fail) => {
       const r = indexedDB.open('strata', 1);
@@ -214,7 +229,7 @@ async function importFixes(page: Page) {
   await page.goto('/?plain');
   await expect(page.locator('.home-vault')).toBeVisible();
   await page.locator('.home-vault-input').setInputFiles(fixesVault());
-  await expect(page.locator('.import-report')).toBeVisible({ timeout: 60_000 });
+  await reportShown(page);
 }
 
 const line = (page: Page, text: string) =>

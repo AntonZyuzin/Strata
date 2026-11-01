@@ -350,7 +350,15 @@ export function importJob(
     cancel,
     tell(e) {
       last = e;
-      for (const l of [...listeners]) l(e);
+      // A listener that throws is the screen's bug: the batches go on, and
+      // the other listeners hear of the step too.
+      for (const l of [...listeners]) {
+        try {
+          l(e);
+        } catch (err) {
+          console.error(err);
+        }
+      }
     },
     watch(listener) {
       listeners.add(listener);

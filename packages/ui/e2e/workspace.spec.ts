@@ -3147,7 +3147,13 @@ test.describe('a workspace on the core', () => {
     test.setTimeout(120_000);
     await page.goto('/?plain');
     await createWorkspace(page, 'Узлы');
-    await createNode(page, 480, 260, 'Узел');
+    // With nothing chosen a node goes under the cursor (each `createNode`
+    // ends with Esc): a chosen node would make it a child, placed beside
+    // the last one (06 §5.4), the camera following it under the panel.
+    await createNode(page, 480, 220, 'Узел');
+    for (let i = 0; i < 8; i++) {
+      await createNode(page, 340 + 80 * (i % 4), i < 4 ? 420 : 520, `Н${i + 1}`);
+    }
     const hub = await idOf(page, 'Узел');
     const radius = () =>
       page.evaluate(async (id) => {
@@ -3155,16 +3161,23 @@ test.describe('a workspace on the core', () => {
         await ws.settled();
         return ws.view.nodeAt(id)?.r ?? null;
       }, hub);
-    // Each new node from the chosen one: a wire from «Узел». Two rows well
-    // inside the canvas, clear of the panel: the camera stays where it is.
-    for (let i = 0; i < 8; i++) {
-      await select(page, 'Узел');
-      await createNode(page, 360 + 80 * (i % 4), i < 4 ? 480 : 580, `Н${i + 1}`);
-      if (i === 6) expect(await radius(), 'seven wires: S').toBe(16);
-    }
-    expect((await graphNow(page)).edges).toHaveLength(8);
+    const wire = (to: string) =>
+      page.evaluate(
+        ([from, to]) => {
+          window.__strataWs
+            ?.graph()
+            ?.transaction({ key: 't.wire' }, (tx) =>
+              (tx as { connect(a: string, b: string): boolean }).connect(from, to),
+            );
+        },
+        [hub, to] as const,
+      );
+    for (let i = 1; i <= 7; i++) await wire(await idOf(page, `Н${i}`));
+    expect(await radius(), 'seven wires: S').toBe(16);
+    await wire(await idOf(page, 'Н8'));
+    expect((await graphNow(page)).edges.filter((e) => e.startsWith('Узел→'))).toHaveLength(8);
     await expect.poll(radius).toBe(24);
-    // One step of undo takes the eighth away, and the bubble back to S.
+    // One step of undo takes the eighth wire away, and the bubble back to S.
     await page.evaluate(() => window.__strataWs?.view.canvas.focus());
     await page.keyboard.press('Control+z');
     await expect.poll(radius).toBe(16);

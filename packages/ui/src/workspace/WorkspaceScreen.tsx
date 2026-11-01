@@ -235,6 +235,9 @@ export interface UndoState {
   canForward: boolean;
 }
 
+/** How far `Ctrl+D` puts the copies from their originals (06 §12.1). */
+const DUPLICATE_SHIFT = 24;
+
 export function WorkspaceScreen(props: {
   locale: Locale;
   home: HomeBackend;
@@ -618,6 +621,7 @@ export function WorkspaceScreen(props: {
         void pasteNodes(e.appearance, e);
         return true;
       },
+      duplicate: (ids) => void duplicateNodes(ids),
       // `Esc` takes a cut back in the network it was made in (☑ Q-06-17).
       uncut: () => {
         const c = clipRef.current;
@@ -1046,6 +1050,31 @@ export function WorkspaceScreen(props: {
       setClipped(nodes.length > 0);
       if (netRef.current === net) viewRef.current?.setCut(nodes.map((n) => n.id));
     };
+
+    /**
+     * `Ctrl+D` (06 §12.1): copies of the nodes, with all inside them, beside
+     * them, shifted by 24 — as `Ctrl+C` then `Ctrl+V` would make them. One step.
+     */
+    const duplicateNodes = (ids: string[]) =>
+      queue(async () => {
+        const g = graph.current;
+        if (!g) return;
+        await sync.current?.settled();
+        const net = netRef.current;
+        const nodes = ids.flatMap((id) => {
+          const n = g.nodes.get(id);
+          return n && !n.ghostOf
+            ? [{ id, x: n.x + DUPLICATE_SHIFT, y: n.y + DUPLICATE_SHIFT }]
+            : [];
+        });
+        if (nodes.length === 0) return;
+        const { ids: made } = await core.copyNodes(nodes, net, {
+          key: 'proto.change.copy',
+          params: { n: nodes.length },
+        });
+        await show(net);
+        editor.current?.selectNodes(made);
+      });
 
     /**
      * `Ctrl+V` and `Ctrl+Shift+V` (06 §12.1) of what was cut or copied, at
@@ -2365,7 +2394,7 @@ export function WorkspaceScreen(props: {
       const preview =
         going.length > 0
           ? await core.trashPreview(going.map((n) => n.id))
-          : { trashed: [], staying: [] };
+          : { trashed: [], staying: [], wires: 0 };
       const nested = preview.trashed.length > going.length || preview.staying.length > 0;
       if (placed.length === 0 && !nested) {
         editor.current?.removeNodes(ids, everywhere);
@@ -2434,7 +2463,7 @@ export function WorkspaceScreen(props: {
     const d = await core.node(id);
     const going = everywhere || d.places.length <= 1;
     const placed = everywhere && d.places.length > 1;
-    const preview = going ? await core.trashPreview([id]) : { trashed: [], staying: [] };
+    const preview = going ? await core.trashPreview([id]) : { trashed: [], staying: [], wires: 0 };
     const nested = preview.trashed.length > 1 || preview.staying.length > 0;
     if (placed || nested) {
       setRemoval({ ids: [id], everywhere, placed: placed ? [d] : [], preview, map: net });
@@ -2769,6 +2798,7 @@ export function WorkspaceScreen(props: {
         onSelect: () => ed.act('cut'),
       },
       { label: t(locale, 'ctx.copy'), hint: 'Ctrl+C', onSelect: () => ed.act('copy') },
+      { label: t(locale, 'ctx.duplicate'), hint: 'Ctrl+D', onSelect: () => ed.act('duplicate') },
       // Beside the node the menu is for, not on it.
       ...pasteItems(() => ({ x: n.x + 160, y: n.y })),
       { label: t(locale, 'ctx.wrap'), hint: 'Shift+C', onSelect: () => ed.act('wrap') },

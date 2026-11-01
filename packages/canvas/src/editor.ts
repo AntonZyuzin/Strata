@@ -181,6 +181,8 @@ export interface EditorEvents {
    * for `Ctrl+V`; a cut one shows half seen until it is pasted (☑ Q-06-17).
    */
   clip?(e: { cut: boolean; ids: string[] }): void;
+  /** `Ctrl+D` (06 §12.1): copies of the nodes beside them, shifted by 24. */
+  duplicate?(ids: string[]): void;
   /**
    * `Ctrl+V`, with `appearance` `Ctrl+Shift+V` (06 §12.1), at (x, y) in the
    * world: true when the Chrome holds nodes and pastes them; false — the
@@ -235,6 +237,7 @@ export type CanvasAction =
   | 'zoomReset'
   | 'cut'
   | 'copy'
+  | 'duplicate'
   | 'paste'
   | 'pasteAppearance'
   | 'wrap'
@@ -722,6 +725,10 @@ export class Editor {
       case 'copy':
         if (this.mode.t !== 'idle' || this.selection.size === 0) return;
         this.events.clip?.({ cut: action === 'cut', ids: [...this.selection] });
+        return;
+      case 'duplicate':
+        if (this.mode.t !== 'idle' || this.selection.size === 0) return;
+        this.events.duplicate?.([...this.selection]);
         return;
       case 'paste':
       case 'pasteAppearance': {
@@ -1716,6 +1723,12 @@ export class Editor {
           e.preventDefault();
           this.act('wrap');
         }
+        return;
+      case 'KeyD':
+        // `Ctrl+D` — copies beside (06 §12.1); the browser's bookmark is not ours.
+        if (!mod || e.altKey || e.shiftKey || this.selection.size === 0) return;
+        e.preventDefault();
+        this.act('duplicate');
         return;
       case 'KeyV': {
         // Nodes cut or copied paste here; anything else is the browser's paste (13 §3.9).

@@ -980,6 +980,9 @@ for (const deviceScaleFactor of [1, 2]) {
       await page.goto('/?plain');
       await createWorkspace(page, 'Появления');
       await appearing(page);
+      // A wire from it: the dialog says it hides with the node (06 §12.3).
+      await select(page, 'Референсы');
+      await createNode(page, 980, 620, 'Сценарий');
       await select(page, 'Референсы');
       const places = page.locator('.ws-inspector .ins-places');
       await expect(places.locator('li')).toHaveCount(2);
@@ -990,6 +993,11 @@ for (const deviceScaleFactor of [1, 2]) {
       await page.keyboard.press('Shift+Delete');
       const dialog = page.locator('.delete-dialog');
       await expect(dialog).toBeVisible();
+      await expect(dialog.locator('.delete-wires')).toHaveText(
+        locale === 'ru-RU'
+          ? '1 нить скроется до возврата из корзины'
+          : '1 wire hides until restored from the trash',
+      );
       expect(await overflowing(page, '.delete-dialog'), `${locale} the dialog must fit`).toEqual(
         [],
       );
@@ -1029,14 +1037,14 @@ for (const deviceScaleFactor of [1, 2]) {
       await createWorkspace(page, 'Перенос');
       await makeFolder(page, 'Архив', 520, 320);
       await createNode(page, 760, 480, 'Эскиз');
-      // The node's menu with a copy waiting: cut, copy, paste, as an appearance, wrap, icon.
+      // The node's menu with a copy waiting: cut, copy, duplicate, paste, as an appearance, wrap, icon.
       await select(page, 'Эскиз');
       await page.evaluate(() => window.__strataWs?.view.canvas.focus());
       await page.keyboard.press('Control+c');
       const sketch = await at(page, 'Эскиз');
       await page.mouse.click(sketch.x, sketch.y, { button: 'right' });
       const menu = page.locator('.context-menu');
-      await expect(menu.locator('.context-menu-row')).toHaveCount(13);
+      await expect(menu.locator('.context-menu-row')).toHaveCount(14);
       expect(await overflowing(page, '.context-menu'), `${locale} the menu must fit`).toEqual([]);
       expect((await box(page, '.context-menu')).width).toBeLessThanOrEqual(
         (await chWidth(page, 40)) + 2,
@@ -3191,6 +3199,53 @@ test.describe('a workspace on the core', () => {
     // One step of undo: both placements again.
     await page.keyboard.press('Control+z');
     await expect.poll(() => placement(page, sketch)).toEqual({ appearance: true, places: 2 });
+  });
+
+  test('Ctrl+D puts a copy beside, shifted by 24, one step; the menu and the palette have it (06 §12.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Дубли');
+    const ws = page.locator('.workspace');
+    await createNode(page, 760, 480, 'Эскиз');
+    const sketch = await idOf(page, 'Эскиз');
+    await select(page, 'Эскиз');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+d');
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    expect(await named(page, 'Эскиз')).toBe(2);
+    // The copy, 24 to the right and down of its original, is the one chosen.
+    const spots = await page.evaluate((orig) => {
+      const ws = window.__strataWs;
+      const g = ws?.graph();
+      const nodes = [...(g?.nodes.values() ?? [])].filter((n) => n.name === 'Эскиз');
+      const a = nodes.find((n) => n.id === orig);
+      const b = nodes.find((n) => n.id !== orig);
+      return {
+        dx: (b?.x ?? 0) - (a?.x ?? 0),
+        dy: (b?.y ?? 0) - (a?.y ?? 0),
+        chosen: ws?.editor()?.selected ?? [],
+        copy: b?.id,
+      };
+    }, sketch);
+    expect([spots.dx, spots.dy]).toEqual([24, 24]);
+    expect(spots.chosen).toEqual([spots.copy]);
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    // The menu by the right button has it, with its key, and so does the palette.
+    const at0 = await at(page, 'Эскиз');
+    await page.mouse.click(at0.x, at0.y, { button: 'right' });
+    await page.getByRole('menuitem', { name: /Дублировать/ }).click();
+    await expect(ws).toHaveAttribute('data-nodes', '2');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+p');
+    await page.locator('.command-palette input').fill('дублировать');
+    await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(
+      'Дублировать',
+    );
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-nodes', '3');
   });
 
   test('a drag held 500 ms on a folder: inside, Alt — a copy, Alt+Ctrl+Shift — an appearance (06 §12.1)', async ({

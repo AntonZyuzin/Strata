@@ -2671,10 +2671,23 @@ fn a_network_in_the_trash_takes_what_lives_only_inside_it() {
     let shared = create(&mut w, &sprint, NodeKind::Note, "Общая");
     let archive = create(&mut w, &root, NodeKind::Network, "Архив");
     place(&mut w, &shared, &archive).expect("also in Архив");
+    // Wires that hide with what goes (06 §12.3): two touch it, one does not.
+    let other = create(&mut w, &root, NodeKind::Note, "Снаружи");
+    for (from, to) in [(&only, &other), (&sprint, &archive), (&other, &archive)] {
+        op(
+            &mut w,
+            Op::Connect {
+                from: from.clone(),
+                to: to.clone(),
+            },
+        )
+        .expect("a wire");
+    }
     // The dialog's preview (06 §12.3) takes nothing.
     let p = w
         .trash_preview(std::slice::from_ref(&sprint))
         .expect("preview");
+    assert_eq!(p.wires, 2);
     let mut gone: Vec<&str> = p.trashed.iter().map(|l| l.name.as_str()).collect();
     gone.sort_unstable();
     assert_eq!(gone, ["Внутри", "Спринт", "Только здесь"]);

@@ -145,7 +145,15 @@ export const COMMANDS: readonly Command[] = [
     'node',
   ),
   canvas('cut', 'cut', 'Ctrl+X', ['вырезать', 'перенести', 'cut', 'move'], chosen, 'node'),
-  canvas('copy', 'copy', 'Ctrl+C', ['копировать', 'копия', 'copy', 'duplicate'], chosen, 'node'),
+  canvas('copy', 'copy', 'Ctrl+C', ['копировать', 'копия', 'copy'], chosen, 'node'),
+  canvas(
+    'duplicate',
+    'duplicate',
+    'Ctrl+D',
+    ['дублировать', 'копия рядом', 'duplicate', 'clone'],
+    chosen,
+    'node',
+  ),
   canvas('paste', 'paste', 'Ctrl+V', ['вставить', 'перенести', 'paste', 'move'], clipped),
   canvas(
     'pasteAppearance',

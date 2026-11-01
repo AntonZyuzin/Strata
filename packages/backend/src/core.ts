@@ -420,6 +420,8 @@ export interface NodeDetails extends NodeAttrs {
 export interface TrashPreview {
   trashed: Linked[];
   staying: (Linked & { path: [string, string][] })[];
+  /** Wires between live nodes that hide with them (06 §12.3). */
+  wires: number;
 }
 
 /**

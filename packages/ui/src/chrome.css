@@ -2043,6 +2043,12 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   min-height: var(--st-size-row);
 }
 
+.delete-wires {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .delete-row {
   flex: 1 1 auto;
   min-width: 0;

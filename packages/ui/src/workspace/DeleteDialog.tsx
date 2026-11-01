@@ -27,6 +27,8 @@ export function DeleteDialog(props: {
   useEffect(() => confirm.current?.focus(), []);
   const title = t(locale, everywhere ? 'del.everywhere' : 'del.trash');
   const inside = Math.max(0, preview.trashed.length - props.chosen);
+  // «Нода и 7 её нитей» (06 §12.3): hidden, not gone (05 §14 rule 6).
+  const wires = t(locale, 'del.wires', { n: preview.wires });
   // One node's places need no name per row: the line above names it.
   const many = placed.length > 1;
   return (
@@ -79,6 +81,11 @@ export function DeleteDialog(props: {
           ) : null}
           {inside > 0 ? (
             <p className="dialog-text">{t(locale, 'del.inside', { n: inside })}</p>
+          ) : null}
+          {preview.wires > 0 ? (
+            <p className="dialog-text delete-wires" title={wires}>
+              {wires}
+            </p>
           ) : null}
           {preview.staying.length > 0 ? (
             <>

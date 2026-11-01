@@ -272,6 +272,10 @@ fn is_false(b: &bool) -> bool {
 pub struct TrashPreview {
     pub trashed: Vec<Linked>,
     pub staying: Vec<Staying>,
+    /// Wires between live nodes that hide with them (05 §14 rule 6): «Нода
+    /// и 7 её нитей» of 06 §12.3. Ghosts are not counted.
+    #[serde(default)]
+    pub wires: u32,
 }
 
 /// Whether a network may take nodes (05 §5), asked before a gesture lands:
@@ -2239,9 +2243,31 @@ impl<S: Store> Workspace<S> {
                 path,
             });
         }
+        let gone: HashSet<NodeId> = c.trashed.iter().copied().collect();
+        let mut wires = 0u32;
+        for shard in self.index_shards() {
+            shard.get_map("edge").for_each(|_, v| {
+                let ValueOrContainer::Value(LoroValue::Map(ends)) = v else {
+                    return;
+                };
+                let end = |k: &str| {
+                    ends.get(k)
+                        .and_then(LoroValue::as_string)
+                        .and_then(|s| NodeId::parse(s).ok())
+                };
+                if let (Some(a), Some(b)) = (end("from"), end("to"))
+                    && (gone.contains(&a) || gone.contains(&b))
+                    && self.alive(a)
+                    && self.alive(b)
+                {
+                    wires += 1;
+                }
+            });
+        }
         Ok(TrashPreview {
             trashed: c.trashed.iter().map(|&n| self.linked(n)).collect(),
             staying,
+            wires,
         })
     }
 

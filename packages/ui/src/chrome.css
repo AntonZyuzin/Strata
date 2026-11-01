@@ -2103,6 +2103,47 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   background: rgb(0 0 0 / 0.45);
 }
 
+/* «Клавиши» (06 §17): groups of one-line rows, the width in ch. */
+.help-window {
+  display: flex;
+  flex-direction: column;
+  width: min(82ch, calc(100vw - 32px));
+  max-height: calc(100vh - 32 * var(--u));
+}
+
+.help-body {
+  min-height: 0;
+  overflow-y: auto;
+  padding: calc(8 * var(--u)) calc(12 * var(--u)) calc(12 * var(--u));
+}
+
+.help-group + .help-group {
+  margin-top: calc(10 * var(--u));
+}
+
+.help-rows {
+  display: grid;
+  grid-template-columns: 32ch minmax(0, 1fr);
+  gap: calc(3 * var(--u)) calc(8 * var(--u));
+  margin: calc(4 * var(--u)) 0 0;
+}
+
+.help-row {
+  display: contents;
+}
+
+.help-row dt,
+.help-row dd {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.help-row dt {
+  color: var(--st-color-text-muted);
+}
+
 .dialog {
   width: min(56ch, calc(100vw - 32px));
 }

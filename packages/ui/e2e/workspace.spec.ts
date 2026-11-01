@@ -1062,6 +1062,44 @@ for (const deviceScaleFactor of [1, 2]) {
     }
   });
 
+  test(`«Клавиши» keep their size in RU and EN @${deviceScaleFactor}x (06 §17)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Клавиши');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Shift+Slash');
+      const help = page.locator('.help-window');
+      await expect(help).toBeVisible();
+      await expect(help.locator('.help-group')).toHaveCount(8);
+      expect(await overflowing(page, '.help-window'), `${locale} the keys must fit`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.help-window'),
+        heading: await box(page, '.help-window .help-group:first-child .ins-heading'),
+        what: await box(page, '.help-window .help-group:first-child .help-row:first-child dt'),
+        keys: await box(page, '.help-window .help-group:first-child .help-row:first-child dd'),
+      });
+      await page.keyboard.press('Escape');
+      await expect(help).toHaveCount(0);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'heading', 'what', 'keys'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
   test(`«Где размещена» and «Удалить везде?» keep their size in RU and EN @${deviceScaleFactor}x (06 §12.2–12.3)`, async ({
     browser,
   }) => {
@@ -4039,6 +4077,36 @@ test.describe('a workspace on the core', () => {
     await page.mouse.move(moved.x, moved.y, { steps: 4 });
     await page.waitForTimeout(900);
     await expect(card).toHaveCount(0);
+  });
+
+  test('? opens the keys; Esc, × and a press outside close them; the palette has them too (06 §17)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Клавиши');
+    const help = page.locator('.help-window');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Shift+Slash');
+    await expect(help).toBeVisible();
+    // A gesture in words, a key as printed: «J+штрих» for the chain.
+    const chain = help.locator('.help-row', { hasText: 'Цепочка' });
+    await expect(chain.locator('dd')).toHaveText('J+штрих');
+    // The canvas leaves the keys alone meanwhile: `L` does not lay out.
+    await page.keyboard.press('Escape');
+    await expect(help).toHaveCount(0);
+    await page.keyboard.press('Shift+Slash');
+    await help.locator('.window-close').click();
+    await expect(help).toHaveCount(0);
+    await page.keyboard.press('Shift+Slash');
+    await page.mouse.click(10, 790);
+    await expect(help).toHaveCount(0);
+    // «Клавиши» in the command palette.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+p');
+    await page.keyboard.type('клавиши');
+    await expect(page.locator('.tab-menu-row').first()).toContainText('Клавиши');
+    await page.keyboard.press('Enter');
+    await expect(help).toBeVisible();
   });
 
   test('a store kept in parts, as a large one is (V-10k), comes back after a reload', async ({

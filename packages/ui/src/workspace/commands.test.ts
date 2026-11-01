@@ -27,6 +27,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   mapAct: () => undefined,
   quality: 'auto',
   setQuality: () => undefined,
+  help: () => undefined,
   ...over,
 });
 

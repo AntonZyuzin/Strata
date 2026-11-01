@@ -41,6 +41,8 @@ export interface CommandContext {
   /** The star map's quality chosen by hand, or `auto` (08 §8.4). */
   quality: Quality | 'auto';
   setQuality(q: Quality | 'auto'): void;
+  /** «Клавиши» (06 §17). */
+  help(): void;
 }
 
 export interface Command {
@@ -211,6 +213,14 @@ export const COMMANDS: readonly Command[] = [
     chosen,
     'node',
   ),
+  {
+    id: 'help',
+    title: 'cmd.help',
+    aliases: ['клавиши', 'справка', 'горячие клавиши', 'keys', 'help', 'shortcuts'],
+    group: 'nav',
+    key: '?',
+    run: (c) => c.help(),
+  },
   {
     id: 'nav.goTo',
     title: 'cmd.nav.goTo',

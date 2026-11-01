@@ -95,6 +95,7 @@ import { dueWord } from './due';
 import { ExternalList } from './ExternalList';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
+import { HelpWindow } from './HelpWindow';
 import { IconPalette, PRESET } from './IconPalette';
 import { ImportReportWindow, type ReportActions } from './ImportReportWindow';
 import { ImportStatus } from './ImportStatus';
@@ -398,6 +399,8 @@ export function WorkspaceScreen(props: {
   const mapChanged = useRef(new Set<() => void>());
   /** The command palette, `Ctrl+P` (09 §3.5). */
   const [palette, setPalette] = useState(false);
+  /** «Клавиши» (06 §17), `?`. */
+  const [help, setHelp] = useState(false);
   /** The list behind a node's «↗N» (06 §14), by the mark at (x, y); `wires` null until the core answers. */
   const [external, setExternal] = useState<{
     id: string;
@@ -1588,6 +1591,7 @@ export function WorkspaceScreen(props: {
       menu !== null ||
         iconPick !== null ||
         colorPick !== null ||
+        help ||
         name !== null ||
         finder !== null ||
         palette ||
@@ -1596,7 +1600,19 @@ export function WorkspaceScreen(props: {
         viewerFocus ||
         covered,
     );
-  }, [menu, iconPick, colorPick, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
+  }, [
+    menu,
+    iconPick,
+    colorPick,
+    help,
+    name,
+    finder,
+    palette,
+    view3d,
+    boardFocus,
+    viewerFocus,
+    covered,
+  ]);
 
   useEffect(() => {
     ringModeRef.current = props.prefs.ring;
@@ -1618,7 +1634,7 @@ export function WorkspaceScreen(props: {
     // Mid-bridge (08 §7) neither view takes keys.
     if (view3d === 'to3d' || view3d === 'to2d') return;
     // A search window and the palette take their own keys while open.
-    if (finder || palette || covered) return;
+    if (finder || palette || covered || help) return;
     const key = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       // `Ctrl+P` — the palette, on the canvas and on the star map (09 §3.5).
@@ -1642,6 +1658,14 @@ export function WorkspaceScreen(props: {
           target.tagName === 'TEXTAREA' ||
           target.isContentEditable ||
           (view3d !== '2d' && target.closest('.window, .dialog, .context-menu') !== null));
+      // `?` — the keys (06 §17), on the canvas and on the star map; by the
+      // key's place, and by the sign where a layout puts it elsewhere.
+      if (((e.code === 'Slash' && e.shiftKey) || e.key === '?') && !mod && !e.altKey) {
+        if (typing || menu || name) return;
+        e.preventDefault();
+        setHelp(true);
+        return;
+      }
       if (view3d === '2d') {
         if (!search || typing || menu || name) return;
         e.preventDefault();
@@ -1673,7 +1697,7 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, finder, palette, covered, menu, name, mapCtx, removal]);
+  }, [view3d, finder, palette, covered, help, menu, name, mapCtx, removal]);
 
   // A window opened over the star map belongs to it (08 §6.3): back in 2D it
   // stays only for a node of the canvas's network.
@@ -3046,6 +3070,7 @@ export function WorkspaceScreen(props: {
     mapAct: (action) => map3d.current?.act(action),
     quality,
     setQuality: chooseQuality,
+    help: () => setHelp(true),
   };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
@@ -3419,6 +3444,15 @@ export function WorkspaceScreen(props: {
           />
         );
       })()}
+      {help ? (
+        <HelpWindow
+          locale={locale}
+          onClose={() => {
+            setHelp(false);
+            focusCanvas();
+          }}
+        />
+      ) : null}
       {colorPick ? (
         <ColorPalette
           locale={locale}

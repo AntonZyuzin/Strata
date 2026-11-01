@@ -292,7 +292,7 @@ export async function browserHome(
             await save();
           });
         if (out.progress) job.tell({ type: 'progress', workspace: id, progress: out.progress });
-        void (async () => {
+        const batches = async () => {
           for (;;) {
             await new Promise((done) => setTimeout(done, pause));
             if (stopped || tabs.get(id) !== c) {
@@ -313,7 +313,17 @@ export async function browserHome(
             job.tell({ type: 'progress', workspace: id, progress: r.progress });
             if (r.progress.report) return;
           }
-        })();
+        };
+        // A batch that throws ends the import as failed: its count would
+        // otherwise stand still for good (13 §3.3).
+        void batches().catch(async (e: unknown) => {
+          await drop().catch(() => undefined);
+          job.tell({
+            type: 'failed',
+            workspace: id,
+            message: e instanceof Error ? e.message : String(e),
+          });
+        });
         return { ...opened, job };
       }),
   };

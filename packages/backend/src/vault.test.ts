@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { vsynthVault, vsynthVaultJson } from '../../editor/src/vsynth-vault';
-import { browserHome, loadCore, memoryShelf } from './browser';
+import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
 import type { ImportJob, ImportReport } from './core';
 
 /**
@@ -64,6 +64,26 @@ describe('V-synth vault', () => {
     expect((await home.home()).workspaces.map((w) => w.id)).toEqual([r.workspace.id]);
     await r.job.cancel();
     await expect(ended(r.job)).rejects.toThrow('cancelled');
+    expect((await home.home()).workspaces).toEqual([]);
+    expect(await shelf.get(`ws:${r.workspace.id}`)).toBeUndefined();
+  });
+
+  it('an import that breaks ends as failed, not with a count that stands still', async () => {
+    // 13 §3.3: here the shelf refuses the last write; the job ends, and the
+    // workspace made for the vault goes with it.
+    const shelf = memoryShelf();
+    let refuse = false;
+    const failing: Shelf = {
+      ...shelf,
+      set: async (k, v) => {
+        if (refuse && k.startsWith('ws:')) throw new Error('the disk is full');
+        await shelf.set(k, v);
+      },
+    };
+    const home = await browserHome(failing);
+    const r = await home.importVault({ name: 'V-synth', files: vsynthVault() }, {});
+    refuse = true;
+    await expect(ended(r.job)).rejects.toThrow('the disk is full');
     expect((await home.home()).workspaces).toEqual([]);
     expect(await shelf.get(`ws:${r.workspace.id}`)).toBeUndefined();
   });

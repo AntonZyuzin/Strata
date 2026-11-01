@@ -61,21 +61,36 @@ function committed(t: IDBTransaction): Promise<void> {
 }
 
 /**
- * Values over this go to IndexedDB as Blobs. Chromium serializes a value of
- * at most 127 MiB — V-10k's store is 163 MB — while a Blob's bytes are kept
- * aside, as a file; smaller values stay byte arrays.
+ * Values over this go to IndexedDB in parts, under `<key>#0000`, `#0001`…:
+ * Chromium serializes no value over 127 MiB (V-10k's store is 163 MB), and
+ * WebKit's private sessions — Playwright's contexts among them — keep no
+ * Blob that could hold it aside.
  */
-const BLOB_OVER = 64 * 1024 * 1024;
+const PART = 32 * 1024 * 1024;
 
-/** Bytes as a Blob's part: those on a shared buffer are copied first, the rest go as they are. */
-const part = (v: Uint8Array): Uint8Array<ArrayBuffer> =>
-  v.buffer instanceof ArrayBuffer ? (v as Uint8Array<ArrayBuffer>) : new Uint8Array(v);
+/** What a value in parts leaves under its own key. */
+interface Parts {
+  parts: number;
+  length: number;
+}
+
+const isParts = (v: unknown): v is Parts =>
+  typeof v === 'object' &&
+  v !== null &&
+  typeof (v as Parts).parts === 'number' &&
+  typeof (v as Parts).length === 'number';
+
+const partKey = (k: string, i: number) => `${k}#${String(i).padStart(4, '0')}`;
+
+/** The parts of `k`, in their order: the keys sort as their numbers. */
+const partsOf = (k: string) => IDBKeyRange.bound(`${k}#`, `${k}#\uffff`);
 
 /**
- * A shelf in IndexedDB: one store of byte arrays, a large one as a Blob.
- * `blobOver` — the size from which a value goes as a Blob.
+ * A shelf in IndexedDB: one store of byte arrays; a value over `part`
+ * bytes is kept in parts. A value and its parts are written in one
+ * transaction and read in one, so a value is whole or not there.
  */
-export async function indexedDbShelf(name = 'strata', blobOver = BLOB_OVER): Promise<Shelf> {
+export async function indexedDbShelf(name = 'strata', part = PART): Promise<Shelf> {
   const open = indexedDB.open(name, 1);
   open.onupgradeneeded = () => open.result.createObjectStore('kv');
   const db = await request(open);
@@ -86,13 +101,43 @@ export async function indexedDbShelf(name = 'strata', blobOver = BLOB_OVER): Pro
   };
   return {
     get: async (k) => {
-      const v: unknown = await request(db.transaction('kv', 'readonly').objectStore('kv').get(k));
+      const store = db.transaction('kv', 'readonly').objectStore('kv');
+      const [v, rest] = await Promise.all([
+        request<unknown>(store.get(k)),
+        request<unknown[]>(store.getAll(partsOf(k))),
+      ]);
       if (v instanceof Uint8Array) return v;
-      return v instanceof Blob ? new Uint8Array(await v.arrayBuffer()) : undefined;
+      if (!isParts(v)) return undefined;
+      const whole = new Uint8Array(v.length);
+      let at = 0;
+      for (const p of rest) {
+        if (!(p instanceof Uint8Array) || at + p.byteLength > v.length) break;
+        whole.set(p, at);
+        at += p.byteLength;
+      }
+      if (rest.length !== v.parts || at !== v.length) {
+        throw new Error(`${k}: ${rest.length} of its ${v.parts} parts, ${at} of ${v.length} bytes`);
+      }
+      return whole;
     },
     set: (k, v) =>
-      write((store) => store.put(v.byteLength > blobOver ? new Blob([part(v)]) : v, k)),
-    delete: (k) => write((store) => store.delete(k)),
+      write((store) => {
+        // Whole or in parts, never both: the old parts go first.
+        store.delete(partsOf(k));
+        if (v.byteLength <= part) {
+          store.put(v, k);
+          return;
+        }
+        const n = Math.ceil(v.byteLength / part);
+        store.put({ parts: n, length: v.byteLength } satisfies Parts, k);
+        // A copy each: a view would carry its whole buffer into the clone.
+        for (let i = 0; i < n; i++) store.put(v.slice(i * part, (i + 1) * part), partKey(k, i));
+      }),
+    delete: (k) =>
+      write((store) => {
+        store.delete(k);
+        store.delete(partsOf(k));
+      }),
   };
 }
 

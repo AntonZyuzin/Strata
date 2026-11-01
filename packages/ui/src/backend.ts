@@ -73,8 +73,9 @@ export async function openHome(): Promise<HomeBackend> {
   const q = new URLSearchParams(window.location.search);
   // Layout tests watch an import's batches land (13 §3.3): `?batchPause=ms`.
   const pause = Number(q.get('batchPause')) || 0;
-  // Tests keep every value as a Blob, as only a large one is (`?shelfBlobs`).
-  const shelf = await indexedDbShelf('strata', q.has('shelfBlobs') ? 0 : undefined);
+  // Tests keep a small store in parts, as a large one is (`?shelfPart=bytes`).
+  const part = Number(q.get('shelfPart')) || undefined;
+  const shelf = await indexedDbShelf('strata', part);
   return browserHome(shelf, undefined, pause);
 }
 

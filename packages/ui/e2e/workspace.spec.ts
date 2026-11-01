@@ -1025,6 +1025,43 @@ for (const deviceScaleFactor of [1, 2]) {
     }
   });
 
+  test(`the info card keeps its size in RU and EN @${deviceScaleFactor}x (06 §4.4)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Справка');
+      await createNode(page, 460, 300, 'Сценарий финальной битвы с боссом');
+      const p = await at(page, 'Сценарий финальной битвы с боссом');
+      await page.mouse.move(p.x, p.y);
+      await page.keyboard.press('Shift+KeyI');
+      const card = page.locator('.ws-info-card');
+      await expect(card.locator('.map-card-rows')).toBeVisible();
+      expect(await overflowing(page, '.ws-info-card'), `${locale} the card must fit`).toEqual([]);
+      boxes.push({
+        card: await box(page, '.ws-info-card'),
+        title: await box(page, '.ws-info-card .map-card-title'),
+        label: await box(page, '.ws-info-card .map-card-label'),
+      });
+      await card.locator('.window-close').click();
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['card', 'title', 'label'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
   test(`«Где размещена» and «Удалить везде?» keep their size in RU and EN @${deviceScaleFactor}x (06 §12.2–12.3)`, async ({
     browser,
   }) => {
@@ -3943,6 +3980,65 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ws-inspector')).toHaveCount(0);
     await page.keyboard.press('KeyP');
     await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Эскиз');
+  });
+
+  test('the info card: the middle button held, 600 ms of rest, Shift+I keeps it (06 §4.4)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Справка');
+    await createNode(page, 520, 380, 'Эскиз');
+    await createNode(page, 760, 380, 'Палитра');
+    const sketch = await at(page, 'Эскиз');
+    const board = await at(page, 'Палитра');
+    // A wire Эскиз → Палитра: the card counts it.
+    await page.mouse.move(sketch.x - 40, sketch.y);
+    await page.keyboard.down('j');
+    await page.mouse.down();
+    await page.mouse.move(board.x, board.y, { steps: 10 });
+    await page.mouse.up();
+    await page.keyboard.up('j');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-wires', '1');
+    const card = page.locator('.ws-info-card');
+    const away = { x: (sketch.x + board.x) / 2, y: sketch.y + 200 };
+    // Held still: the card while the button holds, its wires once the core answers.
+    await page.mouse.move(sketch.x, sketch.y);
+    await page.mouse.down({ button: 'middle' });
+    await expect(card.locator('.map-card-name')).toHaveText('Эскиз');
+    await expect(card.locator('.map-card-value', { hasText: '→ 1' })).toBeVisible();
+    await page.mouse.up({ button: 'middle' });
+    await expect(card).toHaveCount(0);
+    // A drag of the middle button is a pan: no card.
+    await page.mouse.move(board.x, board.y);
+    await page.mouse.down({ button: 'middle' });
+    await page.mouse.move(board.x + 60, board.y + 30, { steps: 4 });
+    await page.mouse.up({ button: 'middle' });
+    await expect(card).toHaveCount(0);
+    const moved = await at(page, 'Палитра');
+    expect(Math.round(moved.x - board.x)).toBe(60);
+    // The cursor at rest 600 ms: the card till it leaves.
+    await page.mouse.move(away.x, away.y);
+    await page.mouse.move(moved.x, moved.y, { steps: 4 });
+    await expect(card.locator('.map-card-name')).toHaveText('Палитра');
+    await page.mouse.move(away.x, away.y, { steps: 4 });
+    await expect(card).toHaveCount(0);
+    // `Shift+I`: kept, with the accent's line; the cursor away, it stays; its × closes it.
+    await page.mouse.move(moved.x, moved.y, { steps: 4 });
+    await page.keyboard.press('Shift+KeyI');
+    await expect(card).toHaveClass(/is-kept/);
+    await page.mouse.move(away.x, away.y, { steps: 4 });
+    await expect(card).toHaveClass(/is-kept/);
+    await card.locator('.window-close').click();
+    await expect(card).toHaveCount(0);
+    // «Настройки»: by the middle button only — rest shows nothing.
+    await page.locator('.tabbar-settings').click();
+    await page.locator('.settings').getByLabel('Инфокарточка').selectOption('hold');
+    await page.locator('.tabbar-settings').click();
+    await expect(page.locator('.settings')).toHaveCount(0);
+    await page.mouse.move(moved.x, moved.y, { steps: 4 });
+    await page.waitForTimeout(900);
+    await expect(card).toHaveCount(0);
   });
 
   test('a store kept in parts, as a large one is (V-10k), comes back after a reload', async ({

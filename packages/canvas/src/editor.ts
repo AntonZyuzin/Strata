@@ -214,6 +214,22 @@ export interface EditorEvents {
   /** `C` (06 §2.1, 05 §4.1 `color`): the colour palette for `ids`, as `icons` has it. */
   colors?(e: { ids: string[]; sx: number; sy: number }): void;
   /**
+   * The info card of node `id` (06 §4.4) beside its bubble, at the screen
+   * point of its right side: `held` — while the middle button holds it,
+   * `hover` — the cursor rested 600 ms, `kept` — `Shift+I`. Null: a held
+   * or hovered card goes; a kept one stays till its ×.
+   */
+  infoCard?(
+    e: {
+      id: string;
+      sx: number;
+      sy: number;
+      /** The bubble's left side: the card goes there when the right has no room. */
+      flipSx: number;
+      how: 'held' | 'hover' | 'kept';
+    } | null,
+  ): void;
+  /**
    * A drag that rested 500 ms on the bubble of a folder or project and was
    * let go there (06 §12.1). `amend` — the gesture wrote a step already (the
    * copy, a shake): this one adds to it, one step of undo.
@@ -289,6 +305,11 @@ const ARROWS: Partial<Record<string, Dir>> = {
   ArrowDown: 'down',
 };
 
+/** The info card (06 §1.3, §4.4): the middle button held still, the cursor at rest; px from the bubble. */
+const INFO_HOLD_MS = 200;
+const INFO_HOVER_MS = 600;
+const INFO_GAP_PX = 8;
+
 /** `Ctrl`+arrows move the selection a grid step (06 §3: 24 world units), `Ctrl+Shift` — four (06 §17). */
 const NUDGE_GRID = 24;
 const NUDGE_FINE = 4;
@@ -326,7 +347,13 @@ interface Candidate {
 
 type Mode =
   | { t: 'idle' }
-  | { t: 'pan'; lastX: number; lastY: number }
+  | {
+      t: 'pan';
+      lastX: number;
+      lastY: number;
+      /** The middle button pressed on a bubble: held 200 ms still, its info card (06 §4.4). */
+      hold?: { id: string; sx: number; sy: number; shown: boolean };
+    }
   | {
       t: 'press';
       hit: Hit;
@@ -467,6 +494,12 @@ export class Editor {
   private selectedWire: [string, string] | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
+  /** The info card on hover (06 §4.4, «Настройки»): 600 ms of rest on a bubble. */
+  hoverCard = true;
+  private hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  private holdTimer: ReturnType<typeof setTimeout> | null = null;
+  /** A hovered node's card is up: it goes as the cursor leaves the bubble. */
+  private hoverShown = false;
   /** `A` + drag: the last layout asked for, and a release that waits for its answer. */
   private arrangeTicket = 0;
   private arrangeOnArrival: { ticket: number; ids: string[] } | null = null;
@@ -519,6 +552,9 @@ export class Editor {
   destroy(): void {
     for (const f of this.detach) f();
     this.minimap.destroy();
+    // A card's timers would fire on a canvas that is gone.
+    if (this.hoverTimer) clearTimeout(this.hoverTimer);
+    this.clearHoldTimer();
   }
 
   /** The React Chrome tells the editor when a menu or input owns the keyboard. */
@@ -1024,9 +1060,9 @@ export class Editor {
     on(el, 'pointerdown', (e) => this.onDown(e));
     on(el, 'pointermove', (e) => this.onMove(e));
     on(el, 'pointerup', (e) => {
-      // The middle button pans (06 §3). On Linux its release would paste the
-      // primary selection (X11, GTK): the canvas took that for a paste and
-      // made a note of it at every pan.
+      // The middle button pans and holds the info card (06 §3, §4.4). On
+      // Linux its release would paste the primary selection (X11, GTK): the
+      // canvas took that for a paste and made a note of it at every pan.
       if (e.button === 1) e.preventDefault();
       this.onUp(e);
     });
@@ -1035,6 +1071,7 @@ export class Editor {
     });
     on(el, 'pointercancel', () => this.cancelGesture());
     on(el, 'pointerleave', () => {
+      this.endHoverCard();
       this.pointer.inside = false;
       this.ring = null;
       this.ringSlot = null;
@@ -1123,9 +1160,21 @@ export class Editor {
     }
     if (m.t === 'menu' || m.t === 'name') return;
     this.view.canvas.setPointerCapture(e.pointerId);
+    this.endHoverCard();
     if (e.button === 1 || (e.button === 0 && this.held.has('Space'))) {
       e.preventDefault(); // no autoscroll on Windows
-      this.mode = { t: 'pan', lastX: sx, lastY: sy };
+      const hit = e.button === 1 ? this.hitTest(sx, sy) : null;
+      const m: Extract<Mode, { t: 'pan' }> = { t: 'pan', lastX: sx, lastY: sy };
+      if (hit?.t === 'node') {
+        // Held still 200 ms: the card, not a pan (06 §1.3, §4.4).
+        m.hold = { id: hit.id, sx, sy, shown: false };
+        this.holdTimer = setTimeout(() => {
+          if (this.mode !== m || !m.hold || m.hold.shown) return;
+          m.hold.shown = true;
+          this.showCard(m.hold.id, 'held');
+        }, INFO_HOLD_MS);
+      }
+      this.mode = m;
       return;
     }
     // Scissors (06 §6.7): hold `Y` and stroke with the left button, or Mod + the right.
@@ -1199,6 +1248,7 @@ export class Editor {
         if (!sameHit(hit, this.hover)) {
           this.hover = hit;
           this.events.hint(hintOf(hit));
+          this.hoverChanged(hit);
         }
         const id = hit.t === 'node' || hit.t === 'port' ? hit.id : null;
         // On the way from the bubble to its ring the ring stays.
@@ -1210,6 +1260,11 @@ export class Editor {
         return;
       }
       case 'pan':
+        if (m.hold?.shown) return;
+        if (m.hold && Math.hypot(sx - m.hold.sx, sy - m.hold.sy) >= DRAG_PX) {
+          delete m.hold;
+          this.clearHoldTimer();
+        }
         this.view.camera.panBy(sx - m.lastX, sy - m.lastY);
         m.lastX = sx;
         m.lastY = sy;
@@ -1256,6 +1311,8 @@ export class Editor {
     switch (m.t) {
       case 'pan':
         this.mode = { t: 'idle' };
+        this.clearHoldTimer();
+        if (m.hold?.shown) this.events.infoCard?.(null);
         return;
       case 'press':
         this.mode = { t: 'idle' };
@@ -2029,12 +2086,23 @@ export class Editor {
         if (mod) return;
         this.strokeCursor();
         return;
-      case 'KeyI':
+      case 'KeyI': {
+        if (mod || e.altKey) return;
+        // `Shift+I` keeps the card of the node under the cursor, else of the current one (06 §4.4).
+        if (e.shiftKey) {
+          const id = this.hoverNode() ?? this.current;
+          if (!id) return;
+          e.preventDefault();
+          this.endHoverCard();
+          this.showCard(id, 'kept');
+          return;
+        }
         // `I` dives in as `Enter` does (06 §10.1).
-        if (mod || e.altKey || e.shiftKey || !this.current) return;
+        if (!this.current) return;
         e.preventDefault();
         this.act('open');
         return;
+      }
       case 'KeyR':
       case 'KeyQ':
       case 'KeyE': {
@@ -2212,12 +2280,53 @@ export class Editor {
       this.events.nameInput(null);
       if (m.created) this.graph.revertLast();
     }
+    if (m.t === 'pan') {
+      this.clearHoldTimer();
+      if (m.hold?.shown) this.events.infoCard?.(null);
+    }
     if (m.t === 'arrange') {
       // Esc: what the preview moved stands where it stood (06 §1.2).
       this.arrangeTicket++;
       this.view.settle(m.ids);
     }
     this.view.invalidate();
+  }
+
+  /** The card of `id` beside its bubble's right side (06 §4.4). */
+  private showCard(id: string, how: 'held' | 'hover' | 'kept') {
+    const p = this.view.nodeAt(id);
+    if (!p || !this.events.infoCard || this.graph.nodes.get(id)?.ghostOf) return;
+    const cam = this.view.camera;
+    const s = cam.toScreen(p.x, p.y);
+    const side = p.r * cam.zoom * HEX_IN + INFO_GAP_PX;
+    this.events.infoCard({ id, sx: s.x + side, sy: s.y, flipSx: s.x - side, how });
+  }
+
+  /** The hovered node changed: a new 600 ms begin, a hovered card goes (06 §4.4). */
+  private hoverChanged(hit: Hit) {
+    this.endHoverCard();
+    if (!this.hoverCard || hit.t !== 'node') return;
+    const id = hit.id;
+    this.hoverTimer = setTimeout(() => {
+      this.hoverTimer = null;
+      const h = this.hover;
+      if (this.mode.t !== 'idle' || h.t !== 'node' || h.id !== id) return;
+      this.hoverShown = true;
+      this.showCard(id, 'hover');
+    }, INFO_HOVER_MS);
+  }
+
+  private endHoverCard() {
+    if (this.hoverTimer) clearTimeout(this.hoverTimer);
+    this.hoverTimer = null;
+    if (!this.hoverShown) return;
+    this.hoverShown = false;
+    this.events.infoCard?.(null);
+  }
+
+  private clearHoldTimer() {
+    if (this.holdTimer) clearTimeout(this.holdTimer);
+    this.holdTimer = null;
   }
 
   /** `Alt+PgDn` / `Alt+PgUp`: the next outgoing or incoming wire of `id` is chosen (06 §6.1). */

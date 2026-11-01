@@ -2,7 +2,7 @@ import type { HomeBackend } from '@strata/backend';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { useEffect, useRef, useState } from 'react';
 import { LocaleSwitch } from '../LocaleSwitch';
-import { CLOCKS, DATE_FORMATS, type Prefs, RING_MODES } from '../prefs';
+import { CARD_MODES, CLOCKS, DATE_FORMATS, type Prefs, RING_MODES } from '../prefs';
 
 /**
  * «Настройки» (✅ Q-06-23): a window the gear opens under itself (owner,
@@ -173,6 +173,23 @@ export function SettingsScreen(props: {
                 {RING_MODES.map((m) => (
                   <option key={m} value={m}>
                     {t(locale, `settings.ring.${m}` as MessageKey)}
+                  </option>
+                ))}
+              </select>
+            </dd>
+            <dt className="ins-label">{t(locale, 'settings.card')}</dt>
+            <dd className="ins-value">
+              <select
+                className="field"
+                aria-label={t(locale, 'settings.card')}
+                value={prefs.card}
+                onChange={(e) =>
+                  onPrefs({ ...prefs, card: e.currentTarget.value as Prefs['card'] })
+                }
+              >
+                {CARD_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(locale, `settings.card.${m}` as MessageKey)}
                   </option>
                 ))}
               </select>

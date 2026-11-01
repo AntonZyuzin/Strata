@@ -19,6 +19,10 @@ export const CLOCKS: readonly Clock[] = ['24', '12'];
 export type RingMode = 'always' | 'far' | 'never';
 export const RING_MODES: readonly RingMode[] = ['always', 'far', 'never'];
 
+/** When the info card shows (06 §4.4): on 600 ms of hover too, or only for the middle button and `Shift+I`. */
+export type CardMode = 'hover' | 'hold';
+export const CARD_MODES: readonly CardMode[] = ['hover', 'hold'];
+
 /**
  * What the device keeps: the language; a date's form and the clock, or
  * `auto` — as the language reads them (owner, 2026-10-24).
@@ -29,6 +33,8 @@ export interface Prefs {
   clock: Clock | 'auto';
   /** The flag ring (06 §8): «Всегда» by default. */
   ring: RingMode;
+  /** The info card (06 §4.4): on hover too by default. */
+  card: CardMode;
 }
 
 const KEY = 'strata.prefs';
@@ -58,9 +64,10 @@ export function loadPrefs(fallback: Locale): Prefs {
       date: DATE_FORMATS.includes(v?.date as DateFormat) ? (v?.date as DateFormat) : 'auto',
       clock: CLOCKS.includes(v?.clock as Clock) ? (v?.clock as Clock) : 'auto',
       ring: RING_MODES.includes(v?.ring as RingMode) ? (v?.ring as RingMode) : 'always',
+      card: CARD_MODES.includes(v?.card as CardMode) ? (v?.card as CardMode) : 'hover',
     };
   } catch {
-    return { locale: fallback, date: 'auto', clock: 'auto', ring: 'always' };
+    return { locale: fallback, date: 'auto', clock: 'auto', ring: 'always', card: 'hover' };
   }
 }
 

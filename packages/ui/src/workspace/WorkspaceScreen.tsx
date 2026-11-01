@@ -98,6 +98,7 @@ import { geckoEvents } from './gecko';
 import { IconPalette, PRESET } from './IconPalette';
 import { ImportReportWindow, type ReportActions } from './ImportReportWindow';
 import { ImportStatus } from './ImportStatus';
+import { InfoCard } from './InfoCard';
 import { Inspector, type InspectorActions } from './Inspector';
 import { InterruptedDialog } from './InterruptedDialog';
 import { fixedLines, fixLine, freshReport, jobOf, reportOf, reportShown } from './imports';
@@ -276,6 +277,8 @@ export function WorkspaceScreen(props: {
   const textWires = useRef(new Set<string>());
   /** When the flag ring shows (06 §8): «Настройки» set it, every new canvas takes it. */
   const ringModeRef = useRef(props.prefs.ring);
+  /** The info card on hover (06 §4.4): «Настройки» set it, every new canvas takes it. */
+  const hoverCardRef = useRef(props.prefs.card === 'hover');
   /** Shows a network (the current one when none is given), after what is queued. */
   const loadRef = useRef<(net?: string) => Promise<void>>(async () => {});
   /** Loads and undo through the core, one after another (they replace the graph). */
@@ -433,6 +436,15 @@ export function WorkspaceScreen(props: {
   /** The selected node, read from the core for the properties panel. */
   const [details, setDetails] = useState<NodeDetails | null>(null);
   const [people, setPeople] = useState<Person[]>([]);
+  /** The info card (06 §4.4): whose, where (page px), and whether `Shift+I` keeps it. */
+  const [info, setInfo] = useState<{
+    id: string;
+    x: number;
+    y: number;
+    flipX: number;
+    kept: boolean;
+  } | null>(null);
+  const [infoDetails, setInfoDetails] = useState<NodeDetails | null>(null);
   const peopleRef = useRef<Person[]>([]);
   const [tree, setTree] = useState<TreeItem[]>([]);
   const [ctx, setCtx] = useState<{ x: number; y: number; at: MenuTarget } | null>(null);
@@ -575,6 +587,23 @@ export function WorkspaceScreen(props: {
       colors: (e) => {
         const r = el.getBoundingClientRect();
         setColorPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
+      },
+      // The info card (06 §4.4): a held or hovered one gives way to none;
+      // a kept one stays till its ×, and `Shift+I` moves it.
+      infoCard: (e) => {
+        if (!e) {
+          setInfo((i) => (i?.kept ? i : null));
+          return;
+        }
+        const r = el.getBoundingClientRect();
+        const card = {
+          id: e.id,
+          x: e.sx + r.left,
+          y: e.sy + r.top,
+          flipX: e.flipSx + r.left,
+          kept: e.how === 'kept',
+        };
+        setInfo((i) => (i?.kept && !card.kept ? i : card));
       },
       tabMenu: (e) => {
         const r = el.getBoundingClientRect();
@@ -1019,6 +1048,7 @@ export function WorkspaceScreen(props: {
           ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
           : 0;
       ed.ringMode = ringModeRef.current;
+      ed.hoverCard = hoverCardRef.current;
       ed.minimap.open = minimapRef.current;
       editor.current = ed;
       sync.current = new CoreSync(core, g, id, refused, setHistory);
@@ -1035,6 +1065,7 @@ export function WorkspaceScreen(props: {
       setMenu(null);
       setName(null);
       setExternal(null);
+      setInfo(null);
       // A flight under way belongs to the network left (a paste framed there).
       v.stopFlight();
       const cam = cameras.current.get(id);
@@ -1571,6 +1602,11 @@ export function WorkspaceScreen(props: {
     ringModeRef.current = props.prefs.ring;
     if (editor.current) editor.current.ringMode = props.prefs.ring;
   }, [props.prefs.ring]);
+
+  useEffect(() => {
+    hoverCardRef.current = props.prefs.card === 'hover';
+    if (editor.current) editor.current.hoverCard = hoverCardRef.current;
+  }, [props.prefs.card]);
 
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
   useEffect(() => searchClient().set('space', tree), [tree]);
@@ -2128,6 +2164,24 @@ export function WorkspaceScreen(props: {
     if (!inside) ops.push({ op: 'connect', from: parent.id, to: id });
     void coreStep(ops, 'proto.change.create', { name }).catch(failed);
   };
+
+  // The info card's fields from the core (06 §4.4); an answer for another card is dropped.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the core is the workspace's
+  useEffect(() => {
+    setInfoDetails(null);
+    const id = info?.id;
+    if (!id) return;
+    let live = true;
+    void (sync.current?.settled() ?? Promise.resolve())
+      .then(() => core.node(id))
+      .then((d) => {
+        if (live) setInfoDetails(d);
+      })
+      .catch(() => undefined);
+    return () => {
+      live = false;
+    };
+  }, [info?.id]);
 
   // Another node in the panel: a list's open request no longer stands.
   useEffect(() => {
@@ -3340,6 +3394,31 @@ export function WorkspaceScreen(props: {
           }}
         />
       ) : null}
+      {(() => {
+        const n = info ? g?.nodes.get(info.id) : undefined;
+        if (!info || !n) return null;
+        return (
+          <InfoCard
+            item={{ id: n.id, name: n.name, kind: n.kind }}
+            details={infoDetails?.id === n.id ? infoDetails : null}
+            words={{ locale, date: reading(props.prefs).date }}
+            person={(id) => people.find((p) => p.id === id)?.name}
+            keys={tree
+              .filter((i) => i.parent === n.id && i.flags?.includes('key'))
+              .slice(0, 5)
+              .map((i) => i.name)}
+            x={info.x}
+            y={info.y}
+            flipX={info.flipX}
+            bounds={seenBounds()}
+            kept={info.kept}
+            onClose={() => {
+              setInfo(null);
+              focusCanvas();
+            }}
+          />
+        );
+      })()}
       {colorPick ? (
         <ColorPalette
           locale={locale}

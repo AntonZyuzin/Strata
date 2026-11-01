@@ -214,6 +214,7 @@ export type CoreRequest =
       net?: string;
       options: ImportOptions;
     }
+  | { call: 'importSynth'; notes: number; options: ImportOptions }
   | { call: 'importStep' }
   | { call: 'importCancel' }
   | { call: 'importProgress' }
@@ -920,6 +921,12 @@ export interface HomeBackend {
     from: string | PickedVault,
     options: ImportOptions,
   ): Promise<Opened & { job: ImportJob }>;
+  /**
+   * V-10k of `notes` notes (14 §1.3), made by the core, as a new workspace
+   * «V-10k» imported in the background as a vault is: the benchmark's
+   * `import` scenario measures the canvas meanwhile (14 §6, NFR-41).
+   */
+  importSynth(notes: number, options: ImportOptions): Promise<Opened & { job: ImportJob }>;
   /** Calls for the open workspace. */
   readonly core: Core;
 }
@@ -965,6 +972,24 @@ export function jsonHome(
     if (r.type !== 'opened') throw new CoreError(`expected opened, got ${r.type}`, false);
     return { workspace: r.workspace, root: r.root };
   };
+  /** An import the shell runs on its thread: its workspace open, its steps told to the job. */
+  const importing = async (
+    request: Record<string, unknown>,
+  ): Promise<Opened & { job: ImportJob }> => {
+    const r = await call(request);
+    if (r.type !== 'importing') throw new CoreError(`expected importing, got ${r.type}`, false);
+    const id = r.workspace.id;
+    const job = importJob(id, async () => {
+      await call({ call: 'cancelImport', id });
+    });
+    jobs.set(id, job);
+    const was = early.get(id);
+    if (was) {
+      early.delete(id);
+      tell(job, was);
+    }
+    return { workspace: r.workspace, root: r.root, job };
+  };
   return {
     where: 'desktop',
     core: new Core(core),
@@ -996,19 +1021,8 @@ export function jsonHome(
     },
     importVault: async (from, options) => {
       if (typeof from !== 'string') throw new CoreError('the desktop reads the folder', true);
-      const r = await call({ call: 'importVault', path: from, options });
-      if (r.type !== 'importing') throw new CoreError(`expected importing, got ${r.type}`, false);
-      const id = r.workspace.id;
-      const job = importJob(id, async () => {
-        await call({ call: 'cancelImport', id });
-      });
-      jobs.set(id, job);
-      const was = early.get(id);
-      if (was) {
-        early.delete(id);
-        tell(job, was);
-      }
-      return { workspace: r.workspace, root: r.root, job };
+      return importing({ call: 'importVault', path: from, options });
     },
+    importSynth: (notes, options) => importing({ call: 'importSynth', notes, options }),
   };
 }

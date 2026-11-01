@@ -4,6 +4,7 @@ import {
   CoreError,
   type HomeBackend,
   type HomeState,
+  type ImportJob,
   type ImportProgress,
   importJob,
   type Opened,
@@ -204,6 +205,68 @@ export async function browserHome(
     }),
   );
 
+  /**
+   * An import into a new workspace `name`: the core plans `request`'s vault,
+   * then the batches land one a task, told to the job (13 §3.3).
+   */
+  const importing = async (
+    name: string,
+    request: Record<string, unknown>,
+  ): Promise<Opened & { job: ImportJob }> => {
+    const c = WasmCore.create(name);
+    const out = JSON.parse(c.call(JSON.stringify(request))) as Answer;
+    if (out.type === 'error') {
+      c.free();
+      throw new CoreError(out.message, out.invalid);
+    }
+    const opened = await remember(c);
+    const id = opened.workspace.id;
+    let stopped = false;
+    const job = importJob(id, async () => {
+      stopped = true;
+    });
+    const drop = () =>
+      later(async () => {
+        release(id);
+        saved.workspaces = saved.workspaces.filter((e) => e.id !== id);
+        await shelf.delete(ws(id));
+        await save();
+      });
+    if (out.progress) job.tell({ type: 'progress', workspace: id, progress: out.progress });
+    const batches = async () => {
+      for (;;) {
+        await new Promise((done) => setTimeout(done, pause));
+        if (stopped || tabs.get(id) !== c) {
+          await drop();
+          return job.tell({ type: 'cancelled', workspace: id });
+        }
+        const r = JSON.parse(c.call(JSON.stringify({ call: 'importStep' }))) as Answer;
+        if (r.type === 'error') {
+          await drop();
+          return job.tell({ type: 'failed', workspace: id, message: r.message });
+        }
+        if (!r.progress) continue;
+        if (r.progress.report) {
+          // Kept once whole: the bytes after each batch would cost the
+          // whole store each time.
+          await later(() => shelf.set(ws(id), c.bytes()));
+        }
+        job.tell({ type: 'progress', workspace: id, progress: r.progress });
+        if (r.progress.report) return;
+      }
+    };
+    // A batch that throws ends the import as failed: its count would
+    // otherwise stand still for good (13 §3.3).
+    void batches().catch(async (e: unknown) => {
+      await drop().catch(() => undefined);
+      job.tell({
+        type: 'failed',
+        workspace: id,
+        message: e instanceof Error ? e.message : String(e),
+      });
+    });
+    return { ...opened, job };
+  };
   return {
     where: 'browser',
     core,
@@ -298,63 +361,12 @@ export async function browserHome(
       later(async () => {
         if (typeof from === 'string') throw new CoreError('a browser imports picked files', true);
         const name = from.name.trim() || 'Obsidian';
-        const c = WasmCore.create(name);
         const files = from.files.map((f) => ({ path: f.path, bytes: toBase64(f.bytes) }));
-        const out = JSON.parse(
-          c.call(JSON.stringify({ call: 'importVault', name, files, options })),
-        ) as Answer;
-        if (out.type === 'error') {
-          c.free();
-          throw new CoreError(out.message, out.invalid);
-        }
-        const opened = await remember(c);
-        const id = opened.workspace.id;
-        let stopped = false;
-        const job = importJob(id, async () => {
-          stopped = true;
-        });
-        const drop = () =>
-          later(async () => {
-            release(id);
-            saved.workspaces = saved.workspaces.filter((e) => e.id !== id);
-            await shelf.delete(ws(id));
-            await save();
-          });
-        if (out.progress) job.tell({ type: 'progress', workspace: id, progress: out.progress });
-        const batches = async () => {
-          for (;;) {
-            await new Promise((done) => setTimeout(done, pause));
-            if (stopped || tabs.get(id) !== c) {
-              await drop();
-              return job.tell({ type: 'cancelled', workspace: id });
-            }
-            const r = JSON.parse(c.call(JSON.stringify({ call: 'importStep' }))) as Answer;
-            if (r.type === 'error') {
-              await drop();
-              return job.tell({ type: 'failed', workspace: id, message: r.message });
-            }
-            if (!r.progress) continue;
-            if (r.progress.report) {
-              // Kept once whole: the bytes after each batch would cost the
-              // whole store each time.
-              await later(() => shelf.set(ws(id), c.bytes()));
-            }
-            job.tell({ type: 'progress', workspace: id, progress: r.progress });
-            if (r.progress.report) return;
-          }
-        };
-        // A batch that throws ends the import as failed: its count would
-        // otherwise stand still for good (13 §3.3).
-        void batches().catch(async (e: unknown) => {
-          await drop().catch(() => undefined);
-          job.tell({
-            type: 'failed',
-            workspace: id,
-            message: e instanceof Error ? e.message : String(e),
-          });
-        });
-        return { ...opened, job };
+        return importing(name, { call: 'importVault', name, files, options });
       }),
+    // V-10k, made by the core: the benchmark's `import` scenario (NFR-41).
+    importSynth: (notes, options) =>
+      later(() => importing('V-10k', { call: 'importSynth', notes, options })),
   };
 }
 

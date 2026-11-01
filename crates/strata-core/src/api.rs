@@ -120,6 +120,13 @@ pub enum Request {
         #[serde(default)]
         options: ImportOptions,
     },
+    /// V-10k of `notes` notes (14 §1.3), made by the core and imported as
+    /// a vault is: the benchmark's `import` scenario (14 §6, NFR-41).
+    ImportSynth {
+        notes: usize,
+        #[serde(default)]
+        options: ImportOptions,
+    },
     /// The import's next batch; the last one gives the report.
     ImportStep,
     /// The import stops and is taken back whole.
@@ -359,16 +366,25 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             files,
             net,
             options,
-        } => ws.import_start(net.as_deref()).and_then(|shadow| {
-            let planned = shadow.plan(Vault::from_files(&name, files), &options);
-            match planned {
-                Ok(p) => ws.import_begin(p).map(|p| importing(ws, Some(p))),
-                Err(e) => {
-                    ws.import_cancel()?;
-                    Err(e)
-                }
+        } => begin_import(
+            ws,
+            net.as_deref(),
+            Vault::from_files(&name, files),
+            &options,
+        ),
+        Request::ImportSynth { notes, options } => {
+            if notes == 0 {
+                Err(crate::CoreError::Invalid(
+                    "a synthetic vault needs notes".to_owned(),
+                ))
+            } else {
+                let spec = crate::synth::Spec {
+                    notes,
+                    ..crate::synth::Spec::V10K
+                };
+                begin_import(ws, None, crate::synth::vault(spec), &options)
             }
-        }),
+        }
         Request::ImportStep => ws.import_step().map(|p| importing(ws, Some(p))),
         Request::ImportCancel => ws.import_cancel().map(|()| Response::History {
             history: ws.history(),
@@ -407,6 +423,24 @@ fn importing<S: Store>(ws: &Workspace<S>, progress: Option<ImportProgress>) -> R
     Response::Importing {
         progress,
         history: ws.history(),
+    }
+}
+
+/// An import planned into network `net` and begun: its batches follow by
+/// `importStep` (13 §3.3); a vault that does not plan leaves nothing begun.
+fn begin_import<S: Store>(
+    ws: &mut Workspace<S>,
+    net: Option<&str>,
+    vault: Vault,
+    options: &ImportOptions,
+) -> crate::workspace::Result<Response> {
+    let shadow = ws.import_start(net)?;
+    match shadow.plan(vault, options) {
+        Ok(p) => ws.import_begin(p).map(|p| importing(ws, Some(p))),
+        Err(e) => {
+            ws.import_cancel()?;
+            Err(e)
+        }
     }
 }
 
@@ -583,6 +617,35 @@ mod tests {
         assert_eq!(cancelled["type"], "history", "{cancelled}");
         assert_eq!(ws.tree().len(), before);
         assert_eq!(cancelled["history"]["undo"]["key"], "core.change.import");
+    }
+
+    #[test]
+    fn the_benchmark_imports_v10k_the_core_makes() {
+        // 14 §6, NFR-41: the browser's `import` scenario asks the core for
+        // V-10k; its batches come as a picked vault's do.
+        let mut ws = Workspace::create(MemoryStore::default(), "V-10k").expect("create");
+        let started = ask(
+            &mut ws,
+            json!({ "call": "importSynth", "notes": 30, "options": { "unlinked": "Без ссылок" } }),
+        );
+        assert_eq!(started["type"], "importing", "{started}");
+        let mut answer = ask(&mut ws, json!({ "call": "importStep" }));
+        while answer["progress"]["report"].is_null() {
+            assert_eq!(answer["type"], "importing", "{answer}");
+            answer = ask(&mut ws, json!({ "call": "importStep" }));
+        }
+        let counts = &answer["progress"]["report"]["counts"];
+        let made = ["notes", "tasks", "lists"]
+            .iter()
+            .map(|k| counts[k].as_u64().unwrap_or(0))
+            .sum::<u64>();
+        // Each canvas's text card is a note too.
+        let canvases = counts["canvases"].as_u64().unwrap_or(0);
+        assert_eq!(made, 30 + canvases, "{counts}");
+        assert_eq!(answer["history"]["undo"]["key"], "core.change.import");
+        let none = ask(&mut ws, json!({ "call": "importSynth", "notes": 0 }));
+        assert_eq!(none["type"], "error");
+        assert_eq!(none["invalid"], true);
     }
 
     #[test]

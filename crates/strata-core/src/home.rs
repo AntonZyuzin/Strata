@@ -266,14 +266,41 @@ impl Home {
             .map(|n| n.to_string_lossy().trim().to_owned())
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Obsidian".to_owned());
-        let folder = self.new_folder(&name);
-        let mut ws = create_folder(&folder, &name)?;
+        self.start(&name, VaultSource::Folder(path.to_owned()), options)
+    }
+
+    /// V-10k of `notes` notes (14 §1.3) as a new workspace, imported as a
+    /// vault is: the benchmark's `import` scenario (14 §6, NFR-41).
+    fn start_synth(
+        &mut self,
+        notes: usize,
+        options: &crate::ImportOptions,
+    ) -> Result<(Workspace<SqliteStore>, Entry, ImportTask)> {
+        if notes == 0 {
+            return Err(invalid("a synthetic vault needs notes"));
+        }
+        let spec = crate::synth::Spec {
+            notes,
+            ..crate::synth::Spec::V10K
+        };
+        self.start("V-10k", VaultSource::Synth(spec), options)
+    }
+
+    /// A new workspace `name`, open and waiting for the vault (13 §3.3).
+    fn start(
+        &mut self,
+        name: &str,
+        vault: VaultSource,
+        options: &crate::ImportOptions,
+    ) -> Result<(Workspace<SqliteStore>, Entry, ImportTask)> {
+        let folder = self.new_folder(name);
+        let mut ws = create_folder(&folder, name)?;
         let shadow = ws.import_start(None)?;
         let entry = self.remember(&ws, &folder, now_ms());
         self.save()?;
         let task = ImportTask {
             workspace: entry.id.clone(),
-            vault: path.to_owned(),
+            vault,
             options: options.clone(),
             shadow,
         };
@@ -398,9 +425,27 @@ impl Desk {
 pub struct ImportTask {
     /// The workspace the vault comes into.
     pub workspace: String,
-    vault: PathBuf,
+    vault: VaultSource,
     options: crate::ImportOptions,
     shadow: crate::ImportShadow,
+}
+
+/// Where an import's vault comes from: a folder on disk, or V-10k that
+/// the core makes for the benchmark's `import` scenario (14 §6, NFR-41).
+#[derive(Clone, Debug)]
+enum VaultSource {
+    Folder(PathBuf),
+    Synth(crate::synth::Spec),
+}
+
+impl VaultSource {
+    /// The vault's files, read or made off the shell's lock (13 §3.3).
+    fn vault(self) -> Result<crate::vault::Vault> {
+        match self {
+            Self::Folder(path) => crate::vault::Vault::read(&path).map_err(io),
+            Self::Synth(spec) => Ok(crate::synth::vault(spec)),
+        }
+    }
 }
 
 impl std::fmt::Debug for ImportTask {
@@ -451,10 +496,7 @@ pub fn run_import(task: ImportTask, with: Lend<'_>, tell: &dyn Fn(ImportEvent)) 
             message: e.to_string(),
         });
     };
-    let planned = match crate::vault::Vault::read(&vault)
-        .map_err(io)
-        .and_then(|v| shadow.plan(v, &options))
-    {
+    let planned = match vault.vault().and_then(|v| shadow.plan(v, &options)) {
         Ok(p) => p,
         Err(e) => return fail(e),
     };
@@ -562,6 +604,14 @@ pub enum Request {
         #[serde(default)]
         options: crate::ImportOptions,
     },
+    /// V-10k of `notes` notes (14 §1.3), made by the core, as a new
+    /// workspace «V-10k», imported in the background as a vault is: the
+    /// benchmark's `import` scenario measures the canvas meanwhile (NFR-41).
+    ImportSynth {
+        notes: usize,
+        #[serde(default)]
+        options: crate::ImportOptions,
+    },
     /// The import into workspace `id` stops; the workspace goes with it.
     CancelImport {
         id: String,
@@ -603,6 +653,15 @@ fn home_of(home: &Home, desk: &Desk) -> Response {
         profile: home.profile().clone(),
         current: desk.current.clone(),
     }
+}
+
+/// An import started: its workspace in a tab, its task for the shell's thread.
+fn importing(desk: &mut Desk, started: (Workspace<SqliteStore>, Entry, ImportTask)) -> Response {
+    let (ws, workspace, task) = started;
+    let root = ws.root();
+    desk.put(ws);
+    desk.started.push(task);
+    Response::Importing { workspace, root }
 }
 
 /// One home call. `to_trash` moves a folder to the system trash: the shell
@@ -706,12 +765,10 @@ pub fn handle(
         }
         Request::ImportVault { path, options } => home
             .start_import(Path::new(&path), &options)
-            .map(|(ws, workspace, task)| {
-                let root = ws.root();
-                desk.put(ws);
-                desk.started.push(task);
-                Response::Importing { workspace, root }
-            }),
+            .map(|started| importing(desk, started)),
+        Request::ImportSynth { notes, options } => home
+            .start_synth(notes, &options)
+            .map(|started| importing(desk, started)),
         Request::CancelImport { id } => {
             home.drop_import(desk, &id);
             Ok(home_of(home, desk))
@@ -1101,6 +1158,43 @@ mod tests {
         for d in [dir, vault, empty] {
             let _ = std::fs::remove_dir_all(d);
         }
+    }
+
+    #[test]
+    fn the_benchmark_imports_v10k_the_core_makes() {
+        // 14 §6, NFR-41: the `import` scenario's vault, made by the core and
+        // imported in the background as a picked folder is.
+        let dir = temp_dir();
+        let mut home = Home::load(&dir);
+        let mut desk = Desk::default();
+        let r = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "importSynth", "notes": 40, "options": { "unlinked": "Без ссылок" } }),
+        );
+        assert_eq!(r["type"], "importing", "{r}");
+        assert_eq!(r["workspace"]["name"], "V-10k");
+        let events = run(&mut home, &mut desk);
+        let Some(ImportEvent::Progress { progress, .. }) = events.last() else {
+            panic!("{events:?}");
+        };
+        let counts = &progress.report.as_ref().expect("the report").counts;
+        // Each canvas's text card is a note too.
+        assert_eq!(
+            counts.notes + counts.tasks + counts.lists,
+            40 + counts.canvases
+        );
+        assert!(counts.folders > 0 && counts.wires > 0, "{counts:?}");
+        let id = r["workspace"]["id"].as_str().expect("id");
+        assert!(desk.is_open(id));
+        let none = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "importSynth", "notes": 0 }),
+        );
+        assert_eq!(none["type"], "error");
+        assert_eq!(home.list().len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

@@ -30,20 +30,16 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/**
- * The files of `<input webkitdirectory>` as a vault (13 §3): the folder
- * picked is the first part of every relative path, its name the vault's.
- */
-export async function pickedVault(list: Iterable<File>): Promise<PickedVault | null> {
-  const files = [...list];
-  const first = files[0];
-  if (!first) return null;
-  const name = first.webkitRelativePath.split('/')[0] ?? '';
+/** The folder picked in `<input webkitdirectory>`: the first part of every relative path. */
+const vaultName = (files: readonly File[]) => files[0]?.webkitRelativePath.split('/')[0] ?? '';
+
+/** The files of `<input webkitdirectory>` as a vault (13 §3), named as its folder. */
+export async function pickedVault(files: readonly File[]): Promise<PickedVault> {
   const read = async (f: File): Promise<VaultFile> => ({
     path: f.webkitRelativePath.split('/').slice(1).join('/') || f.name,
     bytes: new Uint8Array(await f.arrayBuffer()),
   });
-  return { name, files: await Promise.all(files.map(read)) };
+  return { name: vaultName(files), files: await Promise.all(files.map(read)) };
 }
 
 /** Saves bytes as a file through the browser's download. */
@@ -125,6 +121,8 @@ export function HomeScreen(props: {
         else if (r) setState(r);
         setDialog(null);
       } catch (e) {
+        // What was under way is over: its note goes, the failure stays.
+        setNote(null);
         setError(message(e));
       } finally {
         busyRef.current = false;
@@ -153,13 +151,16 @@ export function HomeScreen(props: {
    * «Импорт из Obsidian» (13 §3, S1): the vault's folder becomes a new
    * workspace, open at once; its batches land in the background and the
    * workspace shows them (13 §3.3), its report at the end. The names the
-   * import gives what it makes are in the UI's language (13 §3.6).
+   * import gives what it makes are in the UI's language (13 §3.6). The vault
+   * comes by its folder's path (the desktop) or as the files the browser was given.
    */
-  const importVault = (from: string | PickedVault) =>
+  const importVault = (from: string | readonly File[]) =>
     run(async () => {
-      const name = typeof from === 'string' ? (from.split(/[\\/]/).pop() ?? from) : from.name;
+      const name = typeof from === 'string' ? (from.split(/[\\/]/).pop() ?? from) : vaultName(from);
       setNote(t(locale, 'home.vaultBusy', { name }));
-      const r = await home.importVault(from, {
+      // A file the browser cannot read ends the import here, said as any failure is.
+      const vault = typeof from === 'string' ? from : await pickedVault(from);
+      const r = await home.importVault(vault, {
         unlinked: t(locale, 'import.unlinked'),
         text: t(locale, 'import.text'),
       });
@@ -266,9 +267,7 @@ export function HomeScreen(props: {
             onChange={(e) => {
               const list = [...(e.currentTarget.files ?? [])];
               e.currentTarget.value = '';
-              void pickedVault(list).then((v) => {
-                if (v) void importVault(v);
-              });
+              if (list.length > 0) void importVault(list);
             }}
           />
         </div>

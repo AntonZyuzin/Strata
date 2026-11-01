@@ -98,6 +98,27 @@ test('a cancelled import takes its workspace with it', async ({ page }) => {
   await expect(page.locator('.home-card', { hasText: 'Batches' })).toHaveCount(0);
 });
 
+test('a file the browser cannot read ends the import with its reason on the home screen', async ({
+  page,
+}) => {
+  await page.goto('/?plain');
+  await expect(page.locator('.home-vault')).toBeVisible();
+  // One file is refused, as one moved or locked after the folder was picked.
+  await page.evaluate(() => {
+    const read = File.prototype.arrayBuffer;
+    File.prototype.arrayBuffer = function (this: File) {
+      return this.name === 'Note 3.md'
+        ? Promise.reject(new DOMException('The file could not be read', 'NotReadableError'))
+        : read.call(this);
+    };
+  });
+  await page.locator('.home-vault-input').setInputFiles(bigVault(10));
+  await expect(page.locator('.home-error')).toHaveText('Не получилось: The file could not be read');
+  await expect(page.locator('.home-note')).toHaveCount(0);
+  await expect(page.locator('.tab', { hasText: 'Batches' })).toHaveCount(0);
+  await expect(page.locator('.home-vault')).toBeEnabled();
+});
+
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter(
   (l) => l.viewport.width === 1280 && (l.deviceScaleFactor === 1 || l.deviceScaleFactor === 2),
 )) {

@@ -144,6 +144,12 @@ export interface EditorEvents {
   open?(id: string): void;
   /** `L`: lay out the selection, or the whole network when nothing is selected (06 §9.1). */
   layout?(ids: string[] | null): void;
+  /**
+   * `A` + drag (06 §9.1 «Ветка»): lay out `ids` by `L`'s rule, `anchor`
+   * staying where it is; the answer comes back by `Editor.arranged` with
+   * the same `ticket`.
+   */
+  arrange?(e: { ids: string[]; anchor: string; ticket: number }): void;
   /** `U`: out of this network into its parent (06 §1.4). */
   up?(): void;
   /**
@@ -372,6 +378,21 @@ type Mode =
       crossed: string[];
     }
   | {
+      t: 'arrange';
+      /** The bubble the drag began on: it stays where it is. */
+      anchor: string;
+      /** Where the press was, screen px. */
+      sx: number;
+      sy: number;
+      /** Up the stream (the drag went up or left), or down; null — not yet chosen. */
+      up: boolean | null;
+      /** What the layout moves: the selection, else the branch. */
+      ids: string[];
+      ticket: number;
+      /** The answer shown, world units: committed on the release. */
+      shown: Map<string, { x: number; y: number }> | null;
+    }
+  | {
       t: 'marquee';
       sx0: number;
       sy0: number;
@@ -442,6 +463,9 @@ export class Editor {
   private selectedWire: [string, string] | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
+  /** `A` + drag: the last layout asked for, and a release that waits for its answer. */
+  private arrangeTicket = 0;
+  private arrangeOnArrival: { ticket: number; ids: string[] } | null = null;
   private lastClick = NO_CLICK;
   private gestureZoom: number | null = null;
   private nodeIndex = new RBush<NodeBox>();
@@ -1199,6 +1223,9 @@ export class Editor {
       case 'chain':
         this.chainTo(m, sx, sy);
         return;
+      case 'arrange':
+        this.arrangeTo(m, sx, sy);
+        return;
       default:
         return;
     }
@@ -1231,6 +1258,9 @@ export class Editor {
       case 'chain':
         this.chainTo(m, sx, sy);
         this.finishChain(m);
+        return;
+      case 'arrange':
+        this.finishArrange(m);
         return;
       default:
         return;
@@ -1318,6 +1348,22 @@ export class Editor {
     // `S` held: only a selection, whatever the press began on (06 §11).
     if (m.overNodes) {
       this.startMarquee(m, sx, sy, e);
+      return;
+    }
+    // `A` held on a bubble: its branch is laid out as the drag goes (06 §9.1).
+    if (hit.t === 'node' && this.held.has('KeyA') && this.events.arrange) {
+      const a: Extract<Mode, { t: 'arrange' }> = {
+        t: 'arrange',
+        anchor: hit.id,
+        sx: m.sx,
+        sy: m.sy,
+        up: null,
+        ids: [],
+        ticket: 0,
+        shown: null,
+      };
+      this.mode = a;
+      this.arrangeTo(a, sx, sy);
       return;
     }
     // A ghost stands where its note puts it (06 §14).
@@ -1765,6 +1811,66 @@ export class Editor {
     this.afterGesture();
   }
 
+  /**
+   * `A` + drag on to (sx, sy) (06 §9.1): up or left — the branch up the
+   * stream is laid out, down or right — the one below; a selection the
+   * bubble is in is laid out instead. A turn the other way asks again.
+   */
+  private arrangeTo(m: Extract<Mode, { t: 'arrange' }>, sx: number, sy: number) {
+    const dx = sx - m.sx;
+    const dy = sy - m.sy;
+    if (Math.hypot(dx, dy) < DRAG_PX) return;
+    const up = Math.abs(dx) > Math.abs(dy) ? dx < 0 : dy < 0;
+    if (up === m.up) return;
+    if (m.shown) this.view.settle(m.ids);
+    m.up = up;
+    m.shown = null;
+    const chosen = this.selection.has(m.anchor) && this.selection.size > 1;
+    // Ghosts stand by their notes (06 §14): a layout moves the notes.
+    m.ids = chosen
+      ? [...this.selection].filter((id) => !this.graph.nodes.get(id)?.ghostOf)
+      : branchOf(this.graph, m.anchor, up);
+    m.ticket = ++this.arrangeTicket;
+    this.events.hint('proto.hint.drag');
+    this.events.arrange?.({ ids: m.ids, anchor: m.anchor, ticket: m.ticket });
+  }
+
+  /**
+   * The layout `A` + drag asked for: shown as the drag goes, committed if
+   * the release came first. Positions are `[x, y]` per id of the request.
+   */
+  arranged(ticket: number, pos: Float32Array): void {
+    const at = (ids: readonly string[]) =>
+      new Map(ids.map((id, i) => [id, { x: pos[i * 2] ?? 0, y: pos[i * 2 + 1] ?? 0 }]));
+    const m = this.mode;
+    if (m.t === 'arrange' && m.ticket === ticket) {
+      m.shown = at(m.ids);
+      for (const [id, p] of m.shown) this.view.place(id, p.x, p.y);
+      this.view.invalidate();
+      return;
+    }
+    const late = this.arrangeOnArrival;
+    if (late?.ticket !== ticket) return;
+    this.arrangeOnArrival = null;
+    this.commitArrange(at(late.ids));
+  }
+
+  /** The release: the layout shown is one step of undo; one still on its way, when it comes. */
+  private finishArrange(m: Extract<Mode, { t: 'arrange' }>) {
+    this.mode = { t: 'idle' };
+    if (m.shown) this.commitArrange(m.shown);
+    else if (m.up !== null) this.arrangeOnArrival = { ticket: m.ticket, ids: m.ids };
+    this.afterGesture();
+  }
+
+  private commitArrange(shown: Map<string, { x: number; y: number }>) {
+    const moved = [...shown].filter(([id]) => this.graph.nodes.has(id));
+    if (moved.length === 0) return;
+    this.graph.transaction({ key: 'proto.change.layout', params: { n: moved.length } }, (tx) => {
+      for (const [id, p] of moved) tx.move(id, p.x, p.y);
+    });
+  }
+
   /** A cross-hair while `Y` or `J` is held over the canvas: the left button strokes now. */
   private strokeCursor() {
     this.view.canvas.style.cursor =
@@ -2076,6 +2182,11 @@ export class Editor {
     if (m.t === 'name') {
       this.events.nameInput(null);
       if (m.created) this.graph.revertLast();
+    }
+    if (m.t === 'arrange') {
+      // Esc: what the preview moved stands where it stood (06 §1.2).
+      this.arrangeTicket++;
+      this.view.settle(m.ids);
     }
     this.view.invalidate();
   }

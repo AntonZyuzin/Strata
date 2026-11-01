@@ -71,6 +71,31 @@ export class Layouter {
     return answer.pos;
   }
 
+  /**
+   * `A` + drag (06 §9.1 «Ветка»): `ids` laid out as `layout` does, then
+   * moved as one so that `anchor`, the bubble grabbed, stays where it stands.
+   */
+  async arrange(
+    graph: Graph,
+    view: CanvasView,
+    ids: readonly string[],
+    anchor: string,
+    kind: NetLayout,
+    fromText: (a: string, b: string) => boolean,
+  ): Promise<Float32Array | null> {
+    const pos = await this.layout(graph, view, ids, kind, fromText);
+    const at = ids.indexOf(anchor);
+    const a = graph.nodes.get(anchor);
+    if (!pos || at < 0 || !a) return pos;
+    const dx = a.x - (pos[at * 2] ?? 0);
+    const dy = a.y - (pos[at * 2 + 1] ?? 0);
+    for (let i = 0; i < ids.length; i++) {
+      pos[i * 2] = (pos[i * 2] ?? 0) + dx;
+      pos[i * 2 + 1] = (pos[i * 2 + 1] ?? 0) + dy;
+    }
+    return pos;
+  }
+
   destroy(): void {
     this.worker?.terminate();
     this.worker = null;

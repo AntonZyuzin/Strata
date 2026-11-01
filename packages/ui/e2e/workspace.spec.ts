@@ -3773,6 +3773,76 @@ test.describe('a workspace on the core', () => {
     await expect(ws).toHaveAttribute('data-depth', '1');
   });
 
+  test('A + drag lays out the branch below or above the bubble, which stays put; one step (06 §9.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Ветка');
+    // A chain «Корень» → «Лист 1» → «Лист 2», laid out against its stream.
+    await createNode(page, 640, 560, 'Корень');
+    await createNode(page, 420, 260, 'Лист 1');
+    await createNode(page, 880, 300, 'Лист 2');
+    const root = await at(page, 'Корень');
+    const one = await at(page, 'Лист 1');
+    const two = await at(page, 'Лист 2');
+    await page.mouse.move(root.x, root.y);
+    await page.keyboard.down('j');
+    await page.mouse.down();
+    for (const p of [one, two]) await page.mouse.move(p.x, p.y, { steps: 10 });
+    await page.mouse.up();
+    await page.keyboard.up('j');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-wires', '2');
+    const spots = () =>
+      page.evaluate(async () => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        const out: Record<string, { x: number; y: number }> = {};
+        for (const n of ws.graph()?.nodes.values() ?? []) out[n.name] = { x: n.x, y: n.y };
+        return out;
+      });
+    const before = await spots();
+    /** Held `A`, a drag from «name» by (dx, dy). */
+    const arrange = async (name: string, dx: number, dy: number) => {
+      const p = await at(page, name);
+      await page.mouse.move(p.x, p.y);
+      await page.keyboard.down('a');
+      await page.mouse.down();
+      await page.mouse.move(p.x + dx, p.y + dy, { steps: 6 });
+      await page.mouse.up();
+      await page.keyboard.up('a');
+    };
+    // Down from «Корень»: the branch below it, top to bottom; «Корень» stays.
+    await arrange('Корень', 0, 80);
+    await expect
+      .poll(async () => {
+        const s = await spots();
+        return (
+          (s['Лист 1']?.y ?? 0) > (s['Корень']?.y ?? 0) &&
+          (s['Лист 2']?.y ?? 0) > (s['Лист 1']?.y ?? 0)
+        );
+      })
+      .toBe(true);
+    const after = await spots();
+    expect(after['Корень']).toEqual(before['Корень']);
+    // One step of undo takes the layout back whole; the canvas animates it home.
+    await page.keyboard.press('Control+z');
+    await expect.poll(spots).toEqual(before);
+    await expect.poll(() => at(page, 'Лист 2')).toEqual(two);
+    // Up from «Лист 2»: the branch above it; «Лист 2» stays, its feeders go above.
+    await arrange('Лист 2', 0, -80);
+    await expect
+      .poll(async () => {
+        const s = await spots();
+        return (
+          (s['Корень']?.y ?? 0) < (s['Лист 1']?.y ?? 0) &&
+          (s['Лист 1']?.y ?? 0) < (s['Лист 2']?.y ?? 0)
+        );
+      })
+      .toBe(true);
+    expect((await spots())['Лист 2']).toEqual(before['Лист 2']);
+  });
+
   test('a store kept as a Blob, as a large one is (V-10k), comes back after a reload', async ({
     page,
   }) => {

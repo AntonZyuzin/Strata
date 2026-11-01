@@ -262,6 +262,26 @@ export function Prototype(props: {
           })
           .catch((e: unknown) => console.error('layout', e));
       },
+      // `A` + drag (06 §9.1): the branch by `L`'s rule, the bubble grabbed staying put.
+      arrange: (e) => {
+        const g = graph.current;
+        const v = viewRef.current;
+        if (!g || !v) return;
+        layouter.current ??= new Layouter();
+        layouter.current
+          .arrange(
+            g,
+            v,
+            e.ids,
+            e.anchor,
+            directionRef.current,
+            (a, b) => notes.current?.fromText(a, b) ?? false,
+          )
+          .then((pos) => {
+            if (pos && !cancelled) editor.current?.arranged(e.ticket, pos);
+          })
+          .catch((err: unknown) => console.error('layout', err));
+      },
       open: (id) => {
         const v = viewRef.current;
         const n = graph.current?.nodes.get(id);

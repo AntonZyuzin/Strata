@@ -3666,6 +3666,113 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
   });
 
+  test('the canvas keys of 06 §17: J chains, Alt+click a branch, Alt+PgDn a wire, Ctrl+arrows, S, I', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Клавиши');
+    const ws = page.locator('.workspace');
+    await createNode(page, 420, 300, 'Альфа');
+    await createNode(page, 620, 380, 'Бета');
+    await createNode(page, 820, 300, 'Гамма');
+    const edges = async () => (await graphNow(page)).edges.sort();
+    const selected = () =>
+      page.evaluate(() => {
+        const ws = window.__strataWs as WsHook;
+        const g = ws.graph();
+        return (ws.editor()?.selected ?? []).map((id) => g?.nodes.get(id)?.name).sort();
+      });
+    const a = await at(page, 'Альфа');
+    const b = await at(page, 'Бета');
+    const c = await at(page, 'Гамма');
+    /** Held `J`, a stroke from left of «Альфа» through the three, to right of «Гамма». */
+    const chain = async (giveUp = false) => {
+      await page.mouse.move(a.x - 40, a.y);
+      await page.keyboard.down('j');
+      await page.mouse.down();
+      for (const p of [a, b, c, { x: c.x + 40, y: c.y }]) {
+        await page.mouse.move(p.x, p.y, { steps: 8 });
+      }
+      if (giveUp) await page.keyboard.press('Escape');
+      await page.mouse.up();
+      await page.keyboard.up('j');
+      await settled(page);
+    };
+    // `J` and a stroke (06 §6.1): a chain in the order it reached them, one step.
+    await chain();
+    await expect(ws).toHaveAttribute('data-wires', '2');
+    expect(await edges()).toEqual(['Альфа→Бета', 'Бета→Гамма']);
+    // Again: the wires are there, none is made twice.
+    await chain();
+    expect(await edges()).toEqual(['Альфа→Бета', 'Бета→Гамма']);
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-wires', '0');
+    // Esc in the middle of the stroke makes none.
+    await chain(true);
+    await expect(ws).toHaveAttribute('data-wires', '0');
+    await page.keyboard.press('Control+Shift+z');
+    await expect(ws).toHaveAttribute('data-wires', '2');
+    // A branch (06 §11): Alt+Shift — up the stream, Alt+Ctrl — down.
+    await page.keyboard.down('Alt');
+    await page.keyboard.down('Shift');
+    await page.mouse.click(c.x, c.y);
+    await page.keyboard.up('Shift');
+    await page.keyboard.up('Alt');
+    expect(await selected()).toEqual(['Альфа', 'Бета', 'Гамма']);
+    await page.keyboard.down('Alt');
+    await page.keyboard.down('ControlOrMeta');
+    await page.mouse.click(b.x, b.y);
+    await page.keyboard.up('ControlOrMeta');
+    await page.keyboard.up('Alt');
+    expect(await selected()).toEqual(['Бета', 'Гамма']);
+    // Alt+PgDn (06 §6.1): the outgoing wire of the current node; Delete takes the wire.
+    await select(page, 'Альфа');
+    await page.keyboard.press('Alt+PageDown');
+    expect(await selected()).toEqual([]);
+    await page.keyboard.press('Delete');
+    await settled(page);
+    expect(await edges()).toEqual(['Бета→Гамма']);
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-wires', '2');
+    // Ctrl+arrows move the selection a grid step, with Shift four units, one step each.
+    await select(page, 'Гамма');
+    const gamma = await idOf(page, 'Гамма');
+    const spot = () =>
+      page.evaluate(async (id) => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        const n = ws.graph()?.nodes.get(id);
+        return { x: n?.x, y: n?.y };
+      }, gamma);
+    const from = await spot();
+    await page.keyboard.press('ControlOrMeta+ArrowRight');
+    await page.keyboard.press('ControlOrMeta+Shift+ArrowDown');
+    expect(await spot()).toEqual({ x: (from.x ?? 0) + 24, y: (from.y ?? 0) + 4 });
+    await page.keyboard.press('Control+z');
+    expect(await spot()).toEqual({ x: (from.x ?? 0) + 24, y: from.y });
+    await page.keyboard.press('Control+z');
+    expect(await spot()).toEqual(from);
+    // `S` held: a drag from a bubble is a marquee, nothing moves (06 §11).
+    const before = await graphNow(page);
+    await page.mouse.move(a.x, a.y);
+    await page.keyboard.down('s');
+    await page.mouse.down();
+    await page.mouse.move(b.x + 40, b.y + 40, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('s');
+    expect(await selected()).toEqual(['Альфа', 'Бета']);
+    expect(await spot()).toEqual(from);
+    expect((await graphNow(page)).edges).toEqual(before.edges);
+    // `I` dives in as Enter does (06 §10.1).
+    await makeFolder(page, 'Ящик', 640, 560);
+    await select(page, 'Ящик');
+    await page.keyboard.press('KeyI');
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await page.keyboard.press('KeyU');
+    await expect(ws).toHaveAttribute('data-depth', '1');
+  });
+
   test('a store kept as a Blob, as a large one is (V-10k), comes back after a reload', async ({
     page,
   }) => {

@@ -107,3 +107,42 @@ export function siblingStep(graph: Graph, id: string, next: boolean): string | n
   if (at < 0) return null;
   return row[at + (next ? 1 : -1)]?.id ?? null;
 }
+
+/**
+ * The branch up or down the stream from `id` (06 §11 «Ветка вверх / вниз»):
+ * the node and every node it is fed by — or that it feeds — in this
+ * network, each once though the wires go round (05 §8.2).
+ */
+export function branchOf(graph: Graph, id: string, up: boolean): string[] {
+  const seen = new Set<string>();
+  const stack = [id];
+  for (let n = stack.pop(); n !== undefined; n = stack.pop()) {
+    const node = graph.nodes.get(n);
+    if (seen.has(n) || !node || node.ghostOf) continue;
+    seen.add(n);
+    for (const next of up ? graph.inputs(n) : graph.outputs(n)) {
+      if (!seen.has(next)) stack.push(next);
+    }
+  }
+  return [...seen];
+}
+
+/**
+ * `Alt+PgDn` / `Alt+PgUp` (06 §6.1): the outgoing or incoming wire of `id`;
+ * pressed again — the next one, the far ends left to right, round to the
+ * first. `after` is the wire chosen now.
+ */
+export function wireStep(
+  graph: Graph,
+  id: string,
+  out: boolean,
+  after: readonly [string, string] | null,
+): [string, string] | null {
+  const wires = (out ? graph.outputs(id) : graph.inputs(id))
+    .map((e) => graph.nodes.get(e))
+    .filter((n): n is NonNullable<typeof n> => !!n && !n.ghostOf)
+    .sort((a, b) => a.x - b.x || a.y - b.y || a.id.localeCompare(b.id))
+    .map((n): [string, string] => (out ? [id, n.id] : [n.id, id]));
+  const at = after ? wires.findIndex(([f, t]) => f === after[0] && t === after[1]) : -1;
+  return wires[(at + 1) % wires.length] ?? null;
+}

@@ -1,6 +1,13 @@
 import { Graph, newNode } from '@strata/backend';
 import { describe, expect, it } from 'vitest';
-import { arrowStep, chainStep, nearestInDirection, siblingStep } from './traverse';
+import {
+  arrowStep,
+  branchOf,
+  chainStep,
+  nearestInDirection,
+  siblingStep,
+  wireStep,
+} from './traverse';
 
 /** A network: `P` above, its outputs `A B C` left to right, `D` under `B`. */
 function net(): Graph {
@@ -69,5 +76,33 @@ describe('walking the network from the keyboard (06 §10.3)', () => {
     });
     expect(arrowStep(g, 'B', 'left', { x: 0, y: 0 })).toBe('A');
     expect(chainStep(g, 'B', false)).toBe('D');
+  });
+});
+
+describe('a branch and the wires of the current node (06 §11, §6.1)', () => {
+  it('a branch up is the node and all that feeds it; down, all it feeds', () => {
+    const g = net();
+    expect(branchOf(g, 'B', true).sort()).toEqual(['B', 'P', 'Q']);
+    expect(branchOf(g, 'B', false).sort()).toEqual(['B', 'D']);
+    expect(branchOf(g, 'P', false).sort()).toEqual(['A', 'B', 'C', 'D', 'P']);
+  });
+
+  it('a branch walks each node once though the wires go round (05 §8.2)', () => {
+    const g = net();
+    g.transaction({ key: 't' }, (tx) => tx.connect('D', 'P'));
+    expect(branchOf(g, 'B', false).sort()).toEqual(['A', 'B', 'C', 'D', 'P']);
+  });
+
+  it('Alt+PgDn takes the outgoing wires left to right, round to the first', () => {
+    const g = net();
+    const first = wireStep(g, 'P', true, null);
+    expect(first).toEqual(['P', 'A']);
+    const second = wireStep(g, 'P', true, first);
+    expect(second).toEqual(['P', 'B']);
+    expect(wireStep(g, 'P', true, ['P', 'C'])).toEqual(['P', 'A']);
+    // Alt+PgUp: the incoming ones; none — none.
+    expect(wireStep(g, 'B', false, null)).toEqual(['P', 'B']);
+    expect(wireStep(g, 'B', false, ['P', 'B'])).toEqual(['Q', 'B']);
+    expect(wireStep(g, 'P', false, null)).toBeNull();
   });
 });

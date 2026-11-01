@@ -19,6 +19,7 @@ import {
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
 import { Camera } from './camera';
+import { chainWires, touchAt } from './chain';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
 import type { RimTarget } from './decor';
 import { onTheWay, RING_DELAY_MS, type RingSlot, ringSlots, slotAt } from './flagring';
@@ -26,7 +27,7 @@ import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { radiusOf } from './looks';
 import { Minimap } from './minimap';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
-import { arrowStep, chainStep, type Dir, siblingStep } from './traverse';
+import { arrowStep, branchOf, chainStep, type Dir, siblingStep, wireStep } from './traverse';
 import { type CanvasView, NORMAL_WIRE } from './view';
 import type { WireStyle } from './wires';
 
@@ -119,6 +120,7 @@ export type HintKey =
   | 'proto.hint.wireDrag'
   | 'proto.hint.marquee'
   | 'proto.hint.cut'
+  | 'proto.hint.chain'
   | 'proto.hint.ghost';
 
 export interface EditorEvents {
@@ -277,6 +279,16 @@ const ARROWS: Partial<Record<string, Dir>> = {
   ArrowDown: 'down',
 };
 
+/** `Ctrl`+arrows move the selection a grid step (06 §3: 24 world units), `Ctrl+Shift` — four (06 §17). */
+const NUDGE_GRID = 24;
+const NUDGE_FINE = 4;
+const NUDGE_DIRS: Partial<Record<string, readonly [number, number]>> = {
+  ArrowLeft: [-1, 0],
+  ArrowRight: [1, 0],
+  ArrowUp: [0, -1],
+  ArrowDown: [0, 1],
+};
+
 /** The flags with a key on the canvas (06 §8); «Скрыть от AI» and «Замок» come with MCP. */
 const FLAG_KEYS: Partial<Record<string, Flag>> = {
   KeyR: 'key',
@@ -315,6 +327,8 @@ type Mode =
       shift: boolean;
       /** `Ctrl`, `Cmd` on macOS (06 §17). */
       mod: boolean;
+      /** `S` was held: a drag is a marquee, over nodes too (06 §11). */
+      overNodes: boolean;
     }
   | {
       t: 'drag';
@@ -349,6 +363,13 @@ type Mode =
       stroke: { x: number; y: number }[];
       /** Crossed wires by key: their ends. */
       crossed: Map<string, { from: string; to: string }>;
+    }
+  | {
+      t: 'chain';
+      /** The stroke so far, screen px. */
+      stroke: { x: number; y: number }[];
+      /** The bubbles it passed through, in that order (06 §6.1). */
+      crossed: string[];
     }
   | {
       t: 'marquee';
@@ -1035,11 +1056,11 @@ export class Editor {
       // `Ctrl` let go: the flag ring comes back.
       if (e.code === 'ControlLeft' || e.code === 'ControlRight') this.view.invalidate();
       if (e.code === 'Digit8') this.view.invalidate();
-      if (e.code === 'KeyY') this.scissorsCursor();
+      if (e.code === 'KeyY' || e.code === 'KeyJ') this.strokeCursor();
     });
     on(window, 'blur', () => {
       this.held.clear();
-      this.scissorsCursor();
+      this.strokeCursor();
     });
   }
 
@@ -1072,6 +1093,15 @@ export class Editor {
       this.view.invalidate();
       return;
     }
+    // The chain (06 §6.1): hold `J` and stroke through two or more bubbles.
+    if (e.button === 0 && this.held.has('KeyJ')) {
+      e.preventDefault();
+      const m: Extract<Mode, { t: 'chain' }> = { t: 'chain', stroke: [], crossed: [] };
+      this.mode = m;
+      this.chainTo(m, sx, sy);
+      this.events.hint('proto.hint.chain');
+      return;
+    }
     if (e.button !== 0) return;
     // A slot of the flag ring switches its flag (06 §8), on the selection
     // when the bubble is in it; no press, no drag.
@@ -1100,6 +1130,7 @@ export class Editor {
       alt: e.altKey,
       shift: e.shiftKey,
       mod: e.metaKey || e.ctrlKey,
+      overNodes: this.held.has('KeyS'),
     };
   }
 
@@ -1165,6 +1196,9 @@ export class Editor {
       case 'cut':
         this.cutTo(m, sx, sy);
         return;
+      case 'chain':
+        this.chainTo(m, sx, sy);
+        return;
       default:
         return;
     }
@@ -1193,6 +1227,10 @@ export class Editor {
       case 'cut':
         this.cutTo(m, sx, sy);
         this.finishCut(m);
+        return;
+      case 'chain':
+        this.chainTo(m, sx, sy);
+        this.finishChain(m);
         return;
       default:
         return;
@@ -1229,6 +1267,15 @@ export class Editor {
       return;
     }
     if (hit.t === 'node') {
+      // A branch (06 §11): `Alt+Shift` — up the stream, `Alt+Ctrl` — down.
+      if (e.altKey && (e.shiftKey || mod)) {
+        this.select(branchOf(this.graph, hit.id, e.shiftKey));
+        this.current = hit.id;
+        this.selectedWire = null;
+        this.events.change();
+        this.view.invalidate();
+        return;
+      }
       if (double && !e.shiftKey && !mod) {
         this.select([hit.id]);
         this.current = hit.id;
@@ -1268,6 +1315,11 @@ export class Editor {
 
   private startDrag(m: Extract<Mode, { t: 'press' }>, sx: number, sy: number, e: PointerEvent) {
     const hit = m.hit;
+    // `S` held: only a selection, whatever the press began on (06 §11).
+    if (m.overNodes) {
+      this.startMarquee(m, sx, sy, e);
+      return;
+    }
     // A ghost stands where its note puts it (06 §14).
     if (hit.t === 'ghost') {
       this.mode = { t: 'idle' };
@@ -1343,6 +1395,11 @@ export class Editor {
       return;
     }
     // From empty space: marquee (06 §11).
+    this.startMarquee(m, sx, sy, e);
+  }
+
+  /** A marquee from the press: `Shift` adds, `Ctrl` takes away (06 §11). */
+  private startMarquee(m: Extract<Mode, { t: 'press' }>, sx: number, sy: number, e: PointerEvent) {
     const mod = e.metaKey || e.ctrlKey;
     this.mode = {
       t: 'marquee',
@@ -1665,9 +1722,53 @@ export class Editor {
     this.afterGesture();
   }
 
-  /** A cross-hair while `Y` is held over the canvas: the left button cuts now. */
-  private scissorsCursor() {
-    this.view.canvas.style.cursor = this.held.has('KeyY') ? 'crosshair' : '';
+  /**
+   * The chain's stroke on to (sx, sy): the bubbles it passes through join
+   * the chain in the order it reaches them (06 §6.1); ghosts take no wires.
+   */
+  private chainTo(m: Extract<Mode, { t: 'chain' }>, sx: number, sy: number) {
+    const last = m.stroke.at(-1);
+    if (last && Math.hypot(sx - last.x, sy - last.y) < CUT_STEP_PX) return;
+    m.stroke.push({ x: sx, y: sy });
+    this.refreshIndex();
+    const cam = this.view.camera;
+    const p = cam.toWorld(last?.x ?? sx, last?.y ?? sy);
+    const q = cam.toWorld(sx, sy);
+    const slack = MIN_HIT_PX / cam.zoom;
+    const touched: { id: string; t: number }[] = [];
+    for (const b of this.nodeIndex.search({
+      minX: Math.min(p.x, q.x) - slack,
+      minY: Math.min(p.y, q.y) - slack,
+      maxX: Math.max(p.x, q.x) + slack,
+      maxY: Math.max(p.y, q.y) + slack,
+    })) {
+      const n = this.view.nodeAt(b.id);
+      if (!n || m.crossed.includes(b.id) || this.graph.nodes.get(b.id)?.ghostOf) continue;
+      // As the hit test reaches: the hexagon, 24 px across at least (07 §4.10).
+      const t = touchAt(p, q, n, Math.max(n.r * HEX_IN, slack));
+      if (t !== null) touched.push({ id: b.id, t });
+    }
+    touched.sort((a, b) => a.t - b.t);
+    for (const { id } of touched) m.crossed.push(id);
+    this.view.invalidate();
+  }
+
+  /** Each bubble to the next, one step of undo; wires there already stay (06 §6.1). */
+  private finishChain(m: Extract<Mode, { t: 'chain' }>) {
+    this.mode = { t: 'idle' };
+    const wires = chainWires(m.crossed, (a, b) => this.graph.hasEdge(a, b));
+    if (wires.length > 0) {
+      this.graph.transaction({ key: 'proto.change.chain', params: { n: wires.length } }, (tx) => {
+        for (const [from, to] of wires) tx.connect(from, to);
+      });
+    }
+    this.afterGesture();
+  }
+
+  /** A cross-hair while `Y` or `J` is held over the canvas: the left button strokes now. */
+  private strokeCursor() {
+    this.view.canvas.style.cursor =
+      this.held.has('KeyY') || this.held.has('KeyJ') ? 'crosshair' : '';
   }
 
   private onWheel(e: WheelEvent) {
@@ -1789,8 +1890,15 @@ export class Editor {
         this.act('wireStyle');
         return;
       case 'KeyY':
+      case 'KeyJ':
         if (mod) return;
-        this.scissorsCursor();
+        this.strokeCursor();
+        return;
+      case 'KeyI':
+        // `I` dives in as `Enter` does (06 §10.1).
+        if (mod || e.altKey || e.shiftKey || !this.current) return;
+        e.preventDefault();
+        this.act('open');
         return;
       case 'KeyR':
       case 'KeyQ':
@@ -1833,10 +1941,15 @@ export class Editor {
         return;
       case 'PageUp':
       case 'PageDown': {
-        // Along the chain; with Shift — to the neighbours (06 §10.3).
-        if (mod || e.altKey || !this.current) return;
+        if (mod || !this.current) return;
         e.preventDefault();
         const down = e.code === 'PageDown';
+        // `Alt`: the outgoing or the incoming wire, again — the next (06 §6.1).
+        if (e.altKey) {
+          if (!e.shiftKey) this.stepWire(this.current, down);
+          return;
+        }
+        // Along the chain; with Shift — to the neighbours (06 §10.3).
         this.step(
           e.shiftKey
             ? siblingStep(this.graph, this.current, down)
@@ -1848,7 +1961,15 @@ export class Editor {
       case 'ArrowRight':
       case 'ArrowUp':
       case 'ArrowDown': {
-        if (mod || e.altKey) return;
+        if (e.altKey) return;
+        if (mod) {
+          // The selection moves a grid step, with `Shift` four units (06 §17).
+          e.preventDefault();
+          const d = e.shiftKey ? NUDGE_FINE : NUDGE_GRID;
+          const [ux, uy] = NUDGE_DIRS[e.code] ?? [0, 0];
+          this.nudge(ux * d, uy * d);
+          return;
+        }
         if (!e.shiftKey) {
           // To the nearest node that way (06 §10.3); none chosen — the one in the middle.
           e.preventDefault();
@@ -1957,6 +2078,39 @@ export class Editor {
       if (m.created) this.graph.revertLast();
     }
     this.view.invalidate();
+  }
+
+  /** `Alt+PgDn` / `Alt+PgUp`: the next outgoing or incoming wire of `id` is chosen (06 §6.1). */
+  private stepWire(id: string, out: boolean) {
+    const w = wireStep(this.graph, id, out, this.selectedWire);
+    if (!w) return;
+    // A chosen wire, not nodes: `Delete` takes the wire (06 §6.7); `id` stays current.
+    this.selection.clear();
+    this.selectedWire = w;
+    this.events.change();
+    this.view.invalidate();
+  }
+
+  /** The selection a step aside, one step of undo; ghosts stand by their notes (06 §14). */
+  private nudge(dx: number, dy: number) {
+    if (this.mode.t !== 'idle') return;
+    const ids = [...this.selection].filter((id) => {
+      const n = this.graph.nodes.get(id);
+      return n !== undefined && !n.ghostOf;
+    });
+    const first = ids[0];
+    if (first === undefined) return;
+    const label =
+      ids.length === 1
+        ? { key: 'proto.change.move', params: { name: this.graph.nodes.get(first)?.name ?? '' } }
+        : { key: 'proto.change.moveMany', params: { n: ids.length } };
+    this.graph.transaction(label, (tx) => {
+      for (const id of ids) {
+        const n = this.graph.nodes.get(id);
+        if (n) tx.move(id, n.x + dx, n.y + dy);
+      }
+    });
+    this.afterGesture();
   }
 
   private afterGesture() {
@@ -2395,6 +2549,28 @@ export class Editor {
       // The stroke dashed (06 §6.7); the wires it crossed are dashed with serifs (CUT_WIRE).
       dashed(g, m.stroke, STROKE_DASH);
       g.stroke({ color: PAPER, width: 1, alpha: 0.9 });
+    }
+    if (m.t === 'chain') {
+      // The stroke dashed (06 §6.1); the bubbles it reached are ringed, and
+      // the wires the release will make run rim to rim between them.
+      dashed(g, m.stroke, STROKE_DASH);
+      g.stroke({ color: PAPER, width: 1, alpha: 0.9 });
+      for (const [from, to] of chainWires(m.crossed, (a, b) => this.graph.hasEdge(a, b))) {
+        const a = screen(from);
+        const b = screen(to);
+        if (!a || !b) continue;
+        const angle = Math.atan2(b.y - a.y, b.x - a.x);
+        const ux = Math.cos(angle);
+        const uy = Math.sin(angle);
+        const ra = a.r * rimAt(angle);
+        const rb = b.r * rimAt(angle + Math.PI);
+        g.moveTo(a.x + ux * ra, a.y + uy * ra).lineTo(b.x - ux * rb, b.y - uy * rb);
+      }
+      g.stroke({ color: PAPER, width: 2, alpha: 0.7 });
+      for (const id of m.crossed) {
+        const c = screen(id);
+        if (c) g.poly(hexCorners(c.x, c.y, c.r + 10 / HEX_IN)).stroke({ color: PAPER, width: 2 });
+      }
     }
     if (m.t === 'marquee') {
       const x = Math.min(m.sx0, m.sx1);

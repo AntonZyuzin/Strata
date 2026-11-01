@@ -1,4 +1,5 @@
-import { expect, type Page, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { box, overflowing } from './helpers';
 
 // The star map's line of the MVP (08 §1.2, 16 §4.2 item 5): 04 S6, steps 1–6

@@ -1,7 +1,8 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { expect, type Page, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { box, LAYOUTS, overflowing } from './helpers';
 
 // An import as a long task (13 §3.3, S1 step 5): the vault's workspace opens
@@ -27,18 +28,6 @@ function bigVault(n: number): string {
 
 const status = (page: Page) => page.locator('.ws-import');
 
-/** What each page said in its console, its errors and crashes. */
-const said = new WeakMap<Page, string[]>();
-
-function listen(page: Page): void {
-  if (said.has(page)) return;
-  const lines: string[] = [];
-  said.set(page, lines);
-  page.on('console', (m) => lines.push(`${m.type()}: ${m.text()}`));
-  page.on('pageerror', (e) => lines.push(`pageerror: ${e.message}`));
-  page.on('crash', () => lines.push('crash'));
-}
-
 /** What the page shows of an import, as one line (13 §3.3). */
 const importState = (page: Page) =>
   page
@@ -55,24 +44,17 @@ const importState = (page: Page) =>
     .catch((e: unknown) => `no answer: ${String(e)}`);
 
 /**
- * Waits for `part` in the page's state; a wait that fails says what the
- * page showed and what it said, not only that it timed out.
+ * Waits for `part` in the page's state: a wait that fails says what the
+ * page showed, not only that it timed out; what it said, the fixtures do.
  */
-async function waitFor(page: Page, part: string, timeout = 60_000) {
-  try {
-    await expect.poll(() => importState(page), { timeout }).toContain(part);
-  } catch (e) {
-    const tail = (said.get(page) ?? []).slice(-40).join('\n');
-    throw new Error(`${(e as Error).message}\n--- the page said ---\n${tail}`);
-  }
-}
+const waitFor = (page: Page, part: string, timeout = 60_000) =>
+  expect.poll(() => importState(page), { timeout }).toContain(part);
 
 /** The report of the import that ended. */
 const reportShown = (page: Page) => waitFor(page, '"report":true');
 
 /** Imports `n` notes; the batches land `pause` ms apart, to be watched. */
 async function startImport(page: Page, n = 2000, pause = 400) {
-  listen(page);
   await page.goto(`/?plain&batchPause=${pause}`);
   await expect(page.locator('.home-vault')).toBeVisible();
   await page.locator('.home-vault-input').setInputFiles(bigVault(n));
@@ -255,7 +237,6 @@ interface FixHook {
 }
 
 async function importFixes(page: Page) {
-  listen(page);
   await page.goto('/?plain');
   await expect(page.locator('.home-vault')).toBeVisible();
   await page.locator('.home-vault-input').setInputFiles(fixesVault());

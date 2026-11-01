@@ -1,5 +1,6 @@
-import { type Browser, expect, test } from '@playwright/test';
+import type { Browser } from '@playwright/test';
 import { SCENARIO_IDS } from '@strata/bench/report';
+import { expect, test } from './fixtures';
 import { box, LAYOUTS, overflowing } from './helpers';
 
 // Benchmark window (16 §3.2 step 0.3). Layout: the same box in RU and EN, idle

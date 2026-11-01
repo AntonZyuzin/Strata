@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { box, LAYOUTS, overflowing } from './helpers';
 
 // «Благодарности» (07 §6.3): the same box in RU and EN at every DPR of the

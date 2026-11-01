@@ -1,8 +1,9 @@
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { expect, type Page, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
 import { vsynthVault } from '../../editor/src/vsynth-vault';
+import { expect, test } from './fixtures';
 import { box, LAYOUTS, overflowing } from './helpers';
 
 // Milestone 1C (16 §4.7, scenario S1): V-synth's vault (13 §7.2) picked as a

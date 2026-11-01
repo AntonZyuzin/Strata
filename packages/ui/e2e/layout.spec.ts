@@ -1,4 +1,5 @@
-import { expect, type Page, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { box, LAYOUTS, LONGEST_CORE, overflowing } from './helpers';
 
 async function switchTo(page: Page, short: 'RU' | 'EN') {

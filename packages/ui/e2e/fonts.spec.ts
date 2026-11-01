@@ -1,4 +1,5 @@
-import { expect, type Page, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { box, LAYOUTS, overflowing } from './helpers';
 
 // Font and window check of spike 9 (07 §13): the window keeps its box in RU

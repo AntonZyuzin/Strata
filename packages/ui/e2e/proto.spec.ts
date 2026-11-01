@@ -1,5 +1,6 @@
-import { type Browser, expect, type Page, test } from '@playwright/test';
+import type { Browser, Page } from '@playwright/test';
 import { type MessageKey, t } from '@strata/i18n';
+import { expect, test } from './fixtures';
 import { box, chWidth, LAYOUTS, overflowing } from './helpers';
 
 // Canvas prototype (16 §3.2 step 0.3). Layout: the top window, the status bar

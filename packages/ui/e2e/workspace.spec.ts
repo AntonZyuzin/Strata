@@ -1,4 +1,5 @@
-import { expect, type Page, test } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import { expect, test } from './fixtures';
 import { box, chWidth, LAYOUTS, overflowing } from './helpers';
 
 // Milestone 1A (16 §4.7): the home screen (✅ Q-16-12) and a workspace on the

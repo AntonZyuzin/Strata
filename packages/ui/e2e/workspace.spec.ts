@@ -996,11 +996,14 @@ for (const deviceScaleFactor of [1, 2]) {
       await createWorkspace(page, 'Появления');
       await appearing(page);
       // A wire from it: the dialog says it hides with the node (06 §12.3).
+      // Made on the canvas, not under the panel: the camera stays where it is.
       await select(page, 'Референсы');
-      await createNode(page, 980, 620, 'Сценарий');
+      await createNode(page, 700, 640, 'Сценарий');
       await select(page, 'Референсы');
       const places = page.locator('.ws-inspector .ins-places');
       await expect(places.locator('li')).toHaveCount(2);
+      // Chosen again after a name typed: no window opened, the text is in the panel.
+      await expect(page.locator('.note-window')).toHaveCount(0);
       expect(await overflowing(page, '.ws-inspector'), `${locale} the panel must fit`).toEqual([]);
       const section = await box(page, '.ws-inspector .ins-places');
       const row = await box(page, '.ws-inspector .ins-places li:last-child');
@@ -1074,6 +1077,22 @@ for (const deviceScaleFactor of [1, 2]) {
       await page.mouse.move(sketch.x + 60, sketch.y + 40, { steps: 6 });
       const note = page.locator('.ws-cursor-note');
       await expect(note).toBeVisible();
+      // The note follows the pointer a frame behind (WebKit coalesces the
+      // moves): measured once it stands where the cursor was let rest.
+      await expect
+        .poll(() =>
+          note.evaluate(
+            (el, at) => {
+              const s = (el as HTMLElement).style;
+              return Math.max(
+                Math.abs(Number.parseFloat(s.left) - at.x),
+                Math.abs(Number.parseFloat(s.top) - at.y),
+              );
+            },
+            { x: sketch.x + 60, y: sketch.y + 40 },
+          ),
+        )
+        .toBeLessThanOrEqual(1);
       expect(await overflowing(page, '.ws-cursor-note'), `${locale} the note must fit`).toEqual([]);
       const glyph = await box(page, '.ws-cursor-note .kind-icon');
       const shown = await box(page, '.ws-cursor-note');
@@ -3054,6 +3073,24 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(async () => (await graphNow(page)).names.filter((n) => n === 'План').length)
       .toBe(2);
+  });
+
+  test('two clicks with a key between them are two clicks, not a double click (06 §5)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Клики');
+    await createNode(page, 460, 300, 'Идея');
+    const p = await at(page, 'Идея');
+    // At once, as fast as a double click: the key between makes them two.
+    await page.mouse.click(p.x, p.y);
+    await page.keyboard.press('Escape');
+    await page.mouse.click(p.x, p.y);
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Идея');
+    await expect(page.locator('.note-window')).toHaveCount(0);
+    // A double click still opens the note.
+    await page.mouse.dblclick(p.x, p.y);
+    await expect(page.locator('.note-window')).toBeVisible();
   });
 
   test('Alt+drag copies in the core: the copy keeps its fields and size after a reload (06 §12.1)', async ({

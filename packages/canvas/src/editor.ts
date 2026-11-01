@@ -45,6 +45,10 @@ const DROP_HOLD_MS = 200;
 /** A drag resting on the bubble of a folder or project this long goes inside (06 §12.1). */
 const INTO_HOLD_MS = 500;
 const DOUBLE_CLICK_MS = 400;
+/** Keys that do not end a double click: held for a click with them. */
+const MODIFIER_KEYS = new Set(['Shift', 'Control', 'Alt', 'Meta', 'AltGraph']);
+/** No click before: the next one is not the second of a double click. */
+const NO_CLICK = { time: Number.NEGATIVE_INFINITY, sx: 0, sy: 0 };
 const PORT_RING = (rs: number) => Math.max(8, 0.25 * rs);
 /** 06 §6.4: neighbours downstream shift by 2·r(X) + 24 along A → B. */
 const INSERT_GAP = 24;
@@ -416,7 +420,7 @@ export class Editor {
   private selectedWire: [string, string] | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
-  private lastClick = { time: 0, sx: 0, sy: 0 };
+  private lastClick = NO_CLICK;
   private gestureZoom: number | null = null;
   private nodeIndex = new RBush<NodeBox>();
   private wireIndex = new RBush<WireBox>();
@@ -1009,7 +1013,17 @@ export class Editor {
       e.preventDefault();
       this.gestureZoom = null;
     });
-    on(window, 'keydown', (e) => this.onKey(e), { capture: true });
+    on(
+      window,
+      'keydown',
+      (e) => {
+        // A key between two clicks makes them two clicks, not a double click:
+        // a node chosen, a name typed, the node chosen again opens nothing.
+        if (!MODIFIER_KEYS.has(e.key)) this.lastClick = NO_CLICK;
+        this.onKey(e);
+      },
+      { capture: true },
+    );
     on(window, 'keyup', (e) => {
       this.held.delete(e.code);
       // `Ctrl` let go: the flag ring comes back.

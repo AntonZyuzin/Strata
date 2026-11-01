@@ -211,6 +211,8 @@ export interface EditorEvents {
    * node under the cursor outside it — at the screen point (sx, sy).
    */
   icons?(e: { ids: string[]; sx: number; sy: number }): void;
+  /** `C` (06 §2.1, 05 §4.1 `color`): the colour palette for `ids`, as `icons` has it. */
+  colors?(e: { ids: string[]; sx: number; sy: number }): void;
   /**
    * A drag that rested 500 ms on the bubble of a folder or project and was
    * let go there (06 §12.1). `amend` — the gesture wrote a step already (the
@@ -254,7 +256,9 @@ export type CanvasAction =
   | 'paste'
   | 'pasteAppearance'
   | 'wrap'
-  | 'icons';
+  | 'icons'
+  | 'colors'
+  | 'panel';
 
 /** What the right button was pressed on. */
 export type MenuTarget =
@@ -799,6 +803,12 @@ export class Editor {
         return;
       case 'icons':
         this.openIcons();
+        return;
+      case 'colors':
+        this.openColors();
+        return;
+      case 'panel':
+        this.togglePanel();
         return;
     }
   }
@@ -1949,7 +1959,17 @@ export class Editor {
         } else if (!mod && e.shiftKey) {
           e.preventDefault();
           this.act('wrap');
+        } else if (!mod) {
+          // `C` alone — the colour palette (06 §2.1).
+          e.preventDefault();
+          this.act('colors');
         }
+        return;
+      case 'KeyP':
+        // `P` — the panel of the current node; `Ctrl+P` is the command palette's.
+        if (mod || e.altKey || e.shiftKey) return;
+        e.preventDefault();
+        this.act('panel');
         return;
       case 'KeyD':
         // `Ctrl+D` — copies beside (06 §12.1); the browser's bookmark is not ours.
@@ -2236,13 +2256,39 @@ export class Editor {
   /** `Z`: the icon palette for the nodes `R` / `Q` / `E` would flag (06 §8); ghosts take none. */
   private openIcons() {
     if (this.mode.t !== 'idle' || !this.events.icons) return;
-    const ids = this.flagTargets().filter((id) => {
-      const n = this.graph.nodes.get(id);
-      return n !== undefined && !n.ghostOf;
-    });
+    const ids = this.paletteTargets();
     if (ids.length === 0) return;
     const { sx, sy } = this.anchorScreen();
     this.events.icons({ ids, sx, sy });
+  }
+
+  /** `C`: the colour palette for the nodes `Z` would take (06 §2.1). */
+  private openColors() {
+    if (this.mode.t !== 'idle' || !this.events.colors) return;
+    const ids = this.paletteTargets();
+    if (ids.length === 0) return;
+    const { sx, sy } = this.anchorScreen();
+    this.events.colors({ ids, sx, sy });
+  }
+
+  /** What a palette gives to: the nodes the flags would take, ghosts aside. */
+  private paletteTargets(): string[] {
+    return this.flagTargets().filter((id) => {
+      const n = this.graph.nodes.get(id);
+      return n !== undefined && !n.ghostOf;
+    });
+  }
+
+  /**
+   * `P` (06 §17, §11 «Текущая нода»): the properties panel of the current
+   * node — it is chosen alone, which opens the panel; pressed again, the
+   * panel closes as its × does.
+   */
+  private togglePanel() {
+    const id = this.current;
+    if (this.mode.t !== 'idle' || !id || !this.graph.nodes.has(id)) return;
+    if (this.selection.size === 1 && this.selection.has(id)) this.deselect();
+    else this.select([id]);
   }
 
   private wrapSelection() {

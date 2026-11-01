@@ -47,7 +47,7 @@ interface WsHook {
   };
   core: {
     tree(): Promise<{ id: string; name: string; parent?: string }[]>;
-    node(id: string): Promise<{ icon?: string; status?: string }>;
+    node(id: string): Promise<{ icon?: string; status?: string; color?: number }>;
     view(net: string): Promise<{ nodes: { id: string; name: string; size?: string }[] }>;
   };
   editor(): {
@@ -977,6 +977,48 @@ for (const deviceScaleFactor of [1, 2]) {
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['palette', 'cell', 'footer', 'kind', 'auto', 'xl'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
+  test(`the colour palette keeps its size in RU and EN @${deviceScaleFactor}x (06 §2.1)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Цвета');
+      await createNode(page, 460, 300, 'Карта');
+      await select(page, 'Карта');
+      await page.keyboard.press('KeyC');
+      const palette = page.locator('.color-palette');
+      await expect(palette.locator('.color-cell')).toHaveCount(9);
+      expect(await overflowing(page, '.color-palette'), `${locale} the palette must fit`).toEqual(
+        [],
+      );
+      boxes.push({
+        palette: await box(page, '.color-palette'),
+        header: await box(page, '.color-palette .tab-menu-header'),
+        none: await box(page, '.color-palette .color-cell.is-none'),
+        last: await box(page, '.color-palette .color-cell:last-child'),
+      });
+      await page.keyboard.press('Escape');
+      await expect(palette).toHaveCount(0);
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    // The glyph-free cells are squares; RU and EN draw the same boxes.
+    expect(ru.none.width).toBe(ru.none.height);
+    for (const part of ['palette', 'header', 'none', 'last'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -3841,6 +3883,66 @@ test.describe('a workspace on the core', () => {
       })
       .toBe(true);
     expect((await spots())['Лист 2']).toEqual(before['Лист 2']);
+  });
+
+  test('C gives the nodes a colour, 0 takes it back, one step each; P opens and closes the panel (06 §2.1, §17)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Цвета');
+    await createNode(page, 560, 380, 'Эскиз');
+    await createNode(page, 760, 380, 'Палитра');
+    const sketch = await idOf(page, 'Эскиз');
+    const board = await idOf(page, 'Палитра');
+    const colour = (id: string) =>
+      page.evaluate(async (id) => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        const core = await ws.core.node(id);
+        return { canvas: ws.graph()?.nodes.get(id)?.color ?? null, core: core.color ?? null };
+      }, id);
+    const palette = page.locator('.color-palette');
+    // `C` and a digit: the colour at once, in the canvas and in the core.
+    await select(page, 'Эскиз');
+    await page.keyboard.press('KeyC');
+    await expect(palette).toBeVisible();
+    await page.keyboard.press('3');
+    await expect(palette).toHaveCount(0);
+    expect(await colour(sketch)).toEqual({ canvas: 2, core: 2 });
+    await page.keyboard.press('Control+z');
+    expect(await colour(sketch)).toEqual({ canvas: null, core: null });
+    // The arrows and Enter; the palette opens on the colour the node has.
+    await page.keyboard.press('KeyC');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+    expect(await colour(sketch)).toEqual({ canvas: 1, core: 1 });
+    await page.keyboard.press('KeyC');
+    await expect(palette.locator('.color-cell.is-chosen')).toHaveAttribute(
+      'aria-label',
+      'Бирюзовый',
+    );
+    // `0` — the kind's colour back.
+    await page.keyboard.press('0');
+    expect(await colour(sketch)).toEqual({ canvas: null, core: null });
+    // Two chosen: a click gives both the colour, one step of undo takes both back.
+    await page.keyboard.press('Control+a');
+    await page.keyboard.press('KeyC');
+    await palette.locator('.color-cell').nth(5).click();
+    expect(await colour(sketch)).toEqual({ canvas: 4, core: 4 });
+    expect(await colour(board)).toEqual({ canvas: 4, core: 4 });
+    await page.keyboard.press('Control+z');
+    expect(await colour(sketch)).toEqual({ canvas: null, core: null });
+    expect(await colour(board)).toEqual({ canvas: null, core: null });
+    // `P`: the panel of the current node; again — it closes, as its × does.
+    await select(page, 'Эскиз');
+    await expect(page.locator('.ws-inspector')).toBeVisible();
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyP');
+    await expect(page.locator('.ws-inspector')).toHaveCount(0);
+    await page.keyboard.press('KeyP');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Эскиз');
   });
 
   test('a store kept in parts, as a large one is (V-10k), comes back after a reload', async ({

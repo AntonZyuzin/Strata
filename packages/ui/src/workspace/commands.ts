@@ -178,6 +178,22 @@ export const COMMANDS: readonly Command[] = [
     chosen,
     'node',
   ),
+  canvas(
+    'colors',
+    'colors',
+    'C',
+    ['цвет', 'палитра', 'покрасить', 'colour', 'color', 'palette', 'paint'],
+    chosen,
+    'node',
+  ),
+  canvas(
+    'panel',
+    'panel',
+    'P',
+    ['панель', 'свойства', 'поля', 'panel', 'properties', 'fields'],
+    chosen,
+    'node',
+  ),
   canvas('flag.key', 'flag:key', 'R', ['флаг', 'ключевая', 'flag', 'key', 'star'], chosen, 'node'),
   canvas(
     'flag.pause',

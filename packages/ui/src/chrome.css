@@ -1310,6 +1310,45 @@ button:focus-visible {
   gap: calc(3 * var(--u));
 }
 
+/* The colour palette `C` (06 §2.1): «Без цвета» and the eight colours in a row. */
+.color-palette {
+  --color-cell: 3ch;
+  --color-gap: calc(2 * var(--u));
+  width: calc(9 * var(--color-cell) + 8 * var(--color-gap) + 8 * var(--u));
+}
+
+.color-row {
+  display: grid;
+  grid-template-columns: repeat(9, var(--color-cell));
+  grid-auto-rows: var(--color-cell);
+  gap: var(--color-gap);
+  padding: calc(4 * var(--u));
+  outline: none;
+}
+
+.color-cell {
+  border: var(--u) solid var(--st-color-frame);
+  cursor: pointer;
+}
+
+.color-cell.is-none {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 calc(3 * var(--u)),
+    var(--st-color-divider) 0 calc(4 * var(--u))
+  );
+}
+
+/* The colour the node has: a paper ring inside, readable on every swatch. */
+.color-cell.is-chosen {
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) var(--st-scene-paper);
+}
+
+.color-cell.is-current {
+  outline: calc(2 * var(--u)) solid var(--st-color-accent);
+  outline-offset: var(--u);
+}
+
 .icon-palette-top .tab-menu-prompt {
   flex: 1 1 auto;
   min-width: 0;

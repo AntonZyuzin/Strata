@@ -86,6 +86,7 @@ import { menuOpening, TabMenu } from '../proto/TabMenu';
 import { netItems, searchClient, visited, visits } from '../search';
 import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
+import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
 import type { CommandContext } from './commands';
 import { DeleteDialog } from './DeleteDialog';
@@ -292,6 +293,8 @@ export function WorkspaceScreen(props: {
   const [net, setNet] = useState<NetworkView | null>(null);
   /** The icon palette `Z` (07 §6.3): for these nodes, at a page point. */
   const [iconPick, setIconPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
+  /** `C` (06 §2.1): the colour palette for these nodes, at a page point. */
+  const [colorPick, setColorPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   /** The presets with their authors, loaded when the palette first opens. */
   const [presets, setPresets] = useState<{
     authors: Record<string, IconAuthor>;
@@ -567,6 +570,11 @@ export function WorkspaceScreen(props: {
         const r = el.getBoundingClientRect();
         setIconPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
         void iconPresets().then(setPresets, refused);
+      },
+      // `C` (06 §2.1): the colour palette at the cursor.
+      colors: (e) => {
+        const r = el.getBoundingClientRect();
+        setColorPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
       },
       tabMenu: (e) => {
         const r = el.getBoundingClientRect();
@@ -1548,6 +1556,7 @@ export function WorkspaceScreen(props: {
     editor.current?.setOverlayOpen(
       menu !== null ||
         iconPick !== null ||
+        colorPick !== null ||
         name !== null ||
         finder !== null ||
         palette ||
@@ -1556,7 +1565,7 @@ export function WorkspaceScreen(props: {
         viewerFocus ||
         covered,
     );
-  }, [menu, iconPick, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
+  }, [menu, iconPick, colorPick, name, finder, palette, view3d, boardFocus, viewerFocus, covered]);
 
   useEffect(() => {
     ringModeRef.current = props.prefs.ring;
@@ -2048,6 +2057,20 @@ export function WorkspaceScreen(props: {
     const value = preset === null ? null : `${PRESET}${preset}`;
     g.transaction({ key: 'change.icon', params: { n: nodes.length } }, (tx) => {
       for (const id of nodes) tx.attr(id, 'icon', value);
+    });
+  };
+
+  /** The nodes' colour (05 §4.1, 07 §2.2): an index of the palette, or null — the kind's. One step. */
+  const setColor = (ids: readonly string[], color: number | null) => {
+    const g = graph.current;
+    if (!g) return;
+    const nodes = ids.filter((id) => {
+      const n = g.nodes.get(id);
+      return n && n.ghostOf === null && (n.color ?? null) !== color;
+    });
+    if (nodes.length === 0) return;
+    g.transaction({ key: 'change.color', params: { n: nodes.length } }, (tx) => {
+      for (const id of nodes) tx.attr(id, 'color', color);
     });
   };
 
@@ -2876,6 +2899,11 @@ export function WorkspaceScreen(props: {
           void iconPresets().then(setPresets, failed);
         },
       },
+      {
+        label: t(locale, 'ctx.color'),
+        hint: 'C',
+        onSelect: () => setColorPick({ ids: ed.flagTargets(n.id), x: ctx?.x ?? 0, y: ctx?.y ?? 0 }),
+      },
     );
     // Two commands, not side by side (06 §12.3): «Убрать отсюда» and «Удалить везде».
     items.push({
@@ -3308,6 +3336,24 @@ export function WorkspaceScreen(props: {
           }}
           onClose={() => {
             setIconPick(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {colorPick ? (
+        <ColorPalette
+          locale={locale}
+          current={g?.nodes.get(colorPick.ids[0] ?? '')?.color ?? null}
+          x={colorPick.x}
+          y={colorPick.y}
+          bounds={seenBounds()}
+          onPick={(color) => {
+            setColorPick(null);
+            setColor(colorPick.ids, color);
+            focusCanvas();
+          }}
+          onClose={() => {
+            setColorPick(null);
             focusCanvas();
           }}
         />

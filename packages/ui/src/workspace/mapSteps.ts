@@ -1,4 +1,4 @@
-import type { CoreOp, NetworkView, NodeKind, TreeItem } from '@strata/backend';
+import type { CoreOp, NetworkView, NodeKind, NodeSize, TreeItem } from '@strata/backend';
 import { radiusOf } from '@strata/canvas';
 import { FLAG } from '@strata/view3d/map';
 import type { MapItem } from '../proto/map3d';
@@ -20,9 +20,11 @@ interface Placed {
   x: number;
   y: number;
   flags?: readonly string[] | undefined;
+  size?: NodeSize | undefined;
 }
 
-const radius = (n: Placed) => radiusOf({ kind: n.kind, key: n.flags?.includes('key') ?? false });
+const radius = (n: Placed) =>
+  radiusOf({ kind: n.kind, key: n.flags?.includes('key') ?? false, size: n.size });
 
 /**
  * autoPlace (06 §5.4) on a network not on the canvas: under the parent `from`

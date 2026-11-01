@@ -1,5 +1,6 @@
 import type { ViewGhost } from './core';
 import {
+  type CopyAt,
   type Core,
   type CoreFold,
   type CoreOp,
@@ -68,7 +69,7 @@ export function graphOf(
   g.kindColors = true;
   g.derive({ key: 'core.change.load' }, (tx) => {
     for (const n of view.nodes) {
-      const { id, kind, name, x, y, fold, external, appearance, places, ...attrs } = n;
+      const { id, kind, name, x, y, fold, external, appearance, places, size, ...attrs } = n;
       const node = newNode({
         id,
         name,
@@ -83,6 +84,7 @@ export function graphOf(
       node.external = external ?? 0;
       node.appearance = appearance ?? false;
       node.places = places ?? 1;
+      node.size = size ?? null;
       tx.add(node);
     }
     for (const e of view.edges) tx.connect(e.from, e.to);
@@ -124,15 +126,40 @@ export function finished(n: GraphNode): boolean {
 /** Core operations for the graph's operations of one step in network `net`. */
 export function opsOf(changeset: Changeset, net: string): CoreOp[] {
   const removed = new Set(changeset.ops.flatMap((op) => (op.t === 'remove' ? [op.id] : [])));
+  const copies = new Set(copiesOf(changeset).map((c) => c.copy));
   const out: CoreOp[] = [];
   for (const op of changeset.ops) {
     // A ghost is the core's wire, not a node: what happens to it on the
     // canvas follows the note's text (05 §8.5).
     if (touchesGhost(op)) continue;
+    // A copy and the wires between copies are the core's copy (06 §12.1).
+    if (op.t === 'add' && op.copyOf) continue;
+    if (op.t === 'connect' && copies.has(op.from) && copies.has(op.to)) continue;
     const core = opOf(op, net, removed);
     if (core) out.push(core);
   }
   return out;
+}
+
+/**
+ * The copies a step makes (06 §12.1, `Alt`+drag): the core copies each —
+ * content, fields, wires drawn between them, all inside — under the id the
+ * canvas gave it, at its size here (06 §4.2).
+ */
+export function copiesOf(changeset: Changeset): CopyAt[] {
+  return changeset.ops.flatMap((op) =>
+    op.t === 'add' && op.copyOf
+      ? [
+          {
+            id: op.copyOf,
+            x: op.node.x,
+            y: op.node.y,
+            size: op.node.size ?? undefined,
+            copy: op.node.id,
+          },
+        ]
+      : [],
+  );
 }
 
 function touchesGhost(op: Op): boolean {
@@ -168,6 +195,8 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       return op.everywhere ? { op: 'trash', ids: [op.id] } : { op: 'unplace', id: op.id, net };
     case 'move':
       return { op: 'move', net, id: op.id, x: op.x, y: op.y };
+    case 'size':
+      return { op: 'setSize', id: op.id, net, size: op.size };
     case 'rename':
       return { op: 'rename', id: op.id, name: op.name };
     case 'connect':
@@ -235,6 +264,16 @@ export class CoreSync {
     switch (e.type) {
       case 'apply': {
         const ops = opsOf(cs, this.net);
+        const copies = copiesOf(cs);
+        if (copies.length > 0) {
+          // The core's copy is the step (a copy never amends, `Tx.copy`); the
+          // rest of the gesture goes into it.
+          this.send(async () => {
+            const { history } = await this.core.copyNodes(copies, this.net, cs.label);
+            return ops.length > 0 ? this.core.apply(ops, cs.label, true) : history;
+          });
+          return;
+        }
         if (ops.length === 0 && !e.amend) return;
         this.send(() => this.core.apply(ops, cs.label, e.amend));
         return;

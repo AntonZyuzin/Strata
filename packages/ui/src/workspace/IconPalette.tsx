@@ -1,3 +1,4 @@
+import type { NodeSize } from '@strata/backend';
 import type { IconAuthor, IconPreset } from '@strata/canvas';
 import { iconName, iconTerms, type Locale, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -14,14 +15,18 @@ const COLS = 8;
 /** The prefix of a preset reference in a node's `icon` (05 §4.1 `IconRef`). */
 export const PRESET = 'game-icons/';
 
+/** The size row, smallest first; null — by the rules (06 §4.2). */
+const SIZES: readonly (NodeSize | null)[] = [null, 's', 'm', 'l', 'xl'];
+
 /**
- * The icon palette `Z` (06 §2, 07 §6.3, ☑ Q-07-21): the presets that ship,
- * found by their words in either language; the author of the one under the
- * keys or the cursor on the window's last line («© Lorc, CC BY 3.0»). `Enter`
- * or a click gives it to the nodes; the kind's icon beside the query
- * («Значок вида») takes a chosen one back; one step of undo either way.
- * Opens at the cursor, kept inside the canvas; the Tab menu's window, its
- * width in `ch`.
+ * The icon and size palette `Z` (06 §2, 07 §6.3, ☑ Q-07-21): the presets
+ * that ship, found by their words in either language; the author of the one
+ * under the keys or the cursor on the window's last line («© Lorc, CC BY
+ * 3.0»). `Enter` or a click gives it to the nodes; the kind's icon beside the
+ * query («Значок вида») takes a chosen one back. Under the query, the
+ * bubbles' size in this network (06 §4.2): «Авто» by the rules, or S, M, L,
+ * XL by hand. One step of undo for each choice. Opens at the cursor, kept
+ * inside the canvas; the Tab menu's window, its width in `ch`.
  */
 export function IconPalette(props: {
   locale: Locale;
@@ -31,12 +36,16 @@ export function IconPalette(props: {
   current: string | null;
   /** The kind's icon of the first of the nodes: the button that takes a preset back shows it. */
   kind: IconName;
+  /** The first node's size in this network, set by hand; null — by the rules. */
+  size: NodeSize | null;
   x: number;
   y: number;
   bounds?: DOMRect | undefined;
   search: Pick<MenuSearch, 'rank'>;
   /** A preset by id, or null — back to the kind's icon. */
   onPick: (id: string | null) => void;
+  /** A size by hand, or null — back to the rules. */
+  onSize: (size: NodeSize | null) => void;
   onClose: () => void;
 }) {
   const { locale, presets, search } = props;
@@ -202,7 +211,27 @@ export function IconPalette(props: {
             onClick={() => props.onPick(null)}
           />
         </div>
-        <div ref={grid} className="icon-grid" role="listbox" aria-label={label}>
+        <div className="icon-size" title={t(locale, 'icons.sizeHint')}>
+          <span className="icon-size-label" aria-hidden="true">
+            {t(locale, 'icons.size')}
+          </span>
+          <fieldset className="icon-size-choices">
+            <legend className="sr-only">{t(locale, 'icons.size')}</legend>
+            {SIZES.map((s) => (
+              <button
+                key={s ?? 'auto'}
+                type="button"
+                className={s ? 'icon-size-choice' : 'icon-size-choice is-auto'}
+                aria-pressed={props.size === s}
+                title={t(locale, s ? `icons.size.${s}` : 'icons.size.autoHint')}
+                onClick={() => props.onSize(s)}
+              >
+                {s ? s.toUpperCase() : t(locale, 'icons.size.auto')}
+              </button>
+            ))}
+          </fieldset>
+        </div>
+        <div ref={grid} className="icon-grid" role="listbox" aria-label={t(locale, 'icons.grid')}>
           {shown.map((k, i) => {
             const p = icons[k];
             if (!p) return null;

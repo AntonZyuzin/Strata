@@ -223,6 +223,35 @@ describe('changesets and undo (06 §1.2)', () => {
   });
 });
 
+describe("a bubble's size (06 §4.2)", () => {
+  it('is set by hand and back to the rules, one step each; a ghost has none', () => {
+    const g = new Graph();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.add(node('a'));
+      tx.add({ ...node('?k'), ghost: true, ghostOf: 'a' });
+    });
+    expect(g.transaction({ key: 't.size' }, (tx) => tx.size('?k', 'l'))).toBeNull();
+    const before = g.nodes.get('a');
+    g.transaction({ key: 't.size' }, (tx) => tx.size('a', 'xl'));
+    // A new object: the view remakes a bubble whose radius changed.
+    expect(g.nodes.get('a')).not.toBe(before);
+    expect(g.nodes.get('a')?.size).toBe('xl');
+    expect(g.transaction({ key: 't.same' }, (tx) => tx.size('a', 'xl'))).toBeNull();
+    g.undo();
+    expect(g.nodes.get('a')?.size).toBeNull();
+  });
+
+  it('a copy starts a step: it is not amended into one', () => {
+    const g = new Graph();
+    const a = node('a');
+    g.transaction({ key: 't' }, (tx) => tx.add(a));
+    expect(() => g.amend((tx) => tx.copy({ ...a, id: 'b' }, 'a'))).toThrow();
+    expect(g.nodes.has('b')).toBe(false);
+    g.transaction({ key: 't.copy' }, (tx) => tx.copy({ ...a, id: 'b' }, 'a'));
+    expect(g.nodes.has('b')).toBe(true);
+  });
+});
+
 describe('ids and seed', () => {
   it('makes time-ordered 26-character ids', () => {
     const a = newId(1_760_000_000_000);

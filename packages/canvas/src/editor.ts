@@ -2020,18 +2020,23 @@ export class Editor {
     });
   }
 
+  /**
+   * `Alt`+drag (06 §12.1): copies the cursor takes at once, under ids of
+   * their own; the core copies the rest of each — content, fields, all
+   * inside — under the same id.
+   */
   private copyNodes(ids: string[]): string[] {
-    const copies: GraphNode[] = [];
+    const copies: [GraphNode, string][] = [];
     const map = new Map<string, string>();
     for (const id of ids) {
       const n = this.graph.nodes.get(id);
-      if (!n) continue;
+      if (!n || n.ghostOf) continue;
       const copy = { ...n, id: newId() };
       map.set(id, copy.id);
-      copies.push(copy);
+      copies.push([copy, id]);
     }
     this.graph.transaction({ key: 'proto.change.copy', params: { n: copies.length } }, (tx) => {
-      for (const c of copies) tx.add(c);
+      for (const [c, of] of copies) tx.copy(c, of);
       // Wires between copied nodes are copied too (06 §12.1).
       for (const [a, b] of this.graph.edges()) {
         const ca = map.get(a);
@@ -2039,7 +2044,7 @@ export class Editor {
         if (ca && cb) tx.connect(ca, cb);
       }
     });
-    return copies.map((c) => c.id);
+    return copies.map(([c]) => c.id);
   }
 
   private sourcesFor(id: string): string[] {

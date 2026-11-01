@@ -1252,6 +1252,54 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
+/* The bubbles' size in this network (06 §4.2): the label's column as wide
+   as the longest language has it, the choices one strip; the one the node
+   has stays pressed in, as in Windows 98 (07 §8.2). */
+.icon-size {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  padding: calc(3 * var(--u)) calc(4 * var(--u)) 0;
+}
+
+.icon-size-label {
+  flex: none;
+  width: 8ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+.icon-size-choices {
+  display: flex;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.icon-size-choice {
+  width: 5ch;
+  padding: 0;
+}
+
+.icon-size-choice.is-auto {
+  width: 8ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.icon-size-choice + .icon-size-choice {
+  border-left: 0;
+}
+
+.icon-size-choice[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
 /* The query and, beside it, the kind's icon that takes a preset back. */
 .icon-palette-top {
   display: flex;

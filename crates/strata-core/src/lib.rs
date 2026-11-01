@@ -39,10 +39,10 @@ pub use store::{MemoryStore, Status, Store, StoreError, StoredDoc};
 pub use strata_model as model;
 pub use strata_model::Flag;
 pub use workspace::{
-    Attrs, CoreError, Edited, ExternalWire, Fold, History, ImportBatch, ImportCounts, ImportItem,
-    ImportOptions, ImportProgress, ImportReport, ImportShadow, LinkTarget, LinkTargets, Linked,
-    NetworkView, NodeDetails, Person, Place, Placeable, PlannedImport, Prop, ReadyBatch, Staying,
-    TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
+    Attrs, CopyAt, CoreError, Edited, ExternalWire, Fold, History, ImportBatch, ImportCounts,
+    ImportItem, ImportOptions, ImportProgress, ImportReport, ImportShadow, LinkTarget, LinkTargets,
+    Linked, NetworkView, NodeDetails, Person, Place, Placeable, PlannedImport, Prop, ReadyBatch,
+    Staying, TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

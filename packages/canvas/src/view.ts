@@ -1,4 +1,4 @@
-import type { Graph, GraphNode, Rollup } from '@strata/backend';
+import type { Graph, GraphNode, NodeSize, Rollup } from '@strata/backend';
 import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-tokens';
 import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
@@ -44,8 +44,14 @@ interface Tween {
   start: number;
 }
 
-/** Radius of a bubble: networks M, other kinds S, key nodes one step up (07 §4.2). */
-export function radiusOf(node: Pick<GraphNode, 'kind' | 'key'>): number {
+/**
+ * Radius of a bubble: networks M, other kinds S, key nodes one step up
+ * (07 §4.2); a size set by hand on the placement wins over the rules (06 §4.2).
+ */
+export function radiusOf(
+  node: Pick<GraphNode, 'kind' | 'key'> & { size?: NodeSize | null | undefined },
+): number {
+  if (node.size) return SIZE[node.size] / 2;
   const base = node.kind === 'network' || node.kind === 'project' ? 'm' : 's';
   const d = node.key ? (base === 'm' ? SIZE.l : SIZE.m) : SIZE[base];
   return d / 2;
@@ -724,8 +730,13 @@ export class CanvasView {
         continue;
       }
       if (v.node !== node) {
-        // The «soon» halo is made with the view: a deadline change remakes it.
-        if (v.node.due !== node.due || v.node.icon !== node.icon) {
+        // The «soon» halo and the sprites' scales are made with the view: a
+        // deadline, icon or radius change remakes it.
+        if (
+          v.node.due !== node.due ||
+          v.node.icon !== node.icon ||
+          radiusOf(v.node) !== radiusOf(node)
+        ) {
           v.body.destroy();
           v.icon.destroy();
           v.halo?.destroy();

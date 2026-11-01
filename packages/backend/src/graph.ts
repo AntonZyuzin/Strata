@@ -38,6 +38,9 @@ export interface Fold {
   burning: 'soon' | 'overdue' | null;
 }
 
+/** Bubble sizes by hand (06 §4.2): S 32 · M 48 · L 72 · XL 108. */
+export type NodeSize = 's' | 'm' | 'l' | 'xl';
+
 export interface GraphNode {
   id: string;
   name: string;
@@ -74,6 +77,8 @@ export interface GraphNode {
   /** Placement in this network, world units (05 §9.2). */
   x: number;
   y: number;
+  /** Its bubble's size in this network, set by hand (06 §4.2); null — by the rules. */
+  size: NodeSize | null;
   /** The fields as the core keeps them (05 §6.1); the look fields above follow them. */
   attrs: NodeAttrs;
 }
@@ -128,6 +133,7 @@ export function newNode(
     color: null,
     fold: null,
     attrs: {},
+    size: null,
     ...base,
   };
 }
@@ -209,13 +215,16 @@ export function flagsOf(node: GraphNode): Flag[] {
 }
 
 export type Op =
-  | { t: 'add'; node: GraphNode }
+  /** `copyOf`: a copy of that node, made by the core with all it holds (06 §12.1). */
+  | { t: 'add'; node: GraphNode; copyOf?: string }
   /**
    * The node leaves this network (05 §5): «Убрать отсюда», its placement
    * here goes; `everywhere` — «Удалить везде», the node goes to the trash.
    */
   | { t: 'remove'; id: string; everywhere?: boolean }
   | { t: 'move'; id: string; x: number; y: number }
+  /** Its bubble's size here (06 §4.2); null — by the rules. */
+  | { t: 'size'; id: string; size: NodeSize | null }
   | { t: 'connect'; from: string; to: string }
   | { t: 'disconnect'; from: string; to: string }
   | { t: 'rename'; id: string; name: string }
@@ -278,9 +287,17 @@ export const UNDO_DEPTH = 200;
 /** Collects operations of one gesture; every call applies at once and records its inverse. */
 export interface Tx {
   add(node: GraphNode): void;
+  /**
+   * A copy of node `of` (06 §12.1), as `node` shows it here: the core copies
+   * the rest — content, fields, everything inside — under `node`'s id. The
+   * first step of a gesture, never an amended one.
+   */
+  copy(node: GraphNode, of: string): void;
   /** Out of this network (05 §5); `everywhere` — to the trash, from every network. */
   remove(id: string, everywhere?: boolean): void;
   move(id: string, x: number, y: number): void;
+  /** Its bubble's size in this network (06 §4.2); null — by the rules. */
+  size(id: string, size: NodeSize | null): void;
   /** 05 §8.2 rule 2: no self-loop, at most one wire per ordered pair. False when skipped. */
   connect(from: string, to: string): boolean;
   disconnect(from: string, to: string): boolean;
@@ -400,6 +417,11 @@ export class Graph {
       add: (node) => {
         run({ t: 'add', node: { ...node } });
       },
+      copy: (node, of) => {
+        // The core's copy is a step of its own (06 §12.1): it starts a gesture.
+        if (amend) throw new Error('a copy starts a step, it does not amend one');
+        run({ t: 'add', node: { ...node }, copyOf: of });
+      },
       remove: (id, everywhere) => {
         // A note's ghosts go with it (05 §8.5), and come back with it.
         const ghosts = this.outputs(id).filter((o) => this.nodes.get(o)?.ghostOf === id);
@@ -411,6 +433,9 @@ export class Graph {
       },
       move: (id, x, y) => {
         run({ t: 'move', id, x, y });
+      },
+      size: (id, size) => {
+        run({ t: 'size', id, size });
       },
       connect: (from, to) => run({ t: 'connect', from, to }),
       disconnect: (from, to) => run({ t: 'disconnect', from, to }),
@@ -614,6 +639,13 @@ export class Graph {
           if (g?.ghostOf === op.id) Object.assign(g, ghostSpot(node, g.name));
         }
         return [back];
+      }
+      case 'size': {
+        const node = this.nodes.get(op.id);
+        if (!node || node.ghostOf !== null || node.size === op.size) return null;
+        // A new object: the view remakes a node whose radius changed.
+        this.nodes.set(op.id, { ...node, size: op.size });
+        return [{ t: 'size', id: op.id, size: node.size }];
       }
       case 'rename': {
         const node = this.nodes.get(op.id);

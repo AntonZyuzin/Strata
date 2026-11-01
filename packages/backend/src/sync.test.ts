@@ -53,6 +53,7 @@ const node = (id: string, name: string, x = 0, y = 0) =>
 const A = '01K8A0000000000000000000AA';
 const B = '01K8A0000000000000000000BB';
 const C = '01K8A0000000000000000000CC';
+const D = '01K8A0000000000000000000DD';
 
 describe('the canvas and the core in step', () => {
   it('repeats gestures, their rest, undo and redo in the core', async () => {
@@ -92,6 +93,66 @@ describe('the canvas and the core in step', () => {
     await sync.settled();
     expect(g.wireShape).toBe('straight');
     expect((await home.core.view(root)).wire_style).toBe('straight');
+    expect(errors).toEqual([]);
+  });
+
+  it("keeps a bubble's size in its placement, one step of undo each (06 §4.2)", async () => {
+    const { home, root, g, sync, errors } = await start();
+    g.transaction({ key: 't.create' }, (tx) => tx.add(node(A, 'Идея')));
+    g.transaction({ key: 'change.size' }, (tx) => tx.size(A, 'l'));
+    g.transaction({ key: 'change.size' }, (tx) => tx.size(A, 'xl'));
+    await sync.settled();
+    const sizeInCore = async () =>
+      (await home.core.view(root)).nodes.find((n) => n.id === A)?.size ?? null;
+    expect(await sizeInCore()).toBe('xl');
+    expect(graphOf(await home.core.view(root), () => 0).nodes.get(A)?.size).toBe('xl');
+    g.undo();
+    await sync.settled();
+    expect([g.nodes.get(A)?.size, await sizeInCore()]).toEqual(['l', 'l']);
+    g.undo();
+    await sync.settled();
+    expect([g.nodes.get(A)?.size, await sizeInCore()]).toEqual([null, null]);
+    expect(errors).toEqual([]);
+  });
+
+  it('makes an Alt+drag copy in the core: its text, fields and size, under its id (06 §12.1)', async () => {
+    const { home, root, g, sync, errors } = await start();
+    g.transaction({ key: 't.create' }, (tx) => {
+      tx.add(newNode({ id: A, name: 'Задача', kind: 'task', icon: 0, x: 0, y: 0 }));
+      tx.add(node(B, 'Цель', 200, 0));
+      tx.connect(A, B);
+      tx.attr(A, 'status', 'doing');
+      tx.size(A, 'l');
+    });
+    await sync.settled();
+    const doc = new LoroDoc();
+    doc.import(await home.core.openDoc(`content/${A}`));
+    doc.getText('text').insert(0, 'Описание');
+    doc.commit();
+    await home.core.pushDoc(`content/${A}`, doc.export({ mode: 'update' }));
+    // As the editor makes them: copies under ids of its own, the wire between them.
+    const [a, b] = [g.nodes.get(A), g.nodes.get(B)];
+    if (!a || !b) throw new Error('no nodes');
+    g.transaction({ key: 'proto.change.copy' }, (tx) => {
+      tx.copy({ ...a, id: C, x: 0, y: 300 }, A);
+      tx.copy({ ...b, id: D, x: 200, y: 300 }, B);
+      tx.connect(C, D);
+    });
+    // The drag goes on into the same step.
+    g.amend((tx) => tx.move(C, 10, 310));
+    await sync.settled();
+    const view = await home.core.view(root);
+    expect(view.nodes.find((n) => n.id === C)).toMatchObject({ x: 10, y: 310, size: 'l' });
+    expect(view.edges.map((e) => `${e.from}→${e.to}`).sort()).toEqual([`${A}→${B}`, `${C}→${D}`]);
+    expect((await home.core.node(C)).status).toBe('doing');
+    const copied = new LoroDoc();
+    copied.import(await home.core.openDoc(`content/${C}`));
+    expect(copied.getText('text').toString()).toBe('Описание');
+    // One step of undo in both.
+    g.undo();
+    await sync.settled();
+    expect((await home.core.view(root)).nodes.map((n) => n.id).sort()).toEqual([A, B]);
+    expect(ofView(await home.core.view(root))).toEqual(ofGraph(g));
     expect(errors).toEqual([]);
   });
 

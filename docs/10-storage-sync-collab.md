@@ -140,8 +140,8 @@ edgeOrigin: LoroMap<`${EdgeId}|${'manual' | 'text' | 'import'}`, { at: Ts }>
 ```ts
 // net/{nodeId} — LoroDoc (05 §9.2). Ключ NodeId равнозначен размещению `${netId}/${nodeId}`
 pos:       LoroMap<NodeId, [x: number, y: number]>   // LWW на пару
-size:      LoroMap<NodeId, 'S' | 'M' | 'L' | 'XL'>
-collapsed: LoroMap<NodeId, boolean>
+size:      LoroMap<NodeId, 's' | 'm' | 'l' | 'xl'>     // ручной размер бабла (06 §4.2); нет ключа — по правилам
+collapsed: LoroMap<NodeId, boolean>                   // ☑ Q-05-10: без интерфейса до MVP+ 1.3
 pinned:    LoroMap<NodeId, boolean>                   // 05 §9.2: позиция закреплена; L, A+drag и раздвигание соседей её не трогают
 dot:       LoroMap<DotId, { x: number; y: number; pinned: boolean }>
 route:     LoroMap<EdgeId, { dots: DotId[]; style?: EdgeStyle; bend?: number }>   // bend — ручной изгиб нити (05 §9.2)

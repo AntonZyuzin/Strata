@@ -5,7 +5,18 @@
  * for the home screen (✅ Q-16-12).
  */
 
-import type { ChangeLabel, NodeKind } from './graph';
+import type { ChangeLabel, NodeKind, NodeSize } from './graph';
+
+/** A node to copy and where its copy goes (06 §12.1). */
+export interface CopyAt {
+  id: string;
+  x: number;
+  y: number;
+  /** The size its bubble has by hand where it was copied (06 §4.2): the copy keeps it. */
+  size?: NodeSize | undefined;
+  /** The id the copy takes: the canvas's own for an `Alt`+drag copy. */
+  copy?: string | undefined;
+}
 
 /** Statuses of a workspace (05 §6.1), in order; the last two are final. */
 export const STATUSES = ['inbox', 'todo', 'doing', 'review', 'done', 'cancelled'] as const;
@@ -155,7 +166,9 @@ export type CoreOp =
   /** A flag set or cleared (05 §7). */
   | { op: 'setFlag'; id: string; flag: Flag; on: boolean }
   /** The network's wire style (05 §9.2, 06 §6.2); null — Bézier. */
-  | { op: 'setWireStyle'; net: string; style: WireShape | null };
+  | { op: 'setWireStyle'; net: string; style: WireShape | null }
+  /** A bubble's size in network `net`, set by hand (06 §4.2); null — by the rules. */
+  | { op: 'setSize'; id: string; net: string; size: NodeSize | null };
 
 export type CoreRequest =
   | { call: 'workspace' }
@@ -172,7 +185,7 @@ export type CoreRequest =
     }
   | {
       call: 'copyNodes';
-      nodes: { id: string; x: number; y: number }[];
+      nodes: CopyAt[];
       net: string;
       label: ChangeLabel;
     }
@@ -359,6 +372,8 @@ export interface ViewNode extends NodeAttrs {
   external?: number;
   /** This placement is not its primary one: an appearance (05 §5). */
   appearance?: boolean;
+  /** Its bubble's size here, set by hand (06 §4.2). */
+  size?: NodeSize;
   /** The networks it is placed in, this one among them: «×N» (06 §12.2). */
   places?: number;
 }
@@ -670,10 +685,11 @@ export class Core {
 
   /**
    * Copies of nodes in `net`, each at its point, everything inside them too:
-   * `Ctrl+C` → `Ctrl+V` (06 §12.1). One step of undo; the copies' ids back.
+   * `Ctrl+C` → `Ctrl+V`, `Ctrl+D`, `Alt`+drag (06 §12.1). One step of undo;
+   * the copies' ids back.
    */
   async copyNodes(
-    nodes: { id: string; x: number; y: number }[],
+    nodes: CopyAt[],
     net: string,
     label: ChangeLabel,
   ): Promise<{ ids: string[]; history: History }> {

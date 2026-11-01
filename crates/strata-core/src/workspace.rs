@@ -255,6 +255,28 @@ pub struct ViewNode {
     /// The networks it is placed in, this one among them: «×N» (06 §12.2).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub places: u32,
+    /// Its bubble's size here, set by hand (06 §4.2); none — by the rules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+}
+
+/// Bubble sizes a placement may be given by hand (06 §4.2: S 32 · M 48 · L 72 · XL 108).
+const SIZES: [&str; 4] = ["s", "m", "l", "xl"];
+
+/// A node to copy and where its copy goes (06 §12.1).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct CopyAt {
+    pub id: String,
+    pub x: f64,
+    pub y: f64,
+    /// The size its bubble has by hand where it was copied (06 §4.2): the
+    /// copy keeps it, as it keeps the node's colour and icon.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<String>,
+    /// The id the copy takes: the canvas's own for an `Alt`+drag copy, which
+    /// it moves before the core answers. None — a new one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub copy: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -1076,9 +1098,13 @@ impl<S: Store> Workspace<S> {
                 Op::CreateNode { net, .. }
                 | Op::Move { net, .. }
                 | Op::Place { net, .. }
-                | Op::Relocate { to: net, .. }
+                | Op::SetSize { net, .. }
                 | Op::SetWireStyle { net, .. } => {
                     self.ensure_doc(&format!("net/{net}"))?;
+                }
+                Op::Relocate { from, to, .. } => {
+                    self.ensure_doc(&format!("net/{from}"))?;
+                    self.ensure_doc(&format!("net/{to}"))?;
                 }
                 _ => {}
             }
@@ -1181,6 +1207,8 @@ impl<S: Store> Workspace<S> {
                         Some(Val::map([("at", Val::Int(ts))])),
                     );
                     put(&format!("net/{net}"), "pos", &n.to_text(), at_xy(*x, *y));
+                    // A new placement: its size by the rules, not one left from an old one.
+                    put(&format!("net/{net}"), "size", &n.to_text(), None);
                     ov.placed.insert((target, n), Some(ts));
                 }
                 Op::Unplace { id, net } => {
@@ -1259,6 +1287,17 @@ impl<S: Store> Workspace<S> {
                         None,
                     );
                     ov.placed.insert((src, n), None);
+                    // A size set by hand goes with the placement (06 §4.2).
+                    let size = self
+                        .docs
+                        .get(&format!("net/{from}"))
+                        .and_then(|d| read(d, "size", &n.to_text()));
+                    if size.is_some() {
+                        put(&format!("net/{from}"), "size", &n.to_text(), None);
+                        if !there {
+                            put(&format!("net/{to}"), "size", &n.to_text(), size);
+                        }
+                    }
                     // Already there (05 §5): the one there keeps its place.
                     if !there {
                         // The same placement, moved: it keeps its age (10 §8.5).
@@ -1566,6 +1605,25 @@ impl<S: Store> Workspace<S> {
                         "flag",
                         &format!("{}|{}", n.to_text(), flag.as_str()),
                         on.then_some(Val::Int(1)),
+                    );
+                }
+                Op::SetSize { id, net, size } => {
+                    let parent = match self.parse(net) {
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => p,
+                        _ => self.network(net)?,
+                    };
+                    let n = self.parse(id)?;
+                    if self.placed_now(&ov, parent, n).is_none() {
+                        return Err(invalid(format!("node {id} is not placed in {net}")));
+                    }
+                    if size.as_deref().is_some_and(|s| !SIZES.contains(&s)) {
+                        return Err(invalid("a bubble's size is s, m, l or xl (06 §4.2)"));
+                    }
+                    put(
+                        &format!("net/{net}"),
+                        "size",
+                        &n.to_text(),
+                        size.as_deref().map(Val::str),
                     );
                 }
                 Op::SetWireStyle { net, style } => {
@@ -2331,40 +2389,53 @@ impl<S: Store> Workspace<S> {
         inputs: &[String],
         label: Label,
     ) -> Result<String> {
-        let tops = self.copy_nodes(&[(from.to_owned(), x, y)], net, inputs, label)?;
+        let at = CopyAt {
+            id: from.to_owned(),
+            x,
+            y,
+            ..CopyAt::default()
+        };
+        let tops = self.copy_nodes(&[at], net, inputs, label)?;
         Ok(tops.into_iter().next().unwrap_or_default())
     }
 
     /// Copies of nodes, each at its point in `net`, as [`Self::copy_node`]
-    /// makes one: `Ctrl+C` → `Ctrl+V` (05 §5 «Копировать», 06 §12.1). The
-    /// hand-drawn wires between them come along; `inputs` wire into each.
-    /// One step of undo; the copies' ids back, in the order of `from`.
+    /// makes one: `Ctrl+C` → `Ctrl+V`, `Ctrl+D`, `Alt`+drag (05 §5
+    /// «Копировать», 06 §12.1). The hand-drawn wires between them come
+    /// along; `inputs` wire into each. Bubbles keep their sizes by hand: a
+    /// top one the size `from` gives, one inside a copied network its own
+    /// there (06 §4.2). One step of undo; the copies' ids back, in the
+    /// order of `from`.
     pub fn copy_nodes(
         &mut self,
-        from: &[(String, f64, f64)],
+        from: &[CopyAt],
         net: &str,
         inputs: &[String],
         label: Label,
     ) -> Result<Vec<String>> {
         let target = self.network(net)?;
         let children = self.children();
-        // Source, copy, the copy's network and position; parents before children.
-        let mut copies: Vec<(NodeId, NodeId, String, f64, f64)> = Vec::new();
+        // Source, copy, the copy's network, position and size; parents before children.
+        let mut copies: Vec<(NodeId, NodeId, String, f64, f64, Option<String>)> = Vec::new();
         let mut stack = Vec::new();
         let mut sources = Vec::new();
-        for (id, x, y) in from {
-            let source = self.live(id)?;
+        for at in from {
+            let source = self.live(&at.id)?;
             if sources.contains(&source) {
                 continue;
             }
-            let top = NodeId::new();
-            copies.push((source, top, net.to_owned(), *x, *y));
+            let top = match &at.copy {
+                Some(id) => self.parse(id)?,
+                None => NodeId::new(),
+            };
+            copies.push((source, top, net.to_owned(), at.x, at.y, at.size.clone()));
             stack.push((source, top));
             sources.push(source);
         }
         let tops: Vec<NodeId> = copies.iter().map(|c| c.1).collect();
-        // Appearances inside stay appearances of the same nodes (05 §5): (node, copy's network, x, y).
-        let mut appear: Vec<(NodeId, NodeId, f64, f64)> = Vec::new();
+        // Appearances inside stay appearances of the same nodes (05 §5):
+        // (node, copy's network, x, y, size).
+        let mut appear: Vec<(NodeId, NodeId, f64, f64, Option<String>)> = Vec::new();
         while let Some((s, d)) = stack.pop() {
             if !self.kind(s).is_some_and(NodeKind::has_canvas) {
                 continue;
@@ -2382,24 +2453,26 @@ impl<S: Store> Workspace<S> {
                     ),
                     _ => (0.0, 0.0),
                 };
+                let size = read(&self.docs[&doc], "size", &child.to_text())
+                    .and_then(|v| v.as_str().map(str::to_owned));
                 // What lives here is copied; an appearance of a node elsewhere
                 // appears in the copy too, unless it would lie in itself (05 §5).
                 if self.primary_of(child) != Some(s) {
                     let network = self.kind(child).is_some_and(NodeKind::has_canvas);
                     let looped = network && (child == target || self.inside(target, child));
                     if !looped {
-                        appear.push((child, d, px, py));
+                        appear.push((child, d, px, py, size));
                     }
                     continue;
                 }
                 let copy = NodeId::new();
-                copies.push((child, copy, d.to_text(), px, py));
+                copies.push((child, copy, d.to_text(), px, py, size));
                 stack.push((child, copy));
             }
         }
         let made: HashMap<NodeId, NodeId> = copies.iter().map(|c| (c.0, c.1)).collect();
         let mut ops = Vec::new();
-        for (s, d, parent, px, py) in &copies {
+        for (s, d, parent, px, py, size) in &copies {
             let id = d.to_text();
             let kind = self.kind(*s).unwrap_or(NodeKind::Note);
             ops.push(Op::CreateNode {
@@ -2410,6 +2483,13 @@ impl<S: Store> Workspace<S> {
                 x: *px,
                 y: *py,
             });
+            if size.is_some() {
+                ops.push(Op::SetSize {
+                    id: id.clone(),
+                    net: parent.clone(),
+                    size: size.clone(),
+                });
+            }
             let a = self.attrs(*s);
             let text = |key: &str, v: Option<String>| {
                 v.map(|v| Op::SetAttr {
@@ -2471,13 +2551,20 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
-        for &(node, copy, px, py) in &appear {
+        for (node, copy, px, py, size) in &appear {
             ops.push(Op::Place {
                 id: node.to_text(),
                 net: copy.to_text(),
-                x: px,
-                y: py,
+                x: *px,
+                y: *py,
             });
+            if size.is_some() {
+                ops.push(Op::SetSize {
+                    id: node.to_text(),
+                    net: copy.to_text(),
+                    size: size.clone(),
+                });
+            }
         }
         // An appearance is the same node in the copy: its wires to the copies come too.
         let mut ends = made.clone();
@@ -2727,6 +2814,7 @@ impl<S: Store> Workspace<S> {
                 _ => (0.0, 0.0),
             };
             let kind = self.kind(node).unwrap_or(NodeKind::Note);
+            let size = read(pos, "size", id).and_then(|v| v.as_str().map(str::to_owned));
             nodes.push(ViewNode {
                 id: id.clone(),
                 kind,
@@ -2738,6 +2826,7 @@ impl<S: Store> Workspace<S> {
                 external: 0,
                 appearance: false,
                 places: 0,
+                size,
             });
         }
         let (external, rollups) = self.beyond(&nodes, &wires);

@@ -6,6 +6,7 @@ use crate::changeset::{Label, RevertReport};
 use crate::ops::Op;
 use crate::store::Store;
 use crate::vault::{Vault, VaultFile};
+pub use crate::workspace::CopyAt;
 use crate::workspace::{
     Edited, ExternalWire, History, ImportOptions, ImportProgress, LinkTargets, NetworkView,
     NodeDetails, Person, Placeable, TrashItem, TrashPreview, TreeItem, WireEnds, Workspace,
@@ -147,14 +148,6 @@ pub enum Request {
     },
 }
 
-/// A node to copy and where its copy goes.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct CopyAt {
-    pub id: String,
-    pub x: f64,
-    pub y: f64,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Response {
@@ -289,9 +282,7 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 history: ws.history(),
             }),
         Request::CopyNodes { nodes, net, label } => {
-            let from: Vec<(String, f64, f64)> =
-                nodes.into_iter().map(|n| (n.id, n.x, n.y)).collect();
-            ws.copy_nodes(&from, &net, &[], label)
+            ws.copy_nodes(&nodes, &net, &[], label)
                 .map(|ids| Response::CopiedMany {
                     ids,
                     history: ws.history(),

@@ -131,6 +131,15 @@ pub enum Op {
         #[serde(default)]
         style: Option<WireStyle>,
     },
+    /// The size of node `id`'s bubble in network `net`, set by hand: `s`,
+    /// `m`, `l` or `xl` (05 §9.2, 06 §4.2) — this placement's own, so a node
+    /// is big in one project and small in another; `null` — by the rules.
+    SetSize {
+        id: String,
+        net: String,
+        #[serde(default)]
+        size: Option<String>,
+    },
 }
 
 /// How a network draws its wires (06 §6.2): a segment, an S-curve, an

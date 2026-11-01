@@ -24,6 +24,7 @@ import {
   type NetworkView,
   type NodeDetails,
   type NodeKind,
+  type NodeSize,
   newId,
   newNode,
   type Opened,
@@ -127,11 +128,14 @@ interface Camera {
   zoom: number;
 }
 
-/** Nodes cut or copied for `Ctrl+V` (06 §12.1): the network they lay in, where each stood. */
+/**
+ * Nodes cut or copied for `Ctrl+V` (06 §12.1): the network they lay in,
+ * where each stood and its size there by hand (06 §4.2), which a copy keeps.
+ */
 interface Clip {
   cut: boolean;
   net: string;
-  nodes: { id: string; name: string; x: number; y: number }[];
+  nodes: { id: string; name: string; x: number; y: number; size: NodeSize | undefined }[];
 }
 
 /** Where a node made on the star map goes (08 §6.4). */
@@ -609,7 +613,9 @@ export function WorkspaceScreen(props: {
         if (!g) return;
         const nodes = e.ids.flatMap((id) => {
           const n = g.nodes.get(id);
-          return n && !n.ghostOf ? [{ id, name: n.name, x: n.x, y: n.y }] : [];
+          return n && !n.ghostOf
+            ? [{ id, name: n.name, x: n.x, y: n.y, size: n.size ?? undefined }]
+            : [];
         });
         if (nodes.length === 0) return;
         clipRef.current = { cut: e.cut, net: netRef.current, nodes };
@@ -1064,7 +1070,14 @@ export function WorkspaceScreen(props: {
         const nodes = ids.flatMap((id) => {
           const n = g.nodes.get(id);
           return n && !n.ghostOf
-            ? [{ id, x: n.x + DUPLICATE_SHIFT, y: n.y + DUPLICATE_SHIFT }]
+            ? [
+                {
+                  id,
+                  x: n.x + DUPLICATE_SHIFT,
+                  y: n.y + DUPLICATE_SHIFT,
+                  size: n.size ?? undefined,
+                },
+              ]
             : [];
         });
         if (nodes.length === 0) return;
@@ -1093,7 +1106,7 @@ export function WorkspaceScreen(props: {
         const ids = nodes.map((n) => n.id);
         if (!c.cut && !appearance) {
           const { ids: made } = await core.copyNodes(
-            nodes.map(({ id, x, y }) => ({ id, x, y })),
+            nodes.map(({ id, x, y, size }) => ({ id, x, y, size })),
             net,
             { key: 'proto.change.copy', params: { n: nodes.length } },
           );
@@ -1998,6 +2011,21 @@ export function WorkspaceScreen(props: {
     const value = preset === null ? null : `${PRESET}${preset}`;
     g.transaction({ key: 'change.icon', params: { n: nodes.length } }, (tx) => {
       for (const id of nodes) tx.attr(id, 'icon', value);
+    });
+  };
+
+  /** The bubbles' size in this network (06 §4.2): by hand, or null — by the rules. One step. */
+  const setSize = (ids: readonly string[], size: NodeSize | null) => {
+    const g = graph.current;
+    if (!g) return;
+    // A ghost is the canvas's own: it has no placement to size (05 §8.5).
+    const nodes = ids.filter((id) => {
+      const n = g.nodes.get(id);
+      return n && n.ghostOf === null && n.size !== size;
+    });
+    if (nodes.length === 0) return;
+    g.transaction({ key: 'change.size', params: { n: nodes.length } }, (tx) => {
+      for (const id of nodes) tx.size(id, size);
     });
   };
 
@@ -3230,9 +3258,15 @@ export function WorkspaceScreen(props: {
           y={iconPick.y}
           bounds={seenBounds()}
           search={searchClient()}
+          size={g?.nodes.get(iconPick.ids[0] ?? '')?.size ?? null}
           onPick={(id) => {
             setIconPick(null);
             setIcon(iconPick.ids, id);
+            focusCanvas();
+          }}
+          onSize={(size) => {
+            setIconPick(null);
+            setSize(iconPick.ids, size);
             focusCanvas();
           }}
           onClose={() => {

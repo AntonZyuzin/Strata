@@ -26,6 +26,8 @@ interface Node {
   appearance: boolean;
   /** The networks it lies in. */
   places: number;
+  /** Its bubble's size here by hand (06 §4.2); null — by the rules. */
+  size: 's' | 'm' | 'l' | 'xl' | null;
   x: number;
   y: number;
 }
@@ -44,7 +46,8 @@ interface WsHook {
   };
   core: {
     tree(): Promise<{ id: string; name: string; parent?: string }[]>;
-    node(id: string): Promise<{ icon?: string }>;
+    node(id: string): Promise<{ icon?: string; status?: string }>;
+    view(net: string): Promise<{ nodes: { id: string; name: string; size?: string }[] }>;
   };
   editor(): {
     selected: string[];
@@ -120,6 +123,16 @@ const iconState = (page: Page, id: string) =>
     const icon = ws.graph()?.nodes.get(id)?.attrs.icon ?? null;
     const core = (await ws.core.node(id)).icon ?? null;
     return { shows: ws.view.iconOf(id), icon, core };
+  }, id);
+
+/** A node's bubble as drawn — its radius — and its size by hand on the canvas and in the core. */
+const sizeState = (page: Page, id: string) =>
+  page.evaluate(async (id) => {
+    const ws = window.__strataWs as WsHook;
+    await ws.settled();
+    const core = (await ws.core.view(ws.net())).nodes.find((n) => n.id === id)?.size ?? null;
+    const size = ws.graph()?.nodes.get(id)?.size ?? null;
+    return { r: ws.view.nodeAt(id)?.r ?? null, size, core };
   }, id);
 
 /** Screen point of a node's bubble in page px. */
@@ -953,12 +966,14 @@ for (const deviceScaleFactor of [1, 2]) {
         cell: await box(page, '.icon-palette .icon-cell:first-child'),
         footer: await box(page, '.icon-palette .icon-palette-footer'),
         kind: await box(page, '.icon-palette .icon-palette-top button'),
+        auto: await box(page, '.icon-palette .icon-size-choice.is-auto'),
+        xl: await box(page, '.icon-palette .icon-size-choice:last-child'),
       });
       await page.keyboard.press('Escape');
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['palette', 'cell', 'footer', 'kind'] as const) {
+    for (const part of ['palette', 'cell', 'footer', 'kind', 'auto', 'xl'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2965,6 +2980,139 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
     expect((await iconState(page, map)).core).toBe('game-icons/lorc/owl');
+  });
+
+  test('Z: a bubble takes a size by hand here and the rules back, one step each (06 §4.2)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Размеры');
+    await createNode(page, 460, 300, 'Карта');
+    await createNode(page, 760, 420, 'План');
+    const [map, plan] = [await idOf(page, 'Карта'), await idOf(page, 'План')];
+    // By the rules a note is S: 32, the radius 16.
+    expect(await sizeState(page, map)).toEqual({ r: 16, size: null, core: null });
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    const palette = page.locator('.icon-palette');
+    const choice = (name: string) =>
+      palette.locator('.icon-size').getByRole('button', { name, exact: true });
+    await expect(choice('Авто')).toHaveAttribute('aria-pressed', 'true');
+    await expect(choice('L')).toHaveAttribute('aria-pressed', 'false');
+    await expect(choice('L')).toHaveAttribute('title', 'Крупный — 72');
+    await choice('L').click();
+    await expect(palette).toHaveCount(0);
+    await expect.poll(() => sizeState(page, map)).toEqual({ r: 36, size: 'l', core: 'l' });
+    // The node's own is pressed in next time.
+    await page.keyboard.press('KeyZ');
+    await expect(choice('L')).toHaveAttribute('aria-pressed', 'true');
+    await expect(choice('Авто')).toHaveAttribute('aria-pressed', 'false');
+    await page.keyboard.press('Escape');
+    // One step of undo.
+    await page.keyboard.press('Control+z');
+    await expect.poll(() => sizeState(page, map)).toEqual({ r: 16, size: null, core: null });
+    // Both, by the menu's «Иконка и размер…»; «Авто» takes one back.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+a');
+    const p = await at(page, 'План');
+    await page.mouse.click(p.x, p.y, { button: 'right' });
+    await page.getByRole('menuitem', { name: 'Иконка и размер…' }).click();
+    await choice('XL').click();
+    for (const id of [map, plan]) {
+      await expect.poll(() => sizeState(page, id)).toEqual({ r: 54, size: 'xl', core: 'xl' });
+    }
+    await select(page, 'План');
+    await page.keyboard.press('KeyZ');
+    await choice('Авто').click();
+    await expect.poll(() => sizeState(page, plan)).toEqual({ r: 16, size: null, core: null });
+    expect((await sizeState(page, map)).core).toBe('xl');
+    // A copy keeps its size, `Ctrl+D` and `Alt`+drag alike (06 §12.1).
+    await select(page, 'Карта');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+d');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '3');
+    const copies = () =>
+      page.evaluate(async (orig) => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        const view = await ws.core.view(ws.net());
+        return view.nodes
+          .filter((n) => n.name === 'Карта' && n.id !== orig)
+          .map((n) => n.size ?? null);
+      }, map);
+    await expect.poll(copies).toEqual(['xl']);
+    const from = await at(page, 'План');
+    await page.keyboard.down('Alt');
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(from.x + 8, from.y + 8, { steps: 2 });
+    await page.mouse.move(from.x + 200, from.y + 120, { steps: 8 });
+    await page.mouse.up();
+    await page.keyboard.up('Alt');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '4');
+    await expect
+      .poll(async () => (await graphNow(page)).names.filter((n) => n === 'План').length)
+      .toBe(2);
+  });
+
+  test('Alt+drag copies in the core: the copy keeps its fields and size after a reload (06 §12.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Копии');
+    await createNode(page, 460, 300, 'Эскиз');
+    const sketch = await idOf(page, 'Эскиз');
+    await select(page, 'Эскиз');
+    await page.keyboard.press('KeyZ');
+    await page.locator('.icon-size').getByRole('button', { name: 'L', exact: true }).click();
+    await expect.poll(() => sizeState(page, sketch)).toEqual({ r: 36, size: 'l', core: 'l' });
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('KeyQ');
+    const ws = page.locator('.workspace');
+    const altDrag = async () => {
+      const from = await at(page, 'Эскиз');
+      await page.keyboard.down('Alt');
+      await page.mouse.move(from.x, from.y);
+      await page.mouse.down();
+      await page.mouse.move(from.x + 8, from.y + 8, { steps: 2 });
+      await page.mouse.move(from.x + 240, from.y + 160, { steps: 8 });
+      await page.mouse.up();
+      await page.keyboard.up('Alt');
+      await expect(ws).toHaveAttribute('data-nodes', '2');
+      await settled(page);
+    };
+    // One step of undo takes the copy back whole, the drag with it.
+    await altDrag();
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    await expect
+      .poll(() =>
+        page.evaluate(async () => {
+          const w = window.__strataWs as WsHook;
+          await w.settled();
+          return (await w.core.view(w.net())).nodes.length;
+        }),
+      )
+      .toBe(1);
+    await select(page, 'Эскиз');
+    await altDrag();
+    const copy = await page.evaluate((orig) => {
+      const g = window.__strataWs?.graph();
+      return [...(g?.nodes.values() ?? [])].find((n) => n.name === 'Эскиз' && n.id !== orig)?.id;
+    }, sketch);
+    if (!copy) throw new Error('no copy');
+    await expect.poll(() => sizeState(page, copy)).toEqual({ r: 36, size: 'l', core: 'l' });
+    // The network read again from the core: the copy is still paused and large.
+    await page.reload();
+    await expect(page.locator('.home-card')).toHaveCount(1);
+    await page.locator('.home-open').click();
+    await page.waitForFunction((id) => window.__strataWs?.graph()?.nodes.has(id) ?? false, copy);
+    await expect.poll(() => sizeState(page, copy)).toEqual({ r: 36, size: 'l', core: 'l' });
+    expect(
+      await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.pause, copy),
+    ).toBe(true);
   });
 
   test('«Показать все здесь» asks first past ten nodes (06 §14)', async ({ page }) => {

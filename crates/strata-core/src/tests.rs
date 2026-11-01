@@ -1,6 +1,6 @@
 //! The model's rules on the core (CLAUDE.md: every rule of 05 has a test).
 
-use crate::{Label, MemoryStore, Op, Store, Workspace};
+use crate::{CopyAt, Label, MemoryStore, Op, Store, Workspace};
 use strata_model::{NodeId, NodeKind};
 
 mod import;
@@ -2628,11 +2628,7 @@ fn copies_of_several_nodes_are_one_step() {
     .expect("wire");
     let ids = w
         .copy_nodes(
-            &[
-                (a.clone(), 10.0, 20.0),
-                (b.clone(), 30.0, 40.0),
-                (net.clone(), 0.0, 0.0),
-            ],
+            &[at(&a, 10.0, 20.0), at(&b, 30.0, 40.0), at(&net, 0.0, 0.0)],
             &net,
             &[],
             Label::new("t.copy"),
@@ -2841,4 +2837,211 @@ fn links_to_a_canvas_and_a_drawing_name_their_network_and_board() {
     let mut want = vec![net, board];
     want.sort();
     assert_eq!(outputs, want);
+}
+
+fn size_in(w: &mut Workspace<MemoryStore>, net: &str, id: &str) -> Option<String> {
+    w.network_view(net)
+        .expect("view")
+        .nodes
+        .into_iter()
+        .find(|n| n.id == id)
+        .and_then(|n| n.size)
+}
+
+/// A node to copy to (x, y), its size by the rules.
+fn at(id: &str, x: f64, y: f64) -> CopyAt {
+    CopyAt {
+        id: id.to_owned(),
+        x,
+        y,
+        ..CopyAt::default()
+    }
+}
+
+fn set_size(
+    w: &mut Workspace<MemoryStore>,
+    id: &str,
+    net: &str,
+    size: Option<&str>,
+) -> crate::workspace::Result<crate::Changeset> {
+    op(
+        w,
+        Op::SetSize {
+            id: id.to_owned(),
+            net: net.to_owned(),
+            size: size.map(str::to_owned),
+        },
+    )
+}
+
+#[test]
+fn a_bubbles_size_is_its_placements_own() {
+    // 05 §9.2, 06 §4.2: big in one project, small in another; by hand it is
+    // s, m, l or xl, and none — by the rules again.
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Project, "Игра");
+    let film = create(&mut w, &root, NodeKind::Project, "Фильм");
+    let refs = create(&mut w, &game, NodeKind::Note, "Референсы");
+    place(&mut w, &refs, &film).expect("an appearance");
+    set_size(&mut w, &refs, &game, Some("xl")).expect("XL in Игра");
+    assert_eq!(size_in(&mut w, &game, &refs).as_deref(), Some("xl"));
+    assert_eq!(size_in(&mut w, &film, &refs), None, "its own in Фильм");
+    // What is no size, and where it lies not, are refused.
+    assert!(set_size(&mut w, &refs, &game, Some("xxl")).is_err());
+    assert!(set_size(&mut w, &refs, &root, Some("s")).is_err());
+    // One step of undo each; none — by the rules.
+    w.undo().expect("undo");
+    assert_eq!(size_in(&mut w, &game, &refs), None);
+    w.redo().expect("redo");
+    set_size(&mut w, &refs, &game, None).expect("by the rules");
+    assert_eq!(size_in(&mut w, &game, &refs), None);
+}
+
+#[test]
+fn a_size_goes_with_its_placement_and_a_new_one_starts_by_the_rules() {
+    // 06 §4.2, 05 §5: «Перенести» moves the placement, its size with it; a
+    // placement made anew does not take a size left from an old one.
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Project, "Игра");
+    let archive = create(&mut w, &root, NodeKind::Network, "Архив");
+    let sketch = create(&mut w, &game, NodeKind::Note, "Эскиз");
+    set_size(&mut w, &sketch, &game, Some("l")).expect("L");
+    op(
+        &mut w,
+        Op::Relocate {
+            id: sketch.clone(),
+            from: game.clone(),
+            to: archive.clone(),
+            x: 1.0,
+            y: 2.0,
+        },
+    )
+    .expect("moved");
+    assert_eq!(size_in(&mut w, &archive, &sketch).as_deref(), Some("l"));
+    // Back in Игра as an appearance: by the rules there.
+    place(&mut w, &sketch, &game).expect("an appearance");
+    assert_eq!(size_in(&mut w, &game, &sketch), None);
+    // Moved where it lies already (05 §5): the one there keeps its own size.
+    set_size(&mut w, &sketch, &game, Some("xl")).expect("XL in Игра");
+    op(
+        &mut w,
+        Op::Relocate {
+            id: sketch.clone(),
+            from: game.clone(),
+            to: archive.clone(),
+            x: 5.0,
+            y: 6.0,
+        },
+    )
+    .expect("moved onto itself");
+    assert_eq!(size_in(&mut w, &archive, &sketch).as_deref(), Some("l"));
+    assert!(w.network_view(&game).expect("view").nodes.is_empty());
+}
+
+#[test]
+fn a_copy_keeps_the_sizes_it_was_copied_with() {
+    // 06 §4.2, §12.1: the copy looks as what it was copied from — the size
+    // its bubble had there, and inside a copied project each its own there.
+    let mut w = ws();
+    let root = w.root();
+    let game = create(&mut w, &root, NodeKind::Project, "Игра");
+    let sketch = create(&mut w, &game, NodeKind::Note, "Эскиз");
+    let shared = create(&mut w, &root, NodeKind::Note, "Общее");
+    place(&mut w, &shared, &game).expect("an appearance");
+    set_size(&mut w, &game, &root, Some("xl")).expect("XL");
+    set_size(&mut w, &sketch, &game, Some("l")).expect("L");
+    set_size(&mut w, &shared, &game, Some("m")).expect("M");
+    let top = CopyAt {
+        size: Some("xl".to_owned()),
+        ..at(&game, 300.0, 0.0)
+    };
+    let ids = w
+        .copy_nodes(
+            &[top, at(&sketch, 0.0, 300.0)],
+            &root,
+            &[],
+            Label::new("t.copy"),
+        )
+        .expect("copied");
+    let [copy, alone] = [&ids[0], &ids[1]];
+    assert_eq!(size_in(&mut w, &root, copy).as_deref(), Some("xl"));
+    assert_eq!(
+        size_in(&mut w, &root, alone),
+        None,
+        "by the rules: from gave none"
+    );
+    let inside = w.network_view(copy).expect("view").nodes;
+    let size_of = |name: &str| {
+        inside
+            .iter()
+            .find(|n| n.name == name)
+            .and_then(|n| n.size.clone())
+    };
+    assert_eq!(size_of("Эскиз").as_deref(), Some("l"));
+    assert_eq!(
+        size_of("Общее").as_deref(),
+        Some("m"),
+        "an appearance keeps its size too"
+    );
+    // A size that is none is refused before anything is made.
+    let bad = CopyAt {
+        size: Some("huge".to_owned()),
+        ..at(&sketch, 0.0, 0.0)
+    };
+    let before = names(&mut w, &root);
+    assert!(
+        w.copy_nodes(&[bad], &root, &[], Label::new("t.copy"))
+            .is_err()
+    );
+    assert_eq!(names(&mut w, &root), before);
+}
+
+#[test]
+fn a_copy_takes_the_id_the_canvas_gave_it() {
+    // 06 §12.1: an `Alt`+drag copy is moved on the canvas before the core
+    // answers; the core's copy — content, fields, all inside — takes its id.
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let task = create(&mut w, &root, NodeKind::Task, "Баг");
+    op(
+        &mut w,
+        Op::SetAttr {
+            id: task.clone(),
+            key: "status".to_owned(),
+            value: Some(Val::str("doing")),
+        },
+    )
+    .expect("status");
+    let id = NodeId::new().to_text();
+    let given = CopyAt {
+        copy: Some(id.clone()),
+        ..at(&task, 100.0, 0.0)
+    };
+    let ids = w
+        .copy_nodes(
+            std::slice::from_ref(&given),
+            &root,
+            &[],
+            Label::new("t.copy"),
+        )
+        .expect("copied");
+    assert_eq!(ids, std::slice::from_ref(&id));
+    let details = w.node_details(&id).expect("details");
+    assert_eq!(details.attrs.status.as_deref(), Some("doing"));
+    // An id taken already is refused: the canvas reads the network again.
+    assert!(
+        w.copy_nodes(&[given], &root, &[], Label::new("t.copy"))
+            .is_err()
+    );
+    w.undo().expect("undo");
+    assert!(
+        w.network_view(&root)
+            .expect("view")
+            .nodes
+            .iter()
+            .all(|n| n.id != id)
+    );
 }

@@ -22,7 +22,14 @@ import { Camera } from './camera';
 import { chainWires, touchAt } from './chain';
 import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
 import type { RimTarget } from './decor';
-import { onTheWay, RING_DELAY_MS, type RingSlot, ringSlots, slotAt } from './flagring';
+import {
+  onTheWay,
+  RING_DELAY_MS,
+  type RingSlot,
+  type RingSlotName,
+  ringSlots,
+  slotAt,
+} from './flagring';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { radiusOf } from './looks';
 import { Minimap } from './minimap';
@@ -494,7 +501,7 @@ export class Editor {
    * bubble under 32 px on screen, its flags' glyphs too small (07 §4.9); never.
    */
   ringMode: 'always' | 'far' | 'never' = 'always';
-  private ringSlot: Flag | null = null;
+  private ringSlot: RingSlotName | null = null;
   /** The rim mark under the cursor (06 §12.2, §14): the decor says what it is. */
   private markHover: { id: string; mark: RimTarget } | null = null;
   private selectedWire: [string, string] | null = null;
@@ -1213,7 +1220,13 @@ export class Editor {
     // when the bubble is in it; no press, no drag.
     const slot = this.slotUnder(sx, sy);
     if (slot && this.ring) {
-      this.switchFlag(slot.flag, this.flagTargets(this.ring.id));
+      // `i`: the bubble's info card kept, as `Shift+I` (06 §4.4).
+      if (slot.slot === 'info') {
+        this.endHoverCard();
+        this.showCard(this.ring.id, 'kept');
+      } else {
+        this.switchFlag(slot.slot, this.flagTargets(this.ring.id));
+      }
       return;
     }
     // A mark on the rim: «↗N» opens its list (06 §14), the shortcut of an
@@ -1248,7 +1261,7 @@ export class Editor {
       case 'idle': {
         // Over the flag ring the bubble keeps its hover and its ring.
         const slot = this.slotUnder(sx, sy);
-        this.ringSlot = slot?.flag ?? null;
+        this.ringSlot = slot?.slot ?? null;
         if (slot) {
           this.view.invalidate();
           return;

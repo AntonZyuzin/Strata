@@ -8,6 +8,7 @@ import { BackgroundLayer } from './background';
 import { between, Camera, FLIGHT_MS, type View } from './camera';
 import { controls, pointAt } from './curve';
 import { Decor, type DecorNode, type Interaction, type RimTarget } from './decor';
+import type { RingSlotName } from './flagring';
 import { hexPath } from './hex';
 import {
   createIconAtlas,
@@ -220,7 +221,7 @@ export class CanvasView {
   }
 
   /** A flag ring slot's name and key, shown over it on hover; see `Decor.flagWord`. */
-  set flagWord(word: (flag: 'key' | 'pause' | 'template') => string | null) {
+  set flagWord(word: (slot: RingSlotName) => string | null) {
     this.decor.flagWord = word;
     this.invalidate();
   }

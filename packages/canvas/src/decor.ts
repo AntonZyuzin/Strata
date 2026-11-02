@@ -4,7 +4,7 @@ import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
 import { controls } from './curve';
-import { FRAME_U, RING_DELAY_MS, ringSlots, SLOT_U } from './flagring';
+import { FRAME_U, RING_DELAY_MS, type RingSlotName, ringSlots, SLOT_U } from './flagring';
 import { chordOf, HEX_IN, hexDist, perimeterAngle, rimAt } from './hex';
 import {
   arrowOn,
@@ -41,7 +41,7 @@ export interface Interaction {
    * The flag ring (06 §8): the bubble the cursor rests on since `since`, and
    * the slot under it; hidden while `Ctrl` is held.
    */
-  ring?: { id: string; since: number; slot: Flag | null } | null;
+  ring?: { id: string; since: number; slot: RingSlotName | null } | null;
   /** The rim mark under the cursor: its words show over it (06 §12.2, §14). */
   mark?: { id: string; mark: RimTarget } | null;
 }
@@ -155,7 +155,7 @@ export class Decor {
   dueWord: (n: GraphNode) => string | null = () => null;
 
   /** A slot's name and key for the flag ring (06 §8), in the viewer's language. */
-  flagWord: (flag: 'key' | 'pause' | 'template') => string | null = () => null;
+  flagWord: (slot: RingSlotName) => string | null = () => null;
 
   /** What a rim mark says, in the viewer's language: the canvas has no titles. */
   markWord: (mark: RimTarget, n: GraphNode) => string | null = () => null;
@@ -519,23 +519,16 @@ export class Decor {
         // A 16u slot: the 8u glyph with a 4u margin; a flag that is on inverts it.
         const pad = (SLOT_U - 8) / 2;
         for (const slot of ringSlots(ringAt.x, ringAt.y, ringAt.R, U)) {
-          const flag = slot.flag;
-          this.badge(
-            RING_GLYPH[flag],
-            on[flag] ? 'paper' : 'ink',
-            slot.x,
-            slot.y,
-            1,
-            1,
-            !on[flag],
-            pad,
-          );
-          if (ring.slot === flag) {
+          const name = slot.slot;
+          // `i` is a button, not a flag: never inverted.
+          const lit = name !== 'info' && on[name];
+          this.badge(RING_GLYPH[name], lit ? 'paper' : 'ink', slot.x, slot.y, 1, 1, !lit, pad);
+          if (ring.slot === name) {
             const half = (SLOT_U / 2 + 1) * U;
             g.rect(slot.x - half, slot.y - half, 2 * half, 2 * half);
             corners = true;
             // The slot's name and key over it, as a title in the Chrome.
-            const word = this.flagWord(flag);
+            const word = this.flagWord(name);
             if (word) {
               const t = this.text(word, slot.x, slot.y - half - 4 * U - this.uiCss - U);
               const left = this.snap(slot.x - t.width / 2);
@@ -741,11 +734,12 @@ function onRim(s: { x: number; y: number }, R: number, angle: number): [number, 
   return [s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r];
 }
 
-/** The ring's slots (07 §4.8): ★ key, ‖ pause, the stencil of a template. */
-const RING_GLYPH: Record<'key' | 'pause' | 'template', GlyphName> = {
+/** The ring's slots (07 §4.8): ★ key, ‖ pause, the stencil of a template, `i` the info card. */
+const RING_GLYPH: Record<RingSlotName, GlyphName> = {
   key: 'star',
   pause: 'pause',
   template: 'template',
+  info: 'info',
 };
 
 function kindGlyph(n: GraphNode, big: boolean): GlyphName {

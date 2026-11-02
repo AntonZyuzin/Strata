@@ -5,12 +5,22 @@ import type { Flag } from '@strata/backend';
  * of a fixed screen size — 28 px from its centre at least — with a slot per
  * flag on an ink plate; a flag that is on inverts its slot. A click on a
  * slot switches the flag, on the selection when the bubble is in it. Holding
- * `Ctrl` hides the ring when it covers a neighbour. «Скрыть от AI» joins the
- * slots with MCP (16 §4.5); the info card's `i` comes with the info card.
+ * `Ctrl` hides the ring when it covers a neighbour. After the flags, a gap
+ * apart, `i` keeps the bubble's info card, as `Shift+I` does (06 §4.4).
+ * «Скрыть от AI» joins the slots with MCP (16 §4.5).
  */
 
 /** The ring's flags, left to right. */
 export const RING_FLAGS = ['key', 'pause', 'template'] as const satisfies readonly Flag[];
+
+/** A flag of the ring. */
+export type RingFlag = (typeof RING_FLAGS)[number];
+
+/** The ring's slots, left to right: the flags, then `i` (06 §8). */
+export const RING_SLOTS = [...RING_FLAGS, 'info'] as const;
+
+/** A slot of the ring: a flag, or `info` — the info card kept. */
+export type RingSlotName = (typeof RING_SLOTS)[number];
 
 /** The ring shows after the cursor has rested this long (07 §4.5 «Наведение»). */
 export const RING_DELAY_MS = 150;
@@ -31,7 +41,7 @@ const GAP_U = 6;
 const TARGET_PX = 24;
 
 export interface RingSlot {
-  flag: (typeof RING_FLAGS)[number];
+  slot: RingSlotName;
   /** The slot's centre, screen px. */
   x: number;
   y: number;
@@ -42,16 +52,16 @@ export interface RingSlot {
  * `u` CSS px to a pixel unit: a row above the selection's corners, a gap clear
  * of them and between the slots, centred on the bubble — the arc of half past
  * ten ran through the corners of a small bubble and its slots touched (owner,
- * 2026-10-28). 28 px from the centre at least (06 §8).
+ * 2026-10-28). 28 px from the centre at least (06 §8). `i` is no flag: a
+ * second gap before it.
  */
 export function ringSlots(sx: number, sy: number, R: number, u: number): RingSlot[] {
   const y = sy - Math.max(28, R + (FRAME_U + GAP_U + SLOT_U / 2) * u);
   const step = (SLOT_U + GAP_U) * u;
-  return RING_FLAGS.map((flag, i) => ({
-    flag,
-    x: sx + (i - (RING_FLAGS.length - 1) / 2) * step,
-    y,
-  }));
+  // Offsets from the row's left slot, then the row centred on the bubble.
+  const at = RING_SLOTS.map((slot, i) => i * step + (slot === 'info' ? GAP_U * u : 0));
+  const middle = ((at[0] ?? 0) + (at[at.length - 1] ?? 0)) / 2;
+  return RING_SLOTS.map((slot, i) => ({ slot, x: sx + (at[i] ?? 0) - middle, y }));
 }
 
 /**

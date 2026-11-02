@@ -105,7 +105,7 @@ export const HELP: readonly HelpGroup[] = [
       row('help.color', ['C']),
       row('help.icon', ['Z']),
       row('help.panel', ['P']),
-      row('help.card', ['@mmbHold'], ['Shift', 'I']),
+      row('help.card', ['@mmbHold'], ['Shift', 'I'], ['@ringInfo']),
     ],
   },
   {

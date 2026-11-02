@@ -1568,10 +1568,10 @@ export function WorkspaceScreen(props: {
         // A near or past deadline in a word under the label (Q-07-22).
         v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
         // The flag ring's slots: their names and keys, as the menu has them (06 §8).
-        v.flagWord = (flag) =>
+        v.flagWord = (slot) =>
           t(localeRef.current, 'canvas.slot', {
-            name: t(localeRef.current, `flag.${flag}`),
-            key: { key: 'R', pause: 'Q', template: 'E' }[flag],
+            name: t(localeRef.current, slot === 'info' ? 'canvas.slot.info' : `flag.${slot}`),
+            key: { key: 'R', pause: 'Q', template: 'E', info: 'Shift+I' }[slot],
           });
         // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
         v.markWord = (mark, n) =>

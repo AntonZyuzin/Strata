@@ -52,7 +52,7 @@ interface WsHook {
   };
   editor(): {
     selected: string[];
-    ringSlots(): { flag: string; x: number; y: number }[];
+    ringSlots(): { slot: string; x: number; y: number }[];
   } | null;
   graph(): {
     nodes: Map<string, Node>;
@@ -2676,7 +2676,9 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
   });
 
-  test('the flag ring: rest on a bubble, click a slot; Ctrl hides it (06 §8)', async ({ page }) => {
+  test('the flag ring: rest on a bubble, click a slot, i keeps the card; Ctrl hides it (06 §8)', async ({
+    page,
+  }) => {
     await page.goto('/?plain');
     await createWorkspace(page, 'Кольцо');
     await createNode(page, 600, 400, 'Узел');
@@ -2690,18 +2692,18 @@ test.describe('a workspace on the core', () => {
         const ws = window.__strataWs;
         const r = ws?.view.canvas.getBoundingClientRect();
         return (ws?.editor()?.ringSlots() ?? []).map((s) => ({
-          flag: s.flag,
+          slot: s.slot,
           x: s.x + (r?.left ?? 0),
           y: s.y + (r?.top ?? 0),
         }));
       });
     const p = await at(page, 'Узел');
     await page.mouse.move(p.x, p.y);
-    // It comes after the cursor has rested (07 §4.5): ★ ‖ and the stencil.
+    // It comes after the cursor has rested (07 §4.5): ★ ‖ the stencil, then i.
     await expect
-      .poll(async () => (await slots()).map((s) => s.flag))
-      .toEqual(['key', 'pause', 'template']);
-    const pause = (await slots()).find((s) => s.flag === 'pause');
+      .poll(async () => (await slots()).map((s) => s.slot))
+      .toEqual(['key', 'pause', 'template', 'info']);
+    const pause = (await slots()).find((s) => s.slot === 'pause');
     if (!pause) throw new Error('no pause slot');
     await page.mouse.move(pause.x, pause.y, { steps: 4 });
     await page.mouse.click(pause.x, pause.y);
@@ -2712,7 +2714,19 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.down('Control');
     await expect.poll(async () => (await slots()).length).toBe(0);
     await page.keyboard.up('Control');
-    await expect.poll(async () => (await slots()).length).toBe(3);
+    await expect.poll(async () => (await slots()).length).toBe(4);
+    // i: the bubble's info card kept, as Shift+I (06 §4.4), till its ×.
+    const info = (await slots()).find((s) => s.slot === 'info');
+    if (!info) throw new Error('no i slot');
+    await page.mouse.move(info.x, info.y, { steps: 4 });
+    await page.mouse.click(info.x, info.y);
+    const card = page.locator('.ws-info-card');
+    await expect(card).toHaveClass(/is-kept/);
+    await expect(card.locator('.map-card-name')).toHaveText('Узел');
+    await card.locator('.window-close').click();
+    await expect(card).toHaveCount(0);
+    await page.mouse.move(p.x, p.y, { steps: 4 });
+    await expect.poll(async () => (await slots()).length).toBe(4);
     // Away from the bubble and its ring: gone.
     await page.mouse.move(p.x + 300, p.y + 200, { steps: 4 });
     await expect.poll(async () => (await slots()).length).toBe(0);

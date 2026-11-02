@@ -10,6 +10,8 @@ import type { MessageKey } from '@strata/i18n';
 export interface HelpRow {
   label: MessageKey;
   keys: readonly (readonly string[])[];
+  /** The desktop's only: a browser keeps the key (`Ctrl+W` closes its tab, 06 §13.1). */
+  desktop?: boolean;
 }
 
 export interface HelpGroup {
@@ -35,6 +37,9 @@ export const HELP: readonly HelpGroup[] = [
     title: 'help.g.nav',
     rows: [
       row('help.dive', ['Enter'], ['I'], ['@double']),
+      row('help.openFull', ['Shift', 'Enter']),
+      row('help.openDocked', ['Mod', 'Enter']),
+      { ...row('help.closeWindow', ['Mod', 'W']), desktop: true },
       row('help.up', ['U']),
       row('help.back', ['Alt', '←'], ['Alt', '→']),
       row('help.previous', ['`']),

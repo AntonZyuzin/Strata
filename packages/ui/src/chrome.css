@@ -116,6 +116,34 @@ body {
   color: var(--st-color-title-bg);
 }
 
+/* A content window's ◎ ▭ □ before its × (06 §2.2): glyphs on the title
+   plate, inverse under the pointer, as the ×. */
+.window-tools {
+  display: flex;
+  flex: none;
+  align-items: center;
+}
+
+.window-tool {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--st-size-control);
+  height: var(--st-size-control);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+  color: inherit;
+}
+
+.window-tool:hover:not(:disabled) {
+  background: var(--st-color-title-fg);
+  color: var(--st-color-title-bg);
+}
+
 .window-close::before {
   content: "";
   position: absolute;
@@ -577,6 +605,61 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
+/* A content window docked right (06 §2.2): the canvas's right share from top
+   to bottom, left of the properties panel when it is open; 40 % at first,
+   320 px at least, as much again left to the canvas. Over the canvas: the
+   whole screen between «Ноды» and the panel. */
+.window[data-mode="pinned"],
+.window[data-mode="full"] {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  height: auto;
+  max-height: none;
+}
+
+.window[data-mode="pinned"] {
+  left: auto;
+  width: 40%;
+  min-width: 320px;
+  max-width: calc(100% - var(--layers-w) - 320px);
+}
+
+.window[data-mode="full"] {
+  left: var(--layers-w);
+  width: auto;
+  max-width: none;
+}
+
+.workspace[data-panel="open"] .window[data-mode="pinned"],
+.workspace[data-panel="open"] .window[data-mode="full"] {
+  right: var(--panel-w);
+}
+
+.workspace[data-panel="open"] .window[data-mode="pinned"] {
+  max-width: calc(100% - var(--layers-w) - var(--panel-w) - 320px);
+}
+
+/* The dock's edge: the width dragged, or the arrows on it (06 §2.2). */
+.dock-edge {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  bottom: 0;
+  left: calc(-3 * var(--u));
+  width: calc(6 * var(--u));
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.dock-edge:hover,
+.dock-edge:focus-visible {
+  background: var(--st-color-accent);
+  outline: none;
+}
+
 /* A board's window: 80 % of the canvas (06 §13.1), toolbar on the left (ADR-0006). */
 .board-window {
   position: absolute;
@@ -998,8 +1081,12 @@ button:focus-visible {
   text-overflow: ellipsis;
 }
 
+/* Menus over everything but dialogs and the context menu: over the content
+   windows too, docked or over the canvas (06 §2.2); a press outside — on a
+   window as well — closes them. */
 .menu-backdrop {
   position: fixed;
+  z-index: 19;
   inset: 0;
 }
 
@@ -1007,6 +1094,7 @@ button:focus-visible {
 .tab-menu {
   width: 52ch;
   position: fixed;
+  z-index: 20;
   background: var(--st-color-surface-raised);
   border: var(--u) solid var(--st-color-frame);
   box-shadow: var(--st-shadow-menu);

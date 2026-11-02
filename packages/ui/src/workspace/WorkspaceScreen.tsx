@@ -58,7 +58,9 @@ import type { Scope } from '@strata/search';
 import { type Quality, qualityOf } from '@strata/view3d/map';
 import type { LoroDoc } from 'loro-crdt';
 import {
+  type Dispatch,
   type MutableRefObject,
+  type SetStateAction,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -66,7 +68,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { linkPreview } from '../backend';
+import { isTauri, linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { copyText } from '../clipboard';
 import { nodeIcon, nodeIconFile, nodeIconImages } from '../icons/Icon';
@@ -90,6 +92,14 @@ import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
+import {
+  loadDock,
+  type Moded,
+  type ModeStep,
+  saveDock,
+  stepMode,
+  type WindowMode,
+} from './ContentWindow';
 import type { CommandContext } from './commands';
 import { DeleteDialog } from './DeleteDialog';
 import { CoreDocs } from './docs';
@@ -128,6 +138,27 @@ import {
  * §1.4), the trash (05 §11). The canvas is the prototype's — Pixi outside
  * React (15 §4); React draws the Chrome over it.
  */
+
+/** Where a window beside a bubble opens: the bubble's side, screen points. */
+interface Beside {
+  x: number;
+  y: number;
+  side: 'left' | 'right';
+}
+
+/** The content windows (06 §2.2, §13): one of each kind open at a time. */
+interface WindowState {
+  note: ({ id: string; doc: LoroDoc; at: Beside } & Moded) | null;
+  board: ({ id: string; doc: LoroDoc } & Moded) | null;
+  /** An asset in its viewer (06 §13.4): its file's URL once loaded. */
+  viewer:
+    | ({ id: string; type: Viewable; url: string | null; file: Blob | null; at: Beside } & Moded)
+    | null;
+}
+
+type WindowKind = keyof WindowState;
+const WINDOW_KINDS: readonly WindowKind[] = ['note', 'board', 'viewer'];
+type OpenWindow = <K extends WindowKind>(kind: K, w: NonNullable<WindowState[K]>) => void;
 
 interface Toast {
   id: number;
@@ -368,20 +399,17 @@ export function WorkspaceScreen(props: {
     layers: (_ids: string[], _to: string): void => undefined,
     named: (_id: string, _n: number, _name: string): void => undefined,
   });
-  const [note, setNote] = useState<{
-    id: string;
-    doc: LoroDoc;
-    at: { x: number; y: number; side: 'left' | 'right' };
-  } | null>(null);
-  const [board, setBoard] = useState<{ id: string; doc: LoroDoc } | null>(null);
-  /** An asset in its viewer (06 §13.4): its file's URL once loaded. */
-  const [viewer, setViewer] = useState<{
-    id: string;
-    type: Viewable;
-    url: string | null;
-    file: Blob | null;
-    at: { x: number; y: number; side: 'left' | 'right' };
-  } | null>(null);
+  // Content windows (06 §2.2): bound to their nodes, they stay through dives;
+  // one of them docked right at a time, one over the canvas.
+  const [note, setNote] = useState<WindowState['note']>(null);
+  const [board, setBoard] = useState<WindowState['board']>(null);
+  const [viewer, setViewer] = useState<WindowState['viewer']>(null);
+  /** The dock's width on this device (06 §2.2, 05 §13); none — 40 % of the canvas. */
+  const [dock, setDock] = useState<number | null>(loadDock);
+  /** The window opened or brought forward last: `Ctrl+W` closes it when the focus is on the canvas. */
+  const lastWindow = useRef<WindowKind | null>(null);
+  /** Opens a content window, for the canvas's events made with the canvas. */
+  const openWindowRef = useRef<OpenWindow>(() => undefined);
   /** A list opened: its items are in the panel, the keyboard goes there once. */
   const [listFocus, setListFocus] = useState<string | null>(null);
   /** The shortcut of an appearance clicked: «Где размещена» takes the keyboard once (06 §12.2). */
@@ -813,12 +841,13 @@ export function WorkspaceScreen(props: {
           })
           .catch((err: unknown) => console.error('layout', err));
       },
-      open: (id) => {
+      open: (id, as = 'float') => {
         const v = viewRef.current;
         const n = graph.current?.nodes.get(id);
         const p = v?.nodeAt(id);
         const d = docs.current;
         if (!v || !n || !p || !d) return;
+        const mode = { mode: as, was: as === 'full' ? 'float' : as } as const;
         if (n.kind === 'network' || n.kind === 'project') {
           leaveRef.current();
           // One step further on the way one came (05 §9.3).
@@ -826,7 +855,7 @@ export function WorkspaceScreen(props: {
           return;
         }
         if (n.kind === 'board') {
-          d.doc(id).then((doc) => setBoard({ id, doc }), refused);
+          d.doc(id).then((doc) => openWindowRef.current('board', { id, doc, ...mode }), refused);
           return;
         }
         // A task is its panel (ADR-0010): it is already open; so is an
@@ -851,14 +880,14 @@ export function WorkspaceScreen(props: {
         const at = { side, x, y } as const;
         if (type !== null && viewable(type)) {
           const sha = n.attrs.asset;
-          setViewer({ id, type, url: null, file: null, at });
+          openWindowRef.current('viewer', { id, type, url: null, file: null, at, ...mode });
           if (!sha) return;
           viewerFile(sha, n.attrs.mime ?? '')
             .then((f) => setViewer((w) => (w?.id === id ? { ...w, ...f } : w)))
             .catch(refused);
           return;
         }
-        d.doc(id).then((doc) => setNote({ id, doc, at }), refused);
+        d.doc(id).then((doc) => openWindowRef.current('note', { id, doc, at, ...mode }), refused);
       },
     };
 
@@ -1029,14 +1058,8 @@ export function WorkspaceScreen(props: {
       setTree(items);
       v.clearPictures();
       shown.current.clear();
-      // A note or board window belongs to its network's canvas.
-      if (id !== was) {
-        setNote(null);
-        setBoard(null);
-        setViewer(null);
-        setViewerFocus(false);
-        setBoardFocus(false);
-      }
+      // Content windows are bound to their nodes, not to the network: they
+      // stay through a dive (06 §2.2).
       editor.current?.destroy();
       sync.current?.destroy();
       // The star map asked for this network (08 §7.2): it stays and lands
@@ -1072,10 +1095,17 @@ export function WorkspaceScreen(props: {
       v.setCut(c?.cut && c.net === id ? c.nodes.map((n) => n.id) : []);
       // The properties panel covers the canvas's right edge while one node is
       // chosen: framing keeps clear of it (review 2026-10-24).
-      ed.coveredRight = () =>
-        ed.selection.size === 1
-          ? (el.parentElement?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
-          : 0;
+      ed.coveredRight = () => {
+        const screen = el.parentElement;
+        const panel =
+          ed.selection.size === 1
+            ? (screen?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
+            : 0;
+        // A window docked right shares the screen with the canvas (06 §2.2).
+        const docked =
+          screen?.querySelector<HTMLElement>('.window[data-mode="pinned"]')?.offsetWidth ?? 0;
+        return panel + docked;
+      };
       ed.ringMode = ringModeRef.current;
       ed.hoverCard = hoverCardRef.current;
       ed.minimap.open = minimapRef.current;
@@ -2460,6 +2490,96 @@ export function WorkspaceScreen(props: {
     };
   };
 
+  // Content windows (06 §2.2): the dock and the whole canvas hold one each.
+  const windowsNow: WindowState = { note, board, viewer };
+  const setters: { [K in WindowKind]: Dispatch<SetStateAction<WindowState[K]>> } = {
+    note: setNote,
+    board: setBoard,
+    viewer: setViewer,
+  };
+  /** Others give up the dock or the whole canvas to `kind`'s window. */
+  const yieldTo = (kind: WindowKind, mode: WindowMode) => {
+    if (mode === 'float') return;
+    const docked = (except: WindowKind) =>
+      WINDOW_KINDS.some((k) => k !== kind && k !== except && windowsNow[k]?.mode === 'pinned');
+    for (const k of WINDOW_KINDS) {
+      if (k === kind) continue;
+      const give = <T extends Moded>(w: T | null): T | null => {
+        if (!w || w.mode !== mode) return w;
+        if (mode === 'pinned') return stepMode(w, 'float');
+        // Back from the whole canvas: to the dock only while no one else holds it.
+        const back = stepMode(w, 'back');
+        return back.mode === 'pinned' && docked(k) ? stepMode(back, 'float') : back;
+      };
+      (setters[k] as Dispatch<SetStateAction<Moded | null>>)(give);
+    }
+  };
+  const openWindow: OpenWindow = (kind, w) => {
+    (setters[kind] as Dispatch<SetStateAction<typeof w | null>>)(w);
+    yieldTo(kind, w.mode);
+    lastWindow.current = kind;
+  };
+  openWindowRef.current = openWindow;
+  /** ◎ ▭ □ of a window (06 §2.2). */
+  const setWindowMode = (kind: WindowKind, step: ModeStep) => {
+    const now = windowsNow[kind];
+    if (!now) return;
+    (setters[kind] as Dispatch<SetStateAction<Moded | null>>)((w) => (w ? stepMode(w, step) : w));
+    yieldTo(kind, stepMode(now, step).mode);
+    lastWindow.current = kind;
+  };
+  /** × or `Ctrl+W`: the window goes, what it wrote is kept, the keys go back to the canvas. */
+  const closeWindow = (kind: WindowKind) => {
+    if (kind !== 'viewer') void docs.current?.flush();
+    (setters[kind] as Dispatch<SetStateAction<Moded | null>>)(null);
+    if (kind === 'board') setBoardFocus(false);
+    if (kind === 'viewer') setViewerFocus(false);
+    if (lastWindow.current === kind) lastWindow.current = null;
+    focusCanvas();
+  };
+  const closeWindowRef = useRef(closeWindow);
+  closeWindowRef.current = closeWindow;
+  /** ◎: the bubble on the canvas — its network, framed; a window over the canvas steps back. */
+  const locateWindow = (kind: WindowKind, id: string) => {
+    if (windowsNow[kind]?.mode === 'full') setWindowMode(kind, 'back');
+    void goNode(id, false);
+  };
+  /** `Esc` in a window: the keys to the canvas; from over the canvas, back where it was. */
+  const escapeWindow = (kind: WindowKind) => {
+    if (windowsNow[kind]?.mode === 'full') setWindowMode(kind, 'back');
+    focusCanvas();
+  };
+  const dockWidth = (width: number) => setDock(width);
+  // The dock's width kept on the device once the edge rests (05 §13).
+  useEffect(() => {
+    if (dock === null) return;
+    const timer = setTimeout(() => saveDock(dock), 300);
+    return () => clearTimeout(timer);
+  }, [dock]);
+  // `Ctrl+W` closes a content window on desktop (06 §13.1); a browser keeps
+  // the key for its tab.
+  useEffect(() => {
+    if (!isTauri()) return;
+    const close = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.code !== 'KeyW') return;
+      const inside = (document.activeElement as Element | null)?.closest(
+        '.note-window, .board-window, .asset-window',
+      );
+      const kind: WindowKind | null = inside?.classList.contains('note-window')
+        ? 'note'
+        : inside?.classList.contains('board-window')
+          ? 'board'
+          : inside?.classList.contains('asset-window')
+            ? 'viewer'
+            : lastWindow.current;
+      if (!kind) return;
+      e.preventDefault();
+      closeWindowRef.current(kind);
+    };
+    window.addEventListener('keydown', close, true);
+    return () => window.removeEventListener('keydown', close, true);
+  }, []);
+
   /** Text to the clipboard (09 §4.6), said by a toast. */
   const copy = (text: string) => {
     void copyText(text).then((ok) => toast(ok ? 'path.copied' : 'path.uncopied', { text }));
@@ -2765,17 +2885,18 @@ export function WorkspaceScreen(props: {
     const x = el.offsetLeft + (side === 'right' ? sx + at.r + 24 : sx - at.r - 24);
     const y = el.offsetTop + Math.max(8, Math.min(sy - 120, r.height - 320));
     const place = { side, x, y } as const;
+    const float = { mode: 'float', was: 'float' } as const;
     if (item.kind === 'board') {
-      d.doc(id).then((doc) => setBoard({ id, doc }), failed);
+      d.doc(id).then((doc) => openWindow('board', { id, doc, ...float }), failed);
       return true;
     }
     if (item.kind === 'note') {
-      d.doc(id).then((doc) => setNote({ id, doc, at: place }), failed);
+      d.doc(id).then((doc) => openWindow('note', { id, doc, at: place, ...float }), failed);
       return true;
     }
     const type = item.kind === 'asset' ? assetType(item) : null;
     if (type === null || !viewable(type)) return false;
-    setViewer({ id, type, url: null, file: null, at: place });
+    openWindow('viewer', { id, type, url: null, file: null, at: place, ...float });
     if (item.asset) {
       viewerFile(item.asset, item.mime ?? '')
         .then((f) => setViewer((w) => (w?.id === id ? { ...w, ...f } : w)))
@@ -3331,7 +3452,9 @@ export function WorkspaceScreen(props: {
       </div>
       {details && actions ? (
         <Inspector
-          key={details.id}
+          // Siblings keyed by a node's id alone would collide: the panel and
+          // the window of one node are both here.
+          key={`panel:${details.id}`}
           locale={locale}
           node={details}
           people={people}
@@ -3672,10 +3795,15 @@ export function WorkspaceScreen(props: {
       ) : null}
       {board ? (
         <BoardWindow
-          key={board.id}
+          key={`board:${board.id}`}
           locale={locale}
           name={nameOf(board.id)}
           doc={board.doc}
+          mode={board.mode}
+          dock={dock}
+          onMode={(step) => setWindowMode('board', step)}
+          onLocate={() => locateWindow('board', board.id)}
+          onDock={dockWidth}
           onChange={() => undefined}
           onFocus={setBoardFocus}
           onReady={(handle) => {
@@ -3683,46 +3811,43 @@ export function WorkspaceScreen(props: {
             const hook = (window as unknown as { __strataWs?: Record<string, unknown> }).__strataWs;
             if (hook) hook.board = handle;
           }}
-          onClose={() => {
-            void docs.current?.flush();
-            setBoard(null);
-            setBoardFocus(false);
-            focusCanvas();
-          }}
+          onClose={() => closeWindow('board')}
         />
       ) : null}
       {viewer ? (
         <AssetWindow
-          key={viewer.id}
+          key={`viewer:${viewer.id}`}
           locale={locale}
           name={nameOf(viewer.id)}
           type={viewer.type}
           url={viewer.url}
           file={viewer.file}
           at={viewer.at}
+          mode={viewer.mode}
+          dock={dock}
+          onMode={(step) => setWindowMode('viewer', step)}
+          onLocate={() => locateWindow('viewer', viewer.id)}
+          onDock={dockWidth}
           onFocus={setViewerFocus}
-          onEscape={focusCanvas}
-          onClose={() => {
-            setViewer(null);
-            setViewerFocus(false);
-            focusCanvas();
-          }}
+          onEscape={() => escapeWindow('viewer')}
+          onClose={() => closeWindow('viewer')}
         />
       ) : null}
       {note ? (
         <NoteWindow
-          key={note.id}
+          key={`note:${note.id}`}
           locale={locale}
           name={nameOf(note.id)}
           doc={note.doc}
           at={note.at}
+          mode={note.mode}
+          dock={dock}
+          onMode={(step) => setWindowMode('note', step)}
+          onLocate={() => locateWindow('note', note.id)}
+          onDock={dockWidth}
           onChange={() => undefined}
-          onEscape={focusCanvas}
-          onClose={() => {
-            void docs.current?.flush();
-            setNote(null);
-            focusCanvas();
-          }}
+          onEscape={() => escapeWindow('note')}
+          onClose={() => closeWindow('note')}
         />
       ) : null}
       {name ? (

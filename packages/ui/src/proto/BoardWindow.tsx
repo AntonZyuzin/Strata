@@ -13,6 +13,14 @@ import { type GlyphName, glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type CSSProperties, Suspense, useRef, useState } from 'react';
+import {
+  DockEdge,
+  dockRoom,
+  type ModeStep,
+  modeProps,
+  type WindowMode,
+  WindowTitle,
+} from '../workspace/ContentWindow';
 
 /** The toolbar's icons (07 §6.2): own 1-bit glyphs, drawn in the text colour. */
 const TOOL_GLYPH: Record<BoardTool, GlyphName> = {
@@ -53,6 +61,15 @@ export function BoardWindow(props: {
   locale: Locale;
   name: string;
   doc: LoroDoc;
+  /** At 80 % of the canvas, docked right or over the canvas (06 §2.2). */
+  mode?: WindowMode | undefined;
+  /** The dock's width, CSS px; none — 40 % of the canvas. */
+  dock?: number | null | undefined;
+  /** ▭ and □; none — the window stays where it opened (the prototype's). */
+  onMode?: ((step: ModeStep) => void) | undefined;
+  /** ◎: to the bubble on the canvas. */
+  onLocate?: (() => void) | undefined;
+  onDock?: ((width: number) => void) | undefined;
   onChange: () => void;
   onFocus: (inside: boolean) => void;
   onClose: () => void;
@@ -66,6 +83,7 @@ export function BoardWindow(props: {
     fill: 'none',
   });
   const board = useRef<BoardHandle | null>(null);
+  const box = useRef<HTMLElement>(null);
   const title = props.name || t(locale, 'note.untitled');
   const colorOf = (name: BoardColorName) =>
     BOARD_COLORS.find((c) => c.name === name)?.color ?? 'transparent';
@@ -78,7 +96,9 @@ export function BoardWindow(props: {
   const named = (name: BoardColorName) => t(locale, `board.color.${name}` as const);
   return (
     <section
+      ref={box}
       className="window board-window"
+      {...modeProps(props.mode ?? 'float', props.dock ?? null, undefined)}
       aria-label={t(locale, 'board.label', { name: title })}
       onFocusCapture={() => props.onFocus(true)}
       onBlurCapture={(e) => {
@@ -94,18 +114,23 @@ export function BoardWindow(props: {
         setTool(k);
       }}
     >
-      <header className="window-title">
-        <h2 title={title}>{title}</h2>
-        <button
-          type="button"
-          className="window-close"
-          aria-label={t(locale, 'board.close')}
-          title={t(locale, 'board.close')}
-          onClick={props.onClose}
-        >
-          ×
-        </button>
-      </header>
+      <WindowTitle
+        locale={locale}
+        title={title}
+        mode={props.mode ?? 'float'}
+        onMode={props.onMode}
+        onLocate={props.onLocate}
+        closeLabel={t(locale, 'board.close')}
+        onClose={props.onClose}
+      />
+      {props.mode === 'pinned' && props.onDock ? (
+        <DockEdge
+          locale={locale}
+          width={() => box.current?.offsetWidth ?? 0}
+          room={() => dockRoom(box.current)}
+          onWidth={props.onDock}
+        />
+      ) : null}
       <div className="board-main">
         <fieldset className="board-tools">
           <legend className="sr-only">{t(locale, 'board.tools')}</legend>

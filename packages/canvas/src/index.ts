@@ -20,6 +20,7 @@ export {
   type HintKey,
   type MenuChoice,
   type MenuTarget,
+  type OpenAs,
   type Placeable as DropPlaceable,
   type WheelMode,
   WIRE_SHAPES,

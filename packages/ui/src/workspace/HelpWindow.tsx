@@ -1,5 +1,6 @@
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { useEffect, useMemo, useRef } from 'react';
+import { isTauri } from '../backend';
 import { HELP, keyName, onMac } from './help';
 
 /**
@@ -13,6 +14,7 @@ export function HelpWindow(props: { locale: Locale; onClose: () => void }) {
   const { locale } = props;
   const box = useRef<HTMLElement>(null);
   const mac = useMemo(onMac, []);
+  const desktop = useMemo(isTauri, []);
 
   useEffect(() => {
     box.current?.focus();
@@ -61,16 +63,18 @@ export function HelpWindow(props: { locale: Locale; onClose: () => void }) {
             <section key={g.title} className="help-group">
               <h2 className="ins-heading">{t(locale, g.title)}</h2>
               <dl className="help-rows">
-                {g.rows.map((r) => {
-                  const what = t(locale, r.label);
-                  const keys = r.keys.map(combo).join(' · ');
-                  return (
-                    <div key={r.label} className="help-row">
-                      <dt title={what}>{what}</dt>
-                      <dd title={keys}>{keys}</dd>
-                    </div>
-                  );
-                })}
+                {g.rows
+                  .filter((r) => desktop || !r.desktop)
+                  .map((r) => {
+                    const what = t(locale, r.label);
+                    const keys = r.keys.map(combo).join(' · ');
+                    return (
+                      <div key={r.label} className="help-row">
+                        <dt title={what}>{what}</dt>
+                        <dd title={keys}>{keys}</dd>
+                      </div>
+                    );
+                  })}
               </dl>
             </section>
           ))}

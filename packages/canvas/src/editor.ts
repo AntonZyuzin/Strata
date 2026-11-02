@@ -123,6 +123,9 @@ export type HintKey =
   | 'proto.hint.chain'
   | 'proto.hint.ghost';
 
+/** Where a node's content opens (06 §2.2): beside it, docked right, over the canvas. */
+export type OpenAs = 'float' | 'pinned' | 'full';
+
 export interface EditorEvents {
   /**
    * Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5).
@@ -140,8 +143,11 @@ export interface EditorEvents {
   map?(): void;
   /** `O` opened or closed the minimap (06 §10.3). */
   minimap?(open: boolean): void;
-  /** Double click or `Enter` on a node: open its content (06 §13.1). */
-  open?(id: string): void;
+  /**
+   * Double click or `Enter` on a node: open its content (06 §13.1);
+   * `Shift+Enter` — over the whole canvas, `Ctrl+Enter` — docked right.
+   */
+  open?(id: string, as?: OpenAs): void;
   /** `L`: lay out the selection, or the whole network when nothing is selected (06 §9.1). */
   layout?(ids: string[] | null): void;
   /**
@@ -2130,9 +2136,10 @@ export class Editor {
         return;
       case 'Enter':
       case 'NumpadEnter':
-        if (mod || !this.current) return;
+        if (!this.current || e.altKey) return;
         e.preventDefault();
-        this.act('open');
+        // 06 §13.1: `Shift+Enter` — over the canvas, `Ctrl+Enter` — docked right.
+        this.events.open?.(this.current, e.shiftKey ? 'full' : mod ? 'pinned' : 'float');
         return;
       case 'KeyG':
       case 'KeyF':

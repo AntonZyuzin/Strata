@@ -8,6 +8,14 @@ import {
   useRef,
   useState,
 } from 'react';
+import {
+  DockEdge,
+  dockRoom,
+  type ModeStep,
+  modeProps,
+  type WindowMode,
+  WindowTitle,
+} from './ContentWindow';
 
 /** pdf.js only for a PDF the WebView cannot show itself (ADR-0013). */
 const PdfView = lazy(() => import('./PdfView').then((m) => ({ default: m.PdfView })));
@@ -48,6 +56,15 @@ export function AssetWindow(props: {
   file: Blob | null;
   /** Screen point of the bubble's side and which side the window opens on. */
   at: { x: number; y: number; side: 'left' | 'right' };
+  /** Beside its bubble, docked right or over the canvas (06 §2.2). */
+  mode?: WindowMode | undefined;
+  /** The dock's width, CSS px; none — 40 % of the canvas. */
+  dock?: number | null | undefined;
+  /** ▭ and □; none — the window stays where it opened (the prototype's). */
+  onMode?: ((step: ModeStep) => void) | undefined;
+  /** ◎: to the bubble on the canvas. */
+  onLocate?: (() => void) | undefined;
+  onDock?: ((width: number) => void) | undefined;
   /** The focus came in or went out: inside, the canvas's keys are off. */
   onFocus: (inside: boolean) => void;
   onEscape: () => void;
@@ -73,10 +90,16 @@ export function AssetWindow(props: {
     const top = Math.min(Math.max(r.top, h.top + GAP), h.bottom - r.height - GAP) - h.top;
     setPlace({ left, top: Math.max(GAP, top), max: hi - lo });
   }, [type]);
-  // Before the first paint and again when the content's size changed it.
+  // Before the first paint and again when the content's size changed it;
+  // docked or over the canvas, the window has no place of its own.
+  const floating = (props.mode ?? 'float') === 'float';
   useLayoutEffect(() => {
-    if (place === null) settle();
-  }, [place, settle]);
+    if (place === null && floating) settle();
+  }, [place, settle, floating]);
+  // Floating again: placed anew beside the bubble.
+  useLayoutEffect(() => {
+    if (floating) setPlace(null);
+  }, [floating]);
   // A PDF takes the board's share of the canvas, not a place beside the bubble.
   const style: CSSProperties | undefined =
     type === 'pdf'
@@ -91,7 +114,7 @@ export function AssetWindow(props: {
       ref={ref}
       className="window asset-window"
       data-type={type}
-      style={style}
+      {...modeProps(props.mode ?? 'float', props.dock ?? null, style)}
       aria-label={t(locale, 'asset.label', { name: title })}
       // A click inside takes the focus here, so Esc is the window's, not the canvas's.
       tabIndex={-1}
@@ -106,18 +129,23 @@ export function AssetWindow(props: {
         }
       }}
     >
-      <header className="window-title">
-        <h2 title={title}>{title}</h2>
-        <button
-          type="button"
-          className="window-close"
-          aria-label={t(locale, 'asset.close')}
-          title={t(locale, 'asset.close')}
-          onClick={props.onClose}
-        >
-          ×
-        </button>
-      </header>
+      <WindowTitle
+        locale={locale}
+        title={title}
+        mode={props.mode ?? 'float'}
+        onMode={props.onMode}
+        onLocate={props.onLocate}
+        closeLabel={t(locale, 'asset.close')}
+        onClose={props.onClose}
+      />
+      {props.mode === 'pinned' && props.onDock ? (
+        <DockEdge
+          locale={locale}
+          width={() => ref.current?.offsetWidth ?? 0}
+          room={() => dockRoom(ref.current)}
+          onWidth={props.onDock}
+        />
+      ) : null}
       <div className="asset-body">
         {/* Placed again once the picture or the video knows its size. */}
         {url && type === 'image' ? (

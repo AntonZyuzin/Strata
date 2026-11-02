@@ -686,6 +686,45 @@ async function twoWays(page: Page) {
 }
 
 for (const deviceScaleFactor of [1, 2]) {
+  test(`a content window's title and the dock keep their boxes in RU and EN @${deviceScaleFactor}x (06 §2.2)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Окна');
+      await createNode(page, 420, 300, 'Черновик с длинным именем, которое не влезет в заголовок');
+      await select(page, 'Черновик с длинным именем, которое не влезет в заголовок');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Control+Enter');
+      const win = page.locator('.note-window');
+      await expect(win).toHaveAttribute('data-mode', 'pinned');
+      await expect(win.locator('.window-tool')).toHaveCount(3);
+      expect(await overflowing(page, '.note-window .window-title'), `${locale} title`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.note-window'),
+        tools: await box(page, '.note-window .window-tools'),
+        name: await box(page, '.note-window h2'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'tools', 'name'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
   test(`▾, the canonical path and the typed path keep their boxes in RU and EN @${deviceScaleFactor}x (09 §4.3)`, async ({
     browser,
   }) => {
@@ -1526,6 +1565,96 @@ test.describe('a workspace on the core', () => {
     await expect(
       page.locator('.ws-path').getByRole('button', { name: 'Фильм', exact: true }),
     ).toBeVisible();
+  });
+
+  test('a content window docks right, goes over the canvas and back, stays through a dive (06 §2.2, §13.1)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Окна');
+    await createNode(page, 420, 300, 'Черновик');
+    // Left of where the dock reaches once widened.
+    await makeFolder(page, 'Архив', 320, 520);
+    const win = page.locator('.note-window');
+    const near = (a: number, b: number) => expect(Math.abs(a - b)).toBeLessThanOrEqual(1.5);
+    // Ctrl+Enter: docked right, from the top to the bottom, left of the panel.
+    await select(page, 'Черновик');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+Enter');
+    await expect(win).toHaveAttribute('data-mode', 'pinned');
+    await expect(win.locator('.cm-content')).toBeFocused();
+    const screen = await box(page, '.workspace');
+    let w = await box(page, '.note-window');
+    const panel = await box(page, '.ws-inspector');
+    near(w.x + w.width, panel.x);
+    near(w.y, screen.y);
+    near(w.y + w.height, screen.y + screen.height);
+    // Nothing chosen, the panel closes: the dock takes the screen's right edge.
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-panel', 'closed');
+    w = await box(page, '.note-window');
+    near(w.x + w.width, screen.x + screen.width);
+    // Its edge dragged: wider, and the device keeps the width (05 §13); the
+    // canvas keeps 320 px at least.
+    const edge = await box(page, '.note-window .dock-edge');
+    await page.mouse.move(edge.x + edge.width / 2, edge.y + 200);
+    await page.mouse.down();
+    await page.mouse.move(edge.x + edge.width / 2 - 100, edge.y + 200, { steps: 5 });
+    await page.mouse.up();
+    const wider = await box(page, '.note-window');
+    near(wider.width, w.width + 100);
+    near(wider.x + wider.width, screen.x + screen.width);
+    await expect
+      .poll(() => page.evaluate(() => Number(localStorage.getItem('strata.dock'))))
+      .toBe(Math.round(wider.width));
+    // □: over the whole canvas, from «Ноды» to the edge; Esc — back docked.
+    await win.getByRole('button', { name: 'На весь экран · Shift+Enter' }).click();
+    await expect(win).toHaveAttribute('data-mode', 'full');
+    w = await box(page, '.note-window');
+    const layers = await box(page, '.ws-layers');
+    near(w.x, layers.x + layers.width);
+    near(w.x + w.width, screen.x + screen.width);
+    await page.keyboard.press('Escape');
+    await expect(win).toHaveAttribute('data-mode', 'pinned');
+    // Bound to its node, not to the network: it stays through a dive.
+    await enter(page, 'Архив');
+    await expect(win).toHaveAttribute('data-mode', 'pinned');
+    await expect(win.locator('h2')).toHaveText('Черновик');
+    // ◎: back to its bubble — the network it lies in, chosen there.
+    await win.getByRole('button', { name: 'Показать на холсте' }).click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Черновик');
+    // ▭ again: floating beside its bubble.
+    await win.getByRole('button', { name: 'Открепить' }).click();
+    await expect(win).toHaveAttribute('data-mode', 'float');
+    await win.locator('.window-close').click();
+    await expect(win).toHaveCount(0);
+    // Shift+Enter: over the canvas at once.
+    await select(page, 'Черновик');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Shift+Enter');
+    await expect(win).toHaveAttribute('data-mode', 'full');
+    await win.getByRole('button', { name: 'Восстановить · Esc' }).click();
+    await expect(win).toHaveAttribute('data-mode', 'float');
+    // The dock holds one window: a board docked sends the note back to float.
+    await win.getByRole('button', { name: 'Закрепить справа · Ctrl+Enter' }).click();
+    await expect(win).toHaveAttribute('data-mode', 'pinned');
+    await page.mouse.move(460, 600);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('доска');
+    const kind = page.locator('.tab-menu-label', { hasText: /^(Доска|Board)$/ });
+    await page.locator('.tab-menu-row', { has: kind }).first().click();
+    await page.keyboard.type('Идеи');
+    await page.keyboard.press('Enter');
+    await settled(page);
+    await select(page, 'Идеи');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+Enter');
+    await expect(page.locator('.board-window')).toHaveAttribute('data-mode', 'pinned');
+    await expect(win).toHaveAttribute('data-mode', 'float');
   });
 
   test('the checklist of milestone 1A', async ({ page }) => {

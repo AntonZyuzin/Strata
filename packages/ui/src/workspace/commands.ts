@@ -43,6 +43,11 @@ export interface CommandContext {
   setQuality(q: Quality | 'auto'): void;
   /** «Клавиши» (06 §17). */
   help(): void;
+  /** The path becomes its field (09 §4.3). */
+  typePath(): void;
+  /** The canonical path, and a `[[link]]`, of the node chosen or the network on the canvas (09 §4.6). */
+  copyPath(): void;
+  copyLink(): void;
 }
 
 export interface Command {
@@ -238,6 +243,30 @@ export const COMMANDS: readonly Command[] = [
     run: (c) => c.find(),
   },
   canvas('up', 'up', 'U', ['вверх', 'наверх', 'выйти', 'up', 'parent'], flat, 'nav'),
+  {
+    id: 'nav.typePath',
+    title: 'cmd.nav.typePath',
+    aliases: ['путь', 'адрес', 'перейти по пути', 'path', 'address', 'go to path'],
+    group: 'nav',
+    when: flat,
+    run: (c) => c.typePath(),
+  },
+  {
+    id: 'nav.copyPath',
+    title: 'cmd.nav.copyPath',
+    aliases: ['путь', 'буфер', 'копировать', 'path', 'clipboard', 'copy'],
+    group: 'nav',
+    when: flat,
+    run: (c) => c.copyPath(),
+  },
+  {
+    id: 'nav.copyLink',
+    title: 'cmd.nav.copyLink',
+    aliases: ['ссылка', 'вики-ссылка', 'буфер', 'link', 'wikilink', 'clipboard'],
+    group: 'nav',
+    when: flat,
+    run: (c) => c.copyLink(),
+  },
   {
     id: 'nav.back',
     title: 'cmd.nav.back',

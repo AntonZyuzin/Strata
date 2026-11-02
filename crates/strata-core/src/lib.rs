@@ -41,8 +41,9 @@ pub use strata_model::Flag;
 pub use workspace::{
     Attrs, CopyAt, CoreError, Edited, ExternalWire, Fold, History, ImportBatch, ImportCounts,
     ImportItem, ImportOptions, ImportProgress, ImportReport, ImportShadow, LinkTarget, LinkTargets,
-    Linked, NetworkView, NodeDetails, Person, Place, Placeable, PlannedImport, Prop, ReadyBatch,
-    Staying, TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
+    Linked, NetworkView, NodeDetails, PathHit, PathMissing, PathText, Person, Place, Placeable,
+    PlannedImport, Prop, ReadyBatch, Resolved, Staying, TrashItem, TrashPreview, TreeItem,
+    ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace, escape_segment, parse_path, path_text,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

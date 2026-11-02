@@ -87,13 +87,25 @@ impl<S: Store> Workspace<S> {
         if n == self.root {
             return None;
         }
-        let named = self
-            .field(n, "primaryNet")
-            .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()));
-        if let Some(p) = named.filter(|&p| self.placed(p, n) && self.alive(p)) {
-            return Some(p);
+        self.named_primary(n)
+            .or_else(|| self.placements_of(n).first().map(|&(net, _)| net))
+    }
+
+    /// [`Self::primary_of`] with `n`'s placements at hand, as
+    /// [`Self::placements_index`] gives them.
+    pub(super) fn primary_among(&self, n: NodeId, placed: &[(NodeId, i64)]) -> Option<NodeId> {
+        if n == self.root {
+            return None;
         }
-        self.placements_of(n).first().map(|&(net, _)| net)
+        self.named_primary(n)
+            .or_else(|| placed.first().map(|&(net, _)| net))
+    }
+
+    /// `primaryNet` while it names a placement in a live network.
+    fn named_primary(&self, n: NodeId) -> Option<NodeId> {
+        self.field(n, "primaryNet")
+            .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()))
+            .filter(|&p| self.placed(p, n) && self.alive(p))
     }
 
     /// Node `n` lies inside network `net`'s placements at any depth, by any

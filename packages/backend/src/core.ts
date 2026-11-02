@@ -221,7 +221,27 @@ export type CoreRequest =
   | { call: 'interrupted' }
   | { call: 'settleInterrupted'; keep: boolean }
   | { call: 'linkTargets'; note: string; link: string }
-  | { call: 'pinLink'; note: string; link: string; target: string; alias?: boolean };
+  | { call: 'pinLink'; note: string; link: string; target: string; alias?: boolean }
+  | { call: 'resolve'; path: string; base: string[] };
+
+/** A node a path names (09 §4.4), with the way the path went to it. */
+export interface PathHit {
+  /** From the root to the node, both included, `[id, name]`: its entry path (05 §9.3). */
+  path: [string, string][];
+  kind: NodeKind;
+  /** Its placement in the network before it on the way is its primary one (05 §5). */
+  primary: boolean;
+}
+
+/**
+ * What a path names (09 §4.4): one node — go there; several — a choice
+ * (09 §4.5); none — `missing` says which segment named nothing, and the
+ * names nearest to it where the path had got (09 §2.3).
+ */
+export interface Resolved {
+  found: PathHit[];
+  missing?: { at: number; near: PathHit[] };
+}
 
 /** A file of a vault (13 §2): its path from the vault's folder, `/` between folders. */
 export interface VaultFile {
@@ -482,6 +502,11 @@ export interface TreeItem {
   icon?: string;
   /** Its flags: templates are offered in the Tab menu (06 §5.2). */
   flags?: Flag[];
+  /**
+   * The networks it also appears in, its primary aside (05 §5): the path
+   * bar's `▾` lists it under each network it lies in (09 §4.3).
+   */
+  appears?: string[];
 }
 
 /** A wire's two ends. */
@@ -606,6 +631,7 @@ type CoreResponse =
   | { type: 'importing'; progress: ImportProgress | null; history: History }
   | { type: 'interrupted'; label: ChangeLabel | null }
   | { type: 'linkTargets'; targets: LinkTargets }
+  | { type: 'resolved'; resolved: Resolved }
   | { type: 'error'; message: string; invalid: boolean };
 
 /** A call the core refused (`invalid`: the model's rules, nothing written) or failed. */
@@ -831,6 +857,15 @@ export class Core {
   /** «Оставить» (`keep`) or «Откатить» what that task wrote. */
   async settleInterrupted(keep: boolean): Promise<History> {
     return expect(await this.call({ call: 'settleInterrupted', keep }), 'history').history;
+  }
+
+  /**
+   * What `path` names (09 §4.4) from `base`, the entry path of the network
+   * one is in — ids from the root; a base that no longer holds gives way to
+   * the canonical path.
+   */
+  async resolve(path: string, base: readonly string[]): Promise<Resolved> {
+    return expect(await this.call({ call: 'resolve', path, base: [...base] }), 'resolved').resolved;
   }
 
   /** The nodes a link of `note` may name, the nearest first (13 §3.5). */

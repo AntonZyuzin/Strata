@@ -9,7 +9,8 @@ use crate::vault::{Vault, VaultFile};
 pub use crate::workspace::CopyAt;
 use crate::workspace::{
     Edited, ExternalWire, History, ImportOptions, ImportProgress, LinkTargets, NetworkView,
-    NodeDetails, Person, Placeable, TrashItem, TrashPreview, TreeItem, WireEnds, Workspace,
+    NodeDetails, Person, Placeable, Resolved, TrashItem, TrashPreview, TreeItem, WireEnds,
+    Workspace,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
@@ -139,6 +140,13 @@ pub enum Request {
     SettleInterrupted {
         keep: bool,
     },
+    /// What path `path` names (09 §4.4) from `base`, the entry path of the
+    /// network one is in: ids from the root.
+    Resolve {
+        path: String,
+        #[serde(default)]
+        base: Vec<String>,
+    },
     /// The nodes a link of `note` may name, the nearest first (13 §3.5).
     LinkTargets {
         note: String,
@@ -249,6 +257,9 @@ pub enum Response {
     },
     LinkTargets {
         targets: LinkTargets,
+    },
+    Resolved {
+        resolved: Resolved,
     },
     /// The call failed; `invalid` when the model refused it (nothing was written).
     Error {
@@ -398,6 +409,9 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
                 history: ws.history(),
             })
         }
+        Request::Resolve { path, base } => Ok(Response::Resolved {
+            resolved: ws.resolve_path(&path, &base),
+        }),
         Request::LinkTargets { note, link } => ws
             .link_targets(&note, &link)
             .map(|targets| Response::LinkTargets { targets }),
@@ -523,6 +537,36 @@ mod tests {
             json!({ "call": "pullDoc", "doc": doc, "since": "!" }),
         );
         assert_eq!(bad["invalid"], true);
+    }
+
+    #[test]
+    fn a_path_is_resolved_from_the_entry_path_given() {
+        // 09 §4.4: the path bar, `Ctrl+O` and MCP ask the same call.
+        let mut ws = Workspace::create(MemoryStore::default(), "Root").expect("create");
+        let root = ws.root();
+        let net = strata_model::NodeId::new().to_text();
+        ask(
+            &mut ws,
+            json!({ "call": "apply", "label": { "key": "t" }, "ops": [
+                { "op": "createNode", "id": net, "kind": "network", "name": "Игра", "net": root, "x": 0, "y": 0 }] }),
+        );
+        let r = ask(
+            &mut ws,
+            json!({ "call": "resolve", "path": "игра", "base": [root] }),
+        );
+        assert_eq!(r["type"], "resolved");
+        assert_eq!(
+            r["resolved"],
+            json!({ "found": [{
+                "path": [[root, "Root"], [net, "Игра"]],
+                "kind": "network",
+                "primary": true,
+            }] })
+        );
+        let r = ask(&mut ws, json!({ "call": "resolve", "path": "/Игры" }));
+        assert_eq!(r["resolved"]["found"], json!([]));
+        assert_eq!(r["resolved"]["missing"]["at"], 0);
+        assert_eq!(r["resolved"]["missing"]["near"][0]["path"][1][1], "Игра");
     }
 
     #[test]

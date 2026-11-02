@@ -28,6 +28,7 @@ import {
   newId,
   newNode,
   type Opened,
+  type PathHit,
   type Person,
   type Placeable,
   sniffMime,
@@ -67,6 +68,7 @@ import {
 } from 'react';
 import { linkPreview } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
+import { copyText } from '../clipboard';
 import { nodeIcon, nodeIconFile, nodeIconImages } from '../icons/Icon';
 import { type Prefs, reading } from '../prefs';
 import { BoardWindow } from '../proto/BoardWindow';
@@ -107,8 +109,17 @@ import { Layers } from './Layers';
 import { mapItems, pathTo, placeIn, removeOps } from './mapSteps';
 import { NodeSearch } from './NodeSearch';
 import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
-import { PathBar } from './PathBar';
-import { pathLabel } from './paths';
+import { PathBar, type PathChildren } from './PathBar';
+import {
+  appearsIn,
+  childNetworks,
+  entryHolds,
+  menuRows,
+  type NamedPath,
+  pathLabel,
+  pathText,
+  samePath,
+} from './paths';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -280,8 +291,17 @@ export function WorkspaceScreen(props: {
   const ringModeRef = useRef(props.prefs.ring);
   /** The info card on hover (06 §4.4): «Настройки» set it, every new canvas takes it. */
   const hoverCardRef = useRef(props.prefs.card === 'hover');
-  /** Shows a network (the current one when none is given), after what is queued. */
-  const loadRef = useRef<(net?: string) => Promise<void>>(async () => {});
+  /**
+   * Shows a network (the current one when none is given), after what is
+   * queued; `way` is the entry path to it (05 §9.3), ids from the root —
+   * none, and it is the canonical path, or the one it had when it stays.
+   */
+  const loadRef = useRef<(net?: string, way?: readonly string[]) => Promise<void>>(async () => {});
+  /** The entry path of the network on the canvas (05 §9.3): `U` goes up it, the path shows it. */
+  const entryRef = useRef<string[]>([]);
+  const [entry, setEntry] = useState<string[]>([]);
+  /** The palette's «Ввести путь»: the path becomes its field (09 §4.3). */
+  const [pathAsk, setPathAsk] = useState(0);
   /** Loads and undo through the core, one after another (they replace the graph). */
   const busy = useRef<Promise<unknown>>(Promise.resolve());
   const leaving = useRef(false);
@@ -801,7 +821,8 @@ export function WorkspaceScreen(props: {
         if (!v || !n || !p || !d) return;
         if (n.kind === 'network' || n.kind === 'project') {
           leaveRef.current();
-          void loadRef.current(id);
+          // One step further on the way one came (05 §9.3).
+          void loadRef.current(id, [...entryRef.current, id]);
           return;
         }
         if (n.kind === 'board') {
@@ -904,6 +925,7 @@ export function WorkspaceScreen(props: {
       return {
         mode: three ? '3d' : '2d',
         net: three ? (map3d.current?.focusId() ?? netRef.current) : netRef.current,
+        ...(three ? {} : { way: [...entryRef.current] }),
         ...(v && !three ? { camera: { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom } } : {}),
         ...(camera3d ? { camera3d } : {}),
         ...(selection.length > 0 && !three ? { selection } : {}),
@@ -919,7 +941,7 @@ export function WorkspaceScreen(props: {
     const place = async (e: NavEntry) => {
       if (e.net !== netRef.current) {
         if (e.camera) cameras.current.set(e.net, e.camera);
-        await loadRef.current(e.net);
+        await loadRef.current(e.net, e.way);
       } else if (e.camera) {
         viewRef.current?.flyTo(e.camera);
       }
@@ -957,12 +979,16 @@ export function WorkspaceScreen(props: {
       }
     };
 
+    // `U` (06 §10.1): up the entry path, not the canonical one (05 §9.3);
+    // the bubble one came out of in view, the selection left alone.
     const up = async () => {
-      const path = await core.view(netRef.current).then((v) => v.path);
-      const parent = path.at(-2);
-      if (!parent) return;
+      const way = entryRef.current;
+      const parent = way.at(-2);
+      const from = way.at(-1);
+      if (!parent || !from) return;
       leaveRef.current();
-      await loadRef.current(parent[0]);
+      await loadRef.current(parent, way.slice(0, -1));
+      if (netRef.current === parent) editor.current?.bringIntoView(from);
     };
 
     /** The graph's text wires and ghosts as the core has them, outside undo (05 §8.2, §8.5). */
@@ -981,7 +1007,7 @@ export function WorkspaceScreen(props: {
       return p;
     };
 
-    const show = async (id: string) => {
+    const show = async (id: string, way?: readonly string[]) => {
       const v = viewRef.current;
       if (!v || cancelled) return;
       const was = netRef.current;
@@ -1064,6 +1090,13 @@ export function WorkspaceScreen(props: {
         setView3d('2d');
       }
       netRef.current = id;
+      // The way one came (05 §9.3): given, kept while one stays, else the canonical path.
+      const kept = id === was && entryRef.current.at(-1) === id ? entryRef.current : null;
+      const nextWay = way && way.at(-1) === id ? [...way] : (kept ?? nv.path.map(([pid]) => pid));
+      entryRef.current = nextWay;
+      setEntry(nextWay);
+      // A network entered is a visit of this device's (09 §6.4): the ranking and `▾` read them.
+      if (id !== was) visited(openedRef.current.workspace.id, id);
       setNet(nv);
       setMenu(null);
       setName(null);
@@ -1469,8 +1502,8 @@ export function WorkspaceScreen(props: {
         });
     };
     // A network the core does not give is said, not left an empty canvas.
-    const load = (id?: string) =>
-      queue(() => show(id ?? netRef.current)).catch((e: unknown) => {
+    const load = (id?: string, way?: readonly string[]) =>
+      queue(() => show(id ?? netRef.current, way)).catch((e: unknown) => {
         if (!cancelled)
           toast('ws.unopened', { message: e instanceof Error ? e.message : String(e) });
       });
@@ -2048,9 +2081,9 @@ export function WorkspaceScreen(props: {
    * canvas, a flight to it, the node selected (06 §10.3); `open` — into a
    * folder or project, or its content beside it.
    */
-  const goNode = (id: string, open: boolean) => {
+  const goNode = (id: string, open: boolean): Promise<void> => {
     leaveRef.current();
-    void core
+    return core
       .node(id)
       .then(async (d) => {
         if (!d.parent || (open && hasCanvas(d.kind))) {
@@ -2393,6 +2426,74 @@ export function WorkspaceScreen(props: {
   const ed = editor.current;
   const treeRef = useRef(tree);
   treeRef.current = tree;
+  const treeById = useMemo(() => new Map(tree.map((i) => [i.id, i])), [tree]);
+  const nets = useMemo(() => childNetworks(tree), [tree]);
+  const collator = useMemo(() => new Intl.Collator(locale), [locale]);
+
+  // An entry path a step took away a placement from, or a network of, gives
+  // way to the canonical path (05 §9.3).
+  useEffect(() => {
+    const way = entryRef.current;
+    const here = way.at(-1);
+    if (!here || tree.length === 0 || entryHolds(way, treeById)) return;
+    const canonical = pathTo(tree, here).map(([id]) => id);
+    if (canonical.length === 0) return;
+    entryRef.current = canonical;
+    setEntry(canonical);
+  }, [tree, treeById]);
+
+  /** The networks lying in `id` as `▾` lists them (09 §4.3). */
+  const childrenOf = (id: string): PathChildren => {
+    const { rows, recent } = menuRows(
+      nets.get(id) ?? [],
+      visits(openedRef.current.workspace.id),
+      collator,
+    );
+    return {
+      rows: rows.map((i) => ({
+        id: i.id,
+        name: i.name,
+        kind: i.kind,
+        appearance: appearsIn(i, id),
+      })),
+      recent,
+    };
+  };
+
+  /** Text to the clipboard (09 §4.6), said by a toast. */
+  const copy = (text: string) => {
+    void copyText(text).then((ok) => toast(ok ? 'path.copied' : 'path.uncopied', { text }));
+  };
+
+  /**
+   * A node a typed path named (09 §4.4), by the way the path went. `into` —
+   * the path field: a network is entered, any other node chosen in its
+   * network; `go` — `Enter` of `Ctrl+O`: the node chosen in its network, a
+   * network too; `open` — `Shift+Enter`: into a network, a node's content open.
+   */
+  const goHit = (hit: PathHit, how: 'into' | 'go' | 'open') => {
+    const way = hit.path.map(([id]) => id);
+    const id = way.at(-1);
+    if (!id) return;
+    const visit = () => visited(openedRef.current.workspace.id, id);
+    if (view3dRef.current === '3d') {
+      visit();
+      map3d.current?.flyTo(id);
+      return;
+    }
+    leaveRef.current();
+    // A network entered is a visit of its own (`show`).
+    if (way.length === 1 || (hasCanvas(hit.kind) && how !== 'go')) {
+      void loadRef.current(id, way);
+      return;
+    }
+    const parent = way.slice(0, -1);
+    void loadRef.current(parent.at(-1), parent).then(() => {
+      editor.current?.focusNode(id);
+      visit();
+      if (how === 'open') eventsRef.current?.open?.(id);
+    });
+  };
   /**
    * What `Ctrl+F` searches (09 §3.3, 08 §6.1), made when the bar opens: it
    * keeps the choice of that moment for `Esc`. The network on the canvas,
@@ -2983,6 +3084,17 @@ export function WorkspaceScreen(props: {
         onSelect: () => setColorPick({ ids: ed.flagTargets(n.id), x: ctx?.x ?? 0, y: ctx?.y ?? 0 }),
       },
     );
+    // 09 §4.6: its canonical path and a [[link]] to it, to the clipboard.
+    if (treeById.has(n.id)) {
+      items.push(
+        {
+          label: t(locale, 'ctx.copyPath'),
+          separated: true,
+          onSelect: () => copy(pathText(pathTo(tree, n.id))),
+        },
+        { label: t(locale, 'ctx.copyLink'), onSelect: () => copy(`[[${n.name}]]`) },
+      );
+    }
     // Two commands, not side by side (06 §12.3): «Убрать отсюда» and «Удалить везде».
     items.push({
       label: t(locale, 'ctx.delete'),
@@ -3071,11 +3183,41 @@ export function WorkspaceScreen(props: {
     quality,
     setQuality: chooseQuality,
     help: () => setHelp(true),
+    typePath: () => setPathAsk((n) => n + 1),
+    // The node the panel shows, else the network on the canvas (09 §4.6).
+    copyPath: () => {
+      const id = (ed && ed.selection.size === 1 ? ed.current : null) ?? net?.net;
+      if (id && treeById.has(id)) copy(pathText(pathTo(tree, id)));
+    },
+    copyLink: () => {
+      const id = (ed && ed.selection.size === 1 ? ed.current : null) ?? net?.net;
+      const name = id ? treeById.get(id)?.name : undefined;
+      if (name !== undefined) copy(`[[${name}]]`);
+    },
   };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
     : label(null);
   const path = net?.path ?? [];
+  // The entry path with the tree's names (05 §9.3); on the star map, the way
+  // to the cluster in focus (08 §5.1).
+  const barPath: NamedPath = useMemo(() => {
+    if (!net) return [];
+    if (view3d === '3d') return pathTo(tree, mapFocus ?? net.net);
+    if (entry.at(-1) !== net.net) return net.path;
+    return entry.map(
+      (id) => [id, treeById.get(id)?.name ?? (id === net.net ? net.name : '')] as const,
+    );
+  }, [net, view3d, tree, mapFocus, entry, treeById]);
+  // The canonical path, grey under the entry path when it is another (06 §10.2).
+  const barCanonical = useMemo(() => {
+    const canonical = net && view3d !== '3d' ? pathTo(tree, net.net) : [];
+    const differs = !samePath(
+      canonical.map(([id]) => id),
+      barPath.map(([id]) => id),
+    );
+    return canonical.length > 0 && differs ? canonical : undefined;
+  }, [net, view3d, tree, barPath]);
   const { onUndoState } = props;
   useEffect(
     () =>
@@ -3144,18 +3286,36 @@ export function WorkspaceScreen(props: {
       {net && (view3d === '2d' || view3d === '3d') ? (
         <PathBar
           locale={locale}
-          // On the map: the way to the cluster in focus (08 §5.1).
-          path={view3d === '3d' ? pathTo(tree, mapFocus ?? net.net) : net.path}
-          kindOf={(id) => tree.find((i) => i.id === id)?.kind ?? 'network'}
+          path={barPath}
+          canonical={barCanonical}
+          appearance={barPath.map(
+            ([id], i) => i > 0 && appearsIn(treeById.get(id), barPath[i - 1]?.[0] ?? ''),
+          )}
+          kindOf={(id) => treeById.get(id)?.kind ?? 'network'}
+          canonicalOf={(id) => pathTo(tree, id)}
+          childrenOf={childrenOf}
+          hasChildren={(id) => (nets.get(id)?.length ?? 0) > 0}
+          search={searchClient()}
           panel={details !== null}
-          onGo={(id) => {
+          onGo={(way) => {
+            const id = way.at(-1);
+            if (!id) return;
             leaveRef.current();
             if (view3d === '3d') map3d.current?.goPlace(id);
-            else void loadRef.current(id);
+            else void loadRef.current(id, way);
           }}
-          marks={marks.map((m) => (m ? (tree.find((i) => i.id === m.net)?.name ?? '') : null))}
+          resolve={(text) =>
+            core.resolve(
+              text,
+              barPath.map(([id]) => id),
+            )
+          }
+          onHit={(hit) => goHit(hit, 'into')}
+          onCopy={copy}
+          marks={marks.map((m) => (m ? (treeById.get(m.net)?.name ?? '') : null))}
           onMark={goMark}
           onClearMark={clearMark}
+          editAsked={pathAsk}
         />
       ) : null}
       <div ref={geckoHost} className="ws-gecko" data-panel={details ? 'open' : 'closed'}>
@@ -3255,6 +3415,18 @@ export function WorkspaceScreen(props: {
           here={finder.map ? undefined : netRef.current}
           visits={finderVisits}
           trash={finder.map ? undefined : (trash ?? undefined)}
+          // The path mode (09 §2.1, §4.4): from the entry path, as the path field.
+          resolve={(text) =>
+            core.resolve(
+              text,
+              barPath.map(([id]) => id),
+            )
+          }
+          onHit={(hit, open) => {
+            setFinder(null);
+            focusCanvas();
+            goHit(hit, open ? 'open' : 'go');
+          }}
           left={
             (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
           }
@@ -3262,18 +3434,21 @@ export function WorkspaceScreen(props: {
           onChoose={(id, how) => {
             const map = finder.map;
             setFinder(null);
-            visited(openedRef.current.workspace.id, id);
+            // The node chosen is the visit (09 §2.5): after the network its way
+            // went into, which is a visit too.
+            const visit = () => visited(openedRef.current.workspace.id, id);
             if (map) {
+              visit();
               map3d.current?.flyTo(id);
               return;
             }
             focusCanvas();
             if (how === 'restore') {
               const item = trash?.find((x) => x.id === id);
-              if (item) void restore(item).then(() => goNode(id, false));
+              if (item) void restore(item).then(() => goNode(id, false).then(visit));
               return;
             }
-            goNode(id, how === 'open');
+            void goNode(id, how === 'open').then(visit);
           }}
           onClose={() => {
             setFinder(null);
@@ -3294,7 +3469,7 @@ export function WorkspaceScreen(props: {
           onGo={(id) => {
             setExternal(null);
             focusCanvas();
-            goNode(id, false);
+            void goNode(id, false);
           }}
           onShow={(ends) => {
             setExternal(null);
@@ -3323,7 +3498,7 @@ export function WorkspaceScreen(props: {
           onGo={(id) => {
             setImportReport(null);
             focusCanvas();
-            goNode(id, false);
+            void goNode(id, false);
           }}
           onClose={() => {
             setImportReport(null);

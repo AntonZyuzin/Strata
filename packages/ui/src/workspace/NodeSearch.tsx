@@ -1,9 +1,17 @@
-import type { TrashItem, TreeItem } from '@strata/backend';
+import {
+  hasCanvas,
+  type PathHit,
+  type Resolved,
+  type TrashItem,
+  type TreeItem,
+} from '@strata/backend';
 import { glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { Scope, SearchClient, Visit } from '@strata/search';
 import { type CSSProperties, useEffect, useMemo, useState } from 'react';
 import { pointerMoved } from '../pointer';
+import { segmentSpans } from './PathBar';
+import { escapeSegment, pathLabel } from './paths';
 
 const ROWS = 12;
 const TRASH_ROWS = 3;
@@ -18,6 +26,13 @@ interface Row {
   /** The canonical path of its network, the root left out: the tab names it. */
   path: string;
   trashed: boolean;
+  /** A node a typed path named, or a name offered for its segment (09 §4.4). */
+  hit?: PathHit;
+}
+
+/** A query in the path mode (09 §2.1): it starts with `/`, `./`, `../`. */
+export function pathQuery(q: string): boolean {
+  return /^(\/|\.\.?(\/|$))/.test(q.trimStart());
 }
 
 /**
@@ -27,7 +42,12 @@ interface Row {
  * last; nodes in the trash below, three at most. `Enter` or a click goes to
  * the node, `Shift+Enter` opens it; a node in the trash comes back first.
  * An `Enter` typed before the engine's answer chooses once it comes, as in
- * the Tab menu. Drawn like the Tab menu, its width in `ch` whatever the language.
+ * the Tab menu. A query that starts with `/`, `./` or `../` is a path (09
+ * §2.1, §4.4): the core resolves it from the entry path — the nodes it names,
+ * or the names nearest to a segment that names nothing; `Tab` puts the row's
+ * name in that segment, `/` after a network; `Enter` on a name offered puts
+ * it there and asks again. Drawn like the Tab menu, its width in `ch`
+ * whatever the language.
  */
 export function NodeSearch(props: {
   locale: Locale;
@@ -43,10 +63,17 @@ export function NodeSearch(props: {
   left: number;
   top: number;
   onChoose: (id: string, how: NodeChoice) => void;
+  /** What a typed path names, from the entry path (09 §4.4); none — no path mode. */
+  resolve?: ((text: string) => Promise<Resolved>) | undefined;
+  /** A node a typed path named, by the way it went; `open` — `Shift+Enter`. */
+  onHit?: ((hit: PathHit, open: boolean) => void) | undefined;
   onClose: () => void;
 }) {
-  const { locale, items, search, scope, here, visits, trash } = props;
+  const { locale, items, search, scope, here, visits, trash, resolve } = props;
   const [query, setQuery] = useState('');
+  /** The core's answer to a path, for the query it was asked. */
+  const [resolved, setResolved] = useState<{ q: string; r: Resolved } | null>(null);
+  const paths = resolve !== undefined && pathQuery(query);
   const [index, setIndex] = useState(0);
   const [moved] = useState(pointerMoved);
   const [found, setFound] = useState<{ q: string; ids: string[]; trashed: string[] } | null>(null);
@@ -55,8 +82,19 @@ export function NodeSearch(props: {
   const byId = useMemo(() => new Map(items.map((i) => [i.id, i])), [items]);
 
   useEffect(() => {
+    if (!paths || !resolve) return;
+    let live = true;
+    void resolve(query).then((r) => {
+      if (live) setResolved({ q: query, r });
+    });
+    return () => {
+      live = false;
+    };
+  }, [paths, resolve, query]);
+
+  useEffect(() => {
     const q = query.trim();
-    if (q === '') return;
+    if (q === '' || paths) return;
     let live = true;
     const trashNames = (trash ?? []).map((x) => x.name);
     void Promise.all([
@@ -70,7 +108,7 @@ export function NodeSearch(props: {
     return () => {
       live = false;
     };
-  }, [search, query, scope, here, visits, trash]);
+  }, [search, query, scope, here, visits, trash, paths]);
 
   const pathOf = (id: string): string => {
     const names: string[] = [];
@@ -85,8 +123,42 @@ export function NodeSearch(props: {
     const item = byId.get(id);
     return item ? { id, name: item.name, kind: item.kind, path: pathOf(id), trashed: false } : null;
   };
+  const hitRow = (hit: PathHit): Row => {
+    const [id, name] = hit.path.at(-1) ?? ['', ''];
+    return {
+      id,
+      name,
+      kind: hit.kind,
+      path: pathLabel(hit.path.slice(0, -1)),
+      trashed: false,
+      hit,
+    };
+  };
+  const answer = paths && resolved?.q === query ? resolved.r : null;
+  // A path that ends with `/` and names one network: what lies in it, by name.
+  const [one] = answer?.found ?? [];
+  const into =
+    answer &&
+    !answer.missing &&
+    answer.found.length === 1 &&
+    one &&
+    hasCanvas(one.kind) &&
+    /(^|[^\\])\/\s*$/.test(query)
+      ? one
+      : null;
   let rows: Row[];
-  if (query.trim() === '') {
+  if (into) {
+    const net = into.path.at(-1)?.[0] ?? '';
+    rows = items
+      .filter((i) => i.parent === net || (i.appears ?? []).includes(net))
+      .sort((a, b) => a.name.localeCompare(b.name, locale) || (a.id < b.id ? -1 : 1))
+      .slice(0, ROWS)
+      .map((i) =>
+        hitRow({ path: [...into.path, [i.id, i.name]], kind: i.kind, primary: i.parent === net }),
+      );
+  } else if (paths) {
+    rows = (answer ? (answer.missing?.near ?? answer.found) : []).slice(0, ROWS).map(hitRow);
+  } else if (query.trim() === '') {
     // The nodes visited last (09 §3.4 «Недавние»), in the scope.
     rows = Object.entries(visits)
       .sort(([, a], [, b]) => b.at - a.at)
@@ -105,22 +177,50 @@ export function NodeSearch(props: {
   } else {
     rows = [];
   }
-  const ready = query.trim() === '' || found?.q === query;
+  const ready = paths ? answer !== null : query.trim() === '' || found?.q === query;
+  /** The segment that named nothing, where a name offered goes. */
+  const missing = answer?.missing ? segmentSpans(query)[answer.missing.at] : undefined;
+  /** A row's name in the segment that named nothing; `/` after a network, to go on typing. */
+  const complete = (r: Row, slash: boolean): string | null => {
+    const tail = slash && hasCanvas(r.kind) ? '/' : '';
+    if (into) return query.trimEnd() + escapeSegment(r.name) + tail;
+    const last = segmentSpans(query).at(-1);
+    const word = last ? query.slice(last.start, last.end) : '';
+    // `.` and `..` name where one goes, not a name to put there.
+    if (!missing && (word === '.' || word === '..')) return `${query.trimEnd()}/`;
+    const span = missing ?? (answer?.found.length ? last : undefined);
+    if (!span) return null;
+    return query.slice(0, span.start) + escapeSegment(r.name) + tail + query.slice(span.end);
+  };
+  const { onChoose, onHit } = props;
+  const take = (r: Row, open: boolean) => {
+    if (r.hit && answer?.missing) {
+      // A name offered: in the segment's place, and the path asked again.
+      const next = complete(r, false);
+      if (next !== null) setQuery(next);
+      setIndex(0);
+      if (next !== null) setWaiting({ open });
+      return;
+    }
+    if (r.hit) onHit?.(r.hit, open);
+    else onChoose(r.id, r.trashed ? 'restore' : open ? 'open' : 'go');
+  };
   const choose = (i: number, open: boolean) => {
     if (!ready) {
       setWaiting({ open });
       return;
     }
     const r = rows[i];
-    if (r) props.onChoose(r.id, r.trashed ? 'restore' : open ? 'open' : 'go');
+    if (r) take(r, open);
   };
   const first = rows[Math.min(index, rows.length - 1)];
-  const { onChoose } = props;
   useEffect(() => {
     if (!waiting || !ready) return;
     setWaiting(null);
-    if (first) onChoose(first.id, first.trashed ? 'restore' : waiting.open ? 'open' : 'go');
-  }, [waiting, ready, first, onChoose]);
+    // A path asked again after a name offered goes only where it names one node.
+    if (paths && (answer?.missing || (answer && answer.found.length !== 1))) return;
+    if (first) take(first, waiting.open);
+  });
   let headed = false;
   return (
     <>
@@ -150,7 +250,15 @@ export function NodeSearch(props: {
               e.stopPropagation();
               if (e.key === 'Escape') props.onClose();
               else if (e.key === 'Enter') choose(index, e.shiftKey);
-              else if (e.key === 'ArrowDown') setIndex((i) => Math.min(rows.length - 1, i + 1));
+              else if (e.key === 'Tab' && paths && !e.shiftKey) {
+                // The row's name in its segment, as a shell completes a path.
+                const r = rows[Math.min(index, rows.length - 1)];
+                const next = r ? complete(r, true) : null;
+                if (next !== null) {
+                  setQuery(next);
+                  setIndex(0);
+                }
+              } else if (e.key === 'ArrowDown') setIndex((i) => Math.min(rows.length - 1, i + 1));
               else if (e.key === 'ArrowUp') setIndex((i) => Math.max(0, i - 1));
               else return;
               e.preventDefault();
@@ -159,7 +267,11 @@ export function NodeSearch(props: {
         </div>
         <div className="tab-menu-list" role="listbox" aria-label={props.label}>
           {query.trim() && ready && rows.length === 0 ? (
-            <div className="tab-menu-empty">{t(locale, 'map.nothing', { q: query })}</div>
+            <div className="tab-menu-empty">
+              {missing
+                ? t(locale, 'path.missing', { name: query.slice(missing.start, missing.end) })
+                : t(locale, 'map.nothing', { q: query })}
+            </div>
           ) : null}
           {rows.map((r, i) => {
             const header = r.trashed && !headed;
@@ -171,7 +283,7 @@ export function NodeSearch(props: {
                 </div>
               ) : null,
               <div
-                key={r.id}
+                key={r.hit ? r.hit.path.map(([id]) => id).join('/') : r.id}
                 role="option"
                 tabIndex={-1}
                 aria-selected={i === index}

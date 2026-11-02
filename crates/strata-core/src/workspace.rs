@@ -27,6 +27,7 @@ use strata_model::{
 mod import;
 mod importing;
 mod links;
+mod paths;
 mod places;
 
 #[cfg(test)]
@@ -34,6 +35,7 @@ pub(crate) use import::TEST_BATCH;
 pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
 pub use importing::{ImportBatch, ImportProgress, ImportShadow, PlannedImport, ReadyBatch};
 pub use links::{LinkTarget, LinkTargets};
+pub use paths::{PathHit, PathMissing, PathText, Resolved, escape_segment, parse_path, path_text};
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -466,6 +468,11 @@ pub struct TreeItem {
     /// Its flags (05 §7): templates are offered in the Tab menu.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<Flag>,
+    /// The networks it also appears in, its primary aside, the oldest
+    /// placement first (05 §5): the path bar's `▾` lists a network under
+    /// each network it lies in (09 §4.3).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub appears: Vec<String>,
 }
 
 /// A person of the workspace (05 §10).
@@ -2713,6 +2720,8 @@ impl<S: Store> Workspace<S> {
 
     pub fn tree(&self) -> Vec<TreeItem> {
         let mut out = Vec::new();
+        // Every placement once, not a scan of a shard for each node.
+        let places = self.placements_index();
         for shard in self.index_shards() {
             let LoroValue::Map(kinds) = shard.get_map("kind").get_value() else {
                 continue;
@@ -2723,10 +2732,16 @@ impl<S: Store> Workspace<S> {
                     continue;
                 }
                 // A node with no placement left in a live network lies nowhere (05 §5).
-                let parent = self.primary_of(n).map(|p| p.to_text());
-                if parent.is_none() && n != self.root {
+                let placed = places.get(&n).map(Vec::as_slice).unwrap_or(&[]);
+                let primary = self.primary_among(n, placed);
+                if primary.is_none() && n != self.root {
                     continue;
                 }
+                let appears = placed
+                    .iter()
+                    .filter(|&&(net, _)| Some(net) != primary)
+                    .map(|(net, _)| net.to_text())
+                    .collect();
                 let kind = self.kind(n).unwrap_or(NodeKind::Note);
                 let look = if kind == NodeKind::Asset {
                     self.attrs(n)
@@ -2739,12 +2754,13 @@ impl<S: Store> Workspace<S> {
                     kind,
                     status: self.text_field(n, "status"),
                     deadline: self.text_field(n, "deadline"),
-                    parent,
+                    parent: primary.map(|p| p.to_text()),
                     asset: look.asset,
                     mime: look.mime,
                     url: look.url,
                     icon: look.icon,
                     flags: self.flags(n),
+                    appears,
                 });
             }
         }

@@ -621,9 +621,10 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
         await page.keyboard.up(key);
       }
       await expect(page.locator('.ws-mark')).toHaveCount(2);
-      await expect(path).toHaveAttribute(
+      // The whole path as one types it (09 §4.2), and what a click and the right button do.
+      await expect(path.locator('ol')).toHaveAttribute(
         'title',
-        'Игра «Туман» / Уровни, локации и всё, что между ними / Болото у старой мельницы за туманным лесом',
+        /^\/Уровни, локации и всё, что между ними\/Болото у старой мельницы за туманным лесом · /,
       );
       // Cut names keep themselves whole in their tooltips; nothing else is cut.
       expect(await overflowing(page, '.ws-path'), `${locale} path must fit`).toEqual([]);
@@ -642,10 +643,12 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
       expect(b.x).toBeGreaterThanOrEqual(layers.x + layers.width);
       expect(b.y + b.height).toBeLessThanOrEqual(canvas.y + canvas.height);
       // A click on a folder goes there; on the workspace's icon — to the root, and the path goes.
-      await path.getByRole('button', { name: 'Уровни, локации и всё, что между ними' }).click();
+      await path
+        .getByRole('button', { name: 'Уровни, локации и всё, что между ними', exact: true })
+        .click();
       await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
       await expect(path.locator('[aria-current="location"]')).toContainText('Уровни');
-      await path.getByRole('button', { name: 'Игра «Туман»' }).click();
+      await path.getByRole('button', { name: 'Игра «Туман»', exact: true }).click();
       await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
       // At the root the marks alone stay.
       await expect(page.locator('.ws-path ol')).toHaveCount(0);
@@ -654,6 +657,242 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['path', 'here', 'root', 'marks'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+/**
+ * root ─ Проекты ─ Игра;  root ─ Фильм, where «Игра» appears too (05 §5),
+ * placed there by the Tab menu's `Alt+Enter`. The canvas ends in «Фильм».
+ */
+async function twoWays(page: Page) {
+  await makeFolder(page, 'Проекты', 420, 300);
+  await makeFolder(page, 'Фильм', 760, 460);
+  await enter(page, 'Проекты');
+  await makeFolder(page, 'Игра', 520, 360);
+  await leave(page);
+  await enter(page, 'Фильм');
+  await page.mouse.move(640, 400);
+  await page.keyboard.press('Tab');
+  await page.keyboard.type('Игра');
+  await page.keyboard.press('Alt+Enter');
+  await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+  const game = await idOf(page, 'Игра');
+  await expect.poll(() => placement(page, game)).toEqual({ appearance: true, places: 2 });
+  await settled(page);
+}
+
+test('the path goes the way one came: the entry path, U, ▾, a typed path, «Скопировать путь» (05 §9.3, 09 §4.3–4.6)', async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await page.goto('/?plain');
+  await createWorkspace(page, 'Пути');
+  await twoWays(page);
+  const path = page.locator('.ws-path');
+  const here = path.locator('[aria-current="location"]');
+  // Into «Игра» through its appearance: the path is the way one came, the
+  // shortcut by «Игра»; the canonical path grey under it, ⌂ by it.
+  await enter(page, 'Игра');
+  await expect(here).toContainText('Игра');
+  await expect(path.getByRole('button', { name: 'Фильм', exact: true })).toBeVisible();
+  await expect(here).toHaveAttribute('data-appearance', 'true');
+  const canonical = path.locator('.ws-path-canonical');
+  await expect(canonical).toHaveText('/Проекты/Игра');
+  // `U` goes back the way one came, not to the canonical «Проекты».
+  await leave(page);
+  await expect(here).toContainText('Фильм');
+  await expect(canonical).toHaveCount(0);
+  // ▾ after the root: the networks there, the recently visited first, the one
+  // on the path marked; its triangle again closes it.
+  const rootMore = path.getByRole('button', { name: 'Сети в «Пути»' });
+  await rootMore.click();
+  const menu = page.locator('.path-menu');
+  await expect(menu.locator('.tab-menu-label')).toHaveText(['Фильм', 'Проекты']);
+  await expect(menu.locator('.is-chosen')).toHaveText('Фильм');
+  await rootMore.click();
+  await expect(menu).toHaveCount(0);
+  await rootMore.click();
+  await expect(menu).toBeVisible();
+  // Typing filters by the search engine's ranking; Enter goes there.
+  await page.keyboard.type('проек');
+  await expect(menu.locator('.tab-menu-label')).toHaveText(['Проекты']);
+  await page.keyboard.press('Enter');
+  await expect(here).toContainText('Проекты');
+  await expect(menu).toHaveCount(0);
+  // ▾ after the last: «Игра», lying here by its primary placement.
+  await path.getByRole('button', { name: 'Сети в «Проекты»' }).click();
+  await expect(menu.locator('.tab-menu-label')).toHaveText(['Игра']);
+  await menu.locator('.tab-menu-row').first().click();
+  await expect(here).toContainText('Игра');
+  await expect(canonical).toHaveCount(0);
+  // A click on the network one is in: the field, the canonical path chosen.
+  await here.click();
+  const field = path.locator('.ws-path-input');
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('/Проекты/Игра');
+  expect(
+    await field.evaluate((el: HTMLInputElement) => [el.selectionStart, el.selectionEnd]),
+  ).toEqual([0, '/Проекты/Игра'.length]);
+  // Case and `ё` aside, by any placement (09 §4.2): through «Фильм».
+  await page.keyboard.type('/фильм/ИГРА');
+  await page.keyboard.press('Enter');
+  await expect(field).toHaveCount(0);
+  await expect(path.getByRole('button', { name: 'Фильм', exact: true })).toBeVisible();
+  await expect(canonical).toHaveText('/Проекты/Игра');
+  // A segment that names nothing: the dashed field, the segment chosen, the
+  // nearest name offered; Enter takes it and goes.
+  await here.click();
+  await page.keyboard.type('/Проекты/Игры');
+  await page.keyboard.press('Enter');
+  await expect(field).toHaveAttribute('aria-invalid', 'true');
+  expect(
+    await field.evaluate((el: HTMLInputElement) =>
+      el.value.slice(el.selectionStart ?? 0, el.selectionEnd ?? 0),
+    ),
+  ).toBe('Игры');
+  const answer = path.locator('.path-answer');
+  await expect(answer.locator('.tab-menu-label').first()).toHaveText('Игра');
+  await page.keyboard.press('Enter');
+  await expect(field).toHaveCount(0);
+  await expect(here).toContainText('Игра');
+  await expect(canonical).toHaveCount(0);
+  // `Esc` gives the path back.
+  await here.click();
+  await page.keyboard.type('/Фильм');
+  await page.keyboard.press('Escape');
+  await expect(field).toHaveCount(0);
+  await expect(here).toContainText('Игра');
+  // The right button: the canonical path to the clipboard, said by a toast;
+  // «Скопировать путь захода» only where the way one came is another.
+  await here.click({ button: 'right' });
+  const ctx = page.locator('.context-menu');
+  await expect(ctx.locator('.context-menu-label')).toHaveText([
+    'Скопировать путь',
+    'Скопировать как [[ссылку]]',
+    'Ввести путь',
+  ]);
+  await ctx.getByText('Скопировать путь', { exact: true }).click();
+  await expect(page.locator('.toast', { hasText: 'Скопировано: /Проекты/Игра' })).toBeVisible();
+  // The palette's «Ввести путь» at the root, where the path is not shown.
+  await path.getByRole('button', { name: 'Пути', exact: true }).click();
+  await expect(path.locator('ol')).toHaveCount(0);
+  await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+  await page.keyboard.press('Control+p');
+  await page.keyboard.type('ввести путь');
+  await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(
+    'Ввести путь',
+  );
+  await page.keyboard.press('Enter');
+  await expect(field).toBeFocused();
+  await expect(field).toHaveValue('/');
+  await page.keyboard.type('Фильм/Игра');
+  await page.keyboard.press('Enter');
+  await expect(here).toContainText('Игра');
+  await expect(path.getByRole('button', { name: 'Фильм', exact: true })).toBeVisible();
+});
+
+test('Ctrl+O takes a path: the core resolves it from the entry path, Tab completes, a path ending in / lists what lies there (09 §2.1, §4.4)', async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await page.goto('/?plain');
+  await createWorkspace(page, 'Пути');
+  await twoWays(page);
+  // In «Игра», come to through «Фильм».
+  await enter(page, 'Игра');
+  const goto = page.locator('.goto');
+  const input = goto.locator('input');
+  const rows = goto.locator('.tab-menu-label');
+  const here = page.locator('.ws-path [aria-current="location"]');
+  await page.keyboard.press('Control+o');
+  // `..` goes back the way one came: «Фильм», not the canonical «Проекты».
+  await page.keyboard.type('..');
+  await expect(rows).toHaveText(['Фильм']);
+  // A path that ends with `/` lists what lies in its network, by name.
+  await input.fill('/');
+  await expect(rows).toHaveText(['Проекты', 'Фильм']);
+  // Tab puts the row's name in, `/` after a network.
+  await page.keyboard.press('Tab');
+  await expect(input).toHaveValue('/Проекты/');
+  await expect(rows).toHaveText(['Игра']);
+  // A segment typed in part: the nearest names; Enter puts the name there,
+  // the path is asked again and goes — «Игра» chosen in «Проекты».
+  await page.keyboard.type('иг');
+  await expect(rows).toHaveText(['Игра']);
+  await page.keyboard.press('Enter');
+  await expect(goto).toHaveCount(0);
+  await expect(here).toContainText('Проекты');
+  await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Игра');
+  // A segment that names nothing and nothing near: said in the list.
+  await page.keyboard.press('Control+o');
+  await page.keyboard.type('/Проекты/Ъ');
+  await expect(goto.locator('.tab-menu-empty')).toHaveText('Не найдено: «Ъ»');
+  // Shift+Enter goes into a network, by the way the path went.
+  await input.fill('/Фильм/Игра');
+  await expect(rows).toHaveText(['Игра']);
+  await page.keyboard.press('Shift+Enter');
+  await expect(goto).toHaveCount(0);
+  await expect(here).toContainText('Игра');
+  await expect(
+    page.locator('.ws-path').getByRole('button', { name: 'Фильм', exact: true }),
+  ).toBeVisible();
+});
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`▾, the canonical path and the typed path keep their boxes in RU and EN @${deviceScaleFactor}x (09 §4.3)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Пути');
+      await twoWays(page);
+      await enter(page, 'Игра');
+      const path = page.locator('.ws-path');
+      await expect(path.locator('.ws-path-canonical')).toBeVisible();
+      expect(await overflowing(page, '.ws-path'), `${locale} the path must fit`).toEqual([]);
+      const bar = await box(page, '.ws-path-box');
+      const canonical = await box(page, '.ws-path-canonical');
+      // ▾ after the root, over the path.
+      await path.locator('.ws-path-root + li .ws-path-more').click();
+      const menu = page.locator('.path-menu');
+      await expect(menu.locator('.tab-menu-row')).toHaveCount(2);
+      expect(await overflowing(page, '.path-menu'), `${locale} ▾ must fit`).toEqual([]);
+      const list = await box(page, '.path-menu');
+      expect(list.y + list.height).toBeLessThanOrEqual(bar.y);
+      expect(list.width).toBeLessThanOrEqual((await chWidth(page, 40)) + 2);
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+      await expect(path.locator('.ws-path-root + li .ws-path-more')).toBeFocused();
+      // The field with a segment that names nothing and the name offered.
+      await path.locator('[aria-current="location"]').click();
+      await page.keyboard.type('/Проекты/Игры');
+      await page.keyboard.press('Enter');
+      await expect(path.locator('.ws-path-input')).toHaveAttribute('aria-invalid', 'true');
+      await expect(page.locator('.path-answer .tab-menu-row')).toHaveCount(1);
+      expect(await overflowing(page, '.ws-path'), `${locale} the field must fit`).toEqual([]);
+      boxes.push({
+        bar,
+        canonical,
+        list,
+        field: await box(page, '.ws-path-input'),
+        answer: await box(page, '.path-answer'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['bar', 'canonical', 'list', 'field', 'answer'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -1175,14 +1414,15 @@ for (const deviceScaleFactor of [1, 2]) {
       await createWorkspace(page, 'Перенос');
       await makeFolder(page, 'Архив', 520, 320);
       await createNode(page, 760, 480, 'Эскиз');
-      // The node's menu with a copy waiting: cut, copy, duplicate, paste, as an appearance, wrap, icon, colour.
+      // The node's menu with a copy waiting: cut, copy, duplicate, paste, as an appearance, wrap,
+      // icon, colour; its path and a [[link]] to the clipboard (09 §4.6).
       await select(page, 'Эскиз');
       await page.evaluate(() => window.__strataWs?.view.canvas.focus());
       await page.keyboard.press('Control+c');
       const sketch = await at(page, 'Эскиз');
       await page.mouse.click(sketch.x, sketch.y, { button: 'right' });
       const menu = page.locator('.context-menu');
-      await expect(menu.locator('.context-menu-row')).toHaveCount(15);
+      await expect(menu.locator('.context-menu-row')).toHaveCount(17);
       expect(await overflowing(page, '.context-menu'), `${locale} the menu must fit`).toEqual([]);
       expect((await box(page, '.context-menu')).width).toBeLessThanOrEqual(
         (await chWidth(page, 40)) + 2,

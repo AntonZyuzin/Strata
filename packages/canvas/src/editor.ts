@@ -659,6 +659,14 @@ export class Editor {
     this.follow(id);
   }
 
+  /**
+   * Keeps a node in view, the selection as it is: centred when it is out of
+   * the canvas one sees (06 §10.1: the bubble `U` came out of).
+   */
+  bringIntoView(id: string): void {
+    this.follow(id);
+  }
+
   /** Selects one node and keeps it in view (the «Структура» tree, the panel's links). */
   focusNode(id: string): void {
     if (!this.graph.nodes.has(id)) return;

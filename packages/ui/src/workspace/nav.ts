@@ -20,6 +20,11 @@ export interface NavEntry {
   };
   /** At most `MAX_SELECTION` nodes. */
   selection?: string[];
+  /**
+   * The entry path to `net` (05 §9.3), ids from the root: back there, the
+   * path and `U` go the way one came; none — the canonical path.
+   */
+  way?: string[];
   at: number;
 }
 
@@ -38,7 +43,8 @@ function valid(e: unknown): e is NavEntry {
     v !== null &&
     (v.mode === '2d' || v.mode === '3d') &&
     typeof v.net === 'string' &&
-    typeof v.at === 'number'
+    typeof v.at === 'number' &&
+    (v.way === undefined || (Array.isArray(v.way) && v.way.every((id) => typeof id === 'string')))
   );
 }
 

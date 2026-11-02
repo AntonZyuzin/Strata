@@ -4096,6 +4096,7 @@ dependencies = [
  "strata-layout",
  "strata-markdown",
  "strata-model",
+ "strata-search",
  "thiserror 2.0.21",
  "ureq",
  "url",

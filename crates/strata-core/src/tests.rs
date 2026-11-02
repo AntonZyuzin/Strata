@@ -4,6 +4,7 @@ use crate::{CopyAt, Label, MemoryStore, Op, Store, Workspace};
 use strata_model::{NodeId, NodeKind};
 
 mod import;
+mod paths;
 
 fn ws() -> Workspace<MemoryStore> {
     let mut w = Workspace::create(MemoryStore::default(), "Корень").expect("create");

@@ -29,6 +29,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   setQuality: () => undefined,
   help: () => undefined,
   typePath: () => undefined,
+  nextArea: () => undefined,
   copyPath: () => undefined,
   copyLink: () => undefined,
   ...over,

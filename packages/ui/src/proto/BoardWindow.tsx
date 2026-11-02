@@ -99,6 +99,8 @@ export function BoardWindow(props: {
       ref={box}
       className="window board-window"
       {...modeProps(props.mode ?? 'float', props.dock ?? null, undefined)}
+      // `F6` brings the focus here (06 §1.1): the board's keys are its own then.
+      tabIndex={-1}
       aria-label={t(locale, 'board.label', { name: title })}
       onFocusCapture={() => props.onFocus(true)}
       onBlurCapture={(e) => {

@@ -90,6 +90,7 @@ import { menuOpening, TabMenu } from '../proto/TabMenu';
 import { netItems, searchClient, visited, visits } from '../search';
 import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
+import { areasOf, nextArea } from './areas';
 import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
 import {
@@ -2556,6 +2557,28 @@ export function WorkspaceScreen(props: {
     const timer = setTimeout(() => saveDock(dock), 300);
     return () => clearTimeout(timer);
   }, [dock]);
+  // `F6` / `Shift+F6` (06 §1.1, §17): the focus to the next area of the
+  // screen, or the one before — from a field and a window too, not over a
+  // menu or a dialog. `Ctrl+F6` as well: a browser may keep `F6` for itself.
+  useEffect(() => {
+    const step = (e: KeyboardEvent) => {
+      if (e.key !== 'F6' || e.altKey || e.metaKey) return;
+      if (document.querySelector('.menu-backdrop, .dialog-backdrop, .context-menu')) return;
+      const screen = host.current?.closest('.workspace');
+      if (!screen) return;
+      const to = nextArea(
+        areasOf(screen, viewRef.current?.canvas ?? null),
+        document.activeElement,
+        e.shiftKey,
+      );
+      if (!to) return;
+      e.preventDefault();
+      e.stopPropagation();
+      to.target.focus();
+    };
+    window.addEventListener('keydown', step, true);
+    return () => window.removeEventListener('keydown', step, true);
+  }, []);
   // `Ctrl+W` closes a content window on desktop (06 §13.1); a browser keeps
   // the key for its tab.
   useEffect(() => {
@@ -3305,6 +3328,13 @@ export function WorkspaceScreen(props: {
     setQuality: chooseQuality,
     help: () => setHelp(true),
     typePath: () => setPathAsk((n) => n + 1),
+    nextArea: () => {
+      const screen = host.current?.closest('.workspace');
+      const to = screen
+        ? nextArea(areasOf(screen, viewRef.current?.canvas ?? null), document.activeElement, false)
+        : null;
+      to?.target.focus();
+    },
     // The node the panel shows, else the network on the canvas (09 §4.6).
     copyPath: () => {
       const id = (ed && ed.selection.size === 1 ? ed.current : null) ?? net?.net;

@@ -45,6 +45,8 @@ export interface CommandContext {
   help(): void;
   /** The path becomes its field (09 §4.3). */
   typePath(): void;
+  /** The focus to the screen's next area, as `F6` (06 §1.1): a Mac's `F6` wants `Fn`. */
+  nextArea(): void;
   /** The canonical path, and a `[[link]]`, of the node chosen or the network on the canvas (09 §4.6). */
   copyPath(): void;
   copyLink(): void;
@@ -243,6 +245,14 @@ export const COMMANDS: readonly Command[] = [
     run: (c) => c.find(),
   },
   canvas('up', 'up', 'U', ['вверх', 'наверх', 'выйти', 'up', 'parent'], flat, 'nav'),
+  {
+    id: 'nav.nextArea',
+    title: 'cmd.nav.nextArea',
+    aliases: ['область', 'фокус', 'панель', 'area', 'focus', 'pane'],
+    group: 'nav',
+    key: 'F6',
+    run: (c) => c.nextArea(),
+  },
   {
     id: 'nav.typePath',
     title: 'cmd.nav.typePath',

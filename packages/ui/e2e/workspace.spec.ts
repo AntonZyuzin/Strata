@@ -1567,6 +1567,49 @@ test.describe('a workspace on the core', () => {
     ).toBeVisible();
   });
 
+  test('F6 takes the focus through the areas of the screen, Shift+F6 back (06 §1.1, §17)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Области');
+    await makeFolder(page, 'Архив', 420, 300);
+    await enter(page, 'Архив');
+    await createNode(page, 500, 360, 'Черновик');
+    await select(page, 'Черновик');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.note-window .cm-content')).toBeFocused();
+    const area = () =>
+      page.evaluate(() => {
+        const a = document.activeElement;
+        if (a?.closest('.ws-layers')) return 'layers';
+        if (a?.tagName === 'CANVAS') return 'canvas';
+        if (a?.closest('.ws-path')) return 'path';
+        if (a?.closest('.note-window')) return 'note';
+        if (a?.closest('.ws-inspector')) return 'panel';
+        return a?.tagName ?? 'none';
+      });
+    // In reading order: «Ноды», the canvas, the path, the window, the panel.
+    for (const next of ['panel', 'layers', 'canvas', 'path', 'note']) {
+      await page.keyboard.press('F6');
+      expect(await area()).toBe(next);
+    }
+    await page.keyboard.press('Shift+F6');
+    expect(await area()).toBe('path');
+    // «Ноды» take it on the network one is in.
+    await page.keyboard.press('Shift+F6');
+    await page.keyboard.press('Shift+F6');
+    await expect(page.locator('.layer-row.is-here .layer-name')).toBeFocused();
+    // The palette's «Следующая область» does what F6 does.
+    await page.keyboard.press('Control+p');
+    await page.keyboard.type('следующая область');
+    await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(
+      'Следующая область',
+    );
+    await page.keyboard.press('Enter');
+    expect(await area()).toBe('path');
+  });
+
   test('a content window docks right, goes over the canvas and back, stays through a dive (06 §2.2, §13.1)', async ({
     page,
   }) => {

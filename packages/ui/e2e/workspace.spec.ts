@@ -1175,14 +1175,14 @@ for (const deviceScaleFactor of [1, 2]) {
       await createWorkspace(page, 'Перенос');
       await makeFolder(page, 'Архив', 520, 320);
       await createNode(page, 760, 480, 'Эскиз');
-      // The node's menu with a copy waiting: cut, copy, duplicate, paste, as an appearance, wrap, icon.
+      // The node's menu with a copy waiting: cut, copy, duplicate, paste, as an appearance, wrap, icon, colour.
       await select(page, 'Эскиз');
       await page.evaluate(() => window.__strataWs?.view.canvas.focus());
       await page.keyboard.press('Control+c');
       const sketch = await at(page, 'Эскиз');
       await page.mouse.click(sketch.x, sketch.y, { button: 'right' });
       const menu = page.locator('.context-menu');
-      await expect(menu.locator('.context-menu-row')).toHaveCount(14);
+      await expect(menu.locator('.context-menu-row')).toHaveCount(15);
       expect(await overflowing(page, '.context-menu'), `${locale} the menu must fit`).toEqual([]);
       expect((await box(page, '.context-menu')).width).toBeLessThanOrEqual(
         (await chWidth(page, 40)) + 2,

@@ -5518,7 +5518,7 @@ test.describe('a workspace on the core', () => {
     type Layer = { state(): { grain: number; fog: number; fading: boolean } };
     const state = () =>
       page.evaluate(() =>
-        (window.__strataWs?.view as unknown as { background: Layer }).background.state(),
+        ((window.__strataWs as WsHook).view as unknown as { background: Layer }).background.state(),
       );
     // «Туман» with the pipeline's numbers: grain 0.67, no fog (07 §7.1).
     await expect.poll(state).toEqual({ grain: 0.67, fog: 0, fading: false });
@@ -5529,7 +5529,8 @@ test.describe('a workspace on the core', () => {
     const watching = page.evaluate(
       () =>
         new Promise<boolean>((resolve) => {
-          const bg = (window.__strataWs?.view as unknown as { background: Layer }).background;
+          const bg = ((window.__strataWs as WsHook).view as unknown as { background: Layer })
+            .background;
           let saw = false;
           const t0 = performance.now();
           const tick = () => {

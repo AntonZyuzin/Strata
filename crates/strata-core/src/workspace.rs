@@ -1113,6 +1113,10 @@ impl<S: Store> Workspace<S> {
                     self.ensure_doc(&format!("net/{from}"))?;
                     self.ensure_doc(&format!("net/{to}"))?;
                 }
+                // A node whose networks are all gone comes back to the root (05 §11).
+                Op::Restore { .. } => {
+                    self.ensure_doc(&format!("net/{}", self.root.to_text()))?;
+                }
                 _ => {}
             }
         }
@@ -1463,6 +1467,7 @@ impl<S: Store> Workspace<S> {
                     self.put_cascade(&mut put, &c, ts, &batch);
                 }
                 Op::Restore { ids } => {
+                    let mut back: Vec<NodeId> = Vec::new();
                     for id in ids {
                         let n = self.parse(id)?;
                         if self.field(n, "trashedAt").is_none() {
@@ -1470,10 +1475,67 @@ impl<S: Store> Workspace<S> {
                         }
                         // What went in the same step comes back with it (05 §5).
                         for m in self.trashed_with(n) {
-                            let index = self.index_doc(m);
-                            let key = m.to_text();
-                            put(&index, "trashedAt", &key, None);
-                            put(&index, "trashBatch", &key, None);
+                            if !back.contains(&m) {
+                                back.push(m);
+                            }
+                        }
+                    }
+                    let root = self.root;
+                    for &m in &back {
+                        let index = self.index_doc(m);
+                        let key = m.to_text();
+                        put(&index, "trashedAt", &key, None);
+                        put(&index, "trashBatch", &key, None);
+                        if m == root {
+                            continue;
+                        }
+                        // A placement in what is no network now — a project
+                        // made a task while this node was in the trash — goes
+                        // (05 §14 rule 3); the primary falls to the oldest
+                        // placement left (10 §8.5).
+                        let canvas = |net: NodeId| self.kind(net).is_some_and(NodeKind::has_canvas);
+                        let mut nets = self.placements_any(m);
+                        let primary = self
+                            .field(m, "primaryNet")
+                            .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()));
+                        for &net in nets.iter().filter(|&&net| !canvas(net)) {
+                            put(
+                                &index,
+                                "placement",
+                                &PlacementKey::new(net, m).to_text(),
+                                None,
+                            );
+                        }
+                        nets.retain(|&net| canvas(net));
+                        // Its networks all gone — in the trash and not coming
+                        // back with it, or purged: it comes back to the root,
+                        // which is its primary then (05 §11, 10 §10.3).
+                        let live = |net: &NodeId| {
+                            self.alive(*net) || back.contains(net) || ov.made_in.contains_key(net)
+                        };
+                        let lies = nets.iter().any(live);
+                        if lies && primary.is_some_and(|p| !canvas(p)) {
+                            let oldest = self
+                                .placements_of(m)
+                                .into_iter()
+                                .map(|(net, _)| net)
+                                .find(|&net| canvas(net))
+                                .or_else(|| nets.iter().copied().find(live));
+                            if let Some(oldest) = oldest {
+                                put(&index, "primaryNet", &key, Some(Val::str(oldest.to_text())));
+                            }
+                        }
+                        if !lies {
+                            put(
+                                &index,
+                                "placement",
+                                &PlacementKey::new(root, m).to_text(),
+                                Some(Val::map([("at", Val::Int(ts))])),
+                            );
+                            let (x, y) = self.last_spot(m);
+                            put(&format!("net/{}", root.to_text()), "pos", &key, at_xy(x, y));
+                            put(&index, "primaryNet", &key, Some(Val::str(root.to_text())));
+                            ov.placed.insert((root, m), Some(ts));
                         }
                     }
                 }
@@ -1678,6 +1740,24 @@ impl<S: Store> Workspace<S> {
                 skipped.push(w.clone());
             }
         }
+        // A wire lives while it has an origin (10 §2.3): a step that drew it
+        // by hand goes back, but a link a text has to it since keeps it.
+        let origins_gone: HashSet<(String, String)> = plan
+            .iter()
+            .filter(|w| w.map == "edgeOrigin" && w.before.is_none())
+            .map(|w| (w.doc.clone(), w.key.clone()))
+            .collect();
+        plan.retain(|w| {
+            if w.map != "edge" || w.before.is_some() {
+                return true;
+            }
+            let doc = &self.docs[&w.doc];
+            !links::ORIGINS.iter().any(|o| {
+                let key = format!("{}|{o}", w.key);
+                read(doc, "edgeOrigin", &key).is_some()
+                    && !origins_gone.contains(&(w.doc.clone(), key))
+            })
+        });
         let mut out = self.write(cs.origin.clone(), cs.label.clone(), |tx| {
             for w in plan {
                 tx.set(&w.doc, &w.map, &w.key, w.before)?;

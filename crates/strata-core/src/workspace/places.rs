@@ -46,6 +46,46 @@ impl<S: Store> Workspace<S> {
         out
     }
 
+    /// Every network node `n` has a placement in, live or not: where a
+    /// restore looks for one to come back to (05 §11).
+    pub(super) fn placements_any(&self, n: NodeId) -> Vec<NodeId> {
+        let Some(shard) = self.docs.get(&self.index_doc(n)) else {
+            return Vec::new();
+        };
+        let LoroValue::Map(m) = shard.get_map("placement").get_value() else {
+            return Vec::new();
+        };
+        let suffix = format!("/{}", n.to_text());
+        m.keys()
+            .filter_map(|key| NodeId::parse(key.strip_suffix(&suffix)?).ok())
+            .collect()
+    }
+
+    /// Where node `n` stood in its primary network, when that network's
+    /// document is at hand: a node coming back to the root keeps its spot.
+    pub(super) fn last_spot(&self, n: NodeId) -> (f64, f64) {
+        let Some(net) = self
+            .field(n, "primaryNet")
+            .and_then(|v| v.as_str().and_then(|s| NodeId::parse(s).ok()))
+        else {
+            return (0.0, 0.0);
+        };
+        let Some(doc) = self.docs.get(&format!("net/{}", net.to_text())) else {
+            return (0.0, 0.0);
+        };
+        match doc.get_map("pos").get(&n.to_text()) {
+            Some(loro::ValueOrContainer::Value(LoroValue::List(xy))) => {
+                let at = |i: usize| match xy.get(i) {
+                    Some(LoroValue::Double(v)) => *v,
+                    Some(LoroValue::I64(v)) => *v as f64,
+                    _ => 0.0,
+                };
+                (at(0), at(1))
+            }
+            _ => (0.0, 0.0),
+        }
+    }
+
     /// Every node's placements in live networks: node → `[(net, made at)]`, the oldest first.
     pub(super) fn placements_index(&self) -> HashMap<NodeId, Vec<(NodeId, i64)>> {
         let mut out: HashMap<NodeId, Vec<(NodeId, i64)>> = HashMap::new();

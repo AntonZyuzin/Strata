@@ -5,6 +5,7 @@ use strata_model::{NodeId, NodeKind};
 
 mod import;
 mod paths;
+mod props;
 
 fn ws() -> Workspace<MemoryStore> {
     let mut w = Workspace::create(MemoryStore::default(), "Корень").expect("create");
@@ -2554,6 +2555,169 @@ fn a_placement_goes_and_the_primary_falls_to_the_oldest_left() {
     w.undo().expect("undo");
     assert_eq!(primary(&w, &n), Some(a.clone()));
     assert_eq!(shown(&mut w, &a, &n), Some((false, 3)));
+}
+
+#[test]
+fn undoing_a_wire_drawn_by_hand_keeps_it_while_a_text_links_it() {
+    // 10 §2.3: a wire lives while it has an origin. Drawn by hand, then
+    // linked from the note's text, it stays when the drawing is undone —
+    // the text's wire now (05 §14 rule 7). Found by the property tests of
+    // 05 §14 (NFR-124): the undo took the wire, the link stayed.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let task = create(&mut w, &root, NodeKind::Task, "Задача");
+    op(
+        &mut w,
+        Op::Connect {
+            from: note.clone(),
+            to: task.clone(),
+        },
+    )
+    .expect("by hand");
+    let mut ed = Editor::open(&mut w, &note);
+    assert!(ed.type_text(&mut w, &note, "См. [[Задача]]"));
+    w.undo().expect("undo the drawing");
+    let edges = |w: &mut Workspace<MemoryStore>| -> Vec<(bool, bool)> {
+        w.network_view(&root)
+            .expect("view")
+            .edges
+            .into_iter()
+            .map(|e| (e.text, e.manual))
+            .collect()
+    };
+    assert_eq!(
+        edges(&mut w),
+        vec![(true, false)],
+        "the text's wire, not a hand's"
+    );
+    // Redo draws it by hand again; the link gone from the text, the hand's stays.
+    w.redo().expect("redo");
+    assert_eq!(edges(&mut w), vec![(true, true)]);
+    assert!(ed.type_text(&mut w, &note, "Без ссылок"));
+    assert_eq!(edges(&mut w), vec![(false, true)]);
+}
+
+#[test]
+fn a_node_back_from_the_trash_lies_in_no_task() {
+    // 05 §14 rule 3, §4.2: a project became a task while what lay in it was
+    // in the trash. Back, that node lies in no task: the placement there
+    // goes, the primary falls to the oldest left, or the node comes to the
+    // root. Found by the property tests of 05 §14 (NFR-124).
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let project = create(&mut w, &root, NodeKind::Project, "Проект");
+    let alone = create(&mut w, &project, NodeKind::Note, "Одна");
+    let shared = create(&mut w, &project, NodeKind::Note, "Общая");
+    op(
+        &mut w,
+        Op::Place {
+            id: shared.clone(),
+            net: folder.clone(),
+            x: 0.0,
+            y: 0.0,
+        },
+    )
+    .expect("also in the folder");
+    op(
+        &mut w,
+        Op::Trash {
+            ids: vec![alone.clone(), shared.clone()],
+        },
+    )
+    .expect("both to the trash");
+    op(
+        &mut w,
+        Op::SetKind {
+            id: project.clone(),
+            kind: NodeKind::Task,
+        },
+    )
+    .expect("nothing inside: a task now");
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![alone.clone()],
+        },
+    )
+    .expect("both back, one batch");
+    let item = |w: &Workspace<MemoryStore>, id: &str| {
+        w.tree().into_iter().find(|i| i.id == id).expect("alive")
+    };
+    let one = item(&w, &alone);
+    assert_eq!((one.parent, one.appears), (Some(root.clone()), vec![]));
+    let two = item(&w, &shared);
+    assert_eq!((two.parent, two.appears), (Some(folder.clone()), vec![]));
+}
+
+#[test]
+fn a_node_whose_networks_are_gone_comes_back_to_the_root() {
+    // 05 §11, 10 §10.3: a restore puts a node back where it lay; when none
+    // of its networks is alive — the folder went to the trash in a step of
+    // its own — it comes back to the root, its primary there, on its spot.
+    // Found by the property tests of 05 §14 (NFR-124): the node was alive
+    // and in no live network.
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let n = create(&mut w, &folder, NodeKind::Note, "Заметка");
+    let task = create(&mut w, &root, NodeKind::Task, "Задача");
+    op(
+        &mut w,
+        Op::Connect {
+            from: n.clone(),
+            to: task.clone(),
+        },
+    )
+    .expect("a wire");
+    op(
+        &mut w,
+        Op::Unplace {
+            id: n.clone(),
+            net: folder.clone(),
+        },
+    )
+    .expect("the note to the trash");
+    op(
+        &mut w,
+        Op::Unplace {
+            id: folder.clone(),
+            net: root.clone(),
+        },
+    )
+    .expect("the folder to the trash, a step of its own");
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![n.clone()],
+        },
+    )
+    .expect("restore the note");
+    let item = |w: &Workspace<MemoryStore>, id: &str| w.tree().into_iter().find(|i| i.id == id);
+    assert_eq!(item(&w, &n).and_then(|i| i.parent), Some(root.clone()));
+    assert!(item(&w, &folder).is_none(), "the folder stays in the trash");
+    assert_eq!(
+        shown(&mut w, &root, &n).map(|(appearance, _)| appearance),
+        Some(false)
+    );
+    assert_eq!(w.wires().len(), 1, "its wire shows again");
+    // The folder back too: the note lies in both, the root its primary.
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![folder.clone()],
+        },
+    )
+    .expect("restore the folder");
+    let back = item(&w, &n).expect("alive");
+    assert_eq!(back.parent, Some(root.clone()));
+    assert_eq!(back.appears, vec![folder.clone()]);
+    // Undo takes both restores back: the note is in the trash again.
+    w.undo().expect("undo the folder");
+    w.undo().expect("undo the note");
+    assert!(item(&w, &n).is_none());
+    assert!(w.trash().iter().any(|t| t.id == n));
 }
 
 #[test]

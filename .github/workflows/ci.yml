@@ -26,6 +26,10 @@ jobs:
       - name: Clippy of the WASM bindings (strata-layout-wasm, strata-core-wasm, strata-search-wasm)
         run: cargo clippy -p strata-layout-wasm -p strata-core-wasm -p strata-search-wasm --target wasm32-unknown-unknown -- -D warnings
       - run: cargo test
+      - name: The invariants of 05 §14 over 10 000 random scenarios (NFR-124)
+        run: cargo test --release -p strata-core --lib props
+        env:
+          STRATA_PROPS: "10000"
       - name: The synthetic vaults for importing by hand (V-synth, V-10k; 16 §4.7, milestone 1C)
         run: cargo run -p strata-core --example write_vaults -- target/vaults
       - uses: actions/upload-artifact@v7

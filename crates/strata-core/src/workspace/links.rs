@@ -26,7 +26,7 @@ use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
 /// Fields whose change can make a link find another node, or none (13 §3.5).
 const NAMING: [&str; 4] = ["name", "kind", "trashedAt", "primaryNet"];
 /// Origins of a wire (10 §2.3).
-const ORIGINS: [&str; 3] = ["text", "manual", "import"];
+pub(super) const ORIGINS: [&str; 3] = ["text", "manual", "import"];
 /// A name with these breaks a link (13 §3.4): no link is rewritten to it.
 const BREAKS_LINKS: [char; 5] = ['[', ']', '|', '#', '^'];
 /// The fields of a board's element that may hold `[[links]]` (13 §2.8): its

@@ -18,7 +18,7 @@
 use super::{Changeset, Store, Val, Workspace, Writes, engine, invalid, load, read};
 use crate::changeset::Label;
 use crate::workspace::Result;
-use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer};
+use loro::{Container, ExportMode, LoroDoc, LoroValue, ValueOrContainer};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_markdown::link_key;
 use strata_model::{ChangesetOrigin, EdgeKey, NodeId, NodeKind, now_ms};
@@ -59,8 +59,46 @@ fn live_elements(doc: &LoroDoc) -> Vec<(String, loro::LoroMapValue)> {
     out
 }
 
+/// The widget a board's element shows (ADR-0006 item 4): the last part of
+/// its link `strata://<workspace>/widget/<board>/<widget>` (05 §9.4).
+fn widget_of(el: &loro::LoroMapValue) -> Option<String> {
+    let Some(LoroValue::String(link)) = el.get("link") else {
+        return None;
+    };
+    let mut parts = link.strip_prefix("strata://")?.split('/');
+    let (_, kind, _, widget) = (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
+    (kind == "widget" && !widget.is_empty() && parts.next().is_none()).then(|| widget.to_owned())
+}
+
+/// The texts a widget holds (ADR-0006 item 4): a note's text, or each item
+/// of a to-do — the LoroTexts themselves, so a rename can retype them.
+fn widget_texts(doc: &LoroDoc, widget: &str) -> Vec<loro::LoroText> {
+    let Some(ValueOrContainer::Container(Container::Map(w))) = doc.get_map("widgets").get(widget)
+    else {
+        return Vec::new();
+    };
+    match w.get("text") {
+        Some(ValueOrContainer::Container(Container::Text(t))) => vec![t],
+        _ => match w.get("items") {
+            Some(ValueOrContainer::Container(Container::MovableList(items))) => (0..items.len())
+                .filter_map(|i| match items.get(i) {
+                    Some(ValueOrContainer::Container(Container::Map(item))) => {
+                        match item.get("text") {
+                            Some(ValueOrContainer::Container(Container::Text(t))) => Some(t),
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
+    }
+}
+
 /// What a board says, to its wires what a note's text is to a note's (13
-/// §2.8): the link fields of its live elements, a paragraph each.
+/// §2.8): the link fields of its live elements, a paragraph each, and the
+/// texts of the widgets they show (ADR-0006 item 4).
 pub(super) fn board_text(doc: &LoroDoc) -> String {
     let mut out: Vec<String> = Vec::new();
     for (_, el) in live_elements(doc) {
@@ -68,6 +106,13 @@ pub(super) fn board_text(doc: &LoroDoc) -> String {
             if let Some(LoroValue::String(t)) = el.get(f) {
                 out.push(t.to_string());
             }
+        }
+        if let Some(widget) = widget_of(&el) {
+            out.extend(
+                widget_texts(doc, &widget)
+                    .iter()
+                    .map(loro::LoroText::to_string),
+            );
         }
     }
     out.join("\n\n")
@@ -979,7 +1024,23 @@ impl<S: Store> Workspace<S> {
         let doc = format!("content/{}", board.to_text());
         self.ensure_doc(&doc)?;
         let mut changed: Vec<(String, LoroValue)> = Vec::new();
+        // The widgets' texts (ADR-0006 item 4) merge by character: retyped in place.
+        let mut retyped: Vec<(loro::LoroText, String)> = Vec::new();
         for (id, el) in live_elements(&self.docs[&doc]) {
+            if let Some(widget) = widget_of(&el) {
+                for t in widget_texts(&self.docs[&doc], &widget) {
+                    let before = t.to_string();
+                    let edits = self.renamed_in(board, &before, held, names, was, now);
+                    if edits.is_empty() {
+                        continue;
+                    }
+                    let mut text = before;
+                    for (at, len, written) in edits.iter().rev() {
+                        text.replace_range(*at..*at + *len, written);
+                    }
+                    retyped.push((t, text));
+                }
+            }
             let mut fields: HashMap<String, LoroValue> =
                 el.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
             let mut edited = false;
@@ -1014,7 +1075,7 @@ impl<S: Store> Workspace<S> {
             fields.insert("updated".to_owned(), LoroValue::I64(now_ms()));
             changed.push((id, LoroValue::from(fields)));
         }
-        if changed.is_empty() {
+        if changed.is_empty() && retyped.is_empty() {
             return Ok(());
         }
         let d = &self.docs[&doc];
@@ -1022,6 +1083,10 @@ impl<S: Store> Workspace<S> {
         let elements = d.get_map("elements");
         for (id, v) in changed {
             elements.insert(&id, v).map_err(engine)?;
+        }
+        for (t, text) in retyped {
+            t.update(&text, loro::UpdateOptions::default())
+                .map_err(|e| invalid(format!("widget text: {e:?}")))?;
         }
         d.commit();
         self.keep_core_edit(&doc, &vv)

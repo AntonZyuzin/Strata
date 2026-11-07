@@ -4150,6 +4150,7 @@ export function WorkspaceScreen(props: {
           locale={locale}
           name={nameOf(board.id)}
           doc={board.doc}
+          ids={{ workspace: opened.workspace.id, board: board.id }}
           mode={board.mode}
           dock={dock}
           onMode={(step) => setWindowMode('board', step)}

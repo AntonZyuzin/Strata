@@ -487,6 +487,80 @@ impl Editor {
             .expect("push")
     }
 
+    /// A widget of a board (ADR-0006 item 4) as the board writes it: a note
+    /// with `text`, or a to-do with `items`, each its own LoroText.
+    fn widget(
+        &mut self,
+        w: &mut Workspace<MemoryStore>,
+        board: &str,
+        id: &str,
+        text: Option<&str>,
+        items: &[&str],
+    ) -> bool {
+        use loro::{LoroMap, LoroMovableList, LoroText};
+        let m = self
+            .doc
+            .get_map("widgets")
+            .insert_container(id, LoroMap::new())
+            .expect("widget");
+        if let Some(text) = text {
+            m.insert("kind", "note").expect("kind");
+            let t = m.insert_container("text", LoroText::new()).expect("text");
+            t.insert(0, text).expect("type");
+        } else {
+            m.insert("kind", "todo").expect("kind");
+            let list = m
+                .insert_container("items", LoroMovableList::new())
+                .expect("items");
+            for (i, item) in items.iter().enumerate() {
+                let it = list.insert_container(i, LoroMap::new()).expect("item");
+                it.insert("done", false).expect("done");
+                let t = it.insert_container("text", LoroText::new()).expect("text");
+                t.insert(0, item).expect("type");
+            }
+        }
+        self.doc.commit();
+        let update = self
+            .doc
+            .export(loro::ExportMode::updates(&self.sent))
+            .expect("export");
+        self.sent = self.doc.oplog_vv();
+        w.doc_push(&format!("content/{board}"), &update)
+            .expect("push")
+    }
+
+    /// A widget's texts as the core keeps them now: a note's, or each item's.
+    fn widget_texts(w: &mut Workspace<MemoryStore>, board: &str, id: &str) -> Vec<String> {
+        let doc = loro::LoroDoc::new();
+        doc.import(
+            &w.doc_snapshot(&format!("content/{board}"))
+                .expect("snapshot"),
+        )
+        .expect("import");
+        let loro::LoroValue::Map(all) = doc.get_map("widgets").get_deep_value() else {
+            return Vec::new();
+        };
+        let Some(loro::LoroValue::Map(wd)) = all.get(id) else {
+            return Vec::new();
+        };
+        if let Some(loro::LoroValue::String(t)) = wd.get("text") {
+            return vec![t.to_string()];
+        }
+        let Some(loro::LoroValue::List(items)) = wd.get("items") else {
+            return Vec::new();
+        };
+        items
+            .iter()
+            .filter_map(|i| match i {
+                loro::LoroValue::Map(m) => match m.get("text") {
+                    Some(loro::LoroValue::String(t)) => Some(t.to_string()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect()
+    }
+
     /// A board's element as the core keeps it now.
     fn element(w: &mut Workspace<MemoryStore>, board: &str, id: &str) -> loro::LoroMapValue {
         let doc = loro::LoroDoc::new();
@@ -586,6 +660,79 @@ fn a_boards_links_are_its_text_wires_as_a_notes_are() {
             .expect("board")
             .fold
             .is_none()
+    );
+}
+
+#[test]
+fn a_boards_widgets_say_their_links_too_and_a_rename_retypes_them() {
+    // ADR-0006 item 4, 13 §2.8, §6.5: the texts of the widgets a board's live
+    // elements show — a note's, a to-do's items — are its text wires as its
+    // elements' texts are; a widget whose element is gone says nothing; a
+    // rename retypes them in place, merged by character.
+    use loro::LoroValue;
+    let mut w = ws();
+    let root = w.root();
+    let board = create(&mut w, &root, NodeKind::Board, "Доска");
+    let goal = create(&mut w, &root, NodeKind::Task, "Цель");
+    let other = create(&mut w, &root, NodeKind::Note, "Другая");
+    let mut ed = Editor::open(&mut w, &board);
+    let link = |id: &str| format!("strata://{root}/widget/{board}/{id}");
+    // No element shows them yet: they say nothing.
+    assert!(!ed.widget(&mut w, &board, "W1", Some("См. [[Цель]]"), &[]));
+    assert!(!ed.widget(
+        &mut w,
+        &board,
+        "W2",
+        None,
+        &["купить", "[[Другая]] и [[Нигде]]"]
+    ));
+    assert_eq!(links(&mut w, &root), (vec![], vec![]));
+    for (el, id) in [("e1", "W1"), ("e2", "W2")] {
+        assert!(ed.draw(
+            &mut w,
+            &board,
+            el,
+            &[
+                ("type", LoroValue::from("embeddable")),
+                ("link", LoroValue::from(link(id).as_str())),
+            ],
+        ));
+    }
+    let (mut wires, ghosts) = links(&mut w, &root);
+    wires.sort();
+    let mut want = vec![
+        (board.clone(), goal.clone()),
+        (board.clone(), other.clone()),
+    ];
+    want.sort();
+    assert_eq!(wires, want);
+    assert_eq!(ghosts, vec![(board.clone(), "Нигде".to_owned())]);
+    // A rename retypes the note's text; the wire stays.
+    rename(&mut w, &goal, "Миссия");
+    assert_eq!(
+        Editor::widget_texts(&mut w, &board, "W1"),
+        vec!["См. [[Миссия]]".to_owned()]
+    );
+    assert!(
+        links(&mut w, &root)
+            .0
+            .contains(&(board.clone(), goal.clone()))
+    );
+    // The to-do's element deleted: its items say nothing.
+    assert!(ed.draw(
+        &mut w,
+        &board,
+        "e2",
+        &[
+            ("type", LoroValue::from("embeddable")),
+            ("link", LoroValue::from(link("W2").as_str())),
+            ("isDeleted", LoroValue::Bool(true)),
+            ("version", LoroValue::I64(2)),
+        ],
+    ));
+    assert_eq!(
+        links(&mut w, &root),
+        (vec![(board.clone(), goal.clone())], vec![])
     );
 }
 

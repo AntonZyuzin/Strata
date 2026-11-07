@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@excalidraw/element": "0.18.0-43a92e6",
     "@excalidraw/excalidraw": "0.18.0-43a92e6",
     "@strata/design-tokens": "workspace:*",
     "loro-crdt": "1.16.4",

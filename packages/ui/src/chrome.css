@@ -712,6 +712,84 @@ button:focus-visible {
   gap: calc(2 * var(--u));
 }
 
+/* The widgets (ADR-0006 item 4): Strata's frame inside the board's
+   embeddable, what is written in Golos Text (07 §3.2); a to-do's items one
+   line each, ticked ones dimmed and struck through. */
+.board-widget {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--st-color-text);
+  background: var(--st-color-surface-raised);
+  border: var(--u) solid var(--st-color-frame);
+  box-shadow: var(--st-bevel-raised);
+  font-family: var(--st-font-text);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Excalidraw styles every textarea and input in it (0,2,1): the widget's are Strata's. */
+.excalidraw .board-widget .board-widget-note {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0;
+  padding: calc(4 * var(--u)) calc(6 * var(--u));
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  resize: none;
+}
+
+.board-widget-todo {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: calc(3 * var(--u)) calc(4 * var(--u));
+}
+
+.board-todo-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.board-todo {
+  display: flex;
+  align-items: center;
+  gap: calc(3 * var(--u));
+  min-height: var(--st-size-control);
+}
+
+.excalidraw .board-widget .board-todo-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0 calc(2 * var(--u));
+  color: inherit;
+  font: inherit;
+  background: transparent;
+  border: 0;
+  outline: 0;
+}
+
+.board-todo.is-done .board-todo-text {
+  color: var(--st-color-text-muted);
+  text-decoration: line-through;
+}
+
+/* The first item's button: the row's width in either language. */
+.board-todo-first {
+  width: 100%;
+  overflow: hidden;
+  font: inherit;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* A tool: an icon in a button's frame (07 §8.2); the active one inverted. */
 .board-tool {
   display: grid;

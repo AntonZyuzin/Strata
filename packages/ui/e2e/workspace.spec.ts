@@ -65,7 +65,7 @@ interface WsHook {
   net(): string;
   settled(): Promise<void>;
   /** The open board's scene (13 §2.8). */
-  board?: { elements(): { type: string; text?: string; originalText?: string }[] };
+  board?: { elements(): { type: string; text?: string; originalText?: string; link?: string }[] };
   map(): {
     state: string;
     selectedId(): string | null;
@@ -869,6 +869,55 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['window', 'page', 'fields', 'gear'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`a board's widgets keep their size in RU and EN @${deviceScaleFactor}x (ADR-0006 item 4)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Виджеты');
+      await page.mouse.move(460, 300);
+      await page.keyboard.press('Tab');
+      await page.keyboard.type(locale === 'ru-RU' ? 'доска' : 'board');
+      const kind = page.locator('.tab-menu-label', { hasText: /^(Доска|Board)$/ });
+      await page.locator('.tab-menu-row', { has: kind }).first().click();
+      await page.keyboard.type('Идеи');
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+      await settled(page);
+      await select(page, 'Идеи');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      const win = page.locator('.board-window');
+      await expect(win.locator('.excalidraw')).toBeVisible({ timeout: 30_000 });
+      await win.locator('.board-widget-add[data-widget="todo"]').click();
+      await expect(win.locator('.board-widget[data-widget="todo"]')).toBeVisible();
+      expect(await overflowing(page, '.board-window'), `${locale} the board must fit`).toEqual([]);
+      boxes.push({
+        tools: await box(page, '.board-window .board-tools'),
+        add: await box(page, '.board-window .board-widget-add[data-widget="note"]'),
+        todo: await box(page, '.board-window .board-widget[data-widget="todo"]'),
+        first: await box(page, '.board-window .board-todo-first'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['tools', 'add', 'todo', 'first'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -4304,6 +4353,76 @@ test.describe('a workspace on the core', () => {
       )
       .toEqual(['См. [[Миссия]] и [[Нигде]]']);
     await expect.poll(async () => (await graphNow(page)).edges).toContain('Идеи→Миссия');
+  });
+
+  test('widgets on a board: «Заметка» and «To-do» keep what is written, their [[links]] are wires (ADR-0006 item 4)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Виджеты');
+    await createNode(page, 760, 520, 'Цель');
+    await page.mouse.move(460, 300);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('доска');
+    const kind = page.locator('.tab-menu-label', { hasText: /^(Доска|Board)$/ });
+    await page.locator('.tab-menu-row', { has: kind }).first().click();
+    await page.keyboard.type('Идеи');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
+    await settled(page);
+    const open = async () => {
+      await select(page, 'Идеи');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.board-window .excalidraw')).toBeVisible({ timeout: 30_000 });
+    };
+    await open();
+    const win = page.locator('.board-window');
+    // «Заметка»: an embeddable with Strata's face, in the middle of the view.
+    await win.getByRole('button', { name: 'Заметка' }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            window.__strataWs?.board
+              ?.elements()
+              .filter((e) => e.type === 'embeddable')
+              .map((e) => String(e.link ?? '').split('/')[3]) ?? [],
+        ),
+      )
+      .toEqual(['widget']);
+    const note = win.locator('.board-widget[data-widget="note"] textarea');
+    await expect(note).toBeVisible();
+    await note.fill('План: [[Цель]]');
+    await expect
+      .poll(async () => (await graphNow(page)).edges, { timeout: 15_000 })
+      .toContain('Идеи→Цель');
+    // «To-do»: a first item, Enter adds the next, a tick.
+    await win.getByRole('button', { name: 'To-do' }).click();
+    const todo = win.locator('.board-widget[data-widget="todo"]');
+    await expect(todo).toBeVisible();
+    await todo.getByRole('button', { name: 'Первый пункт' }).click();
+    const first = todo.getByRole('textbox', { name: 'Пункт 1' });
+    await expect(first).toBeVisible();
+    await first.click();
+    await first.fill('Молоко');
+    await first.press('Enter');
+    const second = todo.getByRole('textbox', { name: 'Пункт 2' });
+    await expect(second).toBeFocused();
+    await second.fill('Хлеб');
+    await todo.getByRole('checkbox', { name: 'Сделано: Молоко' }).check();
+    // Closed and opened again: all of it kept in the board's document.
+    await win.locator('.window-close').click();
+    await expect(win).toHaveCount(0);
+    await open();
+    await expect(win.locator('.board-widget[data-widget="note"] textarea')).toHaveValue(
+      'План: [[Цель]]',
+    );
+    const again = win.locator('.board-widget[data-widget="todo"]');
+    await expect(again.getByRole('textbox', { name: 'Пункт 1' })).toHaveValue('Молоко');
+    await expect(again.getByRole('textbox', { name: 'Пункт 2' })).toHaveValue('Хлеб');
+    await expect(again.getByRole('checkbox', { name: 'Сделано: Молоко' })).toBeChecked();
   });
 
   test('eight wires seen here make a bubble a step larger (06 §4.2)', async ({ page }) => {

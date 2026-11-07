@@ -1,3 +1,4 @@
+import { newId } from '@strata/backend';
 import {
   BOARD_COLORS,
   BOARD_TOOL_GROUPS,
@@ -8,11 +9,14 @@ import {
   type BoardHandle,
   type BoardPaint,
   type BoardTool,
+  WIDGET_KINDS,
+  type WidgetKind,
+  widgetLink,
 } from '@strata/board';
 import { type GlyphName, glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
-import { type CSSProperties, Suspense, useRef, useState } from 'react';
+import { type CSSProperties, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import {
   DockEdge,
   dockRoom,
@@ -21,6 +25,10 @@ import {
   type WindowMode,
   WindowTitle,
 } from '../workspace/ContentWindow';
+import { BoardWidget, widgetUndo } from './BoardWidgets';
+
+/** The widgets' buttons on the toolbar (ADR-0006 item 4). */
+const WIDGET_GLYPH: Record<WidgetKind, GlyphName> = { note: 'note', todo: 'checklist' };
 
 /** The toolbar's icons (07 §6.2): own 1-bit glyphs, drawn in the text colour. */
 const TOOL_GLYPH: Record<BoardTool, GlyphName> = {
@@ -61,6 +69,11 @@ export function BoardWindow(props: {
   locale: Locale;
   name: string;
   doc: LoroDoc;
+  /**
+   * The workspace and the board's node: a widget's link names them (05
+   * §9.4); none — the prototype's board, which takes no widgets.
+   */
+  ids?: { workspace: string; board: string } | undefined;
   /** At 80 % of the canvas, docked right or over the canvas (06 §2.2). */
   mode?: WindowMode | undefined;
   /** The dock's width, CSS px; none — 40 % of the canvas. */
@@ -84,6 +97,15 @@ export function BoardWindow(props: {
   });
   const board = useRef<BoardHandle | null>(null);
   const box = useRef<HTMLElement>(null);
+  // The widgets' own undo, as long as the window is open (10 §9.2).
+  const undo = useMemo(() => widgetUndo(props.doc), [props.doc]);
+  useEffect(() => () => undo.free(), [undo]);
+  const ids = props.ids;
+  const insert = (kind: WidgetKind) => {
+    if (!ids) return;
+    const id = newId();
+    board.current?.insertWidget(kind, id, widgetLink(ids.workspace, ids.board, id));
+  };
   const title = props.name || t(locale, 'note.untitled');
   const colorOf = (name: BoardColorName) =>
     BOARD_COLORS.find((c) => c.name === name)?.color ?? 'transparent';
@@ -164,6 +186,30 @@ export function BoardWindow(props: {
               })}
             </div>
           ))}
+          {ids ? (
+            <div className="board-tool-group">
+              {WIDGET_KINDS.map((kind) => {
+                const name = t(locale, `board.widget.${kind}` as const);
+                return (
+                  <button
+                    key={kind}
+                    type="button"
+                    className="board-tool board-widget-add"
+                    data-widget={kind}
+                    aria-label={name}
+                    title={t(locale, `board.widget.${kind}Hint` as const)}
+                    onClick={() => insert(kind)}
+                  >
+                    <span
+                      className="kind-icon"
+                      style={{ '--glyph': glyphUrl(WIDGET_GLYPH[kind]) } as CSSProperties}
+                      aria-hidden="true"
+                    />
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
         </fieldset>
         <div className="board-stage">
           <Suspense fallback={null}>
@@ -175,6 +221,9 @@ export function BoardWindow(props: {
                 board.current = h;
                 props.onReady?.(h);
               }}
+              renderWidget={(w) => (
+                <BoardWidget locale={locale} doc={props.doc} id={w.id} kind={w.kind} undo={undo} />
+              )}
             />
           </Suspense>
         </div>

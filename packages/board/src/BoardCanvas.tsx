@@ -1,4 +1,7 @@
 /// <reference path="./css.d.ts" />
+
+// Excalidraw's own element package (its dependency, the same version): the embeddable's constructor.
+import { newEmbeddableElement } from '@excalidraw/element';
 import {
   CaptureUpdateAction,
   Excalidraw,
@@ -14,7 +17,7 @@ import type {
 } from '@excalidraw/excalidraw/types';
 import { palette } from '@strata/design-tokens';
 import type { LoroDoc } from 'loro-crdt';
-import { useEffect, useMemo, useRef } from 'react';
+import { type ReactElement, useEffect, useMemo, useRef } from 'react';
 import {
   type BoardElement,
   type BoardFile,
@@ -26,6 +29,16 @@ import {
   writeLocal,
 } from './binding';
 import type { BoardPaint, BoardTool } from './tools';
+import { createWidget, parseWidgetLink, type WidgetKind, widgetKind } from './widgets';
+
+/** Scene units a new widget steps off one already in its place. */
+const CASCADE = 24;
+
+/** A new widget's size in scene units (ADR-0006 item 4). */
+const WIDGET_SIZE: Record<WidgetKind, { width: number; height: number }> = {
+  note: { width: 260, height: 160 },
+  todo: { width: 260, height: 200 },
+};
 
 /**
  * The board's canvas (ADR-0006): Excalidraw on a pinned `next` snapshot,
@@ -66,6 +79,12 @@ export interface BoardHandle {
    * so do the next ones drawn. One step of undo.
    */
   paint(which: BoardPaint, color: string): void;
+  /**
+   * A new widget (ADR-0006 item 4) of `kind`, its content `id` in the
+   * document, its element at the middle of the view, linked by `link`
+   * (05 §9.4), selected. One step of the scene's undo.
+   */
+  insertWidget(kind: WidgetKind, id: string, link: string): void;
 }
 
 export function BoardCanvas(props: {
@@ -75,6 +94,11 @@ export function BoardCanvas(props: {
   onChange?: () => void;
   /** The board is ready: its handle. */
   onReady?: (handle: BoardHandle) => void;
+  /**
+   * A widget's face (ADR-0006 item 4): Strata's component for the widget
+   * `id` of `kind` in an element of the scene; a link of none — nothing.
+   */
+  renderWidget?: (widget: { id: string; kind: WidgetKind }) => ReactElement | null;
 }) {
   const { doc, tool } = props;
   const api = useRef<ExcalidrawImperativeAPI | null>(null);
@@ -125,12 +149,22 @@ export function BoardCanvas(props: {
     [doc],
   );
 
+  const renderWidget = useRef(props.renderWidget);
+  renderWidget.current = props.renderWidget;
+
   return (
     <Excalidraw
       ui={false}
       theme="light"
       handleKeyboardGlobally={false}
       initialData={initial}
+      // Only the widgets' own links go into an embeddable: no frame from outside (NFR-84).
+      validateEmbeddable={(link) => parseWidgetLink(link) !== null}
+      renderEmbeddable={(element) => {
+        const id = parseWidgetLink(element.link)?.widget;
+        const kind = id ? widgetKind(doc, id) : null;
+        return id && kind ? (renderWidget.current?.({ id, kind }) ?? null) : null;
+      }}
       onExcalidrawAPI={(a) => {
         api.current = a;
         // `null` on unmount.
@@ -162,6 +196,48 @@ export function BoardCanvas(props: {
               },
               ...(touched ? { elements } : {}),
               captureUpdate: touched ? CaptureUpdateAction.IMMEDIATELY : CaptureUpdateAction.NEVER,
+            });
+          },
+          insertWidget: (kind, id, link) => {
+            createWidget(doc, id, kind);
+            const st = a.getAppState();
+            const { width, height } = WIDGET_SIZE[kind];
+            // The middle of the view: screen = (scene + scroll) × zoom; a
+            // widget already there — a step down and right, as windows cascade.
+            const z = st.zoom.value;
+            let x = st.width / 2 / z - st.scrollX - width / 2;
+            let y = st.height / 2 / z - st.scrollY - height / 2;
+            const taken = a
+              .getSceneElements()
+              .filter((e) => e.type === 'embeddable')
+              .map((e) => [e.x, e.y] as const);
+            while (
+              taken.some(([ex, ey]) => Math.abs(ex - x) < CASCADE && Math.abs(ey - y) < CASCADE)
+            ) {
+              x += CASCADE;
+              y += CASCADE;
+            }
+            const el = newEmbeddableElement({
+              type: 'embeddable',
+              x,
+              y,
+              width,
+              height,
+              link,
+              // The widget draws its own frame (07 §8.2).
+              strokeColor: 'transparent',
+              backgroundColor: 'transparent',
+              roughness: 0,
+              customData: { strata: { widget: kind, v: 1 } },
+            });
+            a.updateScene({
+              elements: [...a.getSceneElementsIncludingDeleted(), el],
+              // Selected and let in at once: one types into a new widget without a click.
+              appState: {
+                selectedElementIds: { [el.id]: true },
+                activeEmbeddable: { element: el, state: 'active' },
+              },
+              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
             });
           },
           elements: () => a.getSceneElements() as unknown as BoardElement[],

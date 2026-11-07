@@ -90,6 +90,9 @@ importers:
 
   packages/board:
     dependencies:
+      '@excalidraw/element':
+        specifier: 0.18.0-43a92e6
+        version: 0.18.0-43a92e6
       '@excalidraw/excalidraw':
         specifier: 0.18.0-43a92e6
         version: 0.18.0-43a92e6(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)

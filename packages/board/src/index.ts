@@ -14,6 +14,7 @@ export {
   type BoardPaint,
   type BoardTool,
 } from './tools';
+export * from './widgets';
 
 /**
  * The board's canvas, loaded on the first open board: Excalidraw is the

@@ -43,6 +43,7 @@ import {
   Editor,
   type EditorEvents,
   generatePreset,
+  type HintKey,
   type IconAuthor,
   type IconPreset,
   iconPresets,
@@ -294,6 +295,18 @@ export interface UndoState {
 /** How far `Ctrl+D` puts the copies from their originals (06 §12.1). */
 const DUPLICATE_SHIFT = 24;
 
+/**
+ * The canvas's gestures whose keys a word by the cursor says while they
+ * last (☑ Q-06-5): `Y`, `J`, a wire in hand, a drop into a wire, the frame.
+ */
+const GESTURE_HINTS: ReadonlySet<HintKey> = new Set<HintKey>([
+  'proto.hint.cut',
+  'proto.hint.chain',
+  'proto.hint.wireDrag',
+  'proto.hint.dragInsert',
+  'proto.hint.marquee',
+]);
+
 export function WorkspaceScreen(props: {
   locale: Locale;
   home: HomeBackend;
@@ -390,6 +403,32 @@ export function WorkspaceScreen(props: {
   /** «⊘ Нода уже здесь» beside the cursor (06 §12.1): its word; it follows the cursor by its ref. */
   const [cursorNote, setCursorNote] = useState<{ x: number; y: number; key: string } | null>(null);
   const noteEl = useRef<HTMLDivElement>(null);
+  /**
+   * Input hints (☑ Q-06-5, 2026-11-07): no status line — the Chrome has no
+   * explaining lines (owner, 2026-10-24) — but while a gesture of its own
+   * lasts, what its keys do is a word by the cursor; «⊘» wins over it.
+   */
+  const [gestureHint, setGestureHint] = useState<HintKey | null>(null);
+  const hintEl = useRef<HTMLDivElement>(null);
+  /** Where the pointer was last, in the page's points: where a hint first stands. */
+  const pointer = useRef({ x: 0, y: 0 });
+  // The gesture's word follows the pointer without a render, as «⊘» does.
+  useEffect(() => {
+    const at = (e: PointerEvent) => {
+      pointer.current = { x: e.clientX, y: e.clientY };
+      const el = hintEl.current;
+      if (el) {
+        el.style.left = `${e.clientX}px`;
+        el.style.top = `${e.clientY}px`;
+      }
+    };
+    window.addEventListener('pointermove', at, { passive: true });
+    window.addEventListener('pointerdown', at, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', at);
+      window.removeEventListener('pointerdown', at);
+    };
+  }, []);
   /**
    * The core's «may this network take them» (05 §5 rules 3–4) by network and
    * nodes, asked while a drag rests on a folder; null — asked. A step clears it.
@@ -671,8 +710,9 @@ export function WorkspaceScreen(props: {
       nameInput: (e) =>
         setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
       toast: (e) => toast(e.key, e.params, e.key !== 'proto.toast.exists'),
-      // No explanatory lines on screen: hints live in tooltips and menus.
-      hint: () => undefined,
+      // No explaining lines on screen: a gesture's keys by the cursor while
+      // it lasts; what lies under the cursor is in tooltips and «Клавиши».
+      hint: (k) => setGestureHint(GESTURE_HINTS.has(k) ? k : null),
       change: () => {
         // A step may have moved what a network holds: its verdicts are asked again.
         verdicts.current = new Map();
@@ -1095,6 +1135,7 @@ export function WorkspaceScreen(props: {
       ed.placeable = (to, ids) => placeableRef.current(to, ids);
       verdicts.current = new Map();
       setCursorNote(null);
+      setGestureHint(null);
       // What was cut here stays half seen until the paste or `Esc` (☑ Q-06-17).
       const c = clipRef.current;
       v.setCut(c?.cut && c.net === id ? c.nodes.map((n) => n.id) : []);
@@ -3532,6 +3573,16 @@ export function WorkspaceScreen(props: {
         >
           <Glyph name="forbid" />
           <span>{t(locale, cursorNote.key as MessageKey)}</span>
+        </div>
+      ) : gestureHint && view3d === '2d' && props.prefs.hints === 'show' ? (
+        <div
+          ref={hintEl}
+          className="ws-cursor-note"
+          data-kind="hint"
+          role="status"
+          style={{ left: pointer.current.x, top: pointer.current.y }}
+        >
+          <span>{t(locale, gestureHint)}</span>
         </div>
       ) : null}
       {mapCtx && view3d === '3d' ? (

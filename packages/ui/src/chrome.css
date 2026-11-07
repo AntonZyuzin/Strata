@@ -3427,6 +3427,13 @@ button.ws-path-step:active:not(:disabled) {
   transform: translate(calc(16 * var(--u)), calc(16 * var(--u)));
 }
 
+/* A gesture's keys (☑ Q-06-5): the same plate, no ⊘, the text grey — what
+   the keys do, not a refusal; its padding even on both sides. */
+.ws-cursor-note[data-kind="hint"] {
+  padding-left: calc(6 * var(--u));
+  color: var(--st-color-text-muted);
+}
+
 .layers-trash {
   flex: none;
   max-height: 40%;

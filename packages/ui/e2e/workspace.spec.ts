@@ -4341,6 +4341,54 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
   });
 
+  test("a gesture's keys are a word by the cursor while it lasts: J, Y (☑ Q-06-5)", async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Подсказки');
+    await createNode(page, 420, 300, 'Один');
+    const hint = page.locator('.ws-cursor-note[data-kind="hint"]');
+    // Resting on a bubble says nothing: no status line (owner, 2026-10-24).
+    const one = await at(page, 'Один');
+    await page.mouse.move(one.x, one.y);
+    await expect(hint).toHaveCount(0);
+    // `J` held and a stroke: what the stroke does, beside the cursor, while it lasts.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.mouse.move(300, 520);
+    await page.keyboard.down('j');
+    await page.mouse.down();
+    await page.mouse.move(340, 540, { steps: 4 });
+    await expect(hint).toHaveText('Ведите через баблы — связать цепочкой · Esc');
+    const b = await box(page, '.ws-cursor-note[data-kind="hint"]');
+    expect(b.x).toBeGreaterThan(340);
+    expect(b.y).toBeGreaterThan(540);
+    await page.mouse.up();
+    await page.keyboard.up('j');
+    await expect(hint).toHaveCount(0);
+    // `Y`: the scissors.
+    await page.keyboard.down('y');
+    await page.mouse.down();
+    await page.mouse.move(380, 560, { steps: 4 });
+    await expect(hint).toHaveText('Ведите через нити — разрезать · Esc');
+    await page.mouse.up();
+    await page.keyboard.up('y');
+    await expect(hint).toHaveCount(0);
+    // «Настройки»: the hints off — the stroke goes without its word.
+    const gear = page.locator('.tabbar-settings');
+    await gear.click();
+    await page.getByRole('combobox', { name: 'Подсказки жестов' }).selectOption('hide');
+    await gear.click();
+    await expect(page.locator('.settings')).toHaveCount(0);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.mouse.move(300, 520);
+    await page.keyboard.down('j');
+    await page.mouse.down();
+    await page.mouse.move(340, 540, { steps: 4 });
+    await expect(page.locator('.ws-cursor-note')).toHaveCount(0);
+    await page.mouse.up();
+    await page.keyboard.up('j');
+  });
+
   test('the canvas keys of 06 §17: J chains, Alt+click a branch, Alt+PgDn a wire, Ctrl+arrows, S, I', async ({
     page,
   }) => {

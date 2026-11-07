@@ -23,6 +23,10 @@ export const RING_MODES: readonly RingMode[] = ['always', 'far', 'never'];
 export type CardMode = 'hover' | 'hold';
 export const CARD_MODES: readonly CardMode[] = ['hover', 'hold'];
 
+/** A gesture's keys by the cursor while it lasts (06 §2.1, ☑ Q-06-5): shown, or not. */
+export type HintMode = 'show' | 'hide';
+export const HINT_MODES: readonly HintMode[] = ['show', 'hide'];
+
 /**
  * What the device keeps: the language; a date's form and the clock, or
  * `auto` — as the language reads them (owner, 2026-10-24).
@@ -35,6 +39,8 @@ export interface Prefs {
   ring: RingMode;
   /** The info card (06 §4.4): on hover too by default. */
   card: CardMode;
+  /** Gesture hints (06 §2.1): shown by default. */
+  hints: HintMode;
 }
 
 const KEY = 'strata.prefs';
@@ -65,9 +71,17 @@ export function loadPrefs(fallback: Locale): Prefs {
       clock: CLOCKS.includes(v?.clock as Clock) ? (v?.clock as Clock) : 'auto',
       ring: RING_MODES.includes(v?.ring as RingMode) ? (v?.ring as RingMode) : 'always',
       card: CARD_MODES.includes(v?.card as CardMode) ? (v?.card as CardMode) : 'hover',
+      hints: HINT_MODES.includes(v?.hints as HintMode) ? (v?.hints as HintMode) : 'show',
     };
   } catch {
-    return { locale: fallback, date: 'auto', clock: 'auto', ring: 'always', card: 'hover' };
+    return {
+      locale: fallback,
+      date: 'auto',
+      clock: 'auto',
+      ring: 'always',
+      card: 'hover',
+      hints: 'show',
+    };
   }
 }
 

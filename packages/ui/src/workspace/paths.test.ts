@@ -1,6 +1,7 @@
 import type { TreeItem } from '@strata/backend';
 import { describe, expect, it } from 'vitest';
 import {
+  alsoIn,
   appearsIn,
   childNetworks,
   entryHolds,
@@ -103,5 +104,42 @@ describe('the networks under a network (09 §4.3)', () => {
     expect(rows.map((i) => i.name)).toEqual(['Е', 'Ж', 'А', 'Б', 'В', 'Г', 'Д']);
     const all = Object.fromEntries(items.map((i, at) => [i.id, { at }]));
     expect(menuRows(items, all, collator).recent).toBe(RECENT_ROWS);
+  });
+});
+
+describe('«Также в: …» (09 §4.3)', () => {
+  const item = (id: string, name: string, parent?: string, appears?: string[]): TreeItem =>
+    ({ id, name, kind: 'network', parent, appears }) as TreeItem;
+  const tree = [
+    item('r', 'Карта'),
+    item('a', 'Проекты', 'r'),
+    item('f', 'Фильм', 'r'),
+    item('h', 'Архив', 'r'),
+    // «Игра» lies in «Проекты», and appears in «Фильм» and «Архив».
+    item('g', 'Игра', 'a', ['f', 'h', 'a']),
+  ];
+  const byId = new Map(tree.map((i) => [i.id, i]));
+  const pathTo = (id: string) => {
+    const out: [string, string][] = [];
+    for (let at = byId.get(id); at; at = at.parent ? byId.get(at.parent) : undefined) {
+      out.unshift([at.id, at.name]);
+    }
+    return out;
+  };
+  const texts = (way: string[]) => alsoIn(byId, 'g', way, pathTo).map(pathText);
+
+  it('lists the other placements, the primary first, the rest by their text', () => {
+    expect(texts(['r', 'f', 'g'])).toEqual(['/Проекты/Игра', '/Архив/Игра']);
+    expect(texts(['r', 'a', 'g'])).toEqual(['/Архив/Игра', '/Фильм/Игра']);
+  });
+
+  it('each way ends at the network, by its ids, to go there', () => {
+    const [primary] = alsoIn(byId, 'g', ['r', 'h', 'g'], pathTo);
+    expect(primary?.map(([id]) => id)).toEqual(['r', 'a', 'g']);
+  });
+
+  it('has nothing for a network in one place or not in the tree', () => {
+    expect(alsoIn(byId, 'a', ['r', 'a'], pathTo)).toEqual([]);
+    expect(alsoIn(byId, 'x', ['r', 'x'], pathTo)).toEqual([]);
   });
 });

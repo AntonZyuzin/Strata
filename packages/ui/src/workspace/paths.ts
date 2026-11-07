@@ -54,6 +54,33 @@ export function childNetworks(tree: readonly TreeItem[]): Map<string, TreeItem[]
   return out;
 }
 
+/**
+ * «Также в: …» (09 §4.3): the other ways to network `id` — one by each of its
+ * placements (05 §5) whose network is not the one `way` came through, each
+ * the canonical path to that network and then `id`; the primary one first,
+ * the rest by their text. One placement each, not every path through nested
+ * appearances: those many come later, lazily (05 §9.3).
+ */
+export function alsoIn(
+  byId: ReadonlyMap<string, TreeItem>,
+  id: string,
+  way: readonly string[],
+  pathTo: (id: string) => NamedPath,
+): NamedPath[] {
+  const item = byId.get(id);
+  if (!item) return [];
+  const came = way.at(-2);
+  const nets = [...new Set([item.parent, ...(item.appears ?? [])])].filter(
+    (n): n is string => n !== null && n !== undefined && n !== came && byId.has(n),
+  );
+  const ways = nets.map((n) => [...pathTo(n), [id, item.name] as const] as NamedPath);
+  const primary = ways.filter((w) => w.at(-2)?.[0] === item.parent);
+  const rest = ways
+    .filter((w) => w.at(-2)?.[0] !== item.parent)
+    .sort((a, b) => pathText(a).localeCompare(pathText(b)));
+  return [...primary, ...rest];
+}
+
 /** `item` lies in `net` as an appearance, not by its primary placement (05 §5). */
 export function appearsIn(item: TreeItem | undefined, net: string): boolean {
   return item !== undefined && item.parent !== net && (item.appears ?? []).includes(net);

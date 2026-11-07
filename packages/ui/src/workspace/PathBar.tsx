@@ -15,6 +15,9 @@ export interface PathChildren {
   recent: number;
 }
 
+/** «Также в: …» rows in the menu; past them, how many more (09 §4.3). */
+const ALSO_ROWS = 8;
+
 /**
  * The path (✅ Q-06-25, 06 §10.2, 09 §4.3): where the canvas is, at its
  * bottom left, from depth 2 — the entry path (05 §9.3), the way one came.
@@ -33,7 +36,8 @@ export interface PathChildren {
  *   node goes there, several are a choice, none marks the segment that named
  *   nothing and offers the nearest names; `Esc` gives the path back.
  * - The right button: «Скопировать путь», «Скопировать путь захода» when it
- *   is another, «Скопировать как [[ссылку]]» (09 §4.6), «Ввести путь».
+ *   is another, «Скопировать как [[ссылку]]» (09 §4.6), «Также в: …» — the
+ *   network's other placements, each a way there — and «Ввести путь».
  *
  * The quick marks set follow it, ★ and the digit (06 §10.3, 09 §6.2): a
  * click goes there, the right button clears it; empty slots are not shown.
@@ -51,6 +55,8 @@ export function PathBar(props: {
   canonicalOf: (id: string) => NamedPath;
   /** The networks lying in a network, as `▾` lists them: asked when it opens. */
   childrenOf: (id: string) => PathChildren;
+  /** «Также в: …»: the ways to a network by its other placements, `way` — how one came. */
+  alsoIn: (id: string, way: readonly string[]) => NamedPath[];
   /** Some network lies in this one: the last network gets its `▾`. */
   hasChildren: (id: string) => boolean;
   search: SearchClient;
@@ -148,17 +154,34 @@ export function PathBar(props: {
         onSelect: () => props.onCopy(pathText(entry)),
       });
     }
-    items.push(
-      { label: t(locale, 'path.copyLink'), onSelect: () => props.onCopy(`[[${name}]]`) },
-      {
-        label: t(locale, 'path.type'),
-        separated: true,
-        onSelect: () => {
-          setMenu(null);
-          setEditing(true);
-        },
+    items.push({
+      label: t(locale, 'path.copyLink'),
+      onSelect: () => props.onCopy(`[[${name}]]`),
+    });
+    // «Также в: …» (09 §4.3): its other placements, each a way there.
+    const others = props.alsoIn(id, ids.slice(0, at + 1));
+    others.slice(0, ALSO_ROWS).forEach((way, i) => {
+      items.push({
+        label: t(locale, 'path.alsoIn', { path: pathText(way.slice(0, -1)) }),
+        separated: i === 0,
+        onSelect: () => props.onGo(way.map(([i]) => i)),
+      });
+    });
+    if (others.length > ALSO_ROWS) {
+      items.push({
+        label: t(locale, 'path.alsoMore', { n: others.length - ALSO_ROWS }),
+        disabled: true,
+        onSelect: () => undefined,
+      });
+    }
+    items.push({
+      label: t(locale, 'path.type'),
+      separated: true,
+      onSelect: () => {
+        setMenu(null);
+        setEditing(true);
       },
-    );
+    });
     return items;
   };
 

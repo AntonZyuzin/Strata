@@ -1442,6 +1442,21 @@ test.describe('a workspace on the core', () => {
     await expect(here).toHaveAttribute('data-appearance', 'true');
     const canonical = path.locator('.ws-path-canonical');
     await expect(canonical).toHaveText('/Проекты/Игра');
+    // The right button by «Игра»: «Также в: /Проекты», its other placement —
+    // not «Фильм», the way one came; it goes there that way, and back.
+    const alsoIn = (where: string) =>
+      page.locator('.context-menu .context-menu-label', { hasText: `Также в: ${where}` });
+    await here.click({ button: 'right' });
+    await expect(alsoIn('/Фильм')).toHaveCount(0);
+    await alsoIn('/Проекты').click();
+    await expect(canonical).toHaveCount(0);
+    await expect(path.getByRole('button', { name: 'Проекты', exact: true })).toBeVisible();
+    await expect(here).not.toHaveAttribute('data-appearance', 'true');
+    await here.click({ button: 'right' });
+    await expect(alsoIn('/Проекты')).toHaveCount(0);
+    await alsoIn('/Фильм').click();
+    await expect(here).toHaveAttribute('data-appearance', 'true');
+    await expect(canonical).toHaveText('/Проекты/Игра');
     // `U` goes back the way one came, not to the canonical «Проекты».
     await leave(page);
     await expect(here).toContainText('Фильм');
@@ -1507,12 +1522,14 @@ test.describe('a workspace on the core', () => {
     await expect(field).toHaveCount(0);
     await expect(here).toContainText('Игра');
     // The right button: the canonical path to the clipboard, said by a toast;
-    // «Скопировать путь захода» only where the way one came is another.
+    // «Скопировать путь захода» only where the way one came is another; the
+    // other placement of «Игра» as «Также в».
     await here.click({ button: 'right' });
     const ctx = page.locator('.context-menu');
     await expect(ctx.locator('.context-menu-label')).toHaveText([
       'Скопировать путь',
       'Скопировать как [[ссылку]]',
+      'Также в: /Фильм',
       'Ввести путь',
     ]);
     await ctx.getByText('Скопировать путь', { exact: true }).click();

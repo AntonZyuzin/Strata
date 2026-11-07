@@ -122,6 +122,7 @@ import { NodeSearch } from './NodeSearch';
 import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
 import { PathBar, type PathChildren } from './PathBar';
 import {
+  alsoIn,
   appearsIn,
   childNetworks,
   entryHolds,
@@ -3456,6 +3457,7 @@ export function WorkspaceScreen(props: {
           kindOf={(id) => treeById.get(id)?.kind ?? 'network'}
           canonicalOf={(id) => pathTo(tree, id)}
           childrenOf={childrenOf}
+          alsoIn={(id, way) => alsoIn(treeById, id, way, (n) => pathTo(tree, n))}
           hasChildren={(id) => (nets.get(id)?.length ?? 0) > 0}
           search={searchClient()}
           panel={details !== null}

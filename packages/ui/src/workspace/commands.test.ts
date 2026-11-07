@@ -1,7 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { loadSearch, rankByName } from '@strata/search';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { available, COMMANDS, type CommandContext, commandNames, rankedCommands } from './commands';
+import {
+  type AppActions,
+  available,
+  COMMANDS,
+  type CommandContext,
+  commandNames,
+  rankedCommands,
+  whyNot,
+} from './commands';
 
 beforeAll(async () => {
   const wasm = new URL('../../../search/pkg/strata_search_bg.wasm', import.meta.url);
@@ -77,6 +85,55 @@ describe('the command palette (09 §3.5)', () => {
     expect(can('map.pin', ctx({ view: '3d' }))).toBe(true);
     expect(can('map.quality.off', ctx())).toBe(true);
     expect(can('map.quality.auto', ctx())).toBe(false);
+  });
+
+  it('says why a command cannot run now, for «Все команды»', () => {
+    const why = (id: string, c: CommandContext) => {
+      const command = COMMANDS.find((x) => x.id === id);
+      if (!command) throw new Error(`no command ${id}`);
+      return whyNot(command, c);
+    };
+    // The view first: a canvas command on the star map is the canvas's only.
+    expect(why('canvas.delete', ctx({ view: '3d', selected: 2 }))).toBe('cmd.why.canvas');
+    expect(why('canvas.delete', ctx())).toBe('cmd.why.selection');
+    expect(why('canvas.rename', ctx())).toBe('cmd.why.node');
+    expect(why('canvas.paste', ctx())).toBe('cmd.why.clip');
+    expect(why('canvas.undo', ctx())).toBe('cmd.why.undo');
+    expect(why('canvas.redo', ctx())).toBe('cmd.why.redo');
+    expect(why('nav.back', ctx())).toBe('cmd.why.back');
+    expect(why('nav.forward', ctx())).toBe('cmd.why.forward');
+    expect(why('nav.mark.go.3', ctx())).toBe('cmd.why.mark');
+    expect(why('nav.importReport', ctx())).toBe('cmd.why.report');
+    expect(why('map.pin', ctx())).toBe('cmd.why.map');
+    expect(why('map.quality.auto', ctx())).toBe('cmd.why.current');
+    expect(why('canvas.layout', ctx())).toBeNull();
+  });
+
+  it("runs the tab bar's steps where the screen has the bar", () => {
+    const done: string[] = [];
+    const app: AppActions = {
+      open: () => done.push('open'),
+      create: () => done.push('create'),
+      home: () => done.push('home'),
+      settings: () => done.push('settings'),
+    };
+    const run = (id: string, c: CommandContext) => {
+      const command = COMMANDS.find((x) => x.id === id);
+      if (!command) throw new Error(`no command ${id}`);
+      if (available(command, c)) command.run(c);
+      return whyNot(command, c);
+    };
+    expect(run('app.open', ctx())).toBe('cmd.why.app');
+    expect(run('app.save', ctx({ app }))).toBe('cmd.why.unsaved');
+    for (const id of ['app.open', 'app.new', 'app.home', 'app.settings']) {
+      expect(run(id, ctx({ app }))).toBeNull();
+    }
+    expect(run('app.save', ctx({ app: { ...app, save: () => done.push('save') } }))).toBeNull();
+    expect(done).toEqual(['open', 'create', 'home', 'settings', 'save']);
+    // On the star map too: the bar is there.
+    expect(run('app.settings', ctx({ app, view: '3d' }))).toBeNull();
+    expect(find('export')[0]).toBe('app.save');
+    expect(find('настройки')[0]).toBe('app.settings');
   });
 
   it('finds the moves of 06 §12.1 and the wrap of §13.3 in both languages', () => {

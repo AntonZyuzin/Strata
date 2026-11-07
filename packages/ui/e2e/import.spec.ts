@@ -74,7 +74,7 @@ test('a vault comes in from the home screen and goes back with one undo', async 
     .first()
     .click({ position: { x: 5, y: 5 } });
   await page.keyboard.press('Control+p');
-  await page.locator('.command-palette input').fill('отчёт импорта');
+  await page.locator('.command-palette .palette-query').fill('отчёт импорта');
   await page.keyboard.press('Enter');
   await expect(report).toBeVisible();
   await report

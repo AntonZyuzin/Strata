@@ -67,10 +67,12 @@ export function NodeSearch(props: {
   resolve?: ((text: string) => Promise<Resolved>) | undefined;
   /** A node a typed path named, by the way it went; `open` — `Shift+Enter`. */
   onHit?: ((hit: PathHit, open: boolean) => void) | undefined;
+  /** The query it opens with: a path the palette began (09 §3.5). */
+  initial?: string | undefined;
   onClose: () => void;
 }) {
   const { locale, items, search, scope, here, visits, trash, resolve } = props;
-  const [query, setQuery] = useState('');
+  const [query, setQuery] = useState(props.initial ?? '');
   /** The core's answer to a path, for the query it was asked. */
   const [resolved, setResolved] = useState<{ q: string; r: Resolved } | null>(null);
   const paths = resolve !== undefined && pathQuery(query);
@@ -241,6 +243,11 @@ export function NodeSearch(props: {
             autoComplete="off"
             // biome-ignore lint/a11y/noAutofocus: the search opens on its key to be typed into
             autoFocus
+            // A query it opened with is typed on from its end.
+            onFocus={(e) => {
+              const end = e.currentTarget.value.length;
+              e.currentTarget.setSelectionRange(end, end);
+            }}
             onChange={(e) => {
               setQuery(e.target.value);
               setIndex(0);

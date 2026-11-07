@@ -1128,7 +1128,7 @@ button:focus-visible {
   box-shadow: var(--st-bevel-sunken);
 }
 
-.tab-menu-prompt input,
+.tab-menu-prompt > input,
 .name-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -1139,7 +1139,7 @@ button:focus-visible {
   outline: none;
 }
 
-.tab-menu-prompt input::selection,
+.tab-menu-prompt > input::selection,
 .name-input::selection {
   background: var(--st-color-selection-bg);
   color: var(--st-color-selection-fg);
@@ -1190,6 +1190,28 @@ button:focus-visible {
 
 .tab-menu-row.is-current .tab-menu-detail {
   color: inherit;
+}
+
+/* A command that cannot run now, under «Все команды» (09 §3.5): grey as a
+   disabled menu row, the reason in its tooltip; current, it is framed, not
+   filled — the bar would say it runs. */
+.tab-menu-row.is-unavailable,
+.tab-menu-row.is-unavailable .tab-menu-detail {
+  color: var(--st-color-text-disabled);
+  cursor: default;
+}
+
+.tab-menu-row.is-current.is-unavailable {
+  background: transparent;
+  box-shadow: inset 0 0 0 var(--u) var(--st-color-frame);
+}
+
+/* «Все команды» at the prompt's end: its label stays whole in both languages. */
+.palette-all {
+  flex: none;
+  min-height: 0;
+  white-space: nowrap;
+  color: var(--st-color-text-muted);
 }
 
 .tab-menu-empty {

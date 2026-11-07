@@ -935,7 +935,7 @@ for (const deviceScaleFactor of [1, 2]) {
       await page.keyboard.press('Control+p');
       const palette = page.locator('.command-palette');
       await expect(palette).toBeVisible();
-      await expect(palette.locator('input')).toBeFocused();
+      await expect(palette.locator('.palette-query')).toBeFocused();
       expect(await overflowing(page, '.command-palette'), `${locale} the palette must fit`).toEqual(
         [],
       );
@@ -945,7 +945,7 @@ for (const deviceScaleFactor of [1, 2]) {
         row: await box(page, '.command-palette .tab-menu-row.is-current'),
         rows,
       });
-      await palette.locator('input').press('Escape');
+      await palette.locator('.palette-query').press('Escape');
       await expect(palette).toHaveCount(0);
       await context.close();
     }
@@ -3116,6 +3116,75 @@ test.describe('a workspace on the core', () => {
     await expect.poll(selected).toEqual(['Верх']);
   });
 
+  test("the palette: «/» goes on as a path, «?» opens the keys, «Все команды» shows the rest grey, the bar's steps run (09 §3.5)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Префиксы');
+    await makeFolder(page, 'Архив', 520, 320);
+    await page.mouse.click(400, 650);
+    const palette = page.locator('.command-palette');
+    const input = palette.locator('.palette-query');
+    // `/`: `Ctrl+O`'s path mode takes the query on, typed on from its end.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+p');
+    await page.keyboard.type('/');
+    await expect(palette).toHaveCount(0);
+    const goto = page.locator('.node-search.goto');
+    const query = goto.locator('input');
+    await expect(query).toBeFocused();
+    await expect(query).toHaveValue('/');
+    await page.keyboard.type('Архив');
+    await expect(query).toHaveValue('/Архив');
+    await expect(goto.locator('.tab-menu-row.is-current .tab-menu-label')).toHaveText('Архив');
+    await page.keyboard.press('Enter');
+    await expect(goto).toHaveCount(0);
+    const archive = await idOf(page, 'Архив');
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.editor()?.selected))
+      .toEqual([archive]);
+    // `?`: «Клавиши».
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+p');
+    await page.keyboard.type('?');
+    await expect(palette).toHaveCount(0);
+    await expect(page.locator('.help-window')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.help-window')).toHaveCount(0);
+    // Nothing chosen: no «Удалить»; «Все команды» shows it grey, why in its tooltip.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+p');
+    await input.fill('удалить');
+    await expect(palette.locator('.tab-menu-empty')).toBeVisible();
+    const all = palette.locator('.palette-all');
+    await all.click();
+    await expect(all.locator('input')).toBeChecked();
+    await expect(input).toBeFocused();
+    const grey = palette.locator('.tab-menu-row.is-unavailable').first();
+    await expect(grey).toBeVisible();
+    await expect(grey.locator('.tab-menu-label')).toHaveAttribute('title', /Ничего не выделено/);
+    await expect(grey).toHaveAttribute('aria-disabled', 'true');
+    // A grey row does not run: the palette stays.
+    await input.press('Enter');
+    await expect(palette).toBeVisible();
+    // The choice stays on the device.
+    await input.press('Escape');
+    await page.keyboard.press('Control+p');
+    await expect(all.locator('input')).toBeChecked();
+    await all.click();
+    await expect(all.locator('input')).not.toBeChecked();
+    // The tab bar's steps: «Настройки» from the palette.
+    await input.fill('настройки');
+    await expect(palette.locator('.tab-menu-row.is-current .tab-menu-label')).toHaveText(
+      'Настройки',
+    );
+    await input.press('Enter');
+    await expect(palette).toHaveCount(0);
+    await expect(page.locator('.settings')).toBeVisible();
+  });
+
   test('Ctrl+P runs a command found in either language; the last ones come first (09 §3.5)', async ({
     page,
   }) => {
@@ -3123,7 +3192,7 @@ test.describe('a workspace on the core', () => {
     await createWorkspace(page, 'Палитра');
     await createNode(page, 500, 360, 'Север');
     const palette = page.locator('.command-palette');
-    const input = palette.locator('input');
+    const input = palette.locator('.palette-query');
     const rows = palette.locator('.tab-menu-row');
     // A pointer resting where the rows open chooses none: the first is current.
     await page.keyboard.press('Control+p');
@@ -4061,7 +4130,7 @@ test.describe('a workspace on the core', () => {
     // The palette pastes an appearance too, in «Архив».
     await enter(page, 'Архив');
     await page.keyboard.press('Control+p');
-    await page.locator('.command-palette input').fill('появление');
+    await page.locator('.command-palette .palette-query').fill('появление');
     await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(
       'Вставить как появление',
     );
@@ -4123,7 +4192,7 @@ test.describe('a workspace on the core', () => {
     await expect(ws).toHaveAttribute('data-nodes', '2');
     await page.evaluate(() => window.__strataWs?.view.canvas.focus());
     await page.keyboard.press('Control+p');
-    await page.locator('.command-palette input').fill('дублировать');
+    await page.locator('.command-palette .palette-query').fill('дублировать');
     await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(
       'Дублировать',
     );

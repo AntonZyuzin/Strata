@@ -148,6 +148,47 @@ export function Shell(props: {
     [],
   );
 
+  // The tab bar's steps: its buttons, and the palette's «Пространство» (09 §3.5).
+  const goHome = () =>
+    void act(async () => {
+      behind();
+      if (!opened) return;
+      await away();
+      await toHome();
+    });
+  const openArchive = () => {
+    if (home.where === 'browser') {
+      importInput.current?.click();
+      return;
+    }
+    void act(async () => {
+      const path = await pickArchive();
+      if (!path) return;
+      await away();
+      show(await home.importArchive(path));
+    });
+  };
+  const save = opened
+    ? () =>
+        void act(async () => {
+          await bridge.current?.save();
+          const file = `${opened.workspace.name}.strata.zip`;
+          if (home.where === 'desktop') {
+            const to = await pickSavePath(file);
+            if (to) await home.exportArchive(opened.workspace.id, to);
+          } else {
+            const bytes = await home.exportArchive(opened.workspace.id);
+            if (bytes) download(file, bytes);
+          }
+        })
+    : undefined;
+  const create = () =>
+    void act(async () => {
+      behind();
+      await away();
+      show(await home.create(t(locale, 'home.untitled')));
+    });
+
   return (
     <div className="app">
       <TabBar
@@ -162,42 +203,9 @@ export function Shell(props: {
         onBack={() => bridge.current?.back()}
         onForward={() => bridge.current?.forward()}
         onMap={() => bridge.current?.map()}
-        onHome={() =>
-          void act(async () => {
-            behind();
-            if (!opened) return;
-            await away();
-            await toHome();
-          })
-        }
-        onImport={() => {
-          if (home.where === 'browser') {
-            importInput.current?.click();
-            return;
-          }
-          void act(async () => {
-            const path = await pickArchive();
-            if (!path) return;
-            await away();
-            show(await home.importArchive(path));
-          });
-        }}
-        onExport={
-          opened
-            ? () =>
-                void act(async () => {
-                  await bridge.current?.save();
-                  const file = `${opened.workspace.name}.strata.zip`;
-                  if (home.where === 'desktop') {
-                    const to = await pickSavePath(file);
-                    if (to) await home.exportArchive(opened.workspace.id, to);
-                  } else {
-                    const bytes = await home.exportArchive(opened.workspace.id);
-                    if (bytes) download(file, bytes);
-                  }
-                })
-            : undefined
-        }
+        onHome={goHome}
+        onImport={openArchive}
+        onExport={save}
         onSelect={(id) => {
           if (id === active) {
             behind();
@@ -234,13 +242,7 @@ export function Shell(props: {
             else await toHome();
           })
         }
-        onNew={() =>
-          void act(async () => {
-            behind();
-            await away();
-            show(await home.create(t(locale, 'home.untitled')));
-          })
-        }
+        onNew={create}
       />
       <input
         ref={importInput}
@@ -274,6 +276,13 @@ export function Shell(props: {
             opened={opened}
             prefs={prefs}
             covered={settings}
+            app={{
+              save,
+              open: openArchive,
+              create,
+              home: goHome,
+              settings: () => setSettings(true),
+            }}
             bridge={bridge}
             onUndoState={setUndo}
           />

@@ -101,7 +101,7 @@ import {
   stepMode,
   type WindowMode,
 } from './ContentWindow';
-import type { CommandContext } from './commands';
+import type { AppActions, CommandContext } from './commands';
 import { DeleteDialog } from './DeleteDialog';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
@@ -301,6 +301,8 @@ export function WorkspaceScreen(props: {
   prefs: Prefs;
   /** «Настройки» are in front: the canvas leaves the keys alone. */
   covered: boolean;
+  /** The tab bar's steps for the palette (09 §3.5); none in the bench's host. */
+  app?: AppActions | undefined;
   bridge: MutableRefObject<WorkspaceBridge | null>;
   onUndoState: (s: UndoState) => void;
 }) {
@@ -419,7 +421,8 @@ export function WorkspaceScreen(props: {
   const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
   /** «Перейти к ноде» (09 §3.4): `Ctrl+O` on the canvas and on the star map (08 §10). */
-  const [finder, setFinder] = useState<{ map: boolean } | null>(null);
+  /** «Перейти к ноде»: on the star map or the canvas, with the path the palette began. */
+  const [finder, setFinder] = useState<{ map: boolean; query?: string } | null>(null);
   /** `Ctrl+F` on the canvas (09 §3.3) and on the star map (08 §6.1). */
   const [finding, setFinding] = useState(false);
   /** The report of the import that made this workspace (13 §3.6, S1 step 7). */
@@ -3352,6 +3355,7 @@ export function WorkspaceScreen(props: {
       const name = id ? treeById.get(id)?.name : undefined;
       if (name !== undefined) copy(`[[${name}]]`);
     },
+    app: props.app,
   };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
@@ -3587,6 +3591,7 @@ export function WorkspaceScreen(props: {
             focusCanvas();
             goHit(hit, open ? 'open' : 'go');
           }}
+          initial={finder.query}
           left={
             (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
           }
@@ -3703,6 +3708,16 @@ export function WorkspaceScreen(props: {
             setPalette(false);
             focusCanvas();
             command.run(commandContext);
+          }}
+          // The prefixes (09 §3.5): a path goes on in `Ctrl+O`'s path mode, `?` — the keys.
+          onPath={(query) => {
+            setPalette(false);
+            setFinding(false);
+            setFinder({ map: view3d !== '2d', query });
+          }}
+          onHelp={() => {
+            setPalette(false);
+            setHelp(true);
           }}
           onClose={() => {
             setPalette(false);

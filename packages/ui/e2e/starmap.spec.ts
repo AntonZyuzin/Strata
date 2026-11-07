@@ -436,7 +436,7 @@ test.describe('the star map without 2D (04 S6, 08 §1.2)', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-view', '2d');
     // The palette turns it on by hand: «высокое» — with bloom.
     await page.keyboard.press('Control+p');
-    await page.locator('.command-palette input').fill('качество карты высокое');
+    await page.locator('.command-palette .palette-query').fill('качество карты высокое');
     await expect(page.locator('.command-palette .tab-menu-row').first()).toContainText(
       'Качество карты: высокое',
     );

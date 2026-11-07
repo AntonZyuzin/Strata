@@ -3,7 +3,6 @@ import type { SearchClient } from '@strata/search';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { pointerMoved } from '../pointer';
 import {
-  available,
   COMMANDS,
   type Command,
   type CommandContext,
@@ -11,13 +10,33 @@ import {
   commandNames,
   rankedCommands,
   titleOf,
+  whyNot,
 } from './commands';
+import { pathQuery } from './NodeSearch';
 
 const ROWS = 12;
 /** Recent commands on top of an empty query (09 §3.5). */
 const RECENT = 5;
 const RECENT_KEY = 'strata.palette.recent';
-const GROUPS: readonly CommandGroup[] = ['node', 'canvas', 'nav'];
+/** «Все команды» on or off, kept on the device (05 §13). */
+const ALL_KEY = 'strata.palette.all';
+const GROUPS: readonly CommandGroup[] = ['node', 'canvas', 'nav', 'app'];
+
+function loadAll(): boolean {
+  try {
+    return localStorage.getItem(ALL_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function saveAll(on: boolean): void {
+  try {
+    localStorage.setItem(ALL_KEY, on ? '1' : '0');
+  } catch {
+    // A convenience too: the choice lasts for the session.
+  }
+}
 
 function loadRecent(): string[] {
   try {
@@ -40,6 +59,8 @@ function remember(id: string): void {
 interface Row {
   command: Command;
   header: MessageKey | null;
+  /** Why it cannot run now (shown under «Все команды»): grey, the reason in its tooltip. */
+  why: MessageKey | null;
 }
 
 /**
@@ -48,7 +69,9 @@ interface Row {
  * command that can run now by its group; with a query — the search engine's
  * ranking of the titles in both languages and the aliases. A row is the
  * title and its key; `Enter` typed before the engine's answer runs once it
- * comes.
+ * comes. «Все команды» shows the ones that cannot run now too, grey, the
+ * reason in the row's tooltip. A query that starts as a path (`/`, `./`,
+ * `../`) goes on in `Ctrl+O`'s path mode; `?` opens «Клавиши».
  */
 export function CommandPalette(props: {
   locale: Locale;
@@ -57,16 +80,22 @@ export function CommandPalette(props: {
   left: number;
   top: number;
   onRun: (command: Command) => void;
+  /** The query became a path: `Ctrl+O` takes it on. */
+  onPath: (query: string) => void;
+  /** `?`: «Клавиши». */
+  onHelp: () => void;
   onClose: () => void;
 }) {
   const { locale, search, context } = props;
   const [query, setQuery] = useState('');
+  const [all, setAll] = useState(loadAll);
   const [index, setIndex] = useState(0);
   const [moved] = useState(pointerMoved);
   const [found, setFound] = useState<{ q: string; commands: Command[] } | null>(null);
   const [waiting, setWaiting] = useState(false);
   const names = useMemo(() => commandNames(), []);
   const list = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const q = query.trim();
@@ -81,29 +110,33 @@ export function CommandPalette(props: {
   }, [search, query, names]);
 
   const rows: Row[] = useMemo(() => {
-    const can = (c: Command) => available(c, context);
+    const can = (c: Command) => whyNot(c, context) === null;
+    const shown = (c: Command) => all || can(c);
+    const row = (command: Command, header: MessageKey | null): Row => ({
+      command,
+      header,
+      why: whyNot(command, context),
+    });
     if (query.trim() === '') {
+      // The recent ones that can run; the rest in their groups, in order.
       const recent = loadRecent()
         .flatMap((id) => COMMANDS.filter((c) => c.id === id))
         .filter(can);
-      const out: Row[] = recent.map((command, i) => ({
-        command,
-        header: i === 0 ? 'cmd.recent' : null,
-      }));
+      const out: Row[] = recent.map((command, i) => row(command, i === 0 ? 'cmd.recent' : null));
       for (const g of GROUPS) {
-        const list = COMMANDS.filter((c) => c.group === g && can(c) && !recent.includes(c));
+        const list = COMMANDS.filter((c) => c.group === g && shown(c) && !recent.includes(c));
         list.forEach((command, i) => {
-          out.push({ command, header: i === 0 ? (`cmd.group.${g}` as MessageKey) : null });
+          out.push(row(command, i === 0 ? (`cmd.group.${g}` as MessageKey) : null));
         });
       }
       return out;
     }
     if (found?.q !== query) return [];
     return found.commands
-      .filter(can)
+      .filter(shown)
       .slice(0, ROWS)
-      .map((command) => ({ command, header: null }));
-  }, [query, found, context]);
+      .map((command) => row(command, null));
+  }, [query, found, context, all]);
 
   const ready = query.trim() === '' || found?.q === query;
   const { onRun } = props;
@@ -113,7 +146,8 @@ export function CommandPalette(props: {
       return;
     }
     const r = rows[i];
-    if (!r) return;
+    // A grey row says why in its tooltip; it does not run.
+    if (!r || r.why) return;
     remember(r.command.id);
     onRun(r.command);
   };
@@ -121,7 +155,7 @@ export function CommandPalette(props: {
   useEffect(() => {
     if (!waiting || !ready) return;
     setWaiting(false);
-    if (!first) return;
+    if (!first || first.why) return;
     remember(first.command.id);
     onRun(first.command);
   }, [waiting, ready, first, onRun]);
@@ -145,6 +179,8 @@ export function CommandPalette(props: {
         <div className="tab-menu-prompt">
           <span aria-hidden="true">&gt;</span>
           <input
+            ref={field}
+            className="palette-query"
             value={query}
             aria-label={label}
             title={`${label} · ${t(locale, 'cmd.keys')}`}
@@ -153,7 +189,17 @@ export function CommandPalette(props: {
             // biome-ignore lint/a11y/noAutofocus: the palette opens on its key to be typed into
             autoFocus
             onChange={(e) => {
-              setQuery(e.target.value);
+              const v = e.target.value;
+              // The prefixes (09 §3.5): a path goes on in `Ctrl+O`, `?` — the keys.
+              if (pathQuery(v)) {
+                props.onPath(v);
+                return;
+              }
+              if (v.trimStart().startsWith('?')) {
+                props.onHelp();
+                return;
+              }
+              setQuery(v);
               setIndex(0);
               setWaiting(false);
             }}
@@ -167,6 +213,21 @@ export function CommandPalette(props: {
               e.preventDefault();
             }}
           />
+          <label className="check palette-all" title={t(locale, 'cmd.allHint')}>
+            <input
+              type="checkbox"
+              checked={all}
+              onChange={(e) => {
+                const on = e.currentTarget.checked;
+                setAll(on);
+                saveAll(on);
+                setIndex(0);
+                // The palette is typed into: the keys go back to the query.
+                field.current?.focus();
+              }}
+            />
+            <span>{t(locale, 'cmd.all')}</span>
+          </label>
         </div>
         <div ref={list} className="tab-menu-list" role="listbox" aria-label={label}>
           {query.trim() && ready && rows.length === 0 ? (
@@ -174,6 +235,9 @@ export function CommandPalette(props: {
           ) : null}
           {rows.map((r, i) => {
             const title = titleOf(locale, r.command);
+            const cls = ['tab-menu-row'];
+            if (i === index) cls.push('is-current');
+            if (r.why) cls.push('is-unavailable');
             return [
               r.header ? (
                 <div key={`h:${r.header}`} className="tab-menu-header" role="presentation">
@@ -185,7 +249,8 @@ export function CommandPalette(props: {
                 role="option"
                 tabIndex={-1}
                 aria-selected={i === index}
-                className={i === index ? 'tab-menu-row is-current' : 'tab-menu-row'}
+                aria-disabled={r.why ? true : undefined}
+                className={cls.join(' ')}
                 onPointerMove={(e) => {
                   if (moved(e)) setIndex(i);
                 }}
@@ -194,7 +259,10 @@ export function CommandPalette(props: {
                   run(i);
                 }}
               >
-                <span className="tab-menu-label" title={title}>
+                <span
+                  className="tab-menu-label"
+                  title={r.why ? `${title} — ${t(locale, r.why)}` : title}
+                >
                   {title}
                 </span>
                 <span className="tab-menu-detail">{r.command.key ?? ''}</span>

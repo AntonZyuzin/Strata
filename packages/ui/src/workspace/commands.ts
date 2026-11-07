@@ -6,12 +6,24 @@ import type { MapAction } from '../proto/map3d';
 
 /**
  * The palette's commands (09 §3.5): every action of the canvas and of the
- * star map has one (06 §1 rule 6). A command is found by its title in both
- * languages and by its aliases, shows the title in the UI's language and its
- * key; one that cannot run now is not shown.
+ * star map has one (06 §1 rule 6), and so has every step of the tab bar. A
+ * command is found by its title in both languages and by its aliases, shows
+ * the title in the UI's language and its key; one that cannot run now is not
+ * shown, or shown grey with the reason under «Показать все».
  */
 
-export type CommandGroup = 'canvas' | 'node' | 'nav';
+export type CommandGroup = 'canvas' | 'node' | 'nav' | 'app';
+
+/** What the tab bar does (06 §2.1), for the palette: the shell gives it. */
+export interface AppActions {
+  /** The workspace to a `.strata.zip`; none while nothing is open. */
+  save?: (() => void) | undefined;
+  /** A `.strata.zip` opened as a new workspace. */
+  open(): void;
+  create(): void;
+  home(): void;
+  settings(): void;
+}
 
 /** What a command may do and know: the workspace screen gives it. */
 export interface CommandContext {
@@ -50,6 +62,8 @@ export interface CommandContext {
   /** The canonical path, and a `[[link]]`, of the node chosen or the network on the canvas (09 §4.6). */
   copyPath(): void;
   copyLink(): void;
+  /** The tab bar's steps; none where the screen has no bar (the bench's host). */
+  app?: AppActions | undefined;
 }
 
 export interface Command {
@@ -60,22 +74,28 @@ export interface Command {
   group: CommandGroup;
   /** Its key, as the palette shows it (06 §1). */
   key?: string;
-  when?(ctx: CommandContext): boolean;
+  /** Why it cannot run now, shown under «Показать все»; null — it can. */
+  why?(ctx: CommandContext): MessageKey | null;
   run(ctx: CommandContext): void;
 }
 
-const flat = (c: CommandContext) => c.view === '2d';
-const spatial = (c: CommandContext) => c.view === '3d';
-const chosen = (c: CommandContext) => c.view === '2d' && c.selected > 0;
-const one = (c: CommandContext) => c.view === '2d' && c.current !== null;
-const clipped = (c: CommandContext) => c.view === '2d' && c.clip;
+/** The reason a command cannot run now, or null. */
+type Why = (c: CommandContext) => MessageKey | null;
+
+const flat: Why = (c) => (c.view === '2d' ? null : 'cmd.why.canvas');
+const spatial: Why = (c) => (c.view === '3d' ? null : 'cmd.why.map');
+const chosen: Why = (c) => flat(c) ?? (c.selected > 0 ? null : 'cmd.why.selection');
+const one: Why = (c) => flat(c) ?? (c.current !== null ? null : 'cmd.why.node');
+const clipped: Why = (c) => flat(c) ?? (c.clip ? null : 'cmd.why.clip');
+const always: Why = () => null;
+const bar: Why = (c) => (c.app ? null : 'cmd.why.app');
 
 const canvas = (
   id: string,
   action: CanvasAction,
   key: string,
   aliases: readonly string[],
-  when: (c: CommandContext) => boolean = flat,
+  why: Why = flat,
   group: CommandGroup = 'canvas',
 ): Command => ({
   id: `canvas.${id}`,
@@ -83,7 +103,7 @@ const canvas = (
   aliases,
   group,
   key,
-  when,
+  why,
   run: (c) => c.act(action),
 });
 
@@ -100,7 +120,7 @@ const mapped = (
   aliases: ['карта', 'звезда', 'map', 'star', ...aliases],
   group,
   key,
-  when: spatial,
+  why: spatial,
   run: (c) => c.mapAct(action),
 });
 
@@ -110,7 +130,7 @@ const preset = (q: Quality | 'auto', aliases: readonly string[]): Command => ({
   title: `cmd.map.quality.${q}` as MessageKey,
   aliases: ['качество', 'карта', 'графика', 'quality', 'map', 'graphics', ...aliases],
   group: 'nav',
-  when: (c) => c.quality !== q,
+  why: (c) => (c.quality !== q ? null : 'cmd.why.current'),
   run: (c) => c.setQuality(q),
 });
 
@@ -125,8 +145,10 @@ export const COMMANDS: readonly Command[] = [
   canvas('zoomIn', 'zoomIn', '+', ['масштаб', 'крупнее', 'zoom', 'bigger']),
   canvas('zoomOut', 'zoomOut', '−', ['масштаб', 'мельче', 'zoom', 'smaller']),
   canvas('zoomReset', 'zoomReset', '0', ['масштаб', '100', 'zoom', 'actual']),
-  canvas('undo', 'undo', 'Ctrl+Z', ['отмена', 'undo'], (c) => c.canUndo),
-  canvas('redo', 'redo', 'Ctrl+Shift+Z', ['повтор', 'redo'], (c) => c.canRedo),
+  canvas('undo', 'undo', 'Ctrl+Z', ['отмена', 'undo'], (c) => (c.canUndo ? null : 'cmd.why.undo')),
+  canvas('redo', 'redo', 'Ctrl+Shift+Z', ['повтор', 'redo'], (c) =>
+    c.canRedo ? null : 'cmd.why.redo',
+  ),
   canvas('open', 'open', 'Enter', ['открыть', 'войти', 'open', 'enter', 'dive'], one, 'node'),
   canvas('rename', 'rename', 'F2', ['имя', 'переименовать', 'rename', 'name'], one, 'node'),
   canvas(
@@ -258,7 +280,7 @@ export const COMMANDS: readonly Command[] = [
     title: 'cmd.nav.typePath',
     aliases: ['путь', 'адрес', 'перейти по пути', 'path', 'address', 'go to path'],
     group: 'nav',
-    when: flat,
+    why: flat,
     run: (c) => c.typePath(),
   },
   {
@@ -266,7 +288,7 @@ export const COMMANDS: readonly Command[] = [
     title: 'cmd.nav.copyPath',
     aliases: ['путь', 'буфер', 'копировать', 'path', 'clipboard', 'copy'],
     group: 'nav',
-    when: flat,
+    why: flat,
     run: (c) => c.copyPath(),
   },
   {
@@ -274,7 +296,7 @@ export const COMMANDS: readonly Command[] = [
     title: 'cmd.nav.copyLink',
     aliases: ['ссылка', 'вики-ссылка', 'буфер', 'link', 'wikilink', 'clipboard'],
     group: 'nav',
-    when: flat,
+    why: flat,
     run: (c) => c.copyLink(),
   },
   {
@@ -283,7 +305,7 @@ export const COMMANDS: readonly Command[] = [
     aliases: ['назад', 'история', 'back', 'history'],
     group: 'nav',
     key: 'Alt+←',
-    when: (c) => c.canBack,
+    why: (c) => (c.canBack ? null : 'cmd.why.back'),
     run: (c) => c.walk('back'),
   },
   {
@@ -292,7 +314,7 @@ export const COMMANDS: readonly Command[] = [
     aliases: ['вперёд', 'история', 'forward', 'history'],
     group: 'nav',
     key: 'Alt+→',
-    when: (c) => c.canForward,
+    why: (c) => (c.canForward ? null : 'cmd.why.forward'),
     run: (c) => c.walk('forward'),
   },
   {
@@ -301,17 +323,57 @@ export const COMMANDS: readonly Command[] = [
     aliases: ['предыдущее', 'туда-обратно', 'previous', 'toggle'],
     group: 'nav',
     key: '`',
-    when: (c) => c.canBack,
+    why: (c) => (c.canBack ? null : 'cmd.why.back'),
     run: (c) => c.walk('previous'),
   },
-  canvas('map', 'map', 'M', ['3d', 'звёзды', 'карта', 'star', 'map'], () => true, 'nav'),
+  canvas('map', 'map', 'M', ['3d', 'звёзды', 'карта', 'star', 'map'], always, 'nav'),
   {
     id: 'nav.importReport',
     title: 'cmd.nav.importReport',
     aliases: ['импорт', 'obsidian', 'отчёт', 'import', 'report', 'vault'],
     group: 'nav',
-    when: (c) => c.importReport !== undefined,
+    why: (c) => (c.importReport ? null : 'cmd.why.report'),
     run: (c) => c.importReport?.(),
+  },
+  {
+    id: 'app.save',
+    title: 'cmd.app.save',
+    aliases: ['экспорт', 'сохранить', 'архив', 'файл', 'export', 'save', 'archive', 'zip'],
+    group: 'app',
+    why: (c) => bar(c) ?? (c.app?.save ? null : 'cmd.why.unsaved'),
+    run: (c) => c.app?.save?.(),
+  },
+  {
+    id: 'app.open',
+    title: 'cmd.app.open',
+    aliases: ['открыть', 'архив', 'импорт', 'файл', 'open', 'archive', 'import', 'zip'],
+    group: 'app',
+    why: bar,
+    run: (c) => c.app?.open(),
+  },
+  {
+    id: 'app.new',
+    title: 'cmd.app.new',
+    aliases: ['новое', 'пространство', 'создать', 'вкладка', 'new', 'workspace', 'create', 'tab'],
+    group: 'app',
+    why: bar,
+    run: (c) => c.app?.create(),
+  },
+  {
+    id: 'app.home',
+    title: 'cmd.app.home',
+    aliases: ['главная', 'домой', 'пространства', 'home', 'start', 'workspaces'],
+    group: 'app',
+    why: bar,
+    run: (c) => c.app?.home(),
+  },
+  {
+    id: 'app.settings',
+    title: 'cmd.app.settings',
+    aliases: ['настройки', 'профиль', 'язык', 'дата', 'settings', 'preferences', 'language'],
+    group: 'app',
+    why: bar,
+    run: (c) => c.app?.settings(),
   },
   mapped('create', 'create', 'Tab', ['создать', 'нода', 'create', 'node']),
   mapped('open', 'open', 'Enter', ['войти', 'открыть', 'open', 'enter']),
@@ -351,7 +413,7 @@ export const COMMANDS: readonly Command[] = [
       aliases: ['метка', 'закладка', 'mark', 'bookmark'],
       group: 'nav',
       key: `${i + 1}`,
-      when: (c) => c.marks[i] === true,
+      why: (c) => (c.marks[i] === true ? null : 'cmd.why.mark'),
       run: (c) => c.goMark(i),
     },
   ]),
@@ -391,9 +453,14 @@ export function rankedCommands(
   return out;
 }
 
+/** Why command `c` cannot run now, or null when it can. */
+export function whyNot(c: Command, ctx: CommandContext): MessageKey | null {
+  return c.why ? c.why(ctx) : null;
+}
+
 /** A command can run now. */
 export function available(c: Command, ctx: CommandContext): boolean {
-  return c.when ? c.when(ctx) : true;
+  return whyNot(c, ctx) === null;
 }
 
 /** Its title in the UI's language. */

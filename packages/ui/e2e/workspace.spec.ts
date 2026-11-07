@@ -1104,7 +1104,8 @@ for (const deviceScaleFactor of [1, 2]) {
         palette: await box(page, '.icon-palette'),
         cell: await box(page, '.icon-palette .icon-cell:first-child'),
         footer: await box(page, '.icon-palette .icon-palette-footer'),
-        kind: await box(page, '.icon-palette .icon-palette-top button'),
+        kind: await box(page, '.icon-palette .icon-palette-top button:not(.icon-own)'),
+        own: await box(page, '.icon-palette .icon-own'),
         auto: await box(page, '.icon-palette .icon-size-choice.is-auto'),
         xl: await box(page, '.icon-palette .icon-size-choice:last-child'),
       });
@@ -1112,7 +1113,77 @@ for (const deviceScaleFactor of [1, 2]) {
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['palette', 'cell', 'footer', 'kind', 'auto', 'xl'] as const) {
+    for (const part of ['palette', 'cell', 'footer', 'kind', 'own', 'auto', 'xl'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+
+  test(`«Своя иконка» keeps its size in RU and EN @${deviceScaleFactor}x (07 §6.4–6.5)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Иконки');
+      await createNode(page, 460, 300, 'Карта');
+      await select(page, 'Карта');
+      const png = await page.evaluate(() => {
+        const c = document.createElement('canvas');
+        c.width = 64;
+        c.height = 48;
+        const g = c.getContext('2d') as CanvasRenderingContext2D;
+        g.fillStyle = '#f0f0f0';
+        g.fillRect(0, 0, 64, 48);
+        g.fillStyle = '#303030';
+        g.fillRect(16, 8, 32, 32);
+        return c.toDataURL('image/png').split(',')[1] ?? '';
+      });
+      await page.keyboard.press('KeyZ');
+      const chooser = page.waitForEvent('filechooser');
+      await page.locator('.icon-palette .icon-own').click();
+      await (await chooser).setFiles({
+        name: 'a-picture-with-a-rather-long-name-of-its-own.png',
+        mimeType: 'image/png',
+        buffer: Buffer.from(png, 'base64'),
+      });
+      const dialog = page.locator('.own-icon-dialog');
+      await expect(dialog).toBeVisible();
+      // The longest mode by hand: «Силуэт» / «Silhouette».
+      await dialog.locator('.own-mode[data-mode="silhouette"]').click();
+      expect(await overflowing(page, '.own-icon-dialog'), `${locale} the dialog must fit`).toEqual(
+        [],
+      );
+      boxes.push({
+        dialog: await box(page, '.own-icon-dialog'),
+        previews: await box(page, '.own-icon-dialog .own-previews'),
+        modes: await box(page, '.own-icon-dialog .own-modes'),
+        first: await box(page, '.own-icon-dialog .own-mode[data-mode="engraving"]'),
+        last: await box(page, '.own-icon-dialog .own-mode[data-mode="as-is"]'),
+        slider: await box(page, '.own-icon-dialog .own-threshold'),
+        actions: await box(page, '.own-icon-dialog .own-actions'),
+      });
+      await page.keyboard.press('Escape');
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of [
+      'dialog',
+      'previews',
+      'modes',
+      'first',
+      'last',
+      'slider',
+      'actions',
+    ] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -3743,6 +3814,138 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
     expect((await iconState(page, map)).core).toBe('game-icons/lorc/owl');
+  });
+
+  test("Z: one's own icon from the disk, brought to the canvas's style in one step (07 §6.4–6.6)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Свои иконки');
+    await createNode(page, 460, 300, 'Карта');
+    const map = await idOf(page, 'Карта');
+    await settled(page);
+    // A dark figure on white: «Гравюра» floods the white from the corners.
+    const png = await page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 96;
+      c.height = 96;
+      const g = c.getContext('2d') as CanvasRenderingContext2D;
+      g.fillStyle = '#ffffff';
+      g.fillRect(0, 0, 96, 96);
+      g.fillStyle = '#202020';
+      g.beginPath();
+      g.arc(48, 48, 30, 0, Math.PI * 2);
+      g.fill();
+      return c.toDataURL('image/png').split(',')[1] ?? '';
+    });
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    const palette = page.locator('.icon-palette');
+    const own = palette.getByRole('button', { name: 'Своя иконка…' });
+    await expect(own).toHaveAttribute('aria-pressed', 'false');
+    // A file that is no picture says so and gives nothing.
+    let chooser = page.waitForEvent('filechooser');
+    await own.click();
+    await (await chooser).setFiles({
+      name: 'заметки.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from('не картинка'),
+    });
+    await expect(
+      page.locator('.toast', { hasText: 'Картинку «заметки.png» не прочитать' }),
+    ).toBeVisible();
+    const dialog = page.locator('.own-icon-dialog');
+    await expect(dialog).toHaveCount(0);
+    // A picture: the dialog, «Гравюра» by default (☑ Q-05-7) with Otsu's threshold.
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    chooser = page.waitForEvent('filechooser');
+    await own.click();
+    await (await chooser).setFiles({
+      name: 'компас.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(png, 'base64'),
+    });
+    await expect(palette).toHaveCount(0);
+    await expect(dialog.locator('h2')).toHaveText('Своя иконка');
+    const mode = (name: string) => dialog.getByRole('button', { name, exact: true });
+    const auto = dialog.getByRole('checkbox', { name: 'Авто' });
+    const slider = dialog.getByRole('slider', { name: 'Порог' });
+    await expect(mode('Гравюра')).toHaveAttribute('aria-pressed', 'true');
+    await expect(auto).toBeChecked();
+    await expect(slider).toBeDisabled();
+    await expect(dialog.locator('.own-bubble')).toHaveCount(3);
+    await expect(dialog.locator('.own-original')).toHaveAttribute('title', 'компас.png');
+    // Nothing is given before «Готово».
+    expect((await iconState(page, map)).core).toBeNull();
+    await dialog.getByRole('button', { name: 'Готово' }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect.poll(async () => (await iconState(page, map)).shows).toBe('own');
+    const first = (await iconState(page, map)).core ?? '';
+    expect(first).toMatch(/^asset\/[0-9a-f]{64}\/engraving$/);
+    const sha = first.split('/')[1];
+    // One step of undo, one of redo.
+    await page.keyboard.press('Control+z');
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({ shows: 'kind', icon: null, core: null });
+    await page.keyboard.press('Control+Shift+z');
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({ shows: 'own', icon: first, core: first });
+    // The node's own icon is pressed in, and the button restyles it from the stored original.
+    await page.keyboard.press('KeyZ');
+    await expect(own).toHaveAttribute('aria-pressed', 'true');
+    await own.click();
+    await expect(dialog.locator('.own-original')).toHaveAttribute('src', /^blob:/);
+    await mode('Пиксель').click();
+    await expect(mode('Пиксель')).toHaveAttribute('aria-pressed', 'true');
+    await expect(mode('Гравюра')).toHaveAttribute('aria-pressed', 'false');
+    await auto.uncheck();
+    await expect(slider).toBeEnabled();
+    await slider.fill('90');
+    await dialog.getByRole('checkbox', { name: 'Инвертировать' }).check();
+    // Enter outside the buttons is «Готово».
+    await slider.focus();
+    await page.keyboard.press('Enter');
+    await expect(dialog).toHaveCount(0);
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({
+        shows: 'own',
+        icon: `asset/${sha}/pixel/t90/i`,
+        core: `asset/${sha}/pixel/t90/i`,
+      });
+    // «Силуэт» has no threshold; Esc takes nothing.
+    await page.keyboard.press('KeyZ');
+    await own.click();
+    await mode('Силуэт').click();
+    await expect(auto).toBeDisabled();
+    await expect(slider).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect((await iconState(page, map)).core).toBe(`asset/${sha}/pixel/t90/i`);
+    // «Значок вида» takes it back.
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    await palette.getByRole('button', { name: 'Значок вида' }).click();
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({ shows: 'kind', icon: null, core: null });
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await iconState(page, map)).shows).toBe('own');
+    // It comes back with the workspace: the mask is made again from the original.
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({
+        shows: 'own',
+        icon: `asset/${sha}/pixel/t90/i`,
+        core: `asset/${sha}/pixel/t90/i`,
+      });
   });
 
   test('Z: a bubble takes a size by hand here and the rules back, one step each (06 §4.2)', async ({

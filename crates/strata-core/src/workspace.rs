@@ -165,6 +165,39 @@ fn is_icon_preset(s: &str) -> bool {
         .is_some_and(|(author, id)| is_icon_name(author) && is_icon_name(id))
 }
 
+/// An asset's id: the SHA-256 of its bytes, in hex (10 §3.2).
+fn is_sha256(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+/// The stylization modes of 07 §6.5.
+const ICON_STYLES: [&str; 5] = ["engraving", "pixel", "silhouette", "photo", "as-is"];
+
+/// One's own icon (05 §4.1 `IconRef`, 07 §6.5–6.6), one spelling per style:
+/// `asset/<sha256>/<mode>[/t<threshold>][/i]` — the original, the mode, the
+/// threshold 0–255 when set by hand (none — Otsu's), `i` when inverted. The
+/// mask is a derivative, rebuilt from them (05 §12). The original's SHA-256,
+/// when the value reads so.
+fn uploaded_icon(s: &str) -> Option<&str> {
+    let mut parts = s.strip_prefix("asset/")?.split('/');
+    let sha = parts.next().filter(|sha| is_sha256(sha))?;
+    if !ICON_STYLES.contains(&parts.next()?) {
+        return None;
+    }
+    let mut next = parts.next();
+    if let Some(t) = next.and_then(|p| p.strip_prefix('t')) {
+        let digits = !t.is_empty() && t.bytes().all(|c| c.is_ascii_digit());
+        if !digits || (t.len() > 1 && t.starts_with('0')) || t.parse::<u8>().is_err() {
+            return None;
+        }
+        next = parts.next();
+    }
+    if next == Some("i") {
+        next = parts.next();
+    }
+    next.is_none().then_some(sha)
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
     #[error(transparent)]
@@ -1608,14 +1641,18 @@ impl<S: Store> Workspace<S> {
                         ("priority", Some(Val::Str(v))) => PRIORITIES.contains(&v.as_str()),
                         ("start" | "deadline", Some(Val::Str(v))) => is_when(v),
                         ("color", Some(Val::Int(v))) => (0..COLORS).contains(v),
-                        ("asset" | "preview", Some(Val::Str(v))) => {
-                            v.len() == 64 && v.bytes().all(|c| c.is_ascii_hexdigit())
-                        }
+                        ("asset" | "preview", Some(Val::Str(v))) => is_sha256(v),
                         ("mime", Some(Val::Str(v))) => is_mime(v),
                         ("url", Some(Val::Str(v))) => is_url(v),
-                        // A preset on any node; an asset also a Chrome icon by name (05 §4.4).
+                        // A preset on any node; an asset also a Chrome icon by name (05 §4.4);
+                        // one's own picture, stylized, whose original is stored (07 §6.5–6.6).
                         ("icon", Some(Val::Str(v))) => {
-                            is_icon_preset(v) || (asset && is_icon_name(v))
+                            is_icon_preset(v)
+                                || (asset && is_icon_name(v))
+                                || match uploaded_icon(v) {
+                                    Some(sha) => self.store.asset(sha)?.is_some(),
+                                    None => false,
+                                }
                         }
                         _ => false,
                     };

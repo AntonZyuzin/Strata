@@ -25,6 +25,7 @@ export {
   type WheelMode,
   WIRE_SHAPES,
 } from './editor';
+export { hexPath } from './hex';
 export {
   createIconAtlas,
   type IconAuthor,
@@ -33,6 +34,7 @@ export {
   type IconPreset,
   iconCredits,
   iconPresets,
+  maskScale,
 } from './icons';
 export {
   BUSY_WIRES,

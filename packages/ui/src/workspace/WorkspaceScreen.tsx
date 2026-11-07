@@ -40,6 +40,7 @@ import {
 import {
   BACKDROP_SIDE,
   CanvasView,
+  DEFAULT_STYLE,
   type DropHow,
   Editor,
   type EditorEvents,
@@ -51,6 +52,7 @@ import {
   type MenuTarget,
   type Pixels,
   processBackdrop,
+  type StyleParams,
   WIRE_SHAPES,
 } from '@strata/canvas';
 import { noteText } from '@strata/editor';
@@ -124,6 +126,16 @@ import { Layers } from './Layers';
 import { mapItems, pathTo, placeIn, removeOps } from './mapSteps';
 import { NodeSearch } from './NodeSearch';
 import { loadMarks, markOf, type NavEntry, NavHistory } from './nav';
+import { OwnIconDialog } from './OwnIconDialog';
+import {
+  blobOf,
+  decodePicture,
+  MASK_SIDE,
+  OWN_ICON,
+  ownIconMask,
+  ownIconRef,
+  parseOwnIcon,
+} from './ownIcons';
 import { PathBar, type PathChildren } from './PathBar';
 import {
   alsoIn,
@@ -372,6 +384,17 @@ export function WorkspaceScreen(props: {
   const [colorPick, setColorPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   /** «Фон» (07 §7.4) at the menu's place: the network on the canvas's background. */
   const [bgPick, setBgPick] = useState<{ x: number; y: number } | null>(null);
+  /**
+   * «Своя иконка» (07 §6.4–6.5) for these nodes: the original — a file not
+   * yet stored, or the stored one's SHA-256 — decoded, and the style to start
+   * from.
+   */
+  const [ownPick, setOwnPick] = useState<{
+    ids: string[];
+    original: { file: File } | { sha: string };
+    picture: { px: Pixels; url: string; name: string };
+    style: StyleParams;
+  } | null>(null);
   /** The presets with their authors, loaded when the palette first opens. */
   const [presets, setPresets] = useState<{
     authors: Record<string, IconAuthor>;
@@ -557,6 +580,10 @@ export function WorkspaceScreen(props: {
   const refreshRef = useRef<() => void>(() => undefined);
   /** Fetches the previews of these link assets (✅ Q-13-16); set with the canvas. */
   const previewRef = useRef<(ids: string[]) => Promise<void>>(async () => {});
+  /** The references of one's own icons whose masks the canvas was given (07 §6.6). */
+  const ownGiven = useRef(new Set<string>());
+  /** Gives the canvas the masks of the own icons its nodes have; set each render. */
+  const ownIconsRef = useRef<() => void>(() => undefined);
   /** Link assets already asked for a preview this session. */
   const previewed = useRef(new Set<string>());
   const eventsRef = useRef<EditorEvents | null>(null);
@@ -1122,8 +1149,11 @@ export function WorkspaceScreen(props: {
         (pid) => peopleRef.current.find((p) => p.id === pid)?.color ?? 0,
       );
       graph.current = g;
+      ownIconsRef.current();
       g.subscribe((e) => {
         for (const event of geckoEvents(e)) gecko.current?.react(event);
+        // One's own icon chosen, undone or redone: its mask (07 §6.6).
+        ownIconsRef.current();
         // A link given by the user: its preview follows (✅ Q-13-16).
         if ((e.type === 'apply' || e.type === 'redo') && e.changeset.source === 'user') {
           const links = e.changeset.ops.flatMap((op) =>
@@ -1709,9 +1739,14 @@ export function WorkspaceScreen(props: {
   }, [locale]);
 
   // A list or a dialog over the screen behind its backdrop — «↗N», «Удалить
-  // везде?», «Импорт прерван», the import's report — holds the keys while open.
+  // везде?», «Импорт прерван», the import's report, «Своя иконка» — holds the
+  // keys while open.
   const modal =
-    external !== null || removal !== null || interrupted !== null || importReport !== null;
+    external !== null ||
+    removal !== null ||
+    interrupted !== null ||
+    importReport !== null ||
+    ownPick !== null;
 
   useEffect(() => {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
@@ -2234,25 +2269,91 @@ export function WorkspaceScreen(props: {
       : toast('ws.refused', { message: e instanceof Error ? e.message : String(e) });
 
   /**
-   * «Показать здесь» (06 §14): appearances of the other ends of node `id`'s
-   * wires beside it, by the autoplace (§5.4); one step; their wires show.
+   * An icon for the nodes — a preset (07 §6.3) or one's own (§6.5) — or back
+   * to their kind's: one step of undo; the core keeps the reference (05 §4.1
+   * `IconRef`).
    */
-  /**
-   * A preset for the nodes, or back to their kind's icon (07 §6.3): one step
-   * of undo; the core keeps the reference (05 §4.1 `IconRef`).
-   */
-  const setIcon = (ids: readonly string[], preset: string | null) => {
+  const setIcon = (ids: readonly string[], icon: string | null) => {
     const g = graph.current;
     if (!g) return;
     const nodes = ids.filter((id) => g.nodes.has(id));
     if (nodes.length === 0) return;
-    const value = preset === null ? null : `${PRESET}${preset}`;
     g.transaction({ key: 'change.icon', params: { n: nodes.length } }, (tx) => {
-      for (const id of nodes) tx.attr(id, 'icon', value);
+      for (const id of nodes) tx.attr(id, 'icon', icon);
     });
   };
 
-  /** The nodes' colour (05 §4.1, 07 §2.2): an index of the palette, or null — the kind's. One step. */
+  /**
+   * «Своя иконка» with a picture from the disk (07 §6.4): decoded for the
+   * dialog, stored only on «Готово».
+   */
+  const ownFromFile = (ids: string[], file: File, style: StyleParams) =>
+    decodePicture(file).then(
+      (px) =>
+        setOwnPick({
+          ids,
+          original: { file },
+          picture: { px, url: URL.createObjectURL(file), name: file.name },
+          style,
+        }),
+      () => toast('own.unreadable', { name: file.name }),
+    );
+
+  /** «Своя иконка» for the nodes' own icon `ref`: its original from the store, its style. */
+  const ownRestyle = (ids: string[], ref: string) => {
+    const own = parseOwnIcon(ref);
+    if (!own) return;
+    void core
+      .asset(own.sha)
+      .then(async (bytes) => {
+        const blob = blobOf(bytes);
+        const px = await decodePicture(blob);
+        setOwnPick({
+          ids,
+          original: { sha: own.sha },
+          picture: { px, url: URL.createObjectURL(blob), name: '' },
+          style: own.style,
+        });
+      })
+      .catch(failed);
+  };
+
+  // The original's address lives as long as the dialog shows it.
+  const ownUrl = ownPick?.picture.url;
+  useEffect(() => () => (ownUrl ? URL.revokeObjectURL(ownUrl) : undefined), [ownUrl]);
+
+  /**
+   * The masks of one's own icons on the canvas (07 §6.6): made for the
+   * references the network's nodes have, once each; the rest let go.
+   */
+  ownIconsRef.current = () => {
+    const v = viewRef.current;
+    const g = graph.current;
+    if (!v || !g) return;
+    const used = new Set<string>();
+    for (const n of g.nodes.values()) {
+      const ref = n.attrs.icon;
+      if (ref?.startsWith(OWN_ICON)) used.add(ref);
+    }
+    const given = ownGiven.current;
+    for (const ref of given) {
+      if (used.has(ref)) continue;
+      given.delete(ref);
+      v.setOwnIcon(ref, null);
+    }
+    for (const ref of used) {
+      if (given.has(ref)) continue;
+      given.add(ref);
+      ownIconMask(ref, (sha) => core.asset(sha)).then(
+        (mask) => {
+          if (given.has(ref) && viewRef.current === v) v.setOwnIcon(ref, mask, MASK_SIDE);
+        },
+        // Not a picture the browser can draw: the bubble keeps its kind's icon.
+        (e: unknown) => console.error('own icon', e),
+      );
+    }
+  };
+
   /** The background of network `id` (07 §7.4): one step of undo; the root's is the workspace's. */
   const setBackground = (id: string, background: Background | null) =>
     coreStep(
@@ -2260,6 +2361,7 @@ export function WorkspaceScreen(props: {
       id === opened.root ? 'ws.change.workspaceBackground' : 'ws.change.background',
     ).catch(failed);
 
+  /** The nodes' colour (05 §4.1, 07 §2.2): an index of the palette, or null — the kind's. One step. */
   const setColor = (ids: readonly string[], color: number | null) => {
     const g = graph.current;
     if (!g) return;
@@ -2288,6 +2390,10 @@ export function WorkspaceScreen(props: {
     });
   };
 
+  /**
+   * «Показать здесь» (06 §14): appearances of the other ends of node `id`'s
+   * wires beside it, by the autoplace (§5.4); one step; their wires show.
+   */
   const showHere = (id: string, ends: readonly ExternalWire[]) => {
     const net = netRef.current;
     const spots = editor.current?.spotsBeside(id, ends) ?? [];
@@ -3866,8 +3972,16 @@ export function WorkspaceScreen(props: {
           size={g?.nodes.get(iconPick.ids[0] ?? '')?.size ?? null}
           onPick={(id) => {
             setIconPick(null);
-            setIcon(iconPick.ids, id);
+            setIcon(iconPick.ids, id === null ? null : `${PRESET}${id}`);
             focusCanvas();
+          }}
+          onOwn={(file) => {
+            const ids = iconPick.ids;
+            setIconPick(null);
+            focusCanvas();
+            const current = g?.nodes.get(ids[0] ?? '')?.attrs.icon ?? null;
+            if (file) void ownFromFile(ids, file, parseOwnIcon(current)?.style ?? DEFAULT_STYLE);
+            else if (current) ownRestyle(ids, current);
           }}
           onSize={(size) => {
             setIconPick(null);
@@ -3938,6 +4052,30 @@ export function WorkspaceScreen(props: {
           }}
           onClose={() => {
             setBgPick(null);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {ownPick ? (
+        <OwnIconDialog
+          key={ownPick.picture.url}
+          locale={locale}
+          picture={ownPick.picture}
+          style={ownPick.style}
+          onDone={(style) => {
+            const pick = ownPick;
+            setOwnPick(null);
+            focusCanvas();
+            const { original } = pick;
+            const stored =
+              'file' in original
+                ? original.file.arrayBuffer().then((b) => core.putAsset(new Uint8Array(b)))
+                : Promise.resolve(original.sha);
+            void stored.then((sha) => setIcon(pick.ids, ownIconRef(sha, style))).catch(failed);
+          }}
+          onAnother={(file, style) => void ownFromFile(ownPick.ids, file, style)}
+          onCancel={() => {
+            setOwnPick(null);
             focusCanvas();
           }}
         />

@@ -6,6 +6,7 @@ import type { IconName } from '../icons/Icon';
 import { pointerMoved } from '../pointer';
 import type { MenuSearch } from '../proto/menu';
 import { IconButton } from '../TabBar';
+import { OWN_ICON } from './ownIcons';
 
 /** CSS px between the window and the canvas's edges. */
 const MARGIN = 8;
@@ -25,8 +26,10 @@ const SIZES: readonly (NodeSize | null)[] = [null, 's', 'm', 'l', 'xl'];
  * 3.0»). `Enter` or a click gives it to the nodes; the kind's icon beside the
  * query («Значок вида») takes a chosen one back. Under the query, the
  * bubbles' size in this network (06 §4.2): «Авто» by the rules, or S, M, L,
- * XL by hand. One step of undo for each choice. Opens at the cursor, kept
- * inside the canvas; the Tab menu's window, its width in `ch`.
+ * XL by hand. One step of undo for each choice. «Своя иконка…» beside it
+ * (07 §6.4): a picture from the disk, or the style of the one the node has.
+ * Opens at the cursor, kept inside the canvas; the Tab menu's window, its
+ * width in `ch`.
  */
 export function IconPalette(props: {
   locale: Locale;
@@ -46,6 +49,8 @@ export function IconPalette(props: {
   onPick: (id: string | null) => void;
   /** A size by hand, or null — back to the rules. */
   onSize: (size: NodeSize | null) => void;
+  /** One's own icon: a picture from the disk, or null — restyle the one the node has. */
+  onOwn: (file: File | null) => void;
   onClose: () => void;
 }) {
   const { locale, presets, search } = props;
@@ -56,6 +61,7 @@ export function IconPalette(props: {
   const [index, setIndex] = useState(0);
   const [moved] = useState(pointerMoved);
   const input = useRef<HTMLInputElement>(null);
+  const file = useRef<HTMLInputElement>(null);
   const box = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: props.x, top: props.y });
@@ -177,6 +183,7 @@ export function IconPalette(props: {
   };
 
   const label = t(locale, 'icons.label');
+  const own = props.current?.startsWith(OWN_ICON) === true;
   return (
     <>
       <div className="menu-backdrop" onPointerDown={props.onClose} />
@@ -209,6 +216,27 @@ export function IconPalette(props: {
             label={t(locale, 'icons.kind')}
             disabled={props.current === null}
             onClick={() => props.onPick(null)}
+          />
+          <IconButton
+            icon="filetype-image"
+            className="icon-own"
+            label={t(locale, 'icons.own')}
+            pressed={own}
+            onClick={() => (own ? props.onOwn(null) : file.current?.click())}
+          />
+          <input
+            ref={file}
+            className="sr-only"
+            type="file"
+            accept="image/*"
+            tabIndex={-1}
+            // The button beside it is the control; this one only opens the chooser.
+            aria-hidden="true"
+            onChange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              e.currentTarget.value = '';
+              if (f) props.onOwn(f);
+            }}
           />
         </div>
         <div className="icon-size" title={t(locale, 'icons.sizeHint')}>

@@ -1441,7 +1441,8 @@ button:focus-visible {
   box-shadow: var(--st-bevel-sunken);
 }
 
-/* The query and, beside it, the kind's icon that takes a preset back. */
+/* The query and, beside it, the kind's icon that takes a preset back and
+   «Своя иконка…» (07 §6.4). */
 .icon-palette-top {
   display: flex;
   align-items: center;
@@ -2386,6 +2387,111 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   justify-content: flex-end;
   gap: calc(4 * var(--u));
   margin-top: calc(8 * var(--u));
+}
+
+/* «Своя иконка» (07 §6.4–6.5): the original, then the mask in three bubbles
+   on the Scene's ground; the style's rows under them, the labels in a column
+   as wide as the longest language has it; the modes share one strip evenly,
+   the one chosen pressed in, as in Windows 98 (07 §8.2). */
+.own-icon-dialog {
+  width: min(74ch, calc(100vw - 32px));
+}
+
+.own-previews {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  margin-bottom: calc(8 * var(--u));
+}
+
+.own-original,
+.own-bubble {
+  flex: none;
+  width: calc(56 * var(--u));
+  height: calc(56 * var(--u));
+}
+
+.own-original {
+  object-fit: contain;
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.own-bubble {
+  background: var(--st-scene-bg);
+}
+
+.own-row {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  min-height: var(--st-size-control);
+}
+
+.own-row + .own-row {
+  margin-top: calc(4 * var(--u));
+}
+
+.own-label {
+  flex: none;
+  width: 10ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+.own-modes {
+  display: grid;
+  flex: 1 1 auto;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.own-mode {
+  min-width: 0;
+  padding: 0 calc(2 * var(--u));
+}
+
+/* The name inside, so a name cut short shows — a button's own box hides it. */
+.own-mode-name {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.own-mode + .own-mode {
+  border-left: 0;
+}
+
+.own-mode[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.own-auto {
+  flex: none;
+}
+
+.own-threshold {
+  flex: 1 1 auto;
+  min-width: 0;
+  accent-color: var(--st-color-text);
+}
+
+.own-actions .own-another {
+  margin-right: auto;
+}
+
+/* The node's own icon: the palette's button stays pressed in. */
+.icon-palette-top .icon-own[aria-pressed="true"] {
+  background: var(--st-color-surface-sunken);
+  border-color: var(--st-color-frame);
+  box-shadow: var(--st-bevel-sunken);
 }
 
 /* An import the app left in the middle (10 §3.3): the vault's name on one

@@ -1,6 +1,6 @@
 import type { Graph, GraphNode, Rollup } from '@strata/backend';
 import { fog, hex, palette, pixelMetrics, pixelUnit } from '@strata/design-tokens';
-import { Application, Container, Graphics, Sprite, Texture } from 'pixi.js';
+import { Application, CanvasSource, Container, Graphics, Sprite, Texture } from 'pixi.js';
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
 import 'pixi.js/unsafe-eval';
 import type { Pixels } from './backdrop';
@@ -16,6 +16,7 @@ import {
   type IconAtlas,
   type IconImage,
   iconScale,
+  maskScale,
   pixelIconScale,
 } from './icons';
 import { Kinetics } from './kinetic';
@@ -35,6 +36,8 @@ import { WireLayer, type WireStyle } from './wires';
 export const STRUCTURE_MS = 200;
 /** The prefix of a preset reference in a node's `icon` (05 §4.1 `IconRef`). */
 const PRESET = 'game-icons/';
+/** The prefix of one's own icon in a node's `icon` (07 §6.6). */
+const OWN = 'asset/';
 
 interface NodeView extends DecorNode {
   body: Sprite;
@@ -310,6 +313,8 @@ export class CanvasView {
   }
 
   private readonly pictures = new Map<string, Texture>();
+  /** One's own icons by their reference (07 §6.6): masks, tinted like the presets. */
+  private readonly ownIcons = new Map<string, Texture>();
   private kindIcons = new Map<string, Texture>();
   /** The icon a node shows, a key of `setKindIcons`: its kind by default (07 §6.1). */
   iconKey: (n: GraphNode) => string = (n) => n.kind;
@@ -340,9 +345,60 @@ export class CanvasView {
     return ref?.startsWith(PRESET) ? this.icons.ids.indexOf(ref.slice(PRESET.length)) : -1;
   }
 
-  /** The kind's icon a node shows; a preset chosen by hand comes first (07 §6.1, §6.3). */
+  /** One's own icon chosen by hand (07 §6.5–6.6): its mask, once the Chrome has made it. */
+  private ownIcon(n: GraphNode): Texture | undefined {
+    const ref = n.attrs.icon;
+    return ref?.startsWith(OWN) ? this.ownIcons.get(ref) : undefined;
+  }
+
+  /**
+   * The kind's icon a node shows; a preset or one's own icon chosen by hand
+   * comes first (07 §6.1, §6.3, §6.5).
+   */
   private kindIcon(n: GraphNode): Texture | undefined {
-    return this.chosenPreset(n) >= 0 ? undefined : this.kindIcons.get(this.iconKey(n));
+    return this.chosenPreset(n) >= 0 || this.ownIcon(n)
+      ? undefined
+      : this.kindIcons.get(this.iconKey(n));
+  }
+
+  /**
+   * One's own icon (07 §6.5–6.6): the mask `side × side` the Chrome made from
+   * the original and the style of the reference `ref` — the alpha is the ink,
+   * tinted on the Scene as a preset is; null forgets it. Until its mask comes
+   * a node shows its kind's icon.
+   */
+  setOwnIcon(ref: string, mask: Uint8ClampedArray | null, side = 0): void {
+    const old = this.ownIcons.get(ref);
+    this.ownIcons.delete(ref);
+    if (mask && side > 0 && mask.length === side * side) {
+      const c = document.createElement('canvas');
+      c.width = side;
+      c.height = side;
+      const g = c.getContext('2d');
+      if (g) {
+        const img = g.createImageData(side, side);
+        for (let i = 0; i < mask.length; i++) {
+          img.data[i * 4] = 255;
+          img.data[i * 4 + 1] = 255;
+          img.data[i * 4 + 2] = 255;
+          img.data[i * 4 + 3] = mask[i] ?? 0;
+        }
+        g.putImageData(img, 0, 0);
+        const source = new CanvasSource({
+          resource: c,
+          autoGenerateMipmaps: true,
+          scaleMode: 'linear',
+        });
+        this.ownIcons.set(ref, new Texture({ source }));
+      }
+    }
+    for (const v of this.views.values()) {
+      if (v.node.attrs.icon !== ref) continue;
+      this.applyPicture(v);
+      this.applyLevel(v);
+    }
+    old?.destroy(true);
+    this.invalidate();
   }
 
   /**
@@ -390,11 +446,12 @@ export class CanvasView {
     return this.pictures.has(id);
   }
 
-  /** What a node's body shows: its picture, its kind's icon or a preset. */
-  iconOf(id: string): 'picture' | 'kind' | 'preset' | null {
+  /** What a node's body shows: its picture, one's own icon, its kind's icon or a preset. */
+  iconOf(id: string): 'picture' | 'own' | 'kind' | 'preset' | null {
     const v = this.views.get(id);
     if (!v) return null;
     if (this.pictures.has(id)) return 'picture';
+    if (this.ownIcon(v.node)) return 'own';
     return this.kindIcon(v.node) ? 'kind' : 'preset';
   }
 
@@ -404,6 +461,13 @@ export class CanvasView {
       v.icon.texture = pic;
       v.icon.scale.set((2 * v.r) / pic.width);
     } else {
+      const mask = this.ownIcon(v.node);
+      if (mask) {
+        // The same share of the body as a preset's (07 §4.3).
+        v.icon.texture = mask;
+        v.icon.scale.set(maskScale(2 * v.r, mask.width));
+        return;
+      }
       const own = this.kindIcon(v.node);
       if (own) {
         v.icon.texture = own;
@@ -501,6 +565,7 @@ export class CanvasView {
     this.icons.destroy();
     this.kindIcons.values().next().value?.source.destroy();
     for (const t of this.kindIcons.values()) t.destroy();
+    for (const t of this.ownIcons.values()) t.destroy(true);
     this.app.destroy({ removeView: true }, { children: true, texture: true, textureSource: true });
   }
 

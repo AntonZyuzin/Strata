@@ -1311,6 +1311,69 @@ fn any_node_takes_an_icon_preset_and_only_an_asset_a_chrome_icon() {
 }
 
 #[test]
+fn ones_own_icon_is_a_stored_picture_and_its_style() {
+    // 07 §6.5–6.6: one's own icon keeps the original's SHA-256 and the style
+    // it is drawn in, one spelling per style; the mask is a derivative (05 §12).
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let sha = w.put_asset(b"\x89PNG a picture").expect("store");
+    for kind in [NodeKind::Network, NodeKind::Task, NodeKind::Asset] {
+        let n = create(&mut w, &root, kind, "Нода");
+        for good in [
+            format!("asset/{sha}/engraving"),
+            format!("asset/{sha}/pixel/t96"),
+            format!("asset/{sha}/silhouette/i"),
+            format!("asset/{sha}/photo/t0/i"),
+            format!("asset/{sha}/as-is/t255/i"),
+        ] {
+            set(&mut w, &n, "icon", Some(Val::str(good.clone()))).expect(&good);
+            let icon = w.node_details(&n).expect("details").attrs.icon;
+            assert_eq!(icon.as_deref(), Some(good.as_str()), "{kind:?}");
+        }
+    }
+    let n = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let missing = "0".repeat(64);
+    for bad in [
+        // The original is not in the store.
+        format!("asset/{missing}/engraving"),
+        // Not a SHA-256.
+        format!("asset/{}/engraving", &sha[..63]),
+        // No style, or one 07 §6.5 does not know.
+        format!("asset/{sha}"),
+        format!("asset/{sha}/"),
+        format!("asset/{sha}/sepia"),
+        // A threshold out of 0–255 or spelled otherwise.
+        format!("asset/{sha}/pixel/t256"),
+        format!("asset/{sha}/pixel/t"),
+        format!("asset/{sha}/pixel/t-1"),
+        format!("asset/{sha}/pixel/t+9"),
+        format!("asset/{sha}/pixel/t09"),
+        // Twice, out of order, or more.
+        format!("asset/{sha}/pixel/t9/t9"),
+        format!("asset/{sha}/pixel/i/t9"),
+        format!("asset/{sha}/pixel/i/i"),
+        format!("asset/{sha}/pixel/i/"),
+        format!("asset/{sha}/pixel/x"),
+    ] {
+        assert!(
+            set(&mut w, &n, "icon", Some(Val::str(bad.clone()))).is_err(),
+            "{bad}"
+        );
+    }
+    assert_eq!(w.node_details(&n).expect("details").attrs.icon, None);
+    // The original goes along with the workspace (10 §3.5).
+    let icon = format!("asset/{sha}/engraving/t128");
+    set(&mut w, &n, "icon", Some(Val::str(icon.clone()))).expect("own icon");
+    let zip = crate::archive::export(&w).expect("export");
+    let unpacked = crate::archive::unpack(&zip).expect("unpack");
+    let again = crate::archive::import(&unpacked, MemoryStore::default(), false).expect("import");
+    assert!(again.asset(&sha).expect("read").is_some());
+    let back = again.node_details(&n).expect("details");
+    assert_eq!(back.attrs.icon.as_deref(), Some(icon.as_str()));
+}
+
+#[test]
 fn the_star_map_reads_every_live_wire() {
     let mut w = ws();
     let root = w.root();

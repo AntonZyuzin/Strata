@@ -104,9 +104,14 @@ export async function createIconAtlas(): Promise<IconAtlas> {
   };
 }
 
-/** Scale of an icon sprite for a bubble of diameter `d`: the mask fills 0.55 · d (07 §4.3). */
+/** Scale of a mask `side` px wide for a bubble of diameter `d`: it fills 0.55 · d (07 §4.3). */
+export function maskScale(d: number, side: number): number {
+  return (0.55 * d) / side;
+}
+
+/** Scale of a preset's sprite for a bubble of diameter `d` (07 §4.3). */
 export function iconScale(d: number): number {
-  return (0.55 * d) / MASK;
+  return maskScale(d, MASK);
 }
 
 /** A picture the canvas can draw from. */

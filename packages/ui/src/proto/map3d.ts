@@ -207,7 +207,17 @@ export function setMapQuality(manual: Quality | null): void {
 type Gesture =
   | { t: 'orbit'; x: number; y: number; moved: number }
   | { t: 'pan'; x: number; y: number; moved: number; button: number }
-  | { t: 'press'; b: number; x: number; y: number; moved: number; shift: boolean; mod: boolean }
+  | {
+      t: 'press';
+      b: number;
+      /** A reflection's network (08 §2.3): the star was pressed in that cluster. */
+      net: string | null;
+      x: number;
+      y: number;
+      moved: number;
+      shift: boolean;
+      mod: boolean;
+    }
   | {
       t: 'grab';
       b: number;
@@ -264,6 +274,13 @@ export class Map3D {
   private lit: Uint8Array | null = null;
   /** Screen points of every body: x, y, depth (`StarMap.projectAll`), as of the last frame. */
   private scr = new Float32Array(0);
+  /** The reflections on the canvas as of the last frame (08 §2.3): x, y, depth each. */
+  private rscr = new Float32Array(0);
+  /**
+   * The network a star was chosen in through its reflection (08 §2.3): its
+   * contextual network while that star stays selected.
+   */
+  private via: string | null = null;
   /** Brief cards by node, and the full one (08 §6.2). */
   private readonly briefs = new Map<string, HTMLElement>();
   private full: {
@@ -1104,6 +1121,8 @@ export class Map3D {
   private contextNet(b: number): string {
     const space = this.space;
     if (!space) return '';
+    // Chosen through a reflection: that network (08 §2.3).
+    if (this.via !== null && this.selected === b) return this.via;
     const p = space.x.primaryNet[b] ?? -1;
     return space.ids[p >= 0 ? p : 0] ?? '';
   }
@@ -1131,12 +1150,16 @@ export class Map3D {
     this.bridgeTo(this.contextNet(b), id);
   }
 
-  /** A click on a star (owner, 2026-10-24; 08 §10): the node in 2D — a network is entered. */
-  private go(b: number): void {
+  /**
+   * A click on a star (owner, 2026-10-24; 08 §10): the node in 2D — a network
+   * is entered; on a reflection (08 §2.3) — the node in the reflection's network.
+   */
+  private go(b: number, net: string | null = null): void {
     const space = this.space;
     if (!space) return;
     const id = space.ids[b] ?? '';
-    if (isCluster(space.x.kind[b] ?? 0)) this.bridgeTo(id, null);
+    if (net !== null) this.bridgeTo(net, id);
+    else if (isCluster(space.x.kind[b] ?? 0)) this.bridgeTo(id, null);
     else this.bridgeTo(this.contextNet(b), id);
   }
 
@@ -1223,6 +1246,8 @@ export class Map3D {
       map.setFade(0.3, 0.15, 1);
       return;
     }
+    // The links of the reflections in the cluster in focus, and the selected star's (08 §2.3).
+    map.showLinks(this.selected, this.focus === 0 ? null : this.focus);
     if (this.focus === 0) {
       map.setFocus(null);
       map.setFade(1, 1, 1);
@@ -1463,6 +1488,10 @@ export class Map3D {
     map.render();
     if (this.state !== '3d' || !bridge || !space) return;
     map.projectAll(bridge.space, space.x.count, this.scr);
+    if (this.rscr.length !== map.reflectionCount * 3) {
+      this.rscr = new Float32Array(map.reflectionCount * 3);
+    }
+    map.projectAll(map.reflectionCentres, map.reflectionCount, this.rscr);
     this.placeLabels();
     this.placePins();
     this.placeCards();
@@ -1518,10 +1547,13 @@ export class Map3D {
       return;
     }
     const b = this.space ? this.pick(p.x, p.y) : null;
-    if (b !== null) {
+    // A reflection nearer than any star: its node, in the reflection's network (08 §2.3).
+    const r = this.space ? this.pickReflection(p.x, p.y, b) : null;
+    if (b !== null || r !== null) {
       this.gesture = {
         t: 'press',
-        b,
+        b: r?.b ?? (b as number),
+        net: r?.net ?? null,
         x: e.clientX,
         y: e.clientY,
         moved: 0,
@@ -1578,10 +1610,10 @@ export class Map3D {
       case 'press': {
         // A click on a star: with Shift or Ctrl it is selected, else the node in 2D (owner, 2026-10-24).
         if (g.shift || g.mod) {
-          this.select(g.mod && this.selected === g.b ? null : g.b);
+          this.select(g.mod && this.selected === g.b ? null : g.b, g.net);
           this.draw();
         } else {
-          this.go(g.b);
+          this.go(g.b, g.net);
         }
         return;
       }
@@ -1668,6 +1700,62 @@ export class Map3D {
       }
     }
     return best;
+  }
+
+  /**
+   * The reflection under a point (08 §2.3), when nearer than star `star`: its
+   * node's body and its network. Reached as a star of 60 % is.
+   */
+  private pickReflection(
+    x: number,
+    y: number,
+    star: number | null,
+  ): { b: number; net: string } | null {
+    const space = this.space;
+    const appear = space?.x.appear;
+    if (!space || !appear || appear.length === 0) return null;
+    const s = this.rscr;
+    const ppu = this.pxPerUnit();
+    const starScore = (b: number) => {
+      const depth = this.scr[b * 3 + 2] ?? 0;
+      if (depth <= 0) return 1;
+      const d = Math.hypot((this.scr[b * 3] ?? 0) - x, (this.scr[b * 3 + 1] ?? 0) - y);
+      return d / Math.max(PICK_PX, (this.starSize(b) * ppu) / depth / 2);
+    };
+    let bestScore = star === null ? 1 : Math.min(1, starScore(star));
+    let best: { b: number; net: string } | null = null;
+    for (let k = 0; k * 2 < appear.length; k++) {
+      const depth = s[k * 3 + 2] ?? 0;
+      if (depth <= 0) continue;
+      const b = appear[k * 2] ?? 0;
+      const d = Math.hypot((s[k * 3] ?? 0) - x, (s[k * 3 + 1] ?? 0) - y);
+      const reach = Math.max(PICK_PX, (0.6 * this.starSize(b) * ppu) / depth / 2);
+      const score = d / reach;
+      if (score < bestScore) {
+        bestScore = score;
+        best = { b, net: space.ids[appear[k * 2 + 1] ?? 0] ?? '' };
+      }
+    }
+    return best;
+  }
+
+  /** The reflections on the page (08 §2.3): node, network and centre in CSS px; for tests. */
+  reflections(): { id: string; net: string; x: number; y: number }[] {
+    const space = this.space;
+    const appear = space?.x.appear;
+    if (!space || !appear) return [];
+    const r = this.canvas.getBoundingClientRect();
+    const out: { id: string; net: string; x: number; y: number }[] = [];
+    for (let k = 0; k * 2 < appear.length; k++) {
+      if ((this.rscr[k * 3 + 2] ?? 0) <= 0) continue;
+      out.push({
+        id: space.ids[appear[k * 2] ?? 0] ?? '',
+        net: space.ids[appear[k * 2 + 1] ?? 0] ?? '',
+        x: r.left + (this.rscr[k * 3] ?? 0),
+        y: r.top + (this.rscr[k * 3 + 1] ?? 0),
+      });
+    }
+    return out;
   }
 
   /** The star nearest the screen's centre within its card's reach (S6 step 8). */
@@ -1904,8 +1992,10 @@ export class Map3D {
 
   // ── Selection, labels, cards ──────────────────────────────────────────
 
-  private select(b: number | null): void {
+  private select(b: number | null, via: string | null = null): void {
     this.selected = b;
+    this.via = b === null ? null : via;
+    this.map?.showLinks(b, this.focus === 0 ? null : this.focus);
     this.label.textContent = b === null ? '' : (this.names[b] ?? '');
     this.placeLabels();
     this.nav?.change?.();
@@ -2203,7 +2293,10 @@ const FLY_KEYS = new Set([
 /** The space as the map last laid it out: nodes, their parents, wires and looks. */
 function signatureOf(items: readonly MapItem[], wires: readonly SpaceWire[]): string {
   const nodes = items
-    .map((i) => `${i.id}${i.parent ?? ''}${i.kind}${i.flags ?? 0}${i.due ?? ''}${i.status ?? ''}`)
+    .map(
+      (i) =>
+        `${i.id}${i.parent ?? ''}${i.kind}${i.flags ?? 0}${i.due ?? ''}${i.status ?? ''}${i.appears?.join('+') ?? ''}`,
+    )
     .join();
   return `${nodes}|${wires.map((w) => w.from + w.to).join()}`;
 }

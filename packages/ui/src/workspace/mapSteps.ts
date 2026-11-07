@@ -132,6 +132,8 @@ export function mapItems(tree: readonly TreeItem[], day?: string): MapItem[] {
       name: i.name,
       deadline: i.deadline,
       flags,
+      // Its reflections in the networks it also appears in (08 §2.3).
+      ...(i.appears && i.appears.length > 0 ? { appears: i.appears } : {}),
       ...(due ? { due } : {}),
     };
   });

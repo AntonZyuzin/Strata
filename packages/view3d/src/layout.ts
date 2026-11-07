@@ -13,6 +13,9 @@ export function clusterRadius(subtreeSize: number): number {
   return 40 * Math.cbrt(1 + subtreeSize);
 }
 
+/** A child's rest distance from its network's star, in its cluster's radii (08 §3.2). */
+export const NEST_LENGTH = 0.6;
+
 /** Mass of a body (08 §3.2): key nodes and well-connected ones push harder. */
 export function mass(flags: number, degree: number): number {
   return 1 + 0.5 * ((flags & FLAG.key) !== 0 ? 1 : 0) + 0.25 * Math.log2(1 + degree);
@@ -65,4 +68,29 @@ export function degrees(x: StarMapExtract): Uint16Array {
     d[v] = Math.min(65535, (d[v] ?? 0) + 1);
   }
   return d;
+}
+
+/**
+ * Where each reflection stands (08 §2.3): in the cluster of its network, as
+ * far from the network's star as a child of it stands, in a direction its
+ * node and network fix — the same at every frame. Three floats each.
+ */
+export function reflectionPlaces(x: StarMapExtract, pos: Float32Array, out: Float32Array): void {
+  const appear = x.appear ?? new Uint32Array(0);
+  for (let k = 0; k * 2 < appear.length; k++) {
+    const node = appear[k * 2] ?? 0;
+    const net = appear[k * 2 + 1] ?? 0;
+    // A unit direction from the pair: two angles of a hash.
+    let h = Math.imul(node + 1, 0x9e3779b1) ^ Math.imul(net + 1, 0x85ebca77);
+    h = Math.imul(h ^ (h >>> 15), 0x2c1b3c6d) >>> 0;
+    const u = (h & 0xffff) / 0xffff;
+    const v = (h >>> 16) / 0xffff;
+    const z = 2 * u - 1;
+    const t = 2 * Math.PI * v;
+    const s = Math.sqrt(Math.max(0, 1 - z * z));
+    const r = NEST_LENGTH * clusterRadius(x.subtreeSize[net] ?? 1);
+    out[k * 3] = (pos[net * 3] ?? 0) + s * Math.cos(t) * r;
+    out[k * 3 + 1] = (pos[net * 3 + 1] ?? 0) + s * Math.sin(t) * r;
+    out[k * 3 + 2] = (pos[net * 3 + 2] ?? 0) + z * r;
+  }
 }

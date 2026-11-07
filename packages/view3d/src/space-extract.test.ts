@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { FLAG, KIND, STATE } from './extract';
+import { clusterRadius, NEST_LENGTH, reflectionPlaces } from './layout';
+import { MODEL, springsOf } from './relax';
 import { bridgeExtract, spaceExtract } from './space-extract';
 
 describe('the extract of a real workspace (08 §10)', () => {
@@ -57,5 +59,50 @@ describe('the extract of a real workspace (08 §10)', () => {
     expect(b.ids).toEqual(['04', '05']);
     expect([...b.members]).toEqual([s.body.get('04'), s.body.get('05')]);
     expect(b.network).toBe(s.body.get('03'));
+  });
+});
+
+describe('appearances on the star map (08 §2.3)', () => {
+  const items = [
+    { id: '01', kind: 'network' as const },
+    { id: '02', kind: 'project' as const, parent: '01' },
+    { id: '03', kind: 'network' as const, parent: '01' },
+    // In «02» first, also in «03» and in the root; one network is gone.
+    { id: '04', kind: 'note' as const, parent: '02', appears: ['03', '01', 'gone', '02'] },
+  ];
+
+  it('gives each appearance on the map a reflection, the primary aside', () => {
+    const s = spaceExtract(items, []);
+    const at = (id: string) => s.body.get(id) ?? -1;
+    expect([...(s.x.appear ?? [])]).toEqual([at('04'), at('03'), at('04'), at('01')]);
+  });
+
+  it('pulls a shared node weakly towards the clusters it appears in', () => {
+    const s = spaceExtract(items, []);
+    const all = Int32Array.from({ length: s.x.count }, (_, i) => i);
+    const at = (id: string) => s.body.get(id) ?? -1;
+    const springs = springsOf(s.x, all);
+    const nest = springs.find((k) => k.a === at('04') && k.b === at('02'));
+    const pull = springs.find((k) => k.a === at('04') && k.b === at('03'));
+    expect(nest?.k).toBe(MODEL.nestStrength);
+    expect(pull?.k).toBe(MODEL.appearStrength);
+    expect(MODEL.appearStrength).toBeLessThan(MODEL.nestStrength);
+  });
+
+  it("stands a reflection in its network's cluster, as far as a child, the same each time", () => {
+    const s = spaceExtract(items, []);
+    const pos = Float32Array.from({ length: s.x.count * 3 }, (_, i) => i * 10);
+    const a = new Float32Array(6);
+    const b = new Float32Array(6);
+    reflectionPlaces(s.x, pos, a);
+    reflectionPlaces(s.x, pos, b);
+    expect([...a]).toEqual([...b]);
+    const net = s.body.get('03') ?? 0;
+    const d = Math.hypot(
+      (a[0] ?? 0) - (pos[net * 3] ?? 0),
+      (a[1] ?? 0) - (pos[net * 3 + 1] ?? 0),
+      (a[2] ?? 0) - (pos[net * 3 + 2] ?? 0),
+    );
+    expect(d).toBeCloseTo(NEST_LENGTH * clusterRadius(s.x.subtreeSize[net] ?? 1), 3);
   });
 });

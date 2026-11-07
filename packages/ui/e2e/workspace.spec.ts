@@ -4606,6 +4606,48 @@ test.describe('a workspace on the core', () => {
     await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Перенос');
   });
 
+  test('the star map draws a reflection of an appearance; a click on it goes to the node in that network (08 §2.3)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Отражения');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 520, 320);
+    await createNode(page, 760, 480, 'Эскиз');
+    const sketch = await idOf(page, 'Эскиз');
+    // An appearance of «Эскиз» in «Архив».
+    await select(page, 'Эскиз');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+c');
+    await enter(page, 'Архив');
+    await page.mouse.move(640, 400);
+    await page.keyboard.press('Control+Shift+v');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    await leave(page);
+    await settled(page);
+    const archive = await idOf(page, 'Архив');
+    // On the map: one reflection, of «Эскиз», in «Архив».
+    await page.getByRole('button', { name: 'Холст или звёздная карта (M)' }).click();
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    const reflections = () =>
+      page.evaluate(() => {
+        const m = window.__strataWs?.map() as unknown as {
+          reflections(): { id: string; net: string; x: number; y: number }[];
+        } | null;
+        return m?.reflections() ?? [];
+      });
+    await expect
+      .poll(async () => (await reflections()).map((r) => [r.id, r.net]))
+      .toEqual([[sketch, archive]]);
+    // A click on it: «Эскиз» in 2D, in «Архив» — not at the root, its primary.
+    const [ring] = await reflections();
+    await page.mouse.click(ring?.x ?? 0, ring?.y ?? 0);
+    await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await expect(page.locator('.ins-title-name')).toHaveText('Эскиз');
+  });
+
   test('Ctrl+C → Ctrl+V copies, Ctrl+Shift+V places an appearance; «Нода уже здесь», «Нода уже была здесь» (05 §5, 06 §12.1)', async ({
     page,
   }) => {

@@ -1,6 +1,6 @@
 import { createForce3d, type ForceParams, type ForceSprings } from '@strata/layout';
 import type { StarMapExtract } from './extract';
-import { clusterRadius, degrees, mass } from './layout';
+import { clusterRadius, degrees, mass, NEST_LENGTH } from './layout';
 
 /**
  * The star map's physics as the app runs it (08 §3.2, ADR-0005): the force
@@ -15,12 +15,14 @@ export const MODEL = {
   repulsion: 30,
   theta: 0.8,
   nestStrength: 0.08,
-  nestLength: 0.6,
+  nestLength: NEST_LENGTH,
   wireLength: 60,
   wireInside: 0.02,
   wireBetween: 0.005,
   collide: 18,
   centre: 0.001,
+  /** A weak pull towards each cluster a node also appears in: 0.3 of nesting's (08 §2.3, §3.2). */
+  appearStrength: 0.3 * 0.08,
   /** Velocity × 0.6 per tick. */
   velocityDecay: 0.4,
 } as const;
@@ -64,6 +66,22 @@ export function springsOf(x: StarMapExtract, bodies: Int32Array): Spring[] {
       b,
       length: MODEL.wireLength,
       k: inside ? MODEL.wireInside : MODEL.wireBetween,
+    });
+  }
+  // Shared nodes drift to the clusters' borders: «bridges» between projects (08 §2.3).
+  const appear = x.appear ?? new Uint32Array(0);
+  for (let e = 0; e < appear.length; e += 2) {
+    const node = appear[e] ?? 0;
+    const net = appear[e + 1] ?? 0;
+    const a = local[node] ?? -1;
+    const b = local[net] ?? -1;
+    if (a < 0 || b < 0) continue;
+    // At the cluster's radius R(N'): on its border (08 §3.2).
+    out.push({
+      a,
+      b,
+      length: clusterRadius(x.subtreeSize[net] ?? 1),
+      k: MODEL.appearStrength,
     });
   }
   return out;

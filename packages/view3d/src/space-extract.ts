@@ -19,6 +19,8 @@ export interface SpaceItem {
   flags?: number | undefined;
   /** A near or past deadline (07 §4.6): the star's yellow or red (08 §4.3). */
   due?: 'soon' | 'today' | 'overdue' | undefined;
+  /** The networks it also appears in, its primary aside (05 §5): its reflections (08 §2.3). */
+  appears?: readonly string[] | undefined;
 }
 
 export interface SpaceWire {
@@ -88,6 +90,15 @@ export function spaceExtract(
     const to = body.get(w.to);
     if (from !== undefined && to !== undefined && from !== to) pairs.push(from, to);
   }
+  // A reflection in each network of an appearance that is on the map, the
+  // primary's aside (08 §2.3).
+  const appear: number[] = [];
+  ids.forEach((id, b) => {
+    for (const net of known.get(id)?.appears ?? []) {
+      const n = body.get(net);
+      if (n !== undefined && n !== b && n !== primaryNet[b]) appear.push(b, n);
+    }
+  });
   return {
     x: {
       count,
@@ -97,6 +108,7 @@ export function spaceExtract(
       primaryNet,
       edges: Uint32Array.from(pairs),
       subtreeSize: subtreeSizes(primaryNet),
+      appear: Uint32Array.from(appear),
     },
     ids,
     body,

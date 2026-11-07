@@ -25,6 +25,7 @@ import {
   ZeroFactor,
 } from 'three';
 import { FLAG, isCluster, STATE, type StarMapExtract } from './extract';
+import { reflectionPlaces } from './layout';
 
 /**
  * The star map of 08 §4 on three.js `WebGLRenderer` (ADR-0005): all of the
@@ -57,6 +58,11 @@ export interface StarMapOptions {
 const SIZE = { s: 32, m: 48, l: 72 } as const;
 /** Smallest star on screen, CSS px (08 §4.2: a dot of 2-4 px). */
 const MIN_PX = 2;
+/**
+ * A reflection (08 §2.3): a hollow ring 60 % of its star, white at 50 %;
+ * its dashed link to the star at 20 %, dashes of this many world units.
+ */
+const REFLECTION = { size: 0.6, alpha: 0.5, link: 0.2, dash: 4 } as const;
 /** Wire alpha inside a cluster and between clusters (08 §4.4). */
 const WIRE_ALPHA = { inside: 0.3, between: 0.12 } as const;
 /** Strength of the bloom added onto the frame. */
@@ -173,6 +179,81 @@ void main() {
 }
 `;
 
+const reflectVertex = /* glsl */ `
+precision highp float;
+in vec3 position;  // the quad's corner
+in vec3 center;
+in float size;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform float uPxPerUnit;
+uniform float uMinPx;
+uniform float uStarFog;
+out vec2 vUv;
+out float vFog;
+out float vPx;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(center, 1.0);
+  float depth = max(-mv.z, 1e-3);
+  float px = max(size * uPxPerUnit / depth, uMinPx);
+  float half_ = 0.5 * px * depth / uPxPerUnit;
+  mv.xy += position.xy * half_;
+  gl_Position = projectionMatrix * mv;
+  vUv = position.xy;
+  float f = uStarFog * depth;
+  vFog = 1.0 - exp(-f * f);
+  vPx = px;
+}
+`;
+const reflectFragment = /* glsl */ `
+precision highp float;
+in vec2 vUv;
+in float vFog;
+in float vPx;
+uniform float uRingAlpha;
+out vec4 fragColor;
+void main() {
+  float r = length(vUv);
+  // A hollow ring a device pixel and a half wide, antialiased on both sides.
+  float w = 3.0 / max(vPx, 1.0);
+  float aa = 2.0 / max(vPx, 1.0);
+  float ring = smoothstep(1.0 - w - aa, 1.0 - w, r) * (1.0 - smoothstep(1.0 - aa, 1.0, r));
+  float a = ring * uRingAlpha * (1.0 - vFog);
+  if (a < 0.004) discard;
+  fragColor = vec4(vec3(a), a);
+}
+`;
+const linkVertex = /* glsl */ `
+precision highp float;
+in vec3 position;
+in float along;  // world units from the star
+in float shown;  // 1: the star is selected or the reflection's cluster in focus
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform float uWireFog;
+out float vAlong;
+out float vShown;
+void main() {
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  float f = uWireFog * max(-mv.z, 0.0);
+  vShown = shown * exp(-f * f);
+  vAlong = along;
+}
+`;
+const linkFragment = /* glsl */ `
+precision highp float;
+in float vAlong;
+in float vShown;
+uniform float uDash;
+uniform float uLinkAlpha;
+out vec4 fragColor;
+void main() {
+  if (vShown < 0.004 || mod(vAlong, 2.0 * uDash) > uDash) discard;
+  float a = uLinkAlpha * vShown;
+  fragColor = vec4(vec3(a), a);
+}
+`;
 const snapVertex = /* glsl */ `
 precision highp float;
 in vec3 position;
@@ -296,6 +377,13 @@ export class StarMap {
   private stars: Mesh | null = null;
   private bloomStars: Mesh | null = null;
   private wires: LineSegments | null = null;
+  private readonly reflectMaterial: RawShaderMaterial;
+  private readonly linkMaterial: RawShaderMaterial;
+  /** Reflections of appearances (08 §2.3) and their links; none without appearances. */
+  private reflections: Mesh | null = null;
+  private links: LineSegments | null = null;
+  /** Where each reflection stands, three floats each. */
+  private reflectAt = new Float32Array(0);
   private x: StarMapExtract | null = null;
   private keyIndex = new Uint32Array(0);
   /** Each star's look as its state gives it: a flash or a fade changes the drawn one only. */
@@ -379,6 +467,35 @@ export class StarMap {
         uWire: { value: new Color(hex(palette.paper)) },
         uWireOthers: { value: 1 },
         uWireFocus: { value: 1 },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: CustomBlending,
+      blendSrc: OneFactor,
+      blendDst: OneFactor,
+    });
+    // The stars' sizes and fog, the wires' fog: the same uniforms, set once a frame.
+    const su = this.starMaterial.uniforms;
+    this.reflectMaterial = new RawShaderMaterial({
+      glslVersion: GLSL3,
+      vertexShader: reflectVertex,
+      fragmentShader: reflectFragment,
+      uniforms: {
+        uPxPerUnit: su.uPxPerUnit as { value: number },
+        uMinPx: su.uMinPx as { value: number },
+        uStarFog: su.uStarFog as { value: number },
+        uRingAlpha: { value: REFLECTION.alpha },
+      },
+      ...premultiplied,
+    });
+    this.linkMaterial = new RawShaderMaterial({
+      glslVersion: GLSL3,
+      vertexShader: linkVertex,
+      fragmentShader: linkFragment,
+      uniforms: {
+        uWireFog: this.wireMaterial.uniforms.uWireFog as { value: number },
+        uDash: { value: REFLECTION.dash },
+        uLinkAlpha: { value: REFLECTION.link },
       },
       transparent: true,
       depthWrite: false,
@@ -507,6 +624,33 @@ export class StarMap {
 
     // Wires under stars; the bloom pass draws the stars' depth, then the key stars' glow.
     this.scene.add(this.wires, this.stars);
+    // Reflections of appearances (08 §2.3): rings over the stars' depth, links dashed.
+    const appear = x.appear ?? new Uint32Array(0);
+    const m = appear.length / 2;
+    this.reflectAt = new Float32Array(m * 3);
+    if (m > 0) {
+      const rings = starGeometry(m);
+      rings.setAttribute('center', new InstancedBufferAttribute(new Float32Array(m * 3), 3));
+      rings.setAttribute(
+        'size',
+        new InstancedBufferAttribute(
+          Float32Array.from(
+            { length: m },
+            (_, k) => REFLECTION.size * (size[appear[k * 2] ?? 0] ?? 0),
+          ),
+          1,
+        ),
+      );
+      this.reflections = new Mesh(rings, this.reflectMaterial);
+      this.reflections.frustumCulled = false;
+      const ties = new BufferGeometry();
+      ties.setAttribute('position', new BufferAttribute(new Float32Array(m * 6), 3));
+      ties.setAttribute('along', new BufferAttribute(new Float32Array(m * 2), 1));
+      ties.setAttribute('shown', new BufferAttribute(new Float32Array(m * 2), 1));
+      this.links = new LineSegments(ties, this.linkMaterial);
+      this.links.frustumCulled = false;
+      this.scene.add(this.links, this.reflections);
+    }
     this.occluders = new Mesh(stars, this.occluderMaterial);
     this.occluders.frustumCulled = false;
     this.occluders.renderOrder = 0;
@@ -544,6 +688,7 @@ export class StarMap {
       lp[w * 6 + 5] = pos[b + 2] ?? 0;
     }
     line.needsUpdate = true;
+    this.placeReflections(pos);
     // Centre and radius of the space: the camera orbits it, the fog reaches its far edge.
     let cx = 0;
     let cy = 0;
@@ -565,6 +710,62 @@ export class StarMap {
     }
     this.centre.set(cx, cy, cz);
     this.radius = Math.sqrt(r2);
+  }
+
+  /** The reflections where their clusters are now, and their links to the stars. */
+  private placeReflections(pos: Float32Array): void {
+    const x = this.x;
+    if (!x || !this.reflections || !this.links) return;
+    reflectionPlaces(x, pos, this.reflectAt);
+    const centre = this.reflections.geometry.getAttribute('center') as InstancedBufferAttribute;
+    (centre.array as Float32Array).set(this.reflectAt);
+    centre.needsUpdate = true;
+    const appear = x.appear ?? new Uint32Array(0);
+    const line = this.links.geometry.getAttribute('position') as BufferAttribute;
+    const along = this.links.geometry.getAttribute('along') as BufferAttribute;
+    const lp = line.array as Float32Array;
+    const la = along.array as Float32Array;
+    for (let k = 0; k * 2 < appear.length; k++) {
+      const s = (appear[k * 2] ?? 0) * 3;
+      const sx = pos[s] ?? 0;
+      const sy = pos[s + 1] ?? 0;
+      const sz = pos[s + 2] ?? 0;
+      const rx = this.reflectAt[k * 3] ?? 0;
+      const ry = this.reflectAt[k * 3 + 1] ?? 0;
+      const rz = this.reflectAt[k * 3 + 2] ?? 0;
+      lp.set([sx, sy, sz, rx, ry, rz], k * 6);
+      la[k * 2] = 0;
+      la[k * 2 + 1] = Math.hypot(rx - sx, ry - sy, rz - sz);
+    }
+    line.needsUpdate = true;
+    along.needsUpdate = true;
+  }
+
+  /** How many reflections the map draws (08 §2.3). */
+  get reflectionCount(): number {
+    return this.reflectAt.length / 3;
+  }
+
+  /** Where the reflections stand, three floats each: for picking and their screen places. */
+  get reflectionCentres(): Float32Array {
+    return this.reflectAt;
+  }
+
+  /**
+   * The links of the reflections drawn (08 §2.3): of the selected star's, and
+   * of those in the cluster in focus; none for `null`.
+   */
+  showLinks(selected: number | null, focus: number | null): void {
+    const x = this.x;
+    if (!x || !this.links) return;
+    const appear = x.appear ?? new Uint32Array(0);
+    const shown = this.links.geometry.getAttribute('shown') as BufferAttribute;
+    const a = shown.array as Float32Array;
+    for (let k = 0; k * 2 < appear.length; k++) {
+      const on = appear[k * 2] === selected || (focus !== null && appear[k * 2 + 1] === focus);
+      a[k * 2] = a[k * 2 + 1] = on ? 1 : 0;
+    }
+    shown.needsUpdate = true;
   }
 
   /**
@@ -828,7 +1029,7 @@ export class StarMap {
   private clear(): void {
     this.occluders?.removeFromParent();
     this.occluders = null;
-    for (const m of [this.stars, this.bloomStars, this.wires]) {
+    for (const m of [this.stars, this.bloomStars, this.wires, this.reflections, this.links]) {
       if (!m) continue;
       m.removeFromParent();
       m.geometry.dispose();
@@ -836,6 +1037,8 @@ export class StarMap {
     this.stars = null;
     this.bloomStars = null;
     this.wires = null;
+    this.reflections = null;
+    this.links = null;
   }
 
   dispose(): void {
@@ -846,6 +1049,8 @@ export class StarMap {
       this.bloomMaterial,
       this.occluderMaterial,
       this.wireMaterial,
+      this.reflectMaterial,
+      this.linkMaterial,
       this.snapMaterial,
       this.blur,
       this.composite,

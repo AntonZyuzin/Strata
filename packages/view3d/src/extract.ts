@@ -36,6 +36,11 @@ export interface StarMapExtract {
   edges: Uint32Array;
   /** Bodies in the subtree of primary placements, the body itself included. */
   subtreeSize: Uint32Array;
+  /**
+   * Appearances (05 §5, 08 §2.3): pairs (node's body, body of a network it
+   * also appears in, its primary aside). Each has a reflection there.
+   */
+  appear?: Uint32Array;
 }
 
 function rng(seed: number): () => number {

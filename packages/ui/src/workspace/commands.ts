@@ -64,6 +64,8 @@ export interface CommandContext {
   copyLink(): void;
   /** The tab bar's steps; none where the screen has no bar (the bench's host). */
   app?: AppActions | undefined;
+  /** «Фон» of the network on the canvas (07 §7.4). */
+  background?: (() => void) | undefined;
 }
 
 export interface Command {
@@ -142,6 +144,14 @@ export const COMMANDS: readonly Command[] = [
   canvas('selectAll', 'selectAll', 'Ctrl+A', ['выделить', 'select']),
   canvas('wireStyle', 'wireStyle', 'Shift+S', ['нити', 'кривые', 'wires', 'curves', 'straight']),
   canvas('minimap', 'minimap', 'O', ['мини-карта', 'обзор', 'minimap', 'overview']),
+  {
+    id: 'canvas.background',
+    title: 'cmd.canvas.background',
+    aliases: ['фон', 'картинка', 'обои', 'пространство', 'background', 'wallpaper', 'picture'],
+    group: 'canvas',
+    why: (c) => flat(c) ?? (c.background ? null : 'cmd.why.app'),
+    run: (c) => c.background?.(),
+  },
   canvas('zoomIn', 'zoomIn', '+', ['масштаб', 'крупнее', 'zoom', 'bigger']),
   canvas('zoomOut', 'zoomOut', '−', ['масштаб', 'мельче', 'zoom', 'smaller']),
   canvas('zoomReset', 'zoomReset', '0', ['масштаб', '100', 'zoom', 'actual']),

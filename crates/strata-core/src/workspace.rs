@@ -14,7 +14,7 @@
 //! and turns a note's `[[links]]` into its text wires.
 
 use crate::changeset::{Changeset, KeyWrite, Label, RevertReport, TextEdit};
-use crate::ops::{Op, WireStyle};
+use crate::ops::{Background, Op, WireStyle};
 use crate::store::{Store, StoreError, StoredDoc};
 use crate::value::Val;
 use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
@@ -523,6 +523,13 @@ pub struct NetworkView {
     /// The network's wire style (05 §9.2); none — Bézier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_style: Option<WireStyle>,
+    /// The network's own background (05 §9.2, 07 §7.4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<Background>,
+    /// The workspace's, the root's, which a network without its own shows;
+    /// none on the root itself, and none set — «Туман».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_background: Option<Background>,
 }
 
 /// A node in the trash.
@@ -604,6 +611,35 @@ fn read(doc: &LoroDoc, map: &str, key: &str) -> Option<Val> {
         ValueOrContainer::Value(v) => Val::from_loro(&v),
         ValueOrContainer::Container(_) => None,
     }
+}
+
+/// A background as a network's document keeps it (05 §3, 07 §7.1).
+fn background_val(b: &Background) -> Val {
+    Val::map([
+        ("source", Val::str(b.source.clone())),
+        ("blur", Val::Float(b.blur)),
+        ("desaturate", Val::Float(b.desaturate)),
+        ("maxL", Val::Float(b.max_l)),
+        ("vignette", Val::Float(b.vignette)),
+        ("grain", Val::Float(b.grain)),
+        ("fog", Val::Float(b.fog)),
+        ("animated", Val::Bool(b.animated)),
+    ])
+}
+
+/// [`background_val`] read back; a value it cannot read is no background.
+fn background_of(v: &Val) -> Option<Background> {
+    let mut b = Background::preset("fog");
+    b.source = v.get("source")?.as_str()?.to_owned();
+    let num = |key: &str, fallback: f64| v.get(key).and_then(Val::as_f64).unwrap_or(fallback);
+    b.blur = num("blur", b.blur);
+    b.desaturate = num("desaturate", b.desaturate);
+    b.max_l = num("maxL", b.max_l);
+    b.vignette = num("vignette", b.vignette);
+    b.grain = num("grain", b.grain);
+    b.fog = num("fog", b.fog);
+    b.animated = matches!(v.get("animated"), Some(Val::Bool(true)));
+    Some(b)
 }
 
 impl Tx<'_> {
@@ -1106,7 +1142,8 @@ impl<S: Store> Workspace<S> {
                 | Op::Move { net, .. }
                 | Op::Place { net, .. }
                 | Op::SetSize { net, .. }
-                | Op::SetWireStyle { net, .. } => {
+                | Op::SetWireStyle { net, .. }
+                | Op::SetBackground { net, .. } => {
                     self.ensure_doc(&format!("net/{net}"))?;
                 }
                 Op::Relocate { from, to, .. } => {
@@ -1708,6 +1745,33 @@ impl<S: Store> Workspace<S> {
                         "settings",
                         "wireStyle",
                         style.map(|s| Val::str(s.as_str())),
+                    );
+                }
+                Op::SetBackground { net, background } => {
+                    // A setting of the network's own document (05 §9.2); the
+                    // root's is the workspace's (05 §3).
+                    match self.parse(net) {
+                        Ok(p) if made.get(&p).is_some_and(|k| k.has_canvas()) => {}
+                        _ => {
+                            self.network(net)?;
+                        }
+                    }
+                    if let Some(b) = background {
+                        if let Some(why) = b.invalid() {
+                            return Err(invalid(why));
+                        }
+                        // An uploaded picture: its original is in the store (05 §12).
+                        if let Some(sha) = b.asset()
+                            && self.store.asset(sha)?.is_none()
+                        {
+                            return Err(invalid(format!("background picture {sha}: not stored")));
+                        }
+                    }
+                    put(
+                        &format!("net/{net}"),
+                        "settings",
+                        "background",
+                        background.as_ref().map(background_val),
                     );
                 }
             }
@@ -2989,6 +3053,14 @@ impl<S: Store> Workspace<S> {
         path.push((net.to_owned(), self.name(n)));
         let wire_style =
             read(pos, "settings", "wireStyle").and_then(|v| v.as_str().and_then(WireStyle::parse));
+        let background = read(pos, "settings", "background").and_then(|v| background_of(&v));
+        let workspace_background = if n == self.root {
+            None
+        } else {
+            let root = format!("net/{}", self.root.to_text());
+            self.ensure_doc(&root)?;
+            read(&self.docs[&root], "settings", "background").and_then(|v| background_of(&v))
+        };
         Ok(NetworkView {
             net: net.to_owned(),
             name: self.name(n),
@@ -2998,6 +3070,8 @@ impl<S: Store> Workspace<S> {
             ghosts,
             rollups,
             wire_style,
+            background,
+            workspace_background,
         })
     }
 

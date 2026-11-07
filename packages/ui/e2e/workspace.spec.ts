@@ -1423,6 +1423,38 @@ for (const deviceScaleFactor of [1, 2]) {
 }
 
 for (const deviceScaleFactor of [1, 2]) {
+  test(`«Фон» keeps its size in RU and EN @${deviceScaleFactor}x (07 §7.4)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(60_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Фоны');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Control+p');
+      await page.locator('.command-palette .palette-query').fill('background');
+      await page.keyboard.press('Enter');
+      const palette = page.locator('.bg-palette');
+      await expect(palette).toBeVisible();
+      expect(await overflowing(page, '.bg-palette'), `${locale} «Фон» must fit`).toEqual([]);
+      boxes.push({ palette: await box(page, '.bg-palette') });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const k of ['x', 'y', 'width', 'height'] as const) {
+      expect(Math.abs(en.palette[k] - ru.palette[k]), k).toBeLessThanOrEqual(0.5);
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
   test(`the updates' question and offer keep their size in RU and EN @${deviceScaleFactor}x (NFR-89, NFR-94)`, async ({
     browser,
   }) => {
@@ -4892,6 +4924,84 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.home-new')).toBeVisible();
     await page.locator('.tabbar-settings').click();
     await expect(page.getByRole('combobox', { name: 'Обновления' })).toHaveCount(0);
+  });
+
+  test("a background: the workspace's on the root, a network's own, one's own picture; one step each (07 §7.4)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Фоны');
+    await makeFolder(page, 'Папка', 640, 400);
+    const ws = page.locator('.workspace');
+    const palette = page.locator('.bg-palette');
+    const cells = palette.locator('.bg-cell');
+    const open = async (item: string) => {
+      const c = await box(page, '.proto-canvas');
+      await page.mouse.click(c.x + 120, c.y + c.height - 120, { button: 'right' });
+      await page.locator('.context-menu').getByText(item, { exact: true }).click();
+      await expect(palette).toBeVisible();
+    };
+    // The root: the workspace's background, «Туман» until chosen; no «Как у пространства».
+    await expect(ws).toHaveAttribute('data-background', 'preset:fog');
+    await open('Фон пространства');
+    await expect(cells).toHaveCount(5);
+    await expect(palette.locator('.bg-cell.is-chosen')).toHaveAttribute('aria-label', 'Туман');
+    await palette.getByRole('option', { name: 'Сумерки' }).click();
+    await expect(palette).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-background', 'preset:dusk');
+    // A network shows the workspace's until it has its own.
+    await enter(page, 'Папка');
+    await expect(ws).toHaveAttribute('data-background', 'preset:dusk');
+    await open('Фон сети');
+    await expect(cells).toHaveCount(6);
+    await expect(palette.locator('.bg-cell.is-chosen')).toHaveAttribute(
+      'aria-label',
+      'Как у пространства',
+    );
+    // The keys: → to «Пыль», Enter.
+    for (let i = 0; i < 4; i++) await page.keyboard.press('ArrowRight');
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-background', 'preset:dust');
+    await leave(page);
+    await expect(ws).toHaveAttribute('data-background', 'preset:dusk');
+    await enter(page, 'Папка');
+    await expect(ws).toHaveAttribute('data-background', 'preset:dust');
+    // One step of undo: the workspace's again.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect(ws).toHaveAttribute('data-background', 'preset:dusk');
+    // One's own picture, from the disk: stored, set as the network's own.
+    const png = await page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 40;
+      const g = c.getContext('2d') as CanvasRenderingContext2D;
+      g.fillStyle = '#3a5a7a';
+      g.fillRect(0, 0, 64, 40);
+      return c.toDataURL('image/png').split(',')[1] ?? '';
+    });
+    await open('Фон сети');
+    const chooser = page.waitForEvent('filechooser');
+    await palette.getByRole('option', { name: 'Своя картинка…' }).click();
+    await (await chooser).setFiles({
+      name: 'небо.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(png, 'base64'),
+    });
+    await expect(ws).toHaveAttribute('data-background', /^asset:[0-9a-f]{64}$/);
+    // The palette's command opens it too.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+p');
+    await page.locator('.command-palette .palette-query').fill('фон сети');
+    await page.keyboard.press('Enter');
+    await expect(palette).toBeVisible();
+    await expect(palette.locator('.bg-cell.is-chosen')).toHaveAttribute(
+      'aria-label',
+      'Своя картинка…',
+    );
+    await page.keyboard.press('Escape');
+    await expect(palette).toHaveCount(0);
   });
 
   test('«Настройки» are a window the gear opens, not a tab (owner, 2026-10-28)', async ({

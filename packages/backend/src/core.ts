@@ -168,7 +168,9 @@ export type CoreOp =
   /** The network's wire style (05 §9.2, 06 §6.2); null — Bézier. */
   | { op: 'setWireStyle'; net: string; style: WireShape | null }
   /** A bubble's size in network `net`, set by hand (06 §4.2); null — by the rules. */
-  | { op: 'setSize'; id: string; net: string; size: NodeSize | null };
+  | { op: 'setSize'; id: string; net: string; size: NodeSize | null }
+  /** The network's background (07 §7.4); the root's is the workspace's; null — none of its own. */
+  | { op: 'setBackground'; net: string; background: Background | null };
 
 export type CoreRequest =
   | { call: 'workspace' }
@@ -592,6 +594,31 @@ export interface NetworkView {
   rollups: ViewRollup[];
   /** The network's wire style; none — Bézier. */
   wire_style?: WireShape;
+  /** The network's own background (05 §9.2, 07 §7.4). */
+  background?: Background | undefined;
+  /** The workspace's, which a network without its own shows; none on the root. */
+  workspace_background?: Background | undefined;
+}
+
+/**
+ * A background (05 §3, 07 §7.1): `preset:<id>` or `asset:<sha256>` — one's
+ * own picture, its original kept — and the pipeline's normalised numbers.
+ */
+export interface Background {
+  source: string;
+  /** The blur's radius at 960 px, 4–16. */
+  blur: number;
+  /** The share of colour taken away, 0–1. */
+  desaturate: number;
+  /** The ceiling of the luminance's 95th percentile, up to 0.10. */
+  maxL: number;
+  /** The edges' brightness under the vignette, 0–1. */
+  vignette: number;
+  /** The grain, 0–1. */
+  grain: number;
+  /** The fog, 0–1; 0 — none. */
+  fog: number;
+  animated: boolean;
 }
 
 export interface History {

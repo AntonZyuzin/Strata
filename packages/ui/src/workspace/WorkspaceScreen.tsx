@@ -1,6 +1,7 @@
 import {
   type AttrKey,
   assetType,
+  type Background,
   type ChangeLabel,
   type CoreOp,
   CoreSync,
@@ -92,6 +93,8 @@ import { netItems, searchClient, visited, visits } from '../search';
 import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { areasOf, nextArea } from './areas';
+import { BackgroundPalette, pictureBackground } from './BackgroundPalette';
+import { backgroundKey, backgroundPixels } from './backgrounds';
 import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
 import {
@@ -367,6 +370,8 @@ export function WorkspaceScreen(props: {
   const [iconPick, setIconPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   /** `C` (06 §2.1): the colour palette for these nodes, at a page point. */
   const [colorPick, setColorPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
+  /** «Фон» (07 §7.4) at the menu's place: the network on the canvas's background. */
+  const [bgPick, setBgPick] = useState<{ x: number; y: number } | null>(null);
   /** The presets with their authors, loaded when the palette first opens. */
   const [presets, setPresets] = useState<{
     authors: Record<string, IconAuthor>;
@@ -1550,6 +1555,15 @@ export function WorkspaceScreen(props: {
         .then(() => core.view(netRef.current))
         .then((nv) => {
           if (cancelled || graph.current !== g || !g || nv.net !== netRef.current) return;
+          // The background a step or its undo changed (07 §7.4).
+          setNet((n) =>
+            n?.net === nv.net &&
+            (backgroundKey(n.background ?? null) !== backgroundKey(nv.background ?? null) ||
+              backgroundKey(n.workspace_background ?? null) !==
+                backgroundKey(nv.workspace_background ?? null))
+              ? { ...n, background: nv.background, workspace_background: nv.workspace_background }
+              : n,
+          );
           // A step made since the question is not in the answer yet; the
           // looks read back below move the version too, so it is asked first.
           const fresh = g.version === at;
@@ -1705,6 +1719,7 @@ export function WorkspaceScreen(props: {
       menu !== null ||
         iconPick !== null ||
         colorPick !== null ||
+        bgPick !== null ||
         help ||
         name !== null ||
         finder !== null ||
@@ -1719,6 +1734,7 @@ export function WorkspaceScreen(props: {
     menu,
     iconPick,
     colorPick,
+    bgPick,
     help,
     name,
     finder,
@@ -2237,6 +2253,13 @@ export function WorkspaceScreen(props: {
   };
 
   /** The nodes' colour (05 §4.1, 07 §2.2): an index of the palette, or null — the kind's. One step. */
+  /** The background of network `id` (07 §7.4): one step of undo; the root's is the workspace's. */
+  const setBackground = (id: string, background: Background | null) =>
+    coreStep(
+      [{ op: 'setBackground', net: id, background }],
+      id === opened.root ? 'ws.change.workspaceBackground' : 'ws.change.background',
+    ).catch(failed);
+
   const setColor = (ids: readonly string[], color: number | null) => {
     const g = graph.current;
     if (!g) return;
@@ -3180,6 +3203,12 @@ export function WorkspaceScreen(props: {
             onSelect: () => ed.setWireShape(shape),
           }),
         ),
+        // The network's background, the workspace's on the root (07 §7.4).
+        {
+          label: t(locale, net?.net === opened.root ? 'bg.workspace' : 'bg.network'),
+          separated: true,
+          onSelect: () => setBgPick({ x: ctx?.x ?? 0, y: ctx?.y ?? 0 }),
+        },
       ];
     }
     if (at.t === 'wire') {
@@ -3398,11 +3427,39 @@ export function WorkspaceScreen(props: {
       if (name !== undefined) copy(`[[${name}]]`);
     },
     app: props.app,
+    // At the canvas's middle, as the palette has no cursor to open at.
+    background: () => {
+      const r = viewRef.current?.canvas.getBoundingClientRect();
+      setBgPick({
+        x: (r?.left ?? 0) + (r?.width ?? 0) / 3,
+        y: (r?.top ?? 0) + (r?.height ?? 0) / 3,
+      });
+    },
   };
   const lastStep = canUndo
     ? t(locale, 'proto.lastStep', { label: label(g?.canUndo ? g.undoLabel : history.undo) })
     : label(null);
   const path = net?.path ?? [];
+  // The network's background on the canvas (07 §7.4): its own, else the
+  // workspace's, else «Туман» — made once per source and parameters.
+  const shownBackground = net ? (net.background ?? net.workspace_background ?? null) : null;
+  const shownKey = backgroundKey(shownBackground);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: by its key: a new object of the same background draws nothing new
+  useEffect(() => {
+    const v = viewRef.current;
+    // `&plain`: no background (e2e on software WebGL).
+    if (!v?.background.container.visible) return;
+    let live = true;
+    backgroundPixels(shownBackground, (sha) => core.asset(sha)).then(
+      (px) => {
+        if (live) v.setBackground(px);
+      },
+      (e: unknown) => console.error('background', e),
+    );
+    return () => {
+      live = false;
+    };
+  }, [shownKey]);
   // The entry path with the tree's names (05 §9.3); on the star map, the way
   // to the cluster in focus (08 §5.1).
   const barPath: NamedPath = useMemo(() => {
@@ -3446,6 +3503,7 @@ export function WorkspaceScreen(props: {
       data-view={view3d}
       data-panel={details ? 'open' : 'closed'}
       data-minimap={minimap ? 'open' : 'closed'}
+      data-background={shownBackground?.source ?? 'preset:fog'}
     >
       <div className="ws-panel-probe" aria-hidden="true" />
       <div
@@ -3852,6 +3910,34 @@ export function WorkspaceScreen(props: {
           locale={locale}
           onClose={() => {
             setHelp(false);
+            focusCanvas();
+          }}
+        />
+      ) : null}
+      {bgPick && net ? (
+        <BackgroundPalette
+          locale={locale}
+          root={net.net === opened.root}
+          current={net.background ?? null}
+          x={bgPick.x}
+          y={bgPick.y}
+          bounds={seenBounds()}
+          onPick={(background) => {
+            setBgPick(null);
+            focusCanvas();
+            void setBackground(net.net, background);
+          }}
+          onPicture={(file) => {
+            setBgPick(null);
+            focusCanvas();
+            void file
+              .arrayBuffer()
+              .then((b) => core.putAsset(new Uint8Array(b)))
+              .then((sha) => setBackground(net.net, pictureBackground(sha)))
+              .catch(failed);
+          }}
+          onClose={() => {
+            setBgPick(null);
             focusCanvas();
           }}
         />

@@ -34,7 +34,7 @@ pub mod vault;
 pub mod workspace;
 
 pub use changeset::{Changeset, KeyWrite, Label, RevertReport, TextEdit};
-pub use ops::{Op, WireStyle};
+pub use ops::{BACKGROUND_PRESETS, Background, Op, WireStyle};
 pub use store::{MemoryStore, Status, Store, StoreError, StoredDoc};
 pub use strata_model as model;
 pub use strata_model::Flag;

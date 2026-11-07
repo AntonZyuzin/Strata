@@ -150,6 +150,7 @@ box:       LoroMap<BoxId, { rect: Rect; title: string; color: Color; collapsed: 
 boxMember: LoroMap<`${BoxId}|${NodeId}`, 1>
 sticky:    LoroMap<StickyId, { rect: Rect; text: string; color: Color }>
 settings:  LoroMap<string, unknown>                   // фон (07 §7), направление раскладки; wireStyle: 'straight' | 'bezier' | 'kinetic' (06 §6.2), нет ключа — Безье
+                                                      // background: Background (05 §3) — фон сети; у корня — фон пространства, его видят сети без своего (сделано 2026-11-07)
 ```
 
 | Вид (05 §4.2) | `content/{nodeId}` | Подробности |

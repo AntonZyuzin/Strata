@@ -1487,6 +1487,61 @@ button:focus-visible {
   outline-offset: var(--u);
 }
 
+/* «Фон» (07 §7.4): one row of swatches 16:10 — «Как у пространства» on a
+   network that is not the root, the four presets, «Своя картинка…»; the
+   width in ch for the most cells, the same in both languages. */
+.bg-palette {
+  --bg-cell-w: 6ch;
+  --bg-gap: calc(2 * var(--u));
+  width: calc(6 * var(--bg-cell-w) + 5 * var(--bg-gap) + 8 * var(--u));
+}
+
+.bg-row {
+  display: grid;
+  grid-template-columns: repeat(6, var(--bg-cell-w));
+  grid-auto-rows: calc(var(--bg-cell-w) * 0.625);
+  gap: var(--bg-gap);
+  padding: calc(4 * var(--u));
+  outline: none;
+}
+
+.bg-cell {
+  border: var(--u) solid var(--st-color-frame);
+  background-size: cover;
+  background-position: center;
+  cursor: pointer;
+}
+
+/* The workspace's: the network has none of its own. */
+.bg-cell.is-inherit {
+  background: repeating-linear-gradient(
+    135deg,
+    transparent 0 calc(3 * var(--u)),
+    var(--st-color-divider) 0 calc(4 * var(--u))
+  );
+}
+
+/* One's own picture: a frame with a plus, chosen from the disk. */
+.bg-cell.is-own {
+  display: grid;
+  place-items: center;
+  background: var(--st-color-surface-sunken);
+}
+
+.bg-cell.is-own::after {
+  content: "+";
+  color: var(--st-color-text-muted);
+}
+
+.bg-cell.is-chosen {
+  box-shadow: inset 0 0 0 calc(2 * var(--u)) var(--st-scene-paper);
+}
+
+.bg-cell.is-current {
+  outline: calc(2 * var(--u)) solid var(--st-color-accent);
+  outline-offset: var(--u);
+}
+
 .icon-palette-top .tab-menu-prompt {
   flex: 1 1 auto;
   min-width: 0;

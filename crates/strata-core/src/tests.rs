@@ -1,6 +1,6 @@
 //! The model's rules on the core (CLAUDE.md: every rule of 05 has a test).
 
-use crate::{CopyAt, Label, MemoryStore, Op, Store, Workspace};
+use crate::{Background, CopyAt, Label, MemoryStore, Op, Store, Workspace};
 use strata_model::{NodeId, NodeKind};
 
 mod import;
@@ -3383,5 +3383,76 @@ fn a_copy_takes_the_id_the_canvas_gave_it() {
             .nodes
             .iter()
             .all(|n| n.id != id)
+    );
+}
+
+#[test]
+fn a_background_is_the_workspaces_or_a_networks_own() {
+    // 05 §3, §9.2, 07 §7.4: the root's background is the workspace's; a
+    // network without its own shows it, one with its own shows that; null
+    // takes it away. Each one step of undo.
+    let mut w = ws();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let set = |w: &mut Workspace<MemoryStore>, net: &str, background: Option<Background>| {
+        op(
+            w,
+            Op::SetBackground {
+                net: net.to_owned(),
+                background,
+            },
+        )
+    };
+    assert_eq!(w.network_view(&root).expect("view").background, None);
+    set(&mut w, &root, Some(Background::preset("dusk"))).expect("the workspace's");
+    let v = w.network_view(&folder).expect("view");
+    assert_eq!(v.background, None);
+    assert_eq!(v.workspace_background, Some(Background::preset("dusk")));
+    assert_eq!(
+        w.network_view(&root).expect("view").workspace_background,
+        None
+    );
+    set(&mut w, &folder, Some(Background::preset("dust"))).expect("its own");
+    let own = |w: &mut Workspace<MemoryStore>| w.network_view(&folder).expect("view").background;
+    assert_eq!(own(&mut w), Some(Background::preset("dust")));
+    set(&mut w, &folder, None).expect("taken away");
+    assert_eq!(own(&mut w), None);
+    w.undo().expect("undo");
+    assert_eq!(own(&mut w), Some(Background::preset("dust")));
+    // Refused: a preset unknown, a number out of its range, a picture not
+    // stored, a node with no canvas.
+    let mut odd = Background::preset("fog");
+    odd.source = "preset:sunset".to_owned();
+    assert!(set(&mut w, &root, Some(odd)).is_err());
+    let mut bright = Background::preset("fog");
+    bright.max_l = 0.5;
+    assert!(set(&mut w, &root, Some(bright)).is_err());
+    let mut lost = Background::preset("fog");
+    lost.source = format!("asset:{}", "a".repeat(64));
+    assert!(set(&mut w, &root, Some(lost)).is_err());
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    assert!(set(&mut w, &note, Some(Background::preset("fog"))).is_err());
+    // One's own picture: the original stored first (05 §12).
+    let sha = w.put_asset(b"a picture").expect("stored");
+    let mut photo = Background::preset("fog");
+    photo.source = format!("asset:{sha}");
+    photo.desaturate = 0.5;
+    set(&mut w, &root, Some(photo.clone())).expect("one's own picture");
+    assert_eq!(w.network_view(&root).expect("view").background, Some(photo));
+}
+
+#[test]
+fn a_background_comes_as_json_with_the_pipelines_defaults() {
+    // The UI's call (api.rs): what is left out takes 07 §7.1's defaults.
+    let op: Op = serde_json::from_str(
+        r#"{"op":"setBackground","net":"n","background":{"source":"preset:depth"}}"#,
+    )
+    .expect("the call");
+    assert_eq!(
+        op,
+        Op::SetBackground {
+            net: "n".to_owned(),
+            background: Some(Background::preset("depth")),
+        }
     );
 }

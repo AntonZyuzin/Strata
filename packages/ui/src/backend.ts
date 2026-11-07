@@ -10,6 +10,16 @@ export interface BuildInfo {
   shell: string;
   webview?: string | null;
   machine?: unknown;
+  /** The build has an update channel (NFR-89): the app may ask to use it (NFR-94). */
+  updates?: boolean;
+}
+
+/** An update the channel offers (NFR-89). */
+export interface UpdateInfo {
+  version: string;
+  /** The version running. */
+  current: string;
+  notes?: string | null;
 }
 
 export function isTauri(): boolean {
@@ -18,12 +28,36 @@ export function isTauri(): boolean {
 
 export async function loadBuildInfo(): Promise<BuildInfo | null> {
   if (!isTauri()) {
-    // Layout tests pass the longest real core string through `?core=`.
-    const mock = new URLSearchParams(window.location.search).get('core');
+    const q = new URLSearchParams(window.location.search);
+    // Layout tests pass the longest real core string through `?core=`, and
+    // `?updates` stands for a build with an update channel.
+    const mock = q.get('core');
+    if (q.has('updates')) return { core: mock ?? 'web', shell: 'web', updates: true };
     return mock ? { core: mock, shell: 'web' } : null;
   }
   const { invoke } = await import('@tauri-apps/api/core');
   return invoke<BuildInfo>('build_info');
+}
+
+/**
+ * Asks the update channel for a newer version (NFR-89), only when the person
+ * agreed to (NFR-94). In a browser `?update=<version>` stands for one, for
+ * the layout tests.
+ */
+export async function checkUpdate(): Promise<UpdateInfo | null> {
+  if (!isTauri()) {
+    const version = new URLSearchParams(window.location.search).get('update');
+    return version ? { version, current: '0.0.1', notes: null } : null;
+  }
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke<UpdateInfo | null>('update_check');
+}
+
+/** Downloads, checks and installs the newer version, then starts it. */
+export async function installUpdate(): Promise<void> {
+  if (!isTauri()) return;
+  const { invoke } = await import('@tauri-apps/api/core');
+  await invoke('update_install');
 }
 
 /**

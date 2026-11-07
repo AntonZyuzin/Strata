@@ -33,6 +33,7 @@ describe('dates and times of the settings (✅ Q-06-23, 05 §6.1)', () => {
       ring: 'always',
       card: 'hover',
       hints: 'show',
+      updates: 'ask',
     });
   });
 

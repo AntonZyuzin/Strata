@@ -1422,6 +1422,41 @@ for (const deviceScaleFactor of [1, 2]) {
   });
 }
 
+for (const deviceScaleFactor of [1, 2]) {
+  test(`the updates' question and offer keep their size in RU and EN @${deviceScaleFactor}x (NFR-89, NFR-94)`, async ({
+    browser,
+  }) => {
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      // A build with a channel and a newer version on it; nothing answered yet.
+      await page.goto('/?updates&update=9.9.9');
+      const dialog = page.locator('.update-dialog');
+      await expect(dialog).toBeVisible();
+      expect(await overflowing(page, '.update-dialog'), `${locale} the question must fit`).toEqual(
+        [],
+      );
+      const ask = await box(page, '.update-dialog');
+      await dialog.locator('.dialog-actions button').last().click();
+      await expect(dialog.locator('h2')).toHaveText(/9\.9\.9/);
+      expect(await overflowing(page, '.update-dialog'), `${locale} the offer must fit`).toEqual([]);
+      boxes.push({ ask, offer: await box(page, '.update-dialog') });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['ask', 'offer'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
 test.describe('a workspace on the core', () => {
   test.use({ viewport: { width: 1280, height: 800 }, locale: 'ru-RU' });
 
@@ -4827,6 +4862,36 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Control+z');
     await expect(ws).toHaveAttribute('data-nodes', '2');
     await expect.poll(() => parentOf(page, 'Эскиз')).toBe('Дерево');
+  });
+
+  test('updates are asked once; «Не проверять» asks nothing, «Настройки» turn checks on (NFR-94)', async ({
+    page,
+  }) => {
+    await page.goto('/?updates&update=9.9.9');
+    const dialog = page.locator('.update-dialog');
+    await expect(dialog.locator('h2')).toHaveText('Проверять обновления?');
+    await expect(dialog.locator('.update-text')).toHaveText('github.com/AntonZyuzin/Strata');
+    await dialog.getByRole('button', { name: 'Не проверять' }).click();
+    await expect(dialog).toHaveCount(0);
+    // Answered: no question at the next start, and nothing asked.
+    await page.reload();
+    await expect(page.locator('.home-new')).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    // «Настройки»: the answer as it is, then checks at each start.
+    await page.locator('.tabbar-settings').click();
+    const row = page.getByRole('combobox', { name: 'Обновления' });
+    await expect(row).toHaveValue('never');
+    await row.selectOption('check');
+    await page.reload();
+    await expect(dialog.locator('h2')).toHaveText('Доступна версия 9.9.9');
+    await expect(dialog.locator('.update-text')).toHaveText('Сейчас 0.0.1');
+    await dialog.getByRole('button', { name: 'Позже' }).click();
+    await expect(dialog).toHaveCount(0);
+    // A build with no channel neither asks nor shows the row.
+    await page.goto('/');
+    await expect(page.locator('.home-new')).toBeVisible();
+    await page.locator('.tabbar-settings').click();
+    await expect(page.getByRole('combobox', { name: 'Обновления' })).toHaveCount(0);
   });
 
   test('«Настройки» are a window the gear opens, not a tab (owner, 2026-10-28)', async ({

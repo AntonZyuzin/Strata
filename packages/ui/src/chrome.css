@@ -2341,6 +2341,14 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   text-overflow: ellipsis;
 }
 
+/* The updates' question and offer at the start (NFR-89, NFR-94): one line of
+   fact — where it asks, the version running — the story in its tooltip. */
+.update-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* An import going on (13 §3.3): the last line of the toasts at the foot of
    the canvas, as wide as they are, the batches counted and on a segmented
    track (07 §8.2). */

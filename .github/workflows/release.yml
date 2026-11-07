@@ -1,0 +1,125 @@
+name: Release
+
+# A signed release (NFR-89, 15 §8.6): the desktop bundles and the updater's
+# artifacts signed with the owner's update key, and the `latest.json` the app
+# asks for, on a draft GitHub release the owner publishes. On a version tag
+# or by hand. The OS code signing (Authenticode, Apple notarization) comes
+# before the public release (☑ Q-15-11); this signs the updates only.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  wasm:
+    name: WASM
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Rust toolchain with the wasm32 target (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: wasm
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack,wasm-bindgen@0.2.129
+      - run: pnpm wasm
+      # On macOS and Windows the system archiver cannot pack the wasm32
+      # objects of a core dependency (psm): built here once for all three.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: wasm-pkg
+          path: |
+            packages/layout/pkg
+            packages/backend/pkg
+            packages/search/pkg
+          retention-days: 1
+
+  release:
+    name: Release · ${{ matrix.name }}
+    needs: wasm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS (universal)
+            os: macos-latest
+            target: universal-apple-darwin
+            rust-targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - name: Windows x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            rust-targets: x86_64-pc-windows-msvc
+          - name: Linux x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            rust-targets: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    env:
+      # The private half signs the updates; the public half is baked into the
+      # app, which takes no update without its signature (NFR-89).
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+      STRATA_UPDATER_PUBKEY: ${{ vars.STRATA_UPDATER_PUBKEY }}
+    steps:
+      - name: The owner's update key is set (NFR-89)
+        shell: bash
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ] || [ -z "$STRATA_UPDATER_PUBKEY" ]; then
+            echo "::error::Set the secret TAURI_SIGNING_PRIVATE_KEY (with TAURI_SIGNING_PRIVATE_KEY_PASSWORD) and the variable STRATA_UPDATER_PUBKEY — docs/15-architecture.md §8.6"
+            exit 1
+          fi
+      - uses: actions/checkout@v7
+      - name: Linux system libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev librsvg2-dev libayatana-appindicator3-dev libxdo-dev libssl-dev patchelf
+      - name: Rust toolchain and targets
+        shell: bash
+        run: |
+          rustup show active-toolchain || rustup toolchain install
+          rustup target add $(echo "${{ matrix.rust-targets }}" | tr ',' ' ')
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: wasm-pkg
+          path: packages
+      - name: Tests of the shell, the update check among them
+        shell: bash
+        run: |
+          pnpm --filter @strata/ui build
+          cargo test -p strata-desktop
+      # Bundles, the updater's artifacts with their signatures, `latest.json`.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/strata-desktop
+          tauriScript: pnpm exec tauri
+          args: --target ${{ matrix.target }} --config '{"bundle":{"createUpdaterArtifacts":true}}'
+          tagName: v__VERSION__
+          releaseName: Gexogon v__VERSION__
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true

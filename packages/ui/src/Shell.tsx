@@ -1,11 +1,12 @@
 import type { HomeBackend, Opened } from '@strata/backend';
 import { t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { pickArchive, pickSavePath } from './backend';
+import { checkUpdate, installUpdate, pickArchive, pickSavePath, type UpdateInfo } from './backend';
 import { download, HomeScreen } from './home/HomeScreen';
 import type { Prefs } from './prefs';
 import { SettingsScreen } from './settings/SettingsScreen';
 import { type Tab, TabBar } from './TabBar';
+import { UpdateOffer, UpdateQuestion } from './UpdateDialogs';
 import { jobOf, watchImports } from './workspace/imports';
 import { type UndoState, type WorkspaceBridge, WorkspaceScreen } from './workspace/WorkspaceScreen';
 
@@ -45,6 +46,8 @@ export function Shell(props: {
   onPrefs: (p: Prefs) => void;
   home: HomeBackend;
   onAbout: () => void;
+  /** The build has an update channel (NFR-89). */
+  updates: boolean;
 }) {
   const { prefs, home } = props;
   const locale = prefs.locale;
@@ -68,6 +71,23 @@ export function Shell(props: {
   const busyRef = useRef(false);
   /** The last left workspace's picture, still being written. */
   const picture = useRef<Promise<void>>(Promise.resolve());
+
+  // Updates (NFR-89, NFR-94): asked once at the first start of a build with
+  // a channel; checked at each start only when the person said so. A check
+  // that fails — no network — says nothing.
+  const [asking, setAsking] = useState(false);
+  const [offer, setOffer] = useState<UpdateInfo | null>(null);
+  const [installing, setInstalling] = useState(false);
+  const askedAtStart = useRef(false);
+  const check = useCallback(() => {
+    checkUpdate().then(setOffer, () => undefined);
+  }, []);
+  useEffect(() => {
+    if (!props.updates || askedAtStart.current) return;
+    askedAtStart.current = true;
+    if (prefs.updates === 'ask') setAsking(true);
+    else if (prefs.updates === 'check') check();
+  }, [props.updates, prefs.updates, check]);
 
   useEffect(() => {
     try {
@@ -309,9 +329,39 @@ export function Shell(props: {
             onPrefs={props.onPrefs}
             onAbout={props.onAbout}
             onClose={() => setSettings(false)}
+            updates={props.updates}
           />
         ) : null}
       </div>
+      {asking ? (
+        <UpdateQuestion
+          locale={locale}
+          onAnswer={(yes) => {
+            setAsking(false);
+            props.onPrefs({ ...prefs, updates: yes ? 'check' : 'never' });
+            if (yes) check();
+          }}
+        />
+      ) : offer ? (
+        <UpdateOffer
+          locale={locale}
+          version={offer.version}
+          current={offer.current}
+          notes={offer.notes}
+          installing={installing}
+          onLater={() => setOffer(null)}
+          onInstall={() => {
+            setInstalling(true);
+            // Installed, the app starts anew; refused — a bad signature, no
+            // network — the offer goes and the reason shows.
+            installUpdate().catch((e: unknown) => {
+              setInstalling(false);
+              setOffer(null);
+              setError(message(e));
+            });
+          }}
+        />
+      ) : null}
     </div>
   );
 }

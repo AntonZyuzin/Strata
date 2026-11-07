@@ -28,6 +28,15 @@ export type HintMode = 'show' | 'hide';
 export const HINT_MODES: readonly HintMode[] = ['show', 'hide'];
 
 /**
+ * Updates (NFR-89, NFR-94): asked at the first start of a build with a
+ * channel, then checked at each start or never. «Настройки» offer the two
+ * answers; not yet asked reads as «Не проверять» there — nothing is asked.
+ */
+export type UpdateMode = 'ask' | 'check' | 'never';
+export const UPDATE_ANSWERS: readonly Exclude<UpdateMode, 'ask'>[] = ['check', 'never'];
+const UPDATE_MODES: readonly UpdateMode[] = ['ask', 'check', 'never'];
+
+/**
  * What the device keeps: the language; a date's form and the clock, or
  * `auto` — as the language reads them (owner, 2026-10-24).
  */
@@ -41,6 +50,8 @@ export interface Prefs {
   card: CardMode;
   /** Gesture hints (06 §2.1): shown by default. */
   hints: HintMode;
+  /** Updates (NFR-94): asked first. */
+  updates: UpdateMode;
 }
 
 const KEY = 'strata.prefs';
@@ -72,6 +83,7 @@ export function loadPrefs(fallback: Locale): Prefs {
       ring: RING_MODES.includes(v?.ring as RingMode) ? (v?.ring as RingMode) : 'always',
       card: CARD_MODES.includes(v?.card as CardMode) ? (v?.card as CardMode) : 'hover',
       hints: HINT_MODES.includes(v?.hints as HintMode) ? (v?.hints as HintMode) : 'show',
+      updates: UPDATE_MODES.includes(v?.updates as UpdateMode) ? (v?.updates as UpdateMode) : 'ask',
     };
   } catch {
     return {
@@ -81,6 +93,7 @@ export function loadPrefs(fallback: Locale): Prefs {
       ring: 'always',
       card: 'hover',
       hints: 'show',
+      updates: 'ask',
     };
   }
 }

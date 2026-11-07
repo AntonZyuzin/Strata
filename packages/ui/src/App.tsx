@@ -127,7 +127,13 @@ export function App() {
       );
     }
     return (
-      <Shell prefs={prefs} onPrefs={setPrefs} home={home} onAbout={() => setScreen('about')} />
+      <Shell
+        prefs={prefs}
+        onPrefs={setPrefs}
+        home={home}
+        onAbout={() => setScreen('about')}
+        updates={info?.updates === true}
+      />
     );
   }
 

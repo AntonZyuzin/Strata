@@ -5508,6 +5508,44 @@ test.describe('a workspace on the core', () => {
     await expect(page.getByRole('combobox', { name: 'Обновления' })).toHaveCount(0);
   });
 
+  test("a background's grain and fog are its own; a new one fades in over the old (07 §7.2, §7.4)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    // The full Scene: the background is drawn.
+    await page.goto('/');
+    await createWorkspace(page, 'Переходы');
+    type Layer = { state(): { grain: number; fog: number; fading: boolean } };
+    const state = () =>
+      page.evaluate(() =>
+        (window.__strataWs?.view as unknown as { background: Layer }).background.state(),
+      );
+    // «Туман» with the pipeline's numbers: grain 0.67, no fog (07 §7.1).
+    await expect.poll(state).toEqual({ grain: 0.67, fog: 0, fading: false });
+    // «Сумерки» from the menu fades in over «Туман» (07 §7.4), then stays.
+    const c = await box(page, '.proto-canvas');
+    await page.mouse.click(c.x + 120, c.y + c.height - 120, { button: 'right' });
+    await page.locator('.context-menu').getByText('Фон пространства', { exact: true }).click();
+    const watching = page.evaluate(
+      () =>
+        new Promise<boolean>((resolve) => {
+          const bg = (window.__strataWs?.view as unknown as { background: Layer }).background;
+          let saw = false;
+          const t0 = performance.now();
+          const tick = () => {
+            if (bg.state().fading) saw = true;
+            if (performance.now() - t0 > 3000) resolve(saw);
+            else requestAnimationFrame(tick);
+          };
+          tick();
+        }),
+    );
+    await page.locator('.bg-palette').getByRole('option', { name: 'Сумерки' }).click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-background', 'preset:dusk');
+    expect(await watching).toBe(true);
+    await expect.poll(state).toEqual({ grain: 0.67, fog: 0, fading: false });
+  });
+
   test("a background: the workspace's on the root, a network's own, one's own picture; one step each (07 §7.4)", async ({
     page,
   }) => {

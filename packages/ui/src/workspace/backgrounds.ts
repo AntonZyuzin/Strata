@@ -1,6 +1,7 @@
 import type { Background } from '@strata/backend';
 import {
   BACKDROP_SIDE,
+  type BackgroundLook,
   fitSize,
   generatePreset,
   type Pixels,
@@ -14,6 +15,11 @@ const PRESET_H = Math.round((BACKDROP_SIDE / 2) * 0.625);
 
 /** Derivatives made this session, by source and parameters: rebuilt, not stored (05 §12). */
 const made = new Map<string, Promise<Pixels>>();
+
+/** What a background lays over its picture (07 §7.2): its grain and fog; none — the defaults (07 §7.1). */
+export function backgroundLook(b: Background | null): BackgroundLook {
+  return { grain: b?.grain ?? 0.67, fog: b?.fog ?? 0 };
+}
 
 /** The readable mode's ceiling of one's own picture's 95th percentile of luminance (07 §11.4). */
 const READABLE_MAX_L = 0.05;

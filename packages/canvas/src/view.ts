@@ -4,7 +4,7 @@ import { Application, CanvasSource, Container, Graphics, Sprite, Texture } from 
 // The CSP has no 'unsafe-eval' (11 §8.7), so Pixi needs its eval-free uniform sync.
 import 'pixi.js/unsafe-eval';
 import type { Pixels } from './backdrop';
-import { BackgroundLayer } from './background';
+import { BackgroundLayer, type BackgroundLook } from './background';
 import { between, Camera, FLIGHT_MS, type View } from './camera';
 import { controls, pointAt } from './curve';
 import { Decor, type DecorNode, type Interaction, type RimTarget } from './decor';
@@ -323,9 +323,14 @@ export class CanvasView {
     this.invalidate();
   }
 
-  /** Shows a processed background picture (07 §7) and redraws; returns its p95 luminance. */
-  setBackground(px: Pixels): number {
-    const p95 = this.background.setPicture(px);
+  /**
+   * Shows a processed background picture (07 §7) with its grain and fog
+   * (`look`; the last one's by default), fading in over the old one, and
+   * redraws; returns its p95 luminance.
+   */
+  setBackground(px: Pixels, look?: BackgroundLook): number {
+    this.background.reducedMotion = this.motionReduced;
+    const p95 = this.background.setPicture(px, look);
     this.invalidate();
     return p95;
   }
@@ -627,6 +632,7 @@ export class CanvasView {
       for (const v of this.views.values()) this.applyLevel(v);
     }
     this.background.follow(cam, this.width, this.height);
+    if (this.background.step(now)) moving = true;
     this.wires.setZoom(cam.zoom);
     this.wires.setTime(now / 1000);
     const swaying = this.writeWires(now);

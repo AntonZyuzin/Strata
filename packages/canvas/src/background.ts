@@ -6,11 +6,14 @@ import type { Camera } from './camera';
 /**
  * The background of the Scene (07 §7.2): one «cover» sprite of a processed
  * picture with a parallax of 3 % of the camera's movement, and a static grain
- * tile. The two or three fog spots move with the same parallax as the picture,
- * so they are baked into it: two full-screen layers instead of five, which
- * matters for fill rate on weak GPUs and software WebGL. Nothing is blurred per
- * frame and nothing moves by itself; the layer redraws only with the camera,
- * so idle costs nothing (07 §10.2).
+ * tile, its opacity the background's `grain` × 6 %. The two or three fog
+ * spots move with the same parallax as the picture, so they are baked into
+ * it, their alpha the background's `fog` (0 — none): two full-screen layers
+ * instead of five, which matters for fill rate on weak GPUs and software
+ * WebGL. Nothing is blurred per frame and nothing moves by itself; the layer
+ * redraws only with the camera, so idle costs nothing (07 §10.2) — but for
+ * the crossfade of 300 ms when the background changes (07 §7.4), instant
+ * with «less motion».
  */
 
 /** Extra size of the cover on each side, so the parallax never shows an edge. */
@@ -60,6 +63,17 @@ function bake(px: Pixels, fogAmount: number): { texture: Texture; p95: number } 
   return { texture, p95 };
 }
 
+/** What a background lays over its picture (07 §7.1): `Background.grain`, `Background.fog`. */
+export interface BackgroundLook {
+  /** 0..1: the grain's opacity is grain × 6 %. */
+  grain: number;
+  /** 0..1: 0 — no fog, else the spots' strength. */
+  fog: number;
+}
+
+/** The crossfade between two backgrounds, ms (07 §7.4, §2.8 `bgFade`). */
+const FADE_MS = fog.dur.bgFade;
+
 /** Black and white specks of random alpha: neutral on average, so the grain does not lift the fog. */
 function grainTexture(): Texture {
   const canvas = document.createElement('canvas');
@@ -87,41 +101,86 @@ function grainTexture(): Texture {
 export class BackgroundLayer {
   readonly container = new Container();
   private readonly cover = new Sprite();
+  /** The picture going away under the new one while it fades in (07 §7.4). */
+  private readonly outgoing = new Sprite();
   private readonly grain: TilingSprite;
   private readonly grainTex = grainTexture();
   private picture: Texture | null = null;
+  private leaving: Texture | null = null;
+  /** When the crossfade began; −1 — at its first frame; null — none. */
+  private fadeStart: number | null = null;
   /** 95th percentile of the shown picture's luminance, fog included (07 §7.1). */
   p95 = 0;
   reducedMotion = false;
-
-  /**
-   * @param grain 0..1, grain opacity is grain × 6 % (07 §7.2)
-   * @param fogAmount 0..1, 0 turns the fog off
-   */
   /** The readable mode (07 §11.4): no grain, no fog. */
   private readable = false;
+  private look: BackgroundLook;
 
-  constructor(
-    private readonly grainAmount = fog.scene.grainOpacity / 0.06,
-    private readonly fogAmount = 0.5,
-  ) {
-    // Specks have 50 % alpha on average, so the tile's alpha is doubled.
-    this.grain = new TilingSprite({ texture: this.grainTex, alpha: 2 * grainAmount * 0.06 });
-    this.grain.visible = grainAmount > 0;
+  /** @param look the grain and the fog until a background gives its own (07 §7.2). */
+  constructor(look: BackgroundLook = { grain: fog.scene.grainOpacity / 0.06, fog: 0.5 }) {
+    this.look = look;
+    this.grain = new TilingSprite({ texture: this.grainTex });
     this.cover.visible = false;
-    this.container.addChild(this.cover, this.grain);
+    this.outgoing.visible = false;
+    this.container.addChild(this.outgoing, this.cover, this.grain);
+    this.applyGrain();
   }
 
-  /** Shows a processed picture (07 §7.1) with the fog baked in; returns its p95 luminance. */
-  setPicture(px: Pixels): number {
+  /**
+   * Shows a processed picture (07 §7.1) with the fog baked in, `look` its
+   * grain and fog (the last one's by default); the one shown before fades
+   * out under it. Returns its p95 luminance.
+   */
+  setPicture(px: Pixels, look: BackgroundLook = this.look): number {
+    this.look = look;
     const old = this.picture;
-    const { texture, p95 } = bake(px, this.readable ? 0 : this.fogAmount);
+    const { texture, p95 } = bake(px, this.readable ? 0 : look.fog);
     this.picture = texture;
     this.cover.texture = texture;
     this.cover.visible = true;
     this.p95 = p95;
-    old?.destroy(true);
+    this.applyGrain();
+    if (old && !this.reducedMotion) {
+      this.leaving?.destroy(true);
+      this.leaving = old;
+      this.outgoing.texture = old;
+      this.outgoing.visible = true;
+      this.cover.alpha = 0;
+      this.fadeStart = -1;
+    } else {
+      old?.destroy(true);
+      this.cover.alpha = 1;
+    }
     return p95;
+  }
+
+  /** One frame of the crossfade (07 §7.4); true while it still runs. */
+  step(now: number): boolean {
+    if (this.fadeStart === null) return false;
+    if (this.fadeStart < 0) this.fadeStart = now;
+    const k = Math.min(1, (now - this.fadeStart) / FADE_MS);
+    this.cover.alpha = k;
+    if (k < 1) return true;
+    this.fadeStart = null;
+    this.outgoing.visible = false;
+    this.leaving?.destroy(true);
+    this.leaving = null;
+    return false;
+  }
+
+  /** The grain and the fog shown, whether a crossfade runs: for tests. */
+  state(): { grain: number; fog: number; fading: boolean } {
+    return {
+      grain: this.grain.visible ? this.look.grain : 0,
+      fog: this.readable ? 0 : this.look.fog,
+      fading: this.fadeStart !== null,
+    };
+  }
+
+  private applyGrain(): void {
+    // Specks have 50 % alpha on average, so the tile's alpha is doubled.
+    this.grain.alpha = 2 * this.look.grain * 0.06;
+    this.grain.visible = !this.readable && this.look.grain > 0;
   }
 
   /**
@@ -130,7 +189,7 @@ export class BackgroundLayer {
    */
   setReadable(on: boolean): void {
     this.readable = on;
-    this.grain.visible = !on && this.grainAmount > 0;
+    this.applyGrain();
   }
 
   /** Lays the layer out for a screen of w × h and the camera's position (07 §7.2 parallax). */
@@ -140,12 +199,14 @@ export class BackgroundLayer {
     const my = h * MARGIN;
     const px = this.reducedMotion ? 0 : clamp(-cam.x * cam.zoom * k, -mx, mx);
     const py = this.reducedMotion ? 0 : clamp(-cam.y * cam.zoom * k, -my, my);
-    if (this.picture) {
-      const tw = this.picture.width;
-      const th = this.picture.height;
-      const s = Math.max((w + 2 * mx) / tw, (h + 2 * my) / th);
-      this.cover.scale.set(s);
-      this.cover.position.set((w - tw * s) / 2 + px, (h - th * s) / 2 + py);
+    for (const [sprite, tex] of [
+      [this.cover, this.picture],
+      [this.outgoing, this.leaving],
+    ] as const) {
+      if (!tex) continue;
+      const s = Math.max((w + 2 * mx) / tex.width, (h + 2 * my) / tex.height);
+      sprite.scale.set(s);
+      sprite.position.set((w - tex.width * s) / 2 + px, (h - tex.height * s) / 2 + py);
     }
     this.grain.width = w;
     this.grain.height = h;
@@ -153,6 +214,7 @@ export class BackgroundLayer {
 
   destroy(): void {
     this.picture?.destroy(true);
+    this.leaving?.destroy(true);
     this.grainTex.destroy(true);
     this.container.destroy({ children: true });
   }

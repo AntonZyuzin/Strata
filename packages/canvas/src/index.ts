@@ -9,6 +9,7 @@ export {
   processBackdrop,
   sceneContrast,
 } from './backdrop';
+export type { BackgroundLook } from './background';
 export { Camera } from './camera';
 export * from './curve';
 export type { Interaction, RimTarget } from './decor';

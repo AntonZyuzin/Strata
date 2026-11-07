@@ -97,7 +97,7 @@ import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { areasOf, nextArea } from './areas';
 import { BackgroundPalette, pictureBackground } from './BackgroundPalette';
-import { backgroundKey, backgroundPixels, plainBackdrop } from './backgrounds';
+import { backgroundKey, backgroundLook, backgroundPixels, plainBackdrop } from './backgrounds';
 import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
 import {
@@ -1685,7 +1685,7 @@ export function WorkspaceScreen(props: {
           v.background.container.visible = false;
         } else {
           // The readable mode's ground is plain (07 §11.4).
-          v.setBackground(readableRef.current ? plainBackdrop() : fog());
+          v.setBackground(readableRef.current ? plainBackdrop() : fog(), backgroundLook(null));
         }
         // Test hook for e2e: the canvas, the graph and when the core has it all.
         (window as unknown as { __strataWs: unknown }).__strataWs = {
@@ -3580,7 +3580,7 @@ export function WorkspaceScreen(props: {
     let live = true;
     backgroundPixels(shownBackground, (sha) => core.asset(sha), readable).then(
       (px) => {
-        if (live) v.setBackground(px);
+        if (live) v.setBackground(px, backgroundLook(shownBackground));
       },
       (e: unknown) => console.error('background', e),
     );

@@ -30,6 +30,7 @@ import {
   ringSlots,
   slotAt,
 } from './flagring';
+import { takenByFocus } from './focus';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { radiusOf } from './looks';
 import { Minimap } from './minimap';
@@ -2003,6 +2004,9 @@ export class Editor {
     if (e.isComposing || this.overlayOpen) return;
     const t = e.target as HTMLElement | null;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+    // A button's `Enter`, a list's arrows, `Tab` on through the Chrome: the
+    // focused control's own, not the canvas's too (06 §1.1).
+    if (takenByFocus(t, e.key, this.view.canvas)) return;
     const mod = e.metaKey || e.ctrlKey;
     if (!e.repeat) this.held.add(e.code);
     // `Ctrl` held hides the flag ring over a neighbour (06 §8).

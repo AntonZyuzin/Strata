@@ -1608,6 +1608,13 @@ test.describe('a workspace on the core', () => {
     );
     await page.keyboard.press('Enter');
     expect(await area()).toBe('path');
+    // `Tab` on the path's button goes on through the Chrome: the Tab menu is
+    // the canvas's key, not the button's (06 §1.1).
+    const focused = () => page.evaluate(() => document.activeElement?.outerHTML ?? '');
+    const before = await focused();
+    await page.keyboard.press('Tab');
+    await expect(page.locator('.tab-menu')).toHaveCount(0);
+    expect(await focused()).not.toBe(before);
   });
 
   test('a content window docks right, goes over the canvas and back, stays through a dive (06 §2.2, §13.1)', async ({
@@ -1652,6 +1659,20 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(() => page.evaluate(() => Number(localStorage.getItem('strata.dock'))))
       .toBe(Math.round(wider.width));
+    // The edge's arrows, 64 px a step with Shift, are the edge's: the canvas
+    // does not pan with them (06 §1.1).
+    const camera = () =>
+      page.evaluate(() => {
+        const c = window.__strataWs?.view.camera as unknown as { x: number; y: number };
+        return { x: c.x, y: c.y };
+      });
+    const seen = await camera();
+    await page.locator('.note-window .dock-edge').focus();
+    await page.keyboard.press('Shift+ArrowLeft');
+    near((await box(page, '.note-window')).width, wider.width + 64);
+    expect(await camera()).toEqual(seen);
+    await page.keyboard.press('Shift+ArrowRight');
+    near((await box(page, '.note-window')).width, wider.width);
     // □: over the whole canvas, from «Ноды» to the edge; Esc — back docked.
     await win.getByRole('button', { name: 'На весь экран · Shift+Enter' }).click();
     await expect(win).toHaveAttribute('data-mode', 'full');
@@ -3376,9 +3397,12 @@ test.describe('a workspace on the core', () => {
     expect(shown.x + shown.width < bubble.x || shown.x > bubble.x, 'clear of the bubble').toBe(
       true,
     );
-    // Esc closes it; Enter on the row goes to «Эскиз» in «Арт».
+    // Esc closes it, the node stays chosen; Enter on the row goes to «Эскиз»
+    // in «Арт». The list's keys are its own: the canvas neither clears the
+    // choice nor opens «Идея» (06 §1.1).
     await page.keyboard.press('Escape');
     await expect(list).toHaveCount(0);
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Идея');
     await openExternal(page, idea);
     await page.keyboard.press('Enter');
     await expect(list).toHaveCount(0);
@@ -3388,6 +3412,7 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(() => page.evaluate(() => window.__strataWs?.editor()?.selected))
       .toEqual([sketch]);
+    await expect(page.locator('.note-window')).toHaveCount(0);
     // Inside «Арт», «Эскиз» has its «↗1» too: «Идея» is not placed here.
     await expect
       .poll(() =>

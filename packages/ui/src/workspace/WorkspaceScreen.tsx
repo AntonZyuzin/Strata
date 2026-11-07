@@ -1649,6 +1649,11 @@ export function WorkspaceScreen(props: {
     if (locale) viewRef.current?.invalidate();
   }, [locale]);
 
+  // A list or a dialog over the screen behind its backdrop — «↗N», «Удалить
+  // везде?», «Импорт прерван», the import's report — holds the keys while open.
+  const modal =
+    external !== null || removal !== null || interrupted !== null || importReport !== null;
+
   useEffect(() => {
     // «Настройки» in front cover the canvas: its keys are off too (✅ Q-06-23).
     editor.current?.setOverlayOpen(
@@ -1659,6 +1664,7 @@ export function WorkspaceScreen(props: {
         name !== null ||
         finder !== null ||
         palette ||
+        modal ||
         view3d !== '2d' ||
         boardFocus ||
         viewerFocus ||
@@ -1672,6 +1678,7 @@ export function WorkspaceScreen(props: {
     name,
     finder,
     palette,
+    modal,
     view3d,
     boardFocus,
     viewerFocus,
@@ -1697,8 +1704,8 @@ export function WorkspaceScreen(props: {
   useLayoutEffect(() => {
     // Mid-bridge (08 §7) neither view takes keys.
     if (view3d === 'to3d' || view3d === 'to2d') return;
-    // A search window and the palette take their own keys while open.
-    if (finder || palette || covered || help) return;
+    // A search window, the palette and a modal list take their own keys while open.
+    if (finder || palette || covered || help || modal) return;
     const key = (e: KeyboardEvent) => {
       const mod = e.metaKey || e.ctrlKey;
       // `Ctrl+P` — the palette, on the canvas and on the star map (09 §3.5).
@@ -1761,7 +1768,7 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, finder, palette, covered, help, menu, name, mapCtx, removal]);
+  }, [view3d, finder, palette, covered, help, modal, menu, name, mapCtx, removal]);
 
   // A window opened over the star map belongs to it (08 §6.3): back in 2D it
   // stays only for a node of the canvas's network.
@@ -1849,7 +1856,7 @@ export function WorkspaceScreen(props: {
   // The history's and the marks' keys (06 §10.3), on the canvas and the star
   // map; a layout effect for the same reason as the view's keys above.
   useLayoutEffect(() => {
-    if (view3d === 'to3d' || view3d === 'to2d' || finder || palette || covered) return;
+    if (view3d === 'to3d' || view3d === 'to2d' || finder || palette || covered || modal) return;
     // A digit held: its timer, or -1 once the mark is set.
     const held = new Map<string, number>();
     const down = (e: KeyboardEvent) => {
@@ -1900,7 +1907,7 @@ export function WorkspaceScreen(props: {
       window.removeEventListener('keyup', up);
       for (const timer of held.values()) if (timer >= 0) window.clearTimeout(timer);
     };
-  }, [view3d, finder, palette, covered, menu, name, walk, setMark, goMark]);
+  }, [view3d, finder, palette, covered, modal, menu, name, walk, setMark, goMark]);
 
   const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
   /** The canvas one sees, page px: the properties panel covers its right (review 2026-10-24). */

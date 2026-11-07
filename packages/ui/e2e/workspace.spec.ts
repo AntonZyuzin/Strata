@@ -472,6 +472,21 @@ const named = (page: Page, name: string) =>
 const cutNow = (page: Page) =>
   page.evaluate(() => [...((window.__strataWs as WsHook).view.cut ?? [])]);
 
+/**
+ * Empties the system clipboard. It is the browser's, not the test's: what an
+ * earlier test copied (a board's elements, JSON) would paste on the canvas
+ * as a note (13 §3.9). WebKit grants no clipboard permission; there the
+ * clipboard stays as it is.
+ */
+async function emptyClipboard(page: Page) {
+  try {
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+  } catch {
+    return;
+  }
+  await page.evaluate(() => navigator.clipboard.writeText(''));
+}
+
 /** Into a network on the canvas by its bubble: chosen, then `Enter`. */
 async function enter(page: Page, name: string) {
   const depth = Number(await page.locator('.workspace').getAttribute('data-depth'));
@@ -3984,6 +3999,7 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Escape');
     await expect.poll(() => cutNow(page)).toEqual([]);
     // Nothing waits for a paste now: `Ctrl+V` makes nothing of the nodes.
+    await emptyClipboard(page);
     await page.keyboard.press('Control+v');
     await settled(page);
     expect((await graphNow(page)).names).toEqual(['Архив', 'Эскиз']);

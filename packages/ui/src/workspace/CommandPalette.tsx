@@ -213,7 +213,12 @@ export function CommandPalette(props: {
               e.preventDefault();
             }}
           />
-          <label className="check palette-all" title={t(locale, 'cmd.allHint')}>
+          <label
+            className="check palette-all"
+            title={t(locale, 'cmd.allHint')}
+            // The query keeps its caret through the press.
+            onMouseDown={(e) => e.preventDefault()}
+          >
             <input
               type="checkbox"
               checked={all}
@@ -222,8 +227,10 @@ export function CommandPalette(props: {
                 setAll(on);
                 saveAll(on);
                 setIndex(0);
-                // The palette is typed into: the keys go back to the query.
-                field.current?.focus();
+                // The palette is typed into: the keys go back to the query once
+                // the click is done — an engine may focus the label's box after
+                // this handler (WebKit does).
+                window.setTimeout(() => field.current?.focus(), 0);
               }}
             />
             <span>{t(locale, 'cmd.all')}</span>

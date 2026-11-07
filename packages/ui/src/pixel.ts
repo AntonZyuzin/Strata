@@ -28,11 +28,14 @@ export function loadPixelPrefs(): PixelPrefs {
 }
 
 let stop: (() => void) | null = null;
+/** The readable mode in force (07 §11.4): its type follows the scale too. */
+let readableNow = false;
 
-/** Applies the prefs to the document and remembers them. */
-export function setPixelPrefs(prefs: PixelPrefs): void {
+/** Applies the prefs to the document and remembers them; the readable mode as it was, unless given. */
+export function setPixelPrefs(prefs: PixelPrefs, readable = readableNow): void {
+  readableNow = readable;
   stop?.();
-  stop = applyPixelUnit(document.documentElement, prefs.scale);
+  stop = applyPixelUnit(document.documentElement, prefs.scale, readable);
   try {
     localStorage.setItem(KEY, JSON.stringify(prefs));
   } catch {

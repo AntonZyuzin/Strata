@@ -91,12 +91,13 @@ import { type MenuGhost, type MenuItem, type MenuNode, remember } from '../proto
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
 import { menuOpening, TabMenu } from '../proto/TabMenu';
+import { useReadable } from '../readable';
 import { netItems, searchClient, visited, visits } from '../search';
 import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { areasOf, nextArea } from './areas';
 import { BackgroundPalette, pictureBackground } from './BackgroundPalette';
-import { backgroundKey, backgroundPixels } from './backgrounds';
+import { backgroundKey, backgroundPixels, plainBackdrop } from './backgrounds';
 import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
 import {
@@ -354,6 +355,10 @@ export function WorkspaceScreen(props: {
   const ringModeRef = useRef(props.prefs.ring);
   /** The info card on hover (06 §4.4): «Настройки» set it, every new canvas takes it. */
   const hoverCardRef = useRef(props.prefs.card === 'hover');
+  /** The readable mode in force (07 §11.4): every new canvas takes it, the shown one follows. */
+  const readable = useReadable(props.prefs.readable);
+  const readableRef = useRef(readable);
+  readableRef.current = readable;
   /**
    * Shows a network (the current one when none is given), after what is
    * queued; `way` is the entry path to it (05 §9.3), ids from the root —
@@ -1671,6 +1676,7 @@ export function WorkspaceScreen(props: {
                 n: n.places,
               });
         v.setKindIcons(icons);
+        v.setReadable(readableRef.current);
         // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
         v.wireEnds = 'sockets';
         v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -1678,7 +1684,8 @@ export function WorkspaceScreen(props: {
         if (new URLSearchParams(window.location.search).has('plain')) {
           v.background.container.visible = false;
         } else {
-          v.setBackground(fog());
+          // The readable mode's ground is plain (07 §11.4).
+          v.setBackground(readableRef.current ? plainBackdrop() : fog());
         }
         // Test hook for e2e: the canvas, the graph and when the core has it all.
         (window as unknown as { __strataWs: unknown }).__strataWs = {
@@ -1790,6 +1797,12 @@ export function WorkspaceScreen(props: {
     hoverCardRef.current = props.prefs.card === 'hover';
     if (editor.current) editor.current.hoverCard = hoverCardRef.current;
   }, [props.prefs.card]);
+
+  // The readable mode (07 §11.4): the labels, the wires and the grain; the
+  // ground follows with the background below.
+  useEffect(() => {
+    viewRef.current?.setReadable(readable);
+  }, [readable]);
 
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
   useEffect(() => searchClient().set('space', tree), [tree]);
@@ -3549,14 +3562,14 @@ export function WorkspaceScreen(props: {
   // The network's background on the canvas (07 §7.4): its own, else the
   // workspace's, else «Туман» — made once per source and parameters.
   const shownBackground = net ? (net.background ?? net.workspace_background ?? null) : null;
-  const shownKey = backgroundKey(shownBackground);
+  const shownKey = backgroundKey(shownBackground, readable);
   // biome-ignore lint/correctness/useExhaustiveDependencies: by its key: a new object of the same background draws nothing new
   useEffect(() => {
     const v = viewRef.current;
     // `&plain`: no background (e2e on software WebGL).
     if (!v?.background.container.visible) return;
     let live = true;
-    backgroundPixels(shownBackground, (sha) => core.asset(sha)).then(
+    backgroundPixels(shownBackground, (sha) => core.asset(sha), readable).then(
       (px) => {
         if (live) v.setBackground(px);
       },

@@ -1,16 +1,17 @@
 import type { HomeBackend } from '@strata/backend';
 import { type Profile, SCENARIO_IDS, type ScenarioId } from '@strata/bench/report';
 import { detectLocale, type Locale, t } from '@strata/i18n';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { BenchWindow } from './BenchWindow';
 import { type BuildInfo, closeAppWindow, loadBuildInfo, openHome } from './backend';
 import { CreditsWindow } from './CreditsWindow';
 import { EngravingWindow } from './EngravingWindow';
 import { FontsWindow } from './FontsWindow';
 import { LocaleSwitch } from './LocaleSwitch';
-import { loadPixelPrefs, type PixelPrefs } from './pixel';
+import { loadPixelPrefs, type PixelPrefs, setPixelPrefs } from './pixel';
 import { loadPrefs, type Prefs, savePrefs } from './prefs';
 import { Prototype } from './proto/Prototype';
+import { useReadable } from './readable';
 import { Shell } from './Shell';
 
 /** `?bench` opens the benchmark at start; `?bench=quick` is the e2e profile; `?only=` picks scenarios. */
@@ -77,6 +78,11 @@ export function App() {
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+
+  // The readable mode (07 §11.4): its fonts are in before the screens' own
+  // effects read them — the canvas sizes its labels by the Chrome's type.
+  const readable = useReadable(prefs.readable);
+  useLayoutEffect(() => setPixelPrefs(loadPixelPrefs(), readable), [readable]);
 
   useEffect(() => {
     loadBuildInfo().then(setInfo);

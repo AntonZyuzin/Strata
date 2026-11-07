@@ -98,13 +98,16 @@ export class BackgroundLayer {
    * @param grain 0..1, grain opacity is grain × 6 % (07 §7.2)
    * @param fogAmount 0..1, 0 turns the fog off
    */
+  /** The readable mode (07 §11.4): no grain, no fog. */
+  private readable = false;
+
   constructor(
-    grain = fog.scene.grainOpacity / 0.06,
+    private readonly grainAmount = fog.scene.grainOpacity / 0.06,
     private readonly fogAmount = 0.5,
   ) {
     // Specks have 50 % alpha on average, so the tile's alpha is doubled.
-    this.grain = new TilingSprite({ texture: this.grainTex, alpha: 2 * grain * 0.06 });
-    this.grain.visible = grain > 0;
+    this.grain = new TilingSprite({ texture: this.grainTex, alpha: 2 * grainAmount * 0.06 });
+    this.grain.visible = grainAmount > 0;
     this.cover.visible = false;
     this.container.addChild(this.cover, this.grain);
   }
@@ -112,13 +115,22 @@ export class BackgroundLayer {
   /** Shows a processed picture (07 §7.1) with the fog baked in; returns its p95 luminance. */
   setPicture(px: Pixels): number {
     const old = this.picture;
-    const { texture, p95 } = bake(px, this.fogAmount);
+    const { texture, p95 } = bake(px, this.readable ? 0 : this.fogAmount);
     this.picture = texture;
     this.cover.texture = texture;
     this.cover.visible = true;
     this.p95 = p95;
     old?.destroy(true);
     return p95;
+  }
+
+  /**
+   * The readable mode (07 §11.4): the grain goes, and the next picture comes
+   * without fog — the Chrome gives a plain one or one's own darker.
+   */
+  setReadable(on: boolean): void {
+    this.readable = on;
+    this.grain.visible = !on && this.grainAmount > 0;
   }
 
   /** Lays the layer out for a screen of w × h and the camera's position (07 §7.2 parallax). */

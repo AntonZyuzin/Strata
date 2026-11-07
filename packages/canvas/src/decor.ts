@@ -170,10 +170,13 @@ export class Decor {
    * @param u pixel unit, device px (07 §2.3)
    * @param uiPx size of the `ui` font in device px (07 §2.4)
    */
+  /** The readable mode (07 §11.4): labels in Golos Text, sampled smooth. */
+  private readable = false;
+
   constructor(
     private readonly u: number,
     private readonly dpr: number,
-    private readonly uiPx: number,
+    private uiPx: number,
   ) {
     this.glyphs = new GlyphTextures(u, dpr);
     this.rings = new RingLayer(dpr);
@@ -186,6 +189,22 @@ export class Decor {
       this.plates,
       this.texts,
     );
+  }
+
+  /**
+   * The labels' type (07 §3.4, §11.4): the `ui` font's device size, pixel
+   * or readable. The words drawn so far go; the next frame writes them anew.
+   */
+  setType(uiPx: number, readable: boolean): void {
+    if (uiPx === this.uiPx && readable === this.readable) return;
+    this.uiPx = uiPx;
+    this.readable = readable;
+    for (const t of [...this.textPool, ...this.labels.values(), ...this.dues.values()]) {
+      t.destroy();
+    }
+    this.textPool.length = 0;
+    this.labels.clear();
+    this.dues.clear();
   }
 
   destroy(): void {
@@ -665,7 +684,7 @@ export class Decor {
     const px = large ? 2 * this.uiPx : this.uiPx;
     return new BitmapText({
       text: '',
-      style: { fontFamily: labelFont(px, this.dpr), fontSize: px / this.dpr },
+      style: { fontFamily: labelFont(px, this.dpr, this.readable), fontSize: px / this.dpr },
     });
   }
 
@@ -694,12 +713,13 @@ export class Decor {
       this.texts.addChild(t);
     }
     const px = large ? 2 * this.uiPx : this.uiPx;
-    const family = labelFont(px, this.dpr);
+    const family = labelFont(px, this.dpr, this.readable);
     if (t.style.fontFamily !== family) {
       t.style.fontFamily = family;
       t.style.fontSize = px / this.dpr;
     }
-    // ≤ 160 px (07 §4.1): Departure Mono advances 0.636 em.
+    // ≤ 160 px (07 §4.1): Departure Mono advances 0.636 em; Golos Text's
+    // average letter is narrower, so ordinary names keep within it too.
     const max = Math.max(4, Math.floor(LABEL_MAX / ((px / this.dpr) * 0.636)));
     const text = name.length > max ? `${name.slice(0, max - 1)}…` : name;
     if (t.text !== text) t.text = text;

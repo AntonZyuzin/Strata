@@ -37,6 +37,13 @@ export const UPDATE_ANSWERS: readonly Exclude<UpdateMode, 'ask'>[] = ['check', '
 const UPDATE_MODES: readonly UpdateMode[] = ['ask', 'check', 'never'];
 
 /**
+ * The readable mode (07 §11.4): «Как в системе» — on while the system asks
+ * for more contrast or forces its colours — or on, or off by hand.
+ */
+export type ReadableMode = 'system' | 'on' | 'off';
+export const READABLE_MODES: readonly ReadableMode[] = ['system', 'on', 'off'];
+
+/**
  * What the device keeps: the language; a date's form and the clock, or
  * `auto` — as the language reads them (owner, 2026-10-24).
  */
@@ -52,6 +59,8 @@ export interface Prefs {
   hints: HintMode;
   /** Updates (NFR-94): asked first. */
   updates: UpdateMode;
+  /** The readable mode (07 §11.4): as the system asks, by default. */
+  readable: ReadableMode;
 }
 
 const KEY = 'strata.prefs';
@@ -84,6 +93,9 @@ export function loadPrefs(fallback: Locale): Prefs {
       card: CARD_MODES.includes(v?.card as CardMode) ? (v?.card as CardMode) : 'hover',
       hints: HINT_MODES.includes(v?.hints as HintMode) ? (v?.hints as HintMode) : 'show',
       updates: UPDATE_MODES.includes(v?.updates as UpdateMode) ? (v?.updates as UpdateMode) : 'ask',
+      readable: READABLE_MODES.includes(v?.readable as ReadableMode)
+        ? (v?.readable as ReadableMode)
+        : 'system',
     };
   } catch {
     return {
@@ -94,6 +106,7 @@ export function loadPrefs(fallback: Locale): Prefs {
       card: 'hover',
       hints: 'show',
       updates: 'ask',
+      readable: 'system',
     };
   }
 }

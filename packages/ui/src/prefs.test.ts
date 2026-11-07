@@ -24,7 +24,7 @@ describe('dates and times of the settings (✅ Q-06-23, 05 §6.1)', () => {
     });
   });
 
-  it('show the flag ring always, the info card on hover too and the gesture hints until told otherwise (06 §8, §4.4, §2.1)', () => {
+  it('show the flag ring always, the info card on hover too and the gesture hints until told otherwise, the readable mode as the system asks (06 §8, §4.4, §2.1; 07 §11.4)', () => {
     // No storage here: the defaults.
     expect(loadPrefs('ru')).toEqual({
       locale: 'ru',
@@ -34,6 +34,7 @@ describe('dates and times of the settings (✅ Q-06-23, 05 §6.1)', () => {
       card: 'hover',
       hints: 'show',
       updates: 'ask',
+      readable: 'system',
     });
   });
 

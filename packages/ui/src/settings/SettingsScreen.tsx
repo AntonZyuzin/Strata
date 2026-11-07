@@ -8,6 +8,7 @@ import {
   DATE_FORMATS,
   HINT_MODES,
   type Prefs,
+  READABLE_MODES,
   RING_MODES,
   UPDATE_ANSWERS,
 } from '../prefs';
@@ -217,6 +218,24 @@ export function SettingsScreen(props: {
                 {HINT_MODES.map((m) => (
                   <option key={m} value={m}>
                     {t(locale, `settings.hints.${m}` as MessageKey)}
+                  </option>
+                ))}
+              </select>
+            </dd>
+            <dt className="ins-label">{t(locale, 'settings.readable')}</dt>
+            <dd className="ins-value">
+              <select
+                className="field"
+                aria-label={t(locale, 'settings.readable')}
+                title={t(locale, 'settings.readableHint')}
+                value={prefs.readable}
+                onChange={(e) =>
+                  onPrefs({ ...prefs, readable: e.currentTarget.value as Prefs['readable'] })
+                }
+              >
+                {READABLE_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(locale, `settings.readable.${m}` as MessageKey)}
                   </option>
                 ))}
               </select>

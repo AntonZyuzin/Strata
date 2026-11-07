@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cssVariables,
   fog,
+  fontVariables,
   GLYPHS,
   glyphSvg,
   pixelMetrics,
@@ -78,6 +79,39 @@ describe('design tokens', () => {
     expect(vars['--u']).toBe('0.8px');
     expect(vars['--st-font-ui-size']).toBe('17.6px');
     expect(vars['--st-font-display-s-size']).toBe('19.2px');
+  });
+});
+
+describe('the readable mode (07 §11.4)', () => {
+  it('trades the pixel fonts for JetBrains Mono and Golos Text', () => {
+    const vars = fontVariables(pixelMetrics(1), 1, true);
+    expect(vars['--st-font-ui']).toBe(fog.font.mono);
+    expect(vars['--st-font-display']).toBe(fog.font.text);
+    expect(vars['--st-font-ui-prop']).toBe(fog.font.text);
+  });
+
+  it.each([
+    [1, 1, 14],
+    [2, 1, 14],
+    [1, 1.5, 21],
+    [1.25, 2, 28],
+  ])('makes the interface type 14 px times the scale at least (DPR %s, ×%s)', (dpr, scale, px) => {
+    const m = pixelMetrics(dpr, scale);
+    const vars = fontVariables(m, scale, true);
+    for (const id of ['ui', 'ui-prop'] as const) {
+      const size = Number.parseFloat(vars[`--st-font-${id}-size`] ?? '');
+      expect(size).toBeGreaterThanOrEqual(px - 1e-9);
+      expect(Number.parseFloat(vars[`--st-font-${id}-line`] ?? '')).toBeGreaterThan(size);
+    }
+  });
+
+  it("gives the theme's families back when off, sizes untouched", () => {
+    const vars = fontVariables(pixelMetrics(1), 1, false);
+    expect(vars).toEqual({
+      '--st-font-display': fog.font.display,
+      '--st-font-ui': fog.font.ui,
+      '--st-font-ui-prop': fog.font.uiProp,
+    });
   });
 });
 

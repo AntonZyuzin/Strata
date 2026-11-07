@@ -305,6 +305,23 @@ export class CanvasView {
     return pixelUnit(dpr) / dpr;
   }
 
+  /**
+   * The readable mode (07 §11.4): labels in Golos Text at the Chrome's `ui`
+   * size — 14 px at least there — and the wires at full alpha. The
+   * background the Chrome gives already (solid, or one's own picture darker).
+   */
+  get readable(): boolean {
+    return this.readableOn;
+  }
+
+  setReadable(on: boolean): void {
+    this.readableOn = on;
+    const dpr = this.app.renderer.resolution;
+    this.decor.setType(uiFontPx(dpr), on);
+    this.background.setReadable(on);
+    this.invalidate();
+  }
+
   /** Shows a processed background picture (07 §7) and redraws; returns its p95 luminance. */
   setBackground(px: Pixels): number {
     const p95 = this.background.setPicture(px);
@@ -312,6 +329,7 @@ export class CanvasView {
     return p95;
   }
 
+  private readableOn = false;
   private readonly pictures = new Map<string, Texture>();
   /** One's own icons by their reference (07 §6.6): masks, tinted like the presets. */
   private readonly ownIcons = new Map<string, Texture>();
@@ -657,7 +675,9 @@ export class CanvasView {
       }
       this.wires.set(i, c);
       const style = this.wireStyle(from, to);
-      const shown = far && style === NORMAL_WIRE ? FAR_WIRE : style;
+      // The readable mode draws the wires at full alpha (07 §11.4).
+      const shown =
+        style === NORMAL_WIRE ? (this.readableOn ? READABLE_WIRE : far ? FAR_WIRE : style) : style;
       const lens = this.lensIds;
       this.wires.setStyle(i, lens && !(lens.has(from) && lens.has(to)) ? this.dim(shown) : shown);
     }
@@ -900,6 +920,8 @@ const FAR_WIRE: WireStyle = {
   width: fog.scene.edgeWidthFar,
   dot: false,
 };
+/** A wire in the readable mode (07 §11.4): at full alpha, near and far. */
+const READABLE_WIRE: WireStyle = { ...NORMAL_WIRE, alpha: 1 };
 
 function wireKey(from: string, to: string): string {
   return `${from}\u0000${to}`;

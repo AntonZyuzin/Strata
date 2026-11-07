@@ -135,17 +135,22 @@ const installed = new Set<string>();
 /**
  * Departure Mono as a bitmap font at an exact device size (07 §3.4): glyphs
  * are rasterised at `devicePx` and sampled nearest, so labels stay on the
- * font's pixel grid. Returns the font name; a size is installed once.
+ * font's pixel grid. In the readable mode (07 §11.4) — Golos Text, sampled
+ * smooth. Returns the font name; a size is installed once.
  */
-export function labelFont(devicePx: number, dpr: number): string {
-  const name = `StrataLabel${devicePx}`;
+export function labelFont(devicePx: number, dpr: number, readable = false): string {
+  const name = `StrataLabel${readable ? 'Readable' : ''}${devicePx}`;
   if (!installed.has(name)) {
     BitmapFont.install({
       name,
-      style: { fontFamily: fog.font.ui, fontSize: devicePx / dpr, fill: palette.paper },
+      style: {
+        fontFamily: readable ? fog.font.text : fog.font.ui,
+        fontSize: devicePx / dpr,
+        fill: palette.paper,
+      },
       chars: LABEL_CHARS,
       resolution: dpr,
-      textureStyle: { scaleMode: 'nearest' },
+      textureStyle: { scaleMode: readable ? 'linear' : 'nearest' },
     });
     installed.add(name);
   }

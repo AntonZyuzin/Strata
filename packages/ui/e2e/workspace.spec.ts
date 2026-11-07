@@ -36,7 +36,8 @@ interface Node {
 interface WsHook {
   view: {
     hasPicture(id: string): boolean;
-    iconOf(id: string): 'picture' | 'kind' | 'preset' | null;
+    iconOf(id: string): 'picture' | 'own' | 'kind' | 'preset' | null;
+    readable: boolean;
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
     markOf(id: string, mark: 'external' | 'places'): { x: number; y: number } | null;
@@ -868,6 +869,56 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['window', 'page', 'fields', 'gear'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`the readable mode keeps the windows whole and their size in RU and EN @${deviceScaleFactor}x (07 §11.4)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      // «Как в системе» by default: the system asks for more contrast.
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+        contrast: 'more',
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await expect(page.locator('html')).toHaveAttribute('data-readable', 'true');
+      await page.locator('.tabbar-settings').click();
+      await expect(page.locator('.settings')).toBeVisible();
+      expect(await overflowing(page, '.settings, .tabbar'), `${locale} «Настройки»`).toEqual([]);
+      const settings = await box(page, '.settings');
+      const fields = await box(page, '.settings section:nth-of-type(2) .ins-fields');
+      await page.locator('.tabbar-settings').click();
+      await createWorkspace(page, 'Читаемость');
+      await createNode(page, 460, 300, 'Карта');
+      await select(page, 'Карта');
+      await page.keyboard.press('KeyZ');
+      await expect(page.locator('.icon-palette .icon-cell')).toHaveCount(200);
+      await page.keyboard.type(locale === 'ru-RU' ? 'бриллиант' : 'flask');
+      await expect(page.locator('.icon-palette .icon-cell').first()).toHaveClass(/is-current/);
+      expect(await overflowing(page, '.icon-palette'), `${locale} «Иконка и размер»`).toEqual([]);
+      const palette = await box(page, '.icon-palette');
+      await page.keyboard.press('Escape');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Shift+Slash');
+      await expect(page.locator('.help-window')).toBeVisible();
+      expect(await overflowing(page, '.help-window'), `${locale} «Клавиши»`).toEqual([]);
+      const help = await box(page, '.help-window');
+      boxes.push({ settings, fields, palette, help });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['settings', 'fields', 'palette', 'help'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -3814,6 +3865,60 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Escape');
     await expect(palette).toHaveCount(0);
     expect((await iconState(page, map)).core).toBe('game-icons/lorc/owl');
+  });
+
+  test('«Режим читаемости»: as the system asks, or by hand; no pixel fonts, the canvas follows (07 §11.4)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await expect(page.locator('.tabbar')).toBeVisible();
+    const html = page.locator('html');
+    // «Как в системе» by default: off while the system asks nothing.
+    await expect(html).toHaveAttribute('data-readable', 'false');
+    const type = () =>
+      page.evaluate(() => {
+        const s = getComputedStyle(document.querySelector('.tabbar') as Element);
+        return { family: s.fontFamily, size: Number.parseFloat(s.fontSize) };
+      });
+    expect((await type()).family).toContain('Departure Mono');
+    await createWorkspace(page, 'Читаемость');
+    const readable = () => page.evaluate(() => window.__strataWs?.view.readable ?? null);
+    expect(await readable()).toBe(false);
+    // The system asks for more contrast, or forces its colours: on.
+    await page.emulateMedia({ contrast: 'more' });
+    await expect(html).toHaveAttribute('data-readable', 'true');
+    await expect.poll(readable).toBe(true);
+    const on = await type();
+    expect(on.family).toContain('JetBrains Mono');
+    expect(on.size).toBeGreaterThanOrEqual(14);
+    await page.emulateMedia({ contrast: 'no-preference' });
+    await expect(html).toHaveAttribute('data-readable', 'false');
+    await page.emulateMedia({ forcedColors: 'active' });
+    await expect(html).toHaveAttribute('data-readable', 'true');
+    await page.emulateMedia({ forcedColors: 'none' });
+    await expect(html).toHaveAttribute('data-readable', 'false');
+    // By hand in «Настройки»; kept on the device.
+    await page.locator('.tabbar-settings').click();
+    const row = page.getByRole('combobox', { name: 'Режим читаемости' });
+    await expect(row).toHaveValue('system');
+    await row.selectOption('on');
+    await expect(html).toHaveAttribute('data-readable', 'true');
+    await page.locator('.tabbar-settings').click();
+    await expect.poll(readable).toBe(true);
+    await page.reload();
+    await expect(html).toHaveAttribute('data-readable', 'true');
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    expect(await readable()).toBe(true);
+    // «Выключен» wins over the system's asking.
+    await page.emulateMedia({ contrast: 'more' });
+    await page.locator('.tabbar-settings').click();
+    await row.selectOption('off');
+    await expect(html).toHaveAttribute('data-readable', 'false');
+    await page.locator('.tabbar-settings').click();
+    await expect.poll(readable).toBe(false);
+    expect((await type()).family).toContain('Departure Mono');
   });
 
   test("Z: one's own icon from the disk, brought to the canvas's style in one step (07 §6.4–6.6)", async ({

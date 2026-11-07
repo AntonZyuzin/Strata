@@ -220,6 +220,44 @@ export function cssVariables(theme: Theme): Record<string, string> {
   return vars;
 }
 
+/** The readable mode's smallest interface type, CSS px at 100 % (07 §11.4). */
+export const READABLE_TYPE = 14;
+
+/**
+ * The readable mode (07 §11.4): no pixel fonts — the monospace `ui` becomes
+ * JetBrains Mono, so widths in `ch` hold as they are; the display and the
+ * proportional pixel fonts become Golos Text — and the interface type is at
+ * least 14 px times the scale. Off, the theme's families come back.
+ */
+export function fontVariables(
+  m: PixelMetrics,
+  scale: number,
+  readable: boolean,
+  theme: Theme = fog,
+): Record<string, string> {
+  if (!readable) {
+    return {
+      '--st-font-display': theme.font.display,
+      '--st-font-ui': theme.font.ui,
+      '--st-font-ui-prop': theme.font.uiProp,
+    };
+  }
+  const px = (v: number) => `${Number(v.toFixed(4))}px`;
+  const vars: Record<string, string> = {
+    '--st-font-display': theme.font.text,
+    '--st-font-ui': theme.font.mono,
+    '--st-font-ui-prop': theme.font.text,
+  };
+  const min = READABLE_TYPE * scale;
+  for (const id of ['ui', 'uiProp'] as const) {
+    const kebab = id.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+    const size = Math.max(min, m.font[id].css);
+    vars[`--st-font-${kebab}-size`] = px(size);
+    vars[`--st-font-${kebab}-line`] = px(Math.max(m.font[id].line, Math.round(size * 1.45)));
+  }
+  return vars;
+}
+
 /** CSS custom properties of the pixel unit and the pixel type scale. */
 export function pixelVariables(m: PixelMetrics): Record<string, string> {
   const px = (v: number) => `${Number(v.toFixed(4))}px`;
@@ -247,15 +285,17 @@ export function applyTheme(el: HTMLElement, theme: Theme = fog): void {
  * Applies the pixel unit for the current DPR and re-applies it when the DPR
  * changes (browser zoom, a window moved to another screen). Returns a stop function.
  */
-export function applyPixelUnit(el: HTMLElement, scale = 1): () => void {
+export function applyPixelUnit(el: HTMLElement, scale = 1, readable = false): () => void {
   let query: MediaQueryList | null = null;
   const apply = () => {
     const dpr = window.devicePixelRatio || 1;
-    const vars = pixelVariables(pixelMetrics(dpr, scale));
+    const m = pixelMetrics(dpr, scale);
+    const vars = { ...pixelVariables(m), ...fontVariables(m, scale, readable) };
     for (const [key, value] of Object.entries(vars)) {
       el.style.setProperty(key, value);
     }
     el.dataset.dpr = String(dpr);
+    el.dataset.readable = String(readable);
     query?.removeEventListener('change', apply);
     query = window.matchMedia(`(resolution: ${dpr}dppx)`);
     query.addEventListener('change', apply);

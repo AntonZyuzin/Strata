@@ -2250,10 +2250,15 @@ test.describe('a workspace on the core', () => {
     await open('Смета');
     await expect(win).toHaveAttribute('data-type', 'pdf');
     await expect(win.locator('iframe')).toHaveAttribute('src', /^blob:/);
-    // As large as a board's window, not a place beside the bubble.
-    const board = await box(page, '.workspace');
+    // As large as a board's window, not a place beside the bubble: 80 % of
+    // the canvas one sees, between «Ноды» and the open properties panel.
+    const layers = await box(page, '.ws-layers');
+    const panel = await box(page, '.ws-inspector');
+    const from = layers.x + layers.width;
+    const room = panel.x - from;
     const w = await box(page, '.asset-window');
-    expect(Math.abs(w.width - board.width * 0.8)).toBeLessThanOrEqual(2);
+    expect(Math.abs(w.width - room * 0.8)).toBeLessThanOrEqual(2);
+    expect(Math.abs(w.x - (from + room * 0.1))).toBeLessThanOrEqual(2);
     // The desktop's CSP, served by the preview too, let the media and the frame in.
     expect(blocked).toEqual([]);
   });

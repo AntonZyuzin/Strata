@@ -3862,6 +3862,7 @@ export function WorkspaceScreen(props: {
           at={viewer.at}
           mode={viewer.mode}
           dock={dock}
+          panel={details !== null}
           onMode={(step) => setWindowMode('viewer', step)}
           onLocate={() => locateWindow('viewer', viewer.id)}
           onDock={dockWidth}
@@ -3879,6 +3880,7 @@ export function WorkspaceScreen(props: {
           at={note.at}
           mode={note.mode}
           dock={dock}
+          panel={details !== null}
           onMode={(step) => setWindowMode('note', step)}
           onLocate={() => locateWindow('note', note.id)}
           onDock={dockWidth}

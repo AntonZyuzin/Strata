@@ -13,6 +13,7 @@ import {
   dockRoom,
   type ModeStep,
   modeProps,
+  settleIn,
   type WindowMode,
   WindowTitle,
 } from './ContentWindow';
@@ -27,9 +28,6 @@ const PdfView = lazy(() => import('./PdfView').then((m) => ({ default: m.PdfView
 export function ownPdfViewer(): boolean {
   return navigator.pdfViewerEnabled === true;
 }
-
-/** Room kept between the window and the panels or the canvas's edge, CSS px. */
-const GAP = 8;
 
 /** What the viewer shows: an asset's types with a picture or a player (05 §4.4). */
 export type Viewable = 'image' | 'video' | 'audio' | 'pdf';
@@ -65,6 +63,8 @@ export function AssetWindow(props: {
   /** ◎: to the bubble on the canvas. */
   onLocate?: (() => void) | undefined;
   onDock?: ((width: number) => void) | undefined;
+  /** The properties panel is open: a floating window stays left of it. */
+  panel?: boolean | undefined;
   /** The focus came in or went out: inside, the canvas's keys are off. */
   onFocus: (inside: boolean) => void;
   onEscape: () => void;
@@ -77,29 +77,23 @@ export function AssetWindow(props: {
   /** Where it settled once its content had a size: inside the free canvas. */
   const [place, setPlace] = useState<{ left: number; top: number; max: number } | null>(null);
   // The canvas runs under «Ноды» and the panel: the window stays between them.
+  const beside = props.at;
   const settle = useCallback(() => {
-    const el = ref.current;
-    const host = el?.offsetParent;
-    if (!el || !(host instanceof HTMLElement) || type === 'pdf') return;
-    const h = host.getBoundingClientRect();
-    const lo = (host.querySelector('.ws-layers')?.getBoundingClientRect().right ?? h.left) + GAP;
-    const hi = (host.querySelector('.ws-inspector')?.getBoundingClientRect().left ?? h.right) - GAP;
-    const r = el.getBoundingClientRect();
-    const width = Math.min(r.width, hi - lo);
-    const left = Math.min(Math.max(r.left, lo), hi - width) - h.left;
-    const top = Math.min(Math.max(r.top, h.top + GAP), h.bottom - r.height - GAP) - h.top;
-    setPlace({ left, top: Math.max(GAP, top), max: hi - lo });
-  }, [type]);
+    if (type === 'pdf') return;
+    const at = settleIn(ref.current, beside);
+    if (at) setPlace(at);
+  }, [type, beside]);
   // Before the first paint and again when the content's size changed it;
   // docked or over the canvas, the window has no place of its own.
   const floating = (props.mode ?? 'float') === 'float';
   useLayoutEffect(() => {
     if (place === null && floating) settle();
   }, [place, settle, floating]);
-  // Floating again: placed anew beside the bubble.
+  // Floating again, or the panel came or went: placed anew beside the bubble.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `panel` — the room changed
   useLayoutEffect(() => {
     if (floating) setPlace(null);
-  }, [floating]);
+  }, [floating, props.panel]);
   // A PDF takes the board's share of the canvas, not a place beside the bubble.
   const style: CSSProperties | undefined =
     type === 'pdf'

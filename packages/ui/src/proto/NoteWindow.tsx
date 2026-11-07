@@ -1,12 +1,13 @@
 import { createNoteEditor } from '@strata/editor';
 import { type Locale, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
-import { useEffect, useRef } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   DockEdge,
   dockRoom,
   type ModeStep,
   modeProps,
+  settleIn,
   type WindowMode,
   WindowTitle,
 } from '../workspace/ContentWindow';
@@ -31,6 +32,8 @@ export function NoteWindow(props: {
   /** ◎: to the bubble on the canvas. */
   onLocate?: (() => void) | undefined;
   onDock?: ((width: number) => void) | undefined;
+  /** The properties panel is open: a floating window stays left of it. */
+  panel?: boolean | undefined;
   onChange: (text: string) => void;
   onEscape: () => void;
   onClose: () => void;
@@ -53,8 +56,21 @@ export function NoteWindow(props: {
     return () => ed.destroy();
   }, [doc]);
 
-  const float =
-    props.at.side === 'right'
+  // Beside the bubble, then settled inside the canvas one sees: between
+  // «Ноды» and the panel, which it covered when its 80ch did not fit.
+  const floating = (props.mode ?? 'float') === 'float';
+  const [place, setPlace] = useState<{ left: number; top: number; max: number } | null>(null);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `at`, `panel` — the room or the bubble moved
+  useLayoutEffect(() => {
+    setPlace(null);
+  }, [floating, props.at.x, props.at.y, props.at.side, props.panel]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: `at` is read when the place is asked anew
+  useLayoutEffect(() => {
+    if (place === null && floating) setPlace(settleIn(box.current, props.at));
+  }, [place, floating]);
+  const float = place
+    ? { left: place.left, top: place.top, maxWidth: place.max }
+    : props.at.side === 'right'
       ? { left: props.at.x, top: props.at.y }
       : { right: `calc(100% - ${props.at.x}px)`, top: props.at.y };
   const title = props.name || t(locale, 'note.untitled');

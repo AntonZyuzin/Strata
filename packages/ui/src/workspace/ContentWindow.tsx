@@ -64,6 +64,48 @@ export function modeProps(
   return { 'data-mode': mode, style: undefined };
 }
 
+/** CSS px kept between a floating window and «Ноды», the panel and the screen's edges. */
+const GAP = 8;
+
+/** A floating window keeps beside its bubble while this much of it fits there, CSS px. */
+const BESIDE_MIN = 320;
+
+/**
+ * Where a floating window stands inside the canvas one sees (06 §13.1):
+ * between «Ноды» and the properties panel, within the screen's height —
+ * its place in its offset parent and the widest it may be there. Given the
+ * bubble's side it opened at (`beside`, in the offset parent's points), it
+ * narrows to stay on that side while 320 px fit there, and only then moves
+ * over the bubble.
+ */
+export function settleIn(
+  el: HTMLElement | null,
+  beside?: { x: number; side: 'left' | 'right' },
+): { left: number; top: number; max: number } | null {
+  const host = el?.offsetParent;
+  if (!el || !(host instanceof HTMLElement)) return null;
+  const h = host.getBoundingClientRect();
+  const lo = (host.querySelector('.ws-layers')?.getBoundingClientRect().right ?? h.left) + GAP;
+  const hi = (host.querySelector('.ws-inspector')?.getBoundingClientRect().left ?? h.right) - GAP;
+  const r = el.getBoundingClientRect();
+  const top = Math.max(
+    GAP,
+    Math.min(Math.max(r.top, h.top + GAP), h.bottom - r.height - GAP) - h.top,
+  );
+  if (beside) {
+    const edge = h.left + beside.x;
+    const room = beside.side === 'right' ? hi - Math.max(lo, edge) : Math.min(hi, edge) - lo;
+    if (room >= Math.min(r.width, BESIDE_MIN)) {
+      const width = Math.min(r.width, room);
+      const left = beside.side === 'right' ? Math.max(lo, edge) : Math.min(hi, edge) - width;
+      return { left: left - h.left, top, max: width };
+    }
+  }
+  const width = Math.min(r.width, hi - lo);
+  const left = Math.min(Math.max(r.left, lo), hi - width) - h.left;
+  return { left, top, max: hi - lo };
+}
+
 /**
  * The room a docked window shares with the canvas, CSS px: from «Ноды» to
  * the window's right edge — the screen's, or the properties panel's left.

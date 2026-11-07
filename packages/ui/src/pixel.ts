@@ -30,12 +30,26 @@ export function loadPixelPrefs(): PixelPrefs {
 let stop: (() => void) | null = null;
 /** The readable mode in force (07 §11.4): its type follows the scale too. */
 let readableNow = false;
+const readableHeard = new Set<() => void>();
+
+/** Whether the document has the readable mode's type (07 §11.4). */
+export function readableApplied(): boolean {
+  return readableNow;
+}
+
+/** Calls `fn` when the document takes or leaves the readable mode; returns the stop. */
+export function onReadableApplied(fn: () => void): () => void {
+  readableHeard.add(fn);
+  return () => readableHeard.delete(fn);
+}
 
 /** Applies the prefs to the document and remembers them; the readable mode as it was, unless given. */
 export function setPixelPrefs(prefs: PixelPrefs, readable = readableNow): void {
+  const changed = readable !== readableNow;
   readableNow = readable;
   stop?.();
   stop = applyPixelUnit(document.documentElement, prefs.scale, readable);
+  if (changed) for (const fn of readableHeard) fn();
   try {
     localStorage.setItem(KEY, JSON.stringify(prefs));
   } catch {

@@ -3,13 +3,16 @@ import { type Locale, t } from '@strata/i18n';
 import { useEffect, useState } from 'react';
 import oflText from './fonts/DepartureMono-OFL.txt?raw';
 import { ICON_FILES } from './icons/Icon';
+import { PHOSPHOR } from './icons/phosphor';
+import mitText from './icons/phosphor-LICENSE.txt?raw';
 import bsdText from './icons/serenity/LICENSE?raw';
 
 /**
  * «Благодарности» (07 §3.5, §6.3, ☑ Q-07-3, Q-07-11): Strata's licence, the
  * bundled fonts with their copyright lines and the OFL text, and every
  * game-icons author whose icons ship, with the change CC BY 3.0 §4(b) asks to
- * state, SerenityOS's Chrome icons with their BSD 2-Clause text, and pdf.js
+ * state, SerenityOS's Chrome icons with their BSD 2-Clause text, Phosphor's
+ * line drawings of the readable mode with their MIT text, and pdf.js
  * with the files it ships. Font lines are copied from each font's LICENSE or, for the board's
  * fonts, from the font's name table and its maker's page.
  */
@@ -52,6 +55,9 @@ const SERENITY = {
   line: 'Copyright (c) 2018-2026, the SerenityOS developers. BSD 2-Clause · github.com/SerenityOS/serenity',
 };
 
+/** The readable mode's icons (07 §11.4), Phosphor's regular set unchanged. */
+const PHOSPHOR_LINE = 'Copyright (c) 2023 Phosphor Icons. MIT · github.com/phosphor-icons/core';
+
 /**
  * pdf.js and what it fetches beside its code (ADR-0013), shipped in `pdfjs/`
  * with each licence text (vite.config.ts); for PDFs a WebView cannot show.
@@ -87,6 +93,7 @@ export function CreditsWindow(props: { locale: Locale; onBack: () => void }) {
   }, []);
 
   const serenity = `${t(locale, 'credits.iconsCount', { n: ICON_FILES })} · ${SERENITY.line}`;
+  const phosphor = `${t(locale, 'credits.iconsCount', { n: new Set(Object.values(PHOSPHOR)).size })} · ${PHOSPHOR_LINE}`;
   const counts = new Map<string, number>();
   for (const { id } of icons?.icons ?? []) {
     const folder = id.split('/')[0] ?? '';
@@ -132,10 +139,18 @@ export function CreditsWindow(props: { locale: Locale; onBack: () => void }) {
             <dt title={SERENITY.name}>{SERENITY.name}</dt>
             <dd title={serenity}>{serenity}</dd>
           </div>
+          <div className="fonts-row">
+            <dt title="Phosphor Icons">Phosphor Icons</dt>
+            <dd title={phosphor}>{phosphor}</dd>
+          </div>
         </dl>
         <details className="credits-ofl">
           <summary>{t(locale, 'credits.bsd')}</summary>
           <pre>{bsdText}</pre>
+        </details>
+        <details className="credits-ofl">
+          <summary>{t(locale, 'credits.mit')}</summary>
+          <pre>{mitText}</pre>
         </details>
         <div className="divider" />
         <h2 className="fonts-heading">{t(locale, 'credits.pdf')}</h2>

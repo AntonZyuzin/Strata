@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useSyncExternalStore } from 'react';
+import { onReadableApplied, readableApplied } from './pixel';
 import type { ReadableMode } from './prefs';
 
 /** What asks for the readable mode from the system (07 §11.4). */
@@ -15,6 +16,14 @@ export function systemAsksReadable(): boolean {
  */
 export function readableOn(mode: ReadableMode, system = systemAsksReadable()): boolean {
   return mode === 'on' || (mode === 'system' && system);
+}
+
+/**
+ * Whether the document is in the readable mode now (07 §11.4): for what
+ * draws icons — Phosphor's line drawings instead of pixel pictures.
+ */
+export function useReadableMode(): boolean {
+  return useSyncExternalStore(onReadableApplied, readableApplied);
 }
 
 /** The readable mode in force, following the system's answer as it changes. */

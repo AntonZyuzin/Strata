@@ -117,6 +117,44 @@ export function iconScale(d: number): number {
 /** A picture the canvas can draw from. */
 export type IconImage = CanvasImageSource & { width: number; height: number };
 
+/**
+ * The readable mode's node icons (07 §11.4): line drawings laid into one
+ * atlas the presets' way — a mask of 128 in a cell of 144, white where
+ * drawn, with mips — so the Scene tints them in ink like a preset.
+ */
+export function createLineIcons(images: Record<string, IconImage>): Map<string, Texture> {
+  const keys = Object.keys(images);
+  const rows = Math.max(1, Math.ceil(keys.length / COLS));
+  const canvas = document.createElement('canvas');
+  canvas.width = COLS * CELL;
+  canvas.height = rows * CELL;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas is not available');
+  keys.forEach((key, k) => {
+    const img = images[key];
+    if (img)
+      ctx.drawImage(img, (k % COLS) * CELL + PAD, Math.floor(k / COLS) * CELL + PAD, MASK, MASK);
+  });
+  // The alpha is the ink: whatever colour the drawing had becomes white.
+  ctx.globalCompositeOperation = 'source-in';
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const source = new CanvasSource({
+    resource: canvas,
+    autoGenerateMipmaps: true,
+    scaleMode: 'linear',
+  });
+  return new Map(
+    keys.map((key, k) => [
+      key,
+      new Texture({
+        source,
+        frame: new Rectangle((k % COLS) * CELL, Math.floor(k / COLS) * CELL, CELL, CELL),
+      }),
+    ]),
+  );
+}
+
 const PIXEL = 8;
 
 /**

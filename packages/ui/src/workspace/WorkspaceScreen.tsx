@@ -1650,7 +1650,7 @@ export function WorkspaceScreen(props: {
       );
     docs.current = makeDocs.current();
 
-    Promise.all([CanvasView.create(el), nodeIconImages()])
+    Promise.all([CanvasView.create(el), nodeIconImages(readableRef.current)])
       .then(([v, icons]) => {
         if (cancelled) {
           v.destroy();
@@ -1675,7 +1675,7 @@ export function WorkspaceScreen(props: {
             : t(localeRef.current, n.appearance ? 'canvas.mark.appearance' : 'canvas.mark.places', {
                 n: n.places,
               });
-        v.setKindIcons(icons);
+        v.setKindIcons(icons, readableRef.current);
         v.setReadable(readableRef.current);
         // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
         v.wireEnds = 'sockets';
@@ -1801,7 +1801,16 @@ export function WorkspaceScreen(props: {
   // The readable mode (07 §11.4): the labels, the wires and the grain; the
   // ground follows with the background below.
   useEffect(() => {
-    viewRef.current?.setReadable(readable);
+    const v = viewRef.current;
+    if (!v || v.readable === readable) return;
+    v.setReadable(readable);
+    // The nodes' icons: Phosphor's line drawings or SerenityOS's pictures.
+    nodeIconImages(readable).then(
+      (icons) => {
+        if (viewRef.current === v) v.setKindIcons(icons, readable);
+      },
+      (e: unknown) => console.error('icons', e),
+    );
   }, [readable]);
 
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.

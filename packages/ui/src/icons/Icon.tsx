@@ -1,7 +1,9 @@
 import { type AssetType, assetType, type NodeAttrs, type NodeKind } from '@strata/backend';
 import type { CSSProperties } from 'react';
+import { useReadableMode } from '../readable';
 import board from './board.png';
 import hourglass from './hourglass.png';
+import { PHOSPHOR } from './phosphor';
 import calendar from './serenity/app-calendar.png';
 import sound from './serenity/app-sound-player.png';
 import starfield from './serenity/app-starfield.png';
@@ -158,8 +160,11 @@ export function nodeIconFile(kind: NodeKind, attrs: NodeAttrs = {}): string {
   return fileOf(nodeIcon(kind, attrs));
 }
 
-/** The pictures nodes may show, decoded for the canvas (view.setKindIcons), by file. */
-export async function nodeIconImages(): Promise<Record<string, HTMLImageElement>> {
+/**
+ * The pictures nodes may show, decoded for the canvas (view.setKindIcons),
+ * by file: SerenityOS's, or in the readable mode Phosphor's (07 §11.4).
+ */
+export async function nodeIconImages(readable = false): Promise<Record<string, HTMLImageElement>> {
   const kinds: NodeKind[] = ['network', 'project', 'task', 'note', 'board', 'checklist'];
   const files = new Set<IconFile>([
     ...kinds.map((k) => fileOf(nodeIcon(k))),
@@ -169,7 +174,7 @@ export async function nodeIconImages(): Promise<Record<string, HTMLImageElement>
   const pairs = await Promise.all(
     [...files].map(async (file) => {
       const img = new Image();
-      img.src = FILES[file];
+      img.src = readable ? PHOSPHOR[file] : FILES[file];
       await img.decode();
       return [file, img] as const;
     }),
@@ -178,7 +183,18 @@ export async function nodeIconImages(): Promise<Record<string, HTMLImageElement>
 }
 
 export function Icon(props: { name: IconName }) {
+  const readable = useReadableMode();
   const file = fileOf(props.name);
+  if (readable) {
+    // A line drawing in the text's colour (07 §11.4).
+    return (
+      <span
+        className="kind-icon is-line"
+        style={{ '--glyph': `url("${PHOSPHOR[file]}")` } as CSSProperties}
+        aria-hidden="true"
+      />
+    );
+  }
   const src = FILES[file];
   if (MONO.has(file)) {
     return (

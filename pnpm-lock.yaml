@@ -275,6 +275,9 @@ importers:
       '@fontsource/tiny5':
         specifier: 5.3.0
         version: 5.3.0
+      '@phosphor-icons/core':
+        specifier: 2.1.1
+        version: 2.1.1
       '@strata/backend':
         specifier: workspace:*
         version: link:../backend
@@ -696,6 +699,9 @@ packages:
 
   '@oxc-project/types@0.154.0':
     resolution: {integrity: sha512-KYOUGQFlLWR+s4QMV2Q9ko38TZm7EdO87Qm7rvZLqk/webse/cDjtyxKhg/47l0byCbs/k46LT8qc4PKjAikzA==}
+
+  '@phosphor-icons/core@2.1.1':
+    resolution: {integrity: sha512-v4ARvrip4qBCImOE5rmPUylOEK4iiED9ZyKjcvzuezqMaiRASCHKcRIuvvxL/twvLpkfnEODCOJp5dM4eZilxQ==}
 
   '@pixi/colord@2.9.6':
     resolution: {integrity: sha512-nezytU2pw587fQstUu1AsJZDVEynjskwOL+kibwcdxsMBFqPsFFNA7xl0ii/gXuDi6M0xj3mfRJj8pBSc2jCfA==}
@@ -3261,6 +3267,8 @@ snapshots:
     optional: true
 
   '@oxc-project/types@0.154.0': {}
+
+  '@phosphor-icons/core@2.1.1': {}
 
   '@pixi/colord@2.9.6': {}
 

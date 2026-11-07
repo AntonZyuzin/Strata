@@ -3991,10 +3991,23 @@ test.describe('a workspace on the core', () => {
     const on = await type();
     expect(on.family).toContain('JetBrains Mono');
     expect(on.size).toBeGreaterThanOrEqual(14);
+    // Phosphor's line drawings instead of the pixel icons, on the nodes too.
+    await expect(page.locator('.tabbar .kind-icon.is-line').first()).toBeVisible();
+    await expect(page.locator('.tabbar img.icon')).toHaveCount(0);
     await page.emulateMedia({ contrast: 'no-preference' });
     await expect(html).toHaveAttribute('data-readable', 'false');
     await page.emulateMedia({ forcedColors: 'active' });
     await expect(html).toHaveAttribute('data-readable', 'true');
+    // The system's colours take the Chrome; icons keep the text's colour.
+    const forced = await page.evaluate(() => {
+      const icon = document.querySelector('.tabbar .kind-icon') as Element;
+      return {
+        // WebKit has the media query but not the property.
+        known: CSS.supports('forced-color-adjust', 'none'),
+        adjust: getComputedStyle(icon).getPropertyValue('forced-color-adjust'),
+      };
+    });
+    if (forced.known) expect(forced.adjust).toBe('none');
     await page.emulateMedia({ forcedColors: 'none' });
     await expect(html).toHaveAttribute('data-readable', 'false');
     // By hand in «Настройки»; kept on the device.
@@ -4018,6 +4031,7 @@ test.describe('a workspace on the core', () => {
     await page.locator('.tabbar-settings').click();
     await expect.poll(readable).toBe(false);
     expect((await type()).family).toContain('Departure Mono');
+    await expect(page.locator('.tabbar .kind-icon.is-line')).toHaveCount(0);
   });
 
   test("Z: one's own icon from the disk, brought to the canvas's style in one step (07 §6.4–6.6)", async ({

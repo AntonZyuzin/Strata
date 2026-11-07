@@ -1603,6 +1603,11 @@ button:focus-visible {
   image-rendering: pixelated;
 }
 
+/* The readable mode's line drawing (07 §11.4): smooth, in the text's colour. */
+.kind-icon.is-line {
+  image-rendering: auto;
+}
+
 /* A colour icon of the SerenityOS set (07 §6.2): whole pixel units only. */
 .icon {
   flex: none;
@@ -4093,4 +4098,38 @@ button.ws-path-step:active:not(:disabled) {
 
 .settings .ins-fields {
   grid-template-columns: 20ch minmax(0, 1fr);
+}
+
+/* Forced colours (07 §11.4): the system's palette takes the Chrome. The
+   bevels, drawn with box-shadow, go with it, so frames become a 1px line;
+   what is pressed, current or chosen takes Highlight; icons drawn as masks
+   keep the text's colour, which the system would otherwise turn into the
+   ground's. */
+@media (forced-colors: active) {
+  button,
+  .field,
+  .window,
+  .tab-menu,
+  .context-menu {
+    border: 1px solid ButtonText;
+  }
+
+  [aria-pressed="true"],
+  [aria-selected="true"],
+  .is-current {
+    forced-color-adjust: none;
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .kind-icon {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
+  [aria-pressed="true"] .kind-icon,
+  [aria-selected="true"] .kind-icon,
+  .is-current .kind-icon {
+    background: HighlightText;
+  }
 }

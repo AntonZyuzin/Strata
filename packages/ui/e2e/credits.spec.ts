@@ -15,6 +15,7 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS) {
       await page.goto('/?credits');
       await expect(page.locator('.credits-list dt', { hasText: 'Lorc' })).toBeVisible();
       await expect(page.locator('.credits-list dt', { hasText: 'Delapouite' })).toBeVisible();
+      await expect(page.locator('.credits-list dt', { hasText: 'Phosphor Icons' })).toBeVisible();
       expect(await overflowing(page), `${locale}: text must fit or carry a tooltip`).toEqual([]);
       await page.screenshot({ path: info.outputPath(`${locale}.png`) });
       sides.push({ context, box: await box(page, '.window-credits') });

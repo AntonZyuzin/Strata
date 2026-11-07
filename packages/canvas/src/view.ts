@@ -12,6 +12,7 @@ import type { RingSlotName } from './flagring';
 import { hexPath } from './hex';
 import {
   createIconAtlas,
+  createLineIcons,
   createPixelIcons,
   type IconAtlas,
   type IconImage,
@@ -334,6 +335,8 @@ export class CanvasView {
   /** One's own icons by their reference (07 §6.6): masks, tinted like the presets. */
   private readonly ownIcons = new Map<string, Texture>();
   private kindIcons = new Map<string, Texture>();
+  /** The kind icons are line drawings, tinted in ink (the readable mode, 07 §11.4). */
+  private kindLines = false;
   /** The icon a node shows, a key of `setKindIcons`: its kind by default (07 §6.1). */
   iconKey: (n: GraphNode) => string = (n) => n.kind;
 
@@ -341,10 +344,12 @@ export class CanvasView {
    * Icons by name (owner, 2026-10-24: the Chrome's SerenityOS
    * set on the nodes too). A node with one shows it instead of its preset, and
    * the kind glyph at six o'clock goes: the icon already says the kind.
+   * `lines` — the readable mode's line drawings (07 §11.4), tinted in ink.
    */
-  setKindIcons(images: Record<string, IconImage>): void {
+  setKindIcons(images: Record<string, IconImage>, lines = false): void {
     const old = this.kindIcons;
-    this.kindIcons = createPixelIcons(images);
+    this.kindIcons = lines ? createLineIcons(images) : createPixelIcons(images);
+    this.kindLines = lines;
     for (const v of this.views.values()) {
       this.applyPicture(v);
       this.applyLevel(v);
@@ -489,7 +494,7 @@ export class CanvasView {
       const own = this.kindIcon(v.node);
       if (own) {
         v.icon.texture = own;
-        v.icon.scale.set(pixelIconScale(2 * v.r));
+        v.icon.scale.set(this.kindLines ? iconScale(2 * v.r) : pixelIconScale(2 * v.r));
         return;
       }
       const chosen = this.chosenPreset(v.node);
@@ -786,7 +791,9 @@ export class CanvasView {
     v.body.alpha = lv === 'dot' ? Math.max(a, 0.6) : a;
     const pic = this.pictures.has(v.id);
     v.icon.visible = !n.ghost && (pic ? lv !== 'dot' : lv !== 'dot' && lv !== 'glyph');
-    v.icon.tint = pic || this.kindIcon(n) ? 0xffffff : closed ? hex(fog.scene.doneInk) : INK;
+    // Pictures and pixel icons keep their colours; masks and lines take the ink.
+    const coloured = pic || (this.kindIcon(n) !== undefined && !this.kindLines);
+    v.icon.tint = coloured ? 0xffffff : closed ? hex(fog.scene.doneInk) : INK;
     v.icon.alpha = a;
     if (v.halo) v.halo.visible = lv !== 'dot';
   }

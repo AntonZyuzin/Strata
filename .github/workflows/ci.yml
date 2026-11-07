@@ -30,6 +30,10 @@ jobs:
         run: cargo test --release -p strata-core --lib props
         env:
           STRATA_PROPS: "10000"
+      - name: The kill switch, 1 000 kills of a writer (NFR-69, NFR-71)
+        run: cargo test --release -p strata-core --test kill_switch
+        env:
+          STRATA_KILL_ROUNDS: "1000"
       - name: The synthetic vaults for importing by hand (V-synth, V-10k; 16 §4.7, milestone 1C)
         run: cargo run -p strata-core --example write_vaults -- target/vaults
       - uses: actions/upload-artifact@v7

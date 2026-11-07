@@ -43,6 +43,10 @@ const UPDATE_MODES: readonly UpdateMode[] = ['ask', 'check', 'never'];
 export type ReadableMode = 'system' | 'on' | 'off';
 export const READABLE_MODES: readonly ReadableMode[] = ['system', 'on', 'off'];
 
+/** The welcome window (06 §17.2): at each start until told otherwise. */
+export type WelcomeMode = 'show' | 'hide';
+export const WELCOME_MODES: readonly WelcomeMode[] = ['show', 'hide'];
+
 /**
  * What the device keeps: the language; a date's form and the clock, or
  * `auto` — as the language reads them (owner, 2026-10-24).
@@ -61,6 +65,8 @@ export interface Prefs {
   updates: UpdateMode;
   /** The readable mode (07 §11.4): as the system asks, by default. */
   readable: ReadableMode;
+  /** The welcome window at the start (06 §17.2): shown by default. */
+  welcome: WelcomeMode;
 }
 
 const KEY = 'strata.prefs';
@@ -96,6 +102,9 @@ export function loadPrefs(fallback: Locale): Prefs {
       readable: READABLE_MODES.includes(v?.readable as ReadableMode)
         ? (v?.readable as ReadableMode)
         : 'system',
+      welcome: WELCOME_MODES.includes(v?.welcome as WelcomeMode)
+        ? (v?.welcome as WelcomeMode)
+        : 'show',
     };
   } catch {
     return {
@@ -107,6 +116,7 @@ export function loadPrefs(fallback: Locale): Prefs {
       hints: 'show',
       updates: 'ask',
       readable: 'system',
+      welcome: 'show',
     };
   }
 }

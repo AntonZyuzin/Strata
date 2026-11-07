@@ -2287,6 +2287,29 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   background: rgb(0 0 0 / 0.45);
 }
 
+/* «Добро пожаловать» (06 §17.2): two lines of what a workspace is, then the
+   first steps as rows of «Клавиши»; the width in ch, the same in both
+   languages. */
+.welcome-window {
+  width: min(72ch, calc(100vw - 32px));
+}
+
+.welcome-body {
+  padding: calc(8 * var(--u)) calc(12 * var(--u)) calc(12 * var(--u));
+}
+
+.welcome-text {
+  margin: 0 0 calc(6 * var(--u));
+}
+
+.welcome-body .help-group {
+  margin-top: calc(10 * var(--u));
+}
+
+.welcome-again {
+  margin-right: auto;
+}
+
 /* «Клавиши» (06 §17): groups of one-line rows, the width in ch. */
 .help-window {
   display: flex;

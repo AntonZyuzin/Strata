@@ -1,4 +1,4 @@
-import type { MessageKey } from '@strata/i18n';
+import { type Locale, type MessageKey, t } from '@strata/i18n';
 
 /**
  * «Клавиши» (06 §17): what the help window `?` lists, group by group, as
@@ -114,6 +114,40 @@ export const HELP: readonly HelpGroup[] = [
     rows: [row('help.layout', ['L']), row('help.arrange', ['A', '@drag'])],
   },
 ];
+
+/**
+ * The first steps the welcome window lists (06 §17.2): rows of «Клавиши»,
+ * the same words and keys, picked out.
+ */
+export const FIRST_STEPS: readonly MessageKey[] = [
+  'help.tab',
+  'help.connect',
+  'help.arrows',
+  'help.dive',
+  'help.up',
+  'help.icon',
+  'help.palette',
+  'help.goTo',
+  'help.map',
+  'help.help',
+];
+
+/** The rows of «Клавиши» with these labels, in this order. */
+export function helpRows(labels: readonly MessageKey[]): HelpRow[] {
+  const all = HELP.flatMap((g) => g.rows);
+  return labels.flatMap((label) => all.filter((r) => r.label === label));
+}
+
+/** A row's keys as they read: alternatives by «·», a gesture in the UI's words. */
+export function keysText(locale: Locale, row: HelpRow, mac: boolean): string {
+  const combo = (tokens: readonly string[]) =>
+    tokens
+      .map((k) =>
+        k.startsWith('@') ? t(locale, `help.k.${k.slice(1)}` as MessageKey) : keyName(k, mac),
+      )
+      .join('+');
+  return row.keys.map(combo).join(' · ');
+}
 
 /** The OS's names of the modifiers (06 §17: ⌘, ⌥, ⇧ on macOS). */
 export function keyName(token: string, mac: boolean): string {

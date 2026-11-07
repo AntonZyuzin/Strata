@@ -11,6 +11,7 @@ import {
   READABLE_MODES,
   RING_MODES,
   UPDATE_ANSWERS,
+  WELCOME_MODES,
 } from '../prefs';
 
 /**
@@ -236,6 +237,24 @@ export function SettingsScreen(props: {
                 {READABLE_MODES.map((m) => (
                   <option key={m} value={m}>
                     {t(locale, `settings.readable.${m}` as MessageKey)}
+                  </option>
+                ))}
+              </select>
+            </dd>
+            <dt className="ins-label">{t(locale, 'settings.welcome')}</dt>
+            <dd className="ins-value">
+              <select
+                className="field"
+                aria-label={t(locale, 'settings.welcome')}
+                title={t(locale, 'settings.welcomeHint')}
+                value={prefs.welcome}
+                onChange={(e) =>
+                  onPrefs({ ...prefs, welcome: e.currentTarget.value as Prefs['welcome'] })
+                }
+              >
+                {WELCOME_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(locale, `settings.welcome.${m}` as MessageKey)}
                   </option>
                 ))}
               </select>

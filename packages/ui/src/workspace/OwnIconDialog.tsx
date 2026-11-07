@@ -10,6 +10,7 @@ import {
 import { fog, palette } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import { keepTab } from '../focusTrap';
 import { takesThreshold } from './ownIcons';
 
 type State = 'normal' | 'selected' | 'dimmed';
@@ -111,6 +112,7 @@ export function OwnIconDialog(props: {
   const result = useMemo(() => stylize(picture.px, shown), [picture.px, shown]);
   const done = useRef<HTMLButtonElement>(null);
   const file = useRef<HTMLInputElement>(null);
+  const box = useRef<HTMLElement>(null);
   useEffect(() => done.current?.focus(), []);
 
   const change = (part: Partial<StyleParams>) => setStyle((s) => ({ ...s, ...part }));
@@ -121,12 +123,15 @@ export function OwnIconDialog(props: {
   return (
     <div className="dialog-backdrop">
       <section
+        ref={box}
         className="window dialog own-icon-dialog"
         role="dialog"
+        aria-modal="true"
         aria-labelledby="own-icon-title"
         title={t(locale, 'own.keys')}
         onKeyDown={(e) => {
           e.stopPropagation();
+          keepTab(e, box.current);
           if (e.key === 'Escape') {
             e.preventDefault();
             props.onCancel();

@@ -35,6 +35,7 @@ describe('dates and times of the settings (✅ Q-06-23, 05 §6.1)', () => {
       hints: 'show',
       updates: 'ask',
       readable: 'system',
+      welcome: 'show',
     });
   });
 

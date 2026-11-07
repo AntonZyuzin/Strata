@@ -877,6 +877,105 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
 }
 
 for (const deviceScaleFactor of [1, 2]) {
+  test(`«Добро пожаловать» keeps its size in RU and EN @${deviceScaleFactor}x (06 §17.2)`, async ({
+    browser,
+  }) => {
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      // A first start: nothing said yet, the welcome greets it.
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+        storageState: { cookies: [], origins: [] },
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      const welcome = page.locator('.welcome-window');
+      await expect(welcome).toBeVisible();
+      expect(await overflowing(page, '.welcome-window'), `${locale} the welcome must fit`).toEqual(
+        [],
+      );
+      boxes.push({
+        window: await box(page, '.welcome-window'),
+        steps: await box(page, '.welcome-window .help-rows'),
+        first: await box(page, '.welcome-window .help-row:first-child dt'),
+        actions: await box(page, '.welcome-window .welcome-actions'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'steps', 'first', 'actions'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+test.describe('the welcome window', () => {
+  // A first start in Russian: nothing said to the welcome yet.
+  test.use({ locale: 'ru-RU', storageState: { cookies: [], origins: [] } });
+
+  test('greets each start until told not to; «Все клавиши…», «Настройки» and the palette reach it (06 §17.2)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    const welcome = page.locator('.welcome-window');
+    await expect(welcome.locator('h1')).toHaveText('Добро пожаловать в Gexogon');
+    await expect(welcome.locator('.help-row dt').first()).toHaveText('Tab-меню');
+    await expect(welcome.getByText('К ближайшей ноде', { exact: true })).toBeVisible();
+    await expect(welcome.getByRole('button', { name: 'Начать' })).toBeFocused();
+    // «Все клавиши…»: the whole table over it; Esc closes the table only.
+    await welcome.getByRole('button', { name: 'Все клавиши…' }).click();
+    const keys = page.locator('.help-window');
+    await expect(keys.locator('h1')).toHaveText('Клавиши');
+    await keys.press('Escape');
+    await expect(keys).toHaveCount(0);
+    await expect(welcome).toBeVisible();
+    // «Начать» closes it; the next start greets again.
+    await welcome.getByRole('button', { name: 'Начать' }).click();
+    await expect(welcome).toHaveCount(0);
+    await page.reload();
+    await expect(welcome).toBeVisible();
+    // «Показывать при запуске» off: the next start has none.
+    const again = welcome.getByRole('checkbox', { name: 'Показывать при запуске' });
+    await expect(again).toBeChecked();
+    await again.uncheck();
+    await welcome.press('Escape');
+    await expect(welcome).toHaveCount(0);
+    await page.reload();
+    await expect(page.locator('.home-new')).toBeVisible();
+    await expect(welcome).toHaveCount(0);
+    // «Настройки» → «Приветствие» keeps the answer and gives it back.
+    await page.locator('.tabbar-settings').click();
+    const row = page.getByRole('combobox', { name: 'Приветствие' });
+    await expect(row).toHaveValue('hide');
+    await row.selectOption('show');
+    await page.reload();
+    await expect(welcome).toBeVisible();
+    await welcome.getByRole('button', { name: 'Начать' }).click();
+    // In a workspace: the palette opens it, and the canvas keeps no keys under it.
+    await createWorkspace(page, 'Приветствие');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+p');
+    await page.locator('.command-palette .palette-query').fill('приветствие');
+    await page.keyboard.press('Enter');
+    await expect(welcome).toBeVisible();
+    await expect(welcome.getByRole('button', { name: 'Начать' })).toBeFocused();
+    // Tab goes round inside the window; the canvas keeps no keys under it.
+    await page.keyboard.press('Tab');
+    await expect(welcome.getByRole('button', { name: 'Закрыть' })).toBeFocused();
+    await expect(page.locator('.tab-menu')).toHaveCount(0);
+    await page.keyboard.press('Shift+Tab');
+    await expect(welcome.getByRole('button', { name: 'Начать' })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(welcome).toHaveCount(0);
+  });
+});
+
+for (const deviceScaleFactor of [1, 2]) {
   test(`the readable mode keeps the windows whole and their size in RU and EN @${deviceScaleFactor}x (07 §11.4)`, async ({
     browser,
   }) => {

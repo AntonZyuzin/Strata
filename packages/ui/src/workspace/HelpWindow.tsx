@@ -1,7 +1,7 @@
-import { type Locale, type MessageKey, t } from '@strata/i18n';
+import { type Locale, t } from '@strata/i18n';
 import { useEffect, useMemo, useRef } from 'react';
 import { isTauri } from '../backend';
-import { HELP, keyName, onMac } from './help';
+import { HELP, keysText, onMac } from './help';
 
 /**
  * «Клавиши» (06 §17): `?` opens the keys and gestures of the canvas, group
@@ -19,13 +19,6 @@ export function HelpWindow(props: { locale: Locale; onClose: () => void }) {
   useEffect(() => {
     box.current?.focus();
   }, []);
-
-  const combo = (tokens: readonly string[]) =>
-    tokens
-      .map((k) =>
-        k.startsWith('@') ? t(locale, `help.k.${k.slice(1)}` as MessageKey) : keyName(k, mac),
-      )
-      .join('+');
 
   return (
     <div
@@ -67,7 +60,7 @@ export function HelpWindow(props: { locale: Locale; onClose: () => void }) {
                   .filter((r) => desktop || !r.desktop)
                   .map((r) => {
                     const what = t(locale, r.label);
-                    const keys = r.keys.map(combo).join(' · ');
+                    const keys = keysText(locale, r, mac);
                     return (
                       <div key={r.label} className="help-row">
                         <dt title={what}>{what}</dt>

@@ -7,6 +7,8 @@ import type { Prefs } from './prefs';
 import { SettingsScreen } from './settings/SettingsScreen';
 import { type Tab, TabBar } from './TabBar';
 import { UpdateOffer, UpdateQuestion } from './UpdateDialogs';
+import { WelcomeWindow } from './WelcomeWindow';
+import { HelpWindow } from './workspace/HelpWindow';
 import { jobOf, watchImports } from './workspace/imports';
 import { type UndoState, type WorkspaceBridge, WorkspaceScreen } from './workspace/WorkspaceScreen';
 
@@ -58,6 +60,12 @@ export function Shell(props: {
    */
   const [settings, setSettings] = useState(false);
   const behind = () => setSettings(false);
+  /**
+   * «Добро пожаловать» (06 §17.2): at the start unless told otherwise, and
+   * from the palette any time; «Клавиши» over it from its «Все клавиши…».
+   */
+  const [welcome, setWelcome] = useState(() => prefs.welcome === 'show');
+  const [keys, setKeys] = useState(false);
   const [tabs, setTabs] = useState<Tab[]>(loadTabs);
   const [opened, setOpened] = useState<Opened | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -295,13 +303,14 @@ export function Shell(props: {
             home={home}
             opened={opened}
             prefs={prefs}
-            covered={settings}
+            covered={settings || welcome || keys}
             app={{
               save,
               open: openArchive,
               create,
               home: goHome,
               settings: () => setSettings(true),
+              welcome: () => setWelcome(true),
             }}
             bridge={bridge}
             onUndoState={setUndo}
@@ -333,7 +342,16 @@ export function Shell(props: {
           />
         ) : null}
       </div>
-      {asking ? (
+      {welcome ? (
+        <WelcomeWindow
+          locale={locale}
+          atStart={prefs.welcome === 'show'}
+          onAtStart={(show) => props.onPrefs({ ...prefs, welcome: show ? 'show' : 'hide' })}
+          onKeys={() => setKeys(true)}
+          onClose={() => setWelcome(false)}
+        />
+      ) : asking ? (
+        // The updates' question waits for the welcome to close.
         <UpdateQuestion
           locale={locale}
           onAnswer={(yes) => {
@@ -362,6 +380,7 @@ export function Shell(props: {
           }}
         />
       ) : null}
+      {keys ? <HelpWindow locale={locale} onClose={() => setKeys(false)} /> : null}
     </div>
   );
 }

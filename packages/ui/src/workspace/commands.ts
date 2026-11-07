@@ -23,6 +23,8 @@ export interface AppActions {
   create(): void;
   home(): void;
   settings(): void;
+  /** «Добро пожаловать» (06 §17.2). */
+  welcome(): void;
 }
 
 /** What a command may do and know: the workspace screen gives it. */
@@ -384,6 +386,14 @@ export const COMMANDS: readonly Command[] = [
     group: 'app',
     why: bar,
     run: (c) => c.app?.settings(),
+  },
+  {
+    id: 'app.welcome',
+    title: 'cmd.app.welcome',
+    aliases: ['приветствие', 'начало', 'первые шаги', 'welcome', 'intro', 'first steps'],
+    group: 'app',
+    why: bar,
+    run: (c) => c.app?.welcome(),
   },
   mapped('create', 'create', 'Tab', ['создать', 'нода', 'create', 'node']),
   mapped('open', 'open', 'Enter', ['войти', 'открыть', 'open', 'enter']),

@@ -13,7 +13,21 @@ export default defineConfig({
   // twice.
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['github'], ['list']] : 'list',
-  use: { baseURL: 'http://localhost:4173' },
+  use: {
+    baseURL: 'http://localhost:4173',
+    // Each test's device has said «don't show» to the welcome window (06
+    // §17.2), contexts a test opens itself included; the welcome's own tests
+    // start from an empty storage.
+    storageState: {
+      cookies: [],
+      origins: [
+        {
+          origin: 'http://localhost:4173',
+          localStorage: [{ name: 'strata.prefs', value: JSON.stringify({ welcome: 'hide' }) }],
+        },
+      ],
+    },
+  },
   projects: [
     { name: 'chromium', use: { ...devices['Desktop Chrome'] } },
     { name: 'webkit', use: { ...devices['Desktop Safari'] } },

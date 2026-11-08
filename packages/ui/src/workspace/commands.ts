@@ -407,6 +407,23 @@ export const COMMANDS: readonly Command[] = [
   mapped('flag.pause', 'flag:pause', 'Q', ['флаг', 'пауза', 'flag', 'pause']),
   mapped('flag.template', 'flag:template', 'E', ['флаг', 'шаблон', 'flag', 'template']),
   mapped('delete', 'delete', 'Del', ['убрать', 'удалить', 'remove', 'delete']),
+  {
+    id: 'map.relayout',
+    title: 'cmd.map.relayout',
+    aliases: [
+      'карта',
+      'пересчитать',
+      'раскладка',
+      'звёзды',
+      'map',
+      'relayout',
+      'recompute',
+      'stars',
+    ],
+    group: 'nav',
+    why: spatial,
+    run: (c) => c.mapAct('relayout'),
+  },
   mapped('deleteEverywhere', 'deleteEverywhere', 'Shift+Del', [
     'удалить',
     'везде',

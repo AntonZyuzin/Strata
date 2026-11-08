@@ -400,6 +400,80 @@ test.describe('the star map without 2D (04 S6, 08 §1.2)', () => {
     expect(new Set(shown2d)).toEqual(new Set([art]));
   });
 
+  test('the stars keep their places from one session to the next; «Пересчитать карту» lays them out anew (08 §3.4–3.5)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Места звёзд');
+    await createNode(page, 420, 300, 'Альфа');
+    await createNode(page, 760, 320, 'Бета');
+    await toMap(page);
+    const alpha = (await ask(page, 'idNamed', 'Альфа')) ?? '';
+    // What the device keeps of the stars of `id` (08 §3.5): IndexedDB, by workspace.
+    const kept = (id: string) =>
+      page.evaluate(
+        (id) =>
+          new Promise<number[] | null>((done) => {
+            const open = indexedDB.open('strata-stars', 1);
+            open.onupgradeneeded = () => open.result.createObjectStore('layouts');
+            open.onsuccess = () => {
+              const all = open.result.transaction('layouts').objectStore('layouts').getAll();
+              all.onsuccess = () => {
+                for (const v of all.result as { ids: string[]; pos: Float32Array }[]) {
+                  const i = v.ids.indexOf(id);
+                  if (i >= 0) return done([...v.pos.subarray(i * 3, i * 3 + 3)]);
+                }
+                done(null);
+              };
+            };
+          }),
+        id,
+      );
+    const reopen = async () => {
+      await page.reload();
+      await page.locator('.home-open').click();
+      await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1', {
+        timeout: 15_000,
+      });
+      await toMap(page);
+    };
+    // A node more, made in 2D: on the map it is born by its network, the rest stays put.
+    await page.keyboard.press('KeyM');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-view', '2d', {
+      timeout: 30_000,
+    });
+    await ws(page, 'focus');
+    await createNode(page, 600, 520, 'Гамма');
+    await toMap(page);
+    // A third of the stars are new since the full layout: the map says it is out of date.
+    const stale = page.locator('.toast', { hasText: 'Звёздная карта устарела' });
+    await expect(stale).toHaveCount(1);
+    await expect(stale.getByRole('button', { name: 'Пересчитать' })).toBeVisible();
+    const before = await ask(page, 'placeOf', alpha);
+    await expect.poll(() => kept(alpha)).toEqual(before);
+    // The next session starts from the device's places, not from a layout of its own.
+    await reopen();
+    expect(await ask(page, 'placeOf', alpha)).toEqual(before);
+    // «Пересчитать карту» from the map's menu: laid out anew, and kept so.
+    const r = await box(page, '.proto-map');
+    await page.mouse.click(r.x + 40, r.y + 40, { button: 'right' });
+    await page.locator('.context-menu').getByText('Пересчитать карту').click();
+    await expect.poll(() => ask(page, 'placeOf', alpha)).not.toEqual(before);
+    await expect.poll(() => field(page, 'still')).toBe(true);
+    const anew = await ask(page, 'placeOf', alpha);
+    await expect.poll(() => kept(alpha)).toEqual(anew);
+    // «Вернуть прежнюю»: the layout before, kept again.
+    await page
+      .locator('.toast', { hasText: 'Звёздная карта пересчитана' })
+      .getByRole('button', { name: 'Вернуть прежнюю' })
+      .click();
+    await expect.poll(() => ask(page, 'placeOf', alpha)).toEqual(before);
+    await expect.poll(() => kept(alpha)).toEqual(before);
+    await reopen();
+    expect(await ask(page, 'placeOf', alpha)).toEqual(before);
+  });
+
   test('the quality: the first frames choose it, the menu and the palette set it (08 §8.4, NFR-19)', async ({
     page,
   }) => {

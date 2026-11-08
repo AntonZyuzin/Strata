@@ -118,6 +118,13 @@ export function relaxInputs(x: StarMapExtract): {
 export const FULL_LAYOUT = { ticks: 300, alphaMin: 0.001 } as const;
 
 /**
+ * The layout's version (08 §3.5): positions a device kept from another —
+ * another model of forces, another start — are laid out anew. One more
+ * whenever `MODEL`, `FULL_LAYOUT` or the start of `initialLayout` change.
+ */
+export const LAYOUT_VERSION = 1;
+
+/**
  * Runs `ticks` ticks of the model over all bodies, cooling 1 → 0.001, and
  * writes the result into `pos`, on this thread. Returns the time it took, ms.
  * The app runs the same in its worker (`@strata/layout/worker`).

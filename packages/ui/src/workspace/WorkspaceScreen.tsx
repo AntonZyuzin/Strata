@@ -187,6 +187,8 @@ interface Toast {
   key: string;
   params?: Record<string, string | number>;
   undo: boolean;
+  /** A step of its own offered by the toast, in place of the undo. */
+  action?: { label: MessageKey; run: () => void };
 }
 
 interface Camera {
@@ -684,12 +686,20 @@ export function WorkspaceScreen(props: {
     l ? t(locale, l.key as MessageKey, l.params ?? {}) : t(locale, 'proto.noSteps');
 
   const toast = useCallback(
-    (key: string, params?: Record<string, string | number>, undo = false) => {
+    (
+      key: string,
+      params?: Record<string, string | number>,
+      undo = false,
+      action?: Toast['action'],
+    ) => {
       const id = ++toastId.current;
-      setToasts((ts) => [...ts.slice(-2), { id, key, undo, ...(params ? { params } : {}) }]);
+      setToasts((ts) => [
+        ...ts.slice(-2),
+        { id, key, undo, ...(params ? { params } : {}), ...(action ? { action } : {}) },
+      ]);
       setTimeout(
         () => setToasts((ts) => ts.filter((x) => x.id !== id)),
-        undo ? TOAST_UNDO_MS : TOAST_MS,
+        undo || action ? TOAST_UNDO_MS : TOAST_MS,
       );
     },
     [],
@@ -1038,6 +1048,7 @@ export function WorkspaceScreen(props: {
       menu: (x, y, id) => mapCalls.current?.menu(x, y, id),
       undo: (redo) => mapCalls.current?.undo(redo),
       toast: (key) => toast(key),
+      offer: (key, label, run) => toast(key, undefined, false, { label, run }),
       measure: !new URLSearchParams(window.location.search).has('plain'),
     };
 
@@ -3325,6 +3336,7 @@ export function WorkspaceScreen(props: {
       return [
         { label: t(locale, 'ctx.create'), hint: 'Tab', onSelect: () => map.act('create') },
         { label: t(locale, 'ctx.showAll'), hint: 'H', onSelect: () => map.act('overview') },
+        { label: t(locale, 'map.relayout'), onSelect: () => map.act('relayout') },
         ...(['auto', 'high', 'medium', 'economy'] as const).map(
           (q, i): MenuEntry => ({
             label: t(locale, `map.quality.${q}` as const),
@@ -3862,7 +3874,17 @@ export function WorkspaceScreen(props: {
             <span title={t(locale, x.key as MessageKey, x.params ?? {})}>
               {t(locale, x.key as MessageKey, x.params ?? {})}
             </span>
-            {x.undo ? (
+            {x.action ? (
+              <button
+                type="button"
+                onClick={() => {
+                  x.action?.run();
+                  setToasts((ts) => ts.filter((y) => y.id !== x.id));
+                }}
+              >
+                {t(locale, x.action.label)}
+              </button>
+            ) : x.undo ? (
               <button
                 type="button"
                 onClick={() => {

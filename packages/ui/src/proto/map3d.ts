@@ -25,6 +25,7 @@ import {
   idHash,
   initialLayout,
   isCluster,
+  LAYOUT_VERSION,
   LIVE_ALPHA,
   LIVE_COOLING,
   lookPose,
@@ -60,6 +61,7 @@ import {
 } from '@strata/view3d/map';
 import { briefCard, type CardItem, type CardWords, fullCard } from './map-cards';
 import { MapPhysics } from './map-physics';
+import { loadStars, saveStars } from './starCache';
 
 /**
  * The star map (08): `M` or the bar's button flies from the canvas into the
@@ -137,6 +139,8 @@ export interface MapNav {
   /** `Ctrl+Z` / `Ctrl+Shift+Z` on the map: the core's history (05 §11). */
   undo: (redo: boolean) => void;
   toast: (key: MessageKey) => void;
+  /** A message with a step of its own on its button (08 §3.4: «Пересчитать», «Вернуть прежнюю»). */
+  offer?: (key: MessageKey, label: MessageKey, run: () => void) => void;
   /** The first frames choose the quality (08 §8.4); off for e2e on software WebGL. */
   measure: boolean;
 }
@@ -173,6 +177,12 @@ const TICK_MS = 1000 / 60;
 /** A new star's flash and a removed one's fade, ms (08 §3.4). */
 const FLASH_MS = 300;
 const FADE_MS = 200;
+/** The stars' flight to a layout made anew (08 §3.4). */
+const RELAYOUT_MS = 800;
+/** «Карта устарела» once this share of the stars was born or went since the full layout (08 §3.4). */
+const STALE = 0.2;
+/** The workspaces whose map said «Карта устарела» this session: once each. */
+const staleSaid = new Set<string>();
 const QUALITY_KEY = 'strata.map.quality';
 
 const pinsKey = (workspace: string) => `strata.map.pins.${workspace}`;
@@ -253,6 +263,18 @@ export class Map3D {
   private gesture: Gesture | null = null;
   private flight: Ticker | null = null;
   private live: Ticker | null = null;
+  /** «Пересчитать карту» is under way. */
+  private relaying = false;
+  /** Stars at the last full layout, and stars born or gone since (08 §3.4). */
+  private fullCount = 0;
+  private drift = 0;
+  /** The layout before «Пересчитать карту», for «Вернуть прежнюю». */
+  private previous: {
+    space: SpaceExtract;
+    pos: Float32Array;
+    full: number;
+    drift: number;
+  } | null = null;
   private readonly tickers = new Set<Ticker>();
   private frame = 0;
   private lastFrame = 0;
@@ -633,6 +655,8 @@ export class Map3D {
     const b = given ?? this.selected ?? this.hovered;
     if (action === 'create') {
       this.create(given ?? this.selected);
+    } else if (action === 'relayout') {
+      void this.relayout();
     } else if (action === 'up') {
       this.up();
     } else if (action === 'overview') {
@@ -812,19 +836,38 @@ export class Map3D {
     const next = spaceExtract(items, wires);
     const old = this.space;
     const oldPos = this.pos;
-    if (!old || !oldPos) {
-      const pos = await this.physics.start(
-        next.x,
-        initialLayout(next.x, 1),
-        this.pinned(next),
-        FULL_LAYOUT.ticks,
-      );
+    // Where the stars stood: on this map, or as the device kept them (08 §3.5);
+    // `lost` — those of them gone since.
+    let known: ((id: string) => Float32Array | undefined) | null = null;
+    let lost = 0;
+    if (old && oldPos) {
+      known = (id) => {
+        const b = old.body.get(id);
+        return b === undefined ? undefined : oldPos.subarray(b * 3, b * 3 + 3);
+      };
+      lost = old.ids.filter((id) => !next.body.has(id)).length;
+    } else {
+      const kept = await loadStars(nav.workspace, LAYOUT_VERSION);
       if (this.dead) return;
-      this.install(next, pos, items, signature);
+      const at = new Map(kept?.ids.map((id, i) => [id, i]));
+      const held = next.ids.filter((id) => at.has(id)).length;
+      // Kept for fewer than half the stars, the rest would crowd: laid out anew.
+      if (kept && held * 2 >= next.ids.length) {
+        known = (id) => {
+          const i = at.get(id);
+          return i === undefined ? undefined : kept.pos.subarray(i * 3, i * 3 + 3);
+        };
+        lost = kept.ids.length - held;
+        this.fullCount = kept.full;
+        this.drift = kept.drift;
+      }
+    }
+    if (!known) {
+      await this.layoutAnew(next, items, signature);
       return;
     }
     // A removed star fades where it is; the hole stays until a new layout (08 §3.4).
-    const gone = old.ids.flatMap((id, b) => (next.body.has(id) ? [] : [b]));
+    const gone = old ? old.ids.flatMap((id, b) => (next.body.has(id) ? [] : [b])) : [];
     if (gone.length > 0 && this.state === '3d' && !this.view.reducedMotion) {
       await this.animate(FADE_MS, (k) => {
         for (const b of gone) this.map?.setStarLook(b, 1, 1 - k);
@@ -834,10 +877,11 @@ export class Map3D {
     const pos = new Float32Array(next.x.count * 3);
     const newcomers: number[] = [];
     next.ids.forEach((id, b) => {
-      const was = old.body.get(id);
+      const was = known(id);
       if (was === undefined) newcomers.push(b);
-      else pos.set(oldPos.subarray(was * 3, was * 3 + 3), b * 3);
+      else pos.set(was, b * 3);
     });
+    this.drift += newcomers.length + lost;
     const from = born?.from ? (next.body.get(born.from) ?? null) : null;
     // Parents come before children: a new network's new nodes go round it.
     for (const b of newcomers) {
@@ -846,6 +890,7 @@ export class Map3D {
     }
     for (const p of this.pinned(next)) pos.set([p.x, p.y, p.z], p.i * 3);
     this.install(next, pos, items, signature);
+    this.keep();
     if (newcomers.length > 0 && !QUALITY[this.quality].touchOnly) {
       // The new stars and their neighbours settle; the rest stays (08 §3.4).
       await this.physics.start(next.x, pos, this.pinned(next), 0);
@@ -864,6 +909,7 @@ export class Map3D {
       }
       if (this.dead || this.space !== next) return;
       this.placed(relaxed);
+      this.keep();
     }
     const nb = born ? next.body.get(born.id) : undefined;
     if (nb !== undefined && this.state === '3d' && QUALITY[this.quality].halos) {
@@ -873,6 +919,116 @@ export class Map3D {
       this.map?.setStarLook(nb, 1, 1);
       this.draw();
     }
+  }
+
+  /**
+   * «Пересчитать карту» (08 §3.4): the whole space laid out anew from its
+   * start — the holes of removed stars close, the clusters find their
+   * places again; the stars fly there, the device keeps the new layout, and
+   * the whole space comes into view. Pinned stars stay.
+   */
+  private async relayout(): Promise<void> {
+    const { space, pos } = this;
+    if (!space || !pos || this.relaying) return;
+    this.relaying = true;
+    try {
+      this.stopLive();
+      const previous = { space, pos: pos.slice(), full: this.fullCount, drift: this.drift };
+      const next = await this.physics.start(
+        space.x,
+        initialLayout(space.x, 1),
+        this.pinned(space),
+        FULL_LAYOUT.ticks,
+      );
+      if (this.dead || this.space !== space) return;
+      await this.flyStars(pos.slice(), next);
+      if (this.dead || this.space !== space) return;
+      this.previous = previous;
+      this.fullCount = space.ids.length;
+      this.drift = 0;
+      this.keep();
+      if (this.state === '3d') this.overview();
+      this.draw();
+      this.nav?.offer?.('map.relaid', 'map.relayoutBack', () => void this.relayoutBack());
+    } finally {
+      this.relaying = false;
+    }
+  }
+
+  /** «Вернуть прежнюю» (08 §3.4): the layout before «Пересчитать карту», kept again. */
+  private async relayoutBack(): Promise<void> {
+    const { previous, space, pos } = this;
+    if (!previous || !space || !pos || previous.space !== space || this.relaying) return;
+    this.previous = null;
+    this.relaying = true;
+    try {
+      this.stopLive();
+      await this.physics.start(space.x, previous.pos.slice(), this.pinned(space), 0);
+      if (this.dead || this.space !== space) return;
+      await this.flyStars(pos.slice(), previous.pos);
+      if (this.dead || this.space !== space) return;
+      this.fullCount = previous.full;
+      this.drift = previous.drift;
+      this.keep();
+      this.draw();
+    } finally {
+      this.relaying = false;
+    }
+  }
+
+  /** The stars fly from `start` to `end` (08 §3.4), at once with «less motion» or in 2D. */
+  private async flyStars(start: Float32Array, end: Float32Array): Promise<void> {
+    if (this.state === '3d' && !this.view.reducedMotion) {
+      const now = new Float32Array(end.length);
+      await this.animate(RELAYOUT_MS, (k) => {
+        const e = 1 - (1 - k) ** 3;
+        for (let i = 0; i < now.length; i++) {
+          now[i] = (start[i] ?? 0) + ((end[i] ?? 0) - (start[i] ?? 0)) * e;
+        }
+        this.placed(now);
+      });
+      if (this.dead) return;
+    }
+    this.placed(end.slice());
+  }
+
+  /**
+   * «Карта устарела» (08 §3.4): said once a session, when the map opens and a
+   * fifth of its stars or more were born or went since the full layout.
+   */
+  private sayStale(): void {
+    const nav = this.nav;
+    if (!nav || staleSaid.has(nav.workspace)) return;
+    if (this.fullCount === 0 || this.drift < STALE * this.fullCount) return;
+    staleSaid.add(nav.workspace);
+    nav.offer?.('map.stale', 'map.relayoutNow', () => void this.relayout());
+  }
+
+  /** A full layout of `next` from its start (08 §3.3), kept on the device. */
+  private async layoutAnew(next: SpaceExtract, items: MapItem[], signature: string) {
+    const pos = await this.physics.start(
+      next.x,
+      initialLayout(next.x, 1),
+      this.pinned(next),
+      FULL_LAYOUT.ticks,
+    );
+    if (this.dead) return;
+    this.install(next, pos, items, signature);
+    this.fullCount = next.ids.length;
+    this.drift = 0;
+    this.keep();
+  }
+
+  /** The stars' positions now as the device's (08 §3.5): the next map starts from them. */
+  private keep(): void {
+    const { nav, space, pos } = this;
+    if (!nav || !space || !pos) return;
+    saveStars(nav.workspace, LAYOUT_VERSION, {
+      ids: space.ids,
+      pos,
+      full: this.fullCount,
+      drift: this.drift,
+    });
   }
 
   /**
@@ -1069,6 +1225,7 @@ export class Map3D {
     this.select(null);
     this.draw();
     this.nav?.change?.();
+    this.sayStale();
   }
 
   /** The bridge back into the network on the canvas, its frame as it is. */
@@ -2005,7 +2162,11 @@ export class Map3D {
           if (cool === 1) return;
           alpha = r.alpha;
           quiet = r.quiet === n ? quiet + n : r.quiet;
-          if (quiet >= REST_TICKS) done = true;
+          if (quiet >= REST_TICKS) {
+            done = true;
+            // At rest again: the new equilibrium is the stars' place (08 §3.5, §3.6).
+            this.keep();
+          }
         })
         .catch(() => {
           done = true;
@@ -2342,7 +2503,8 @@ export type MapAction =
   | 'flag:pause'
   | 'flag:template'
   | 'delete'
-  | 'deleteEverywhere';
+  | 'deleteEverywhere'
+  | 'relayout';
 
 const FLY_KEYS = new Set([
   'KeyW',

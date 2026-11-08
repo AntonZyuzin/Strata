@@ -743,6 +743,77 @@ async function twoWays(page: Page) {
   await settled(page);
 }
 
+/** The home screen's only card opened: its canvas ready for keys, as `createWorkspace` leaves it. */
+async function openCard(page: Page) {
+  await page.locator('.home-open').click();
+  await page.waitForFunction(() => window.__strataWs?.graph() != null);
+  await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1', {
+    timeout: 15_000,
+  });
+}
+
+/**
+ * Workspace `name` with both kinds of copy of its store (10 §3.5): a node,
+ * its tab closed and the workspace opened again — the opening copies it —
+ * then restored from that copy once, which keeps the store as it was. Ends
+ * on the home screen; `restore` — the card menu's item in the page's language.
+ */
+async function withBackups(page: Page, name: string, restore: string) {
+  await createWorkspace(page, name);
+  await createNode(page, 600, 400, 'Нода');
+  await settled(page);
+  await page.locator('.tab-close').click();
+  await expect(page.locator('.home-card')).toHaveCount(1);
+  await openCard(page);
+  await page.locator('.tabbar-logo').click();
+  await cardAction(page, name, restore, true);
+  await expect(page.locator('.restore-list [role="option"]')).toHaveCount(1);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.workspace')).toBeVisible();
+  await page.waitForFunction(() => window.__strataWs?.graph() != null);
+  await page.locator('.tabbar-logo').click();
+  await expect(page.locator('.home-card')).toHaveCount(1);
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`«Восстановить из копии» keeps its frame in RU and EN @${deviceScaleFactor}x (10 §3.5)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    const name = 'Очень длинное название пространства для проверки обрезки';
+    for (const [locale, restore] of [
+      ['ru-RU', 'Восстановить из копии…'],
+      ['en-US', 'Restore from a backup…'],
+    ] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 800, height: 500 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await withBackups(page, name, restore);
+      await cardAction(page, name, restore, true);
+      // The longest rows: a day's copy and the store as it was before the restore.
+      await expect(page.locator('.restore-list [role="option"]')).toHaveCount(2);
+      expect(await overflowing(page, '.restore-dialog'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.restore-dialog'),
+        list: await box(page, '.restore-list'),
+        actions: await box(page, '.restore-dialog .dialog-actions'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'list', 'actions'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
 for (const deviceScaleFactor of [1, 2]) {
   test(`a content window's title and the dock keep their boxes in RU and EN @${deviceScaleFactor}x (06 §2.2)`, async ({
     browser,
@@ -2300,6 +2371,55 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.home-name')).toHaveText(['Работа 2026']);
     await page.locator('.home-open').click();
     await expect(page.locator('.tab.is-active')).toHaveText('Работа 2026');
+  });
+
+  test('a workspace comes back from a copy, and the restore can be taken back (10 §3.5)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Копии');
+    await createNode(page, 600, 400, 'До копии');
+    await settled(page);
+    // Made today: no copy yet.
+    await page.getByRole('button', { name: 'Главная' }).click();
+    await cardAction(page, 'Копии', 'Восстановить из копии…', true);
+    const dialog = page.getByRole('dialog', { name: 'Восстановить «Копии»' });
+    await expect(dialog.locator('.tab-menu-empty')).toHaveText('Копий пока нет');
+    await expect(dialog.getByRole('button', { name: 'Восстановить' })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+
+    // Its tab closed, opened again: the opening makes the day's copy.
+    await openCard(page);
+    await page.getByRole('button', { name: 'Закрыть «Копии»' }).click();
+    await openCard(page);
+    await createNode(page, 700, 300, 'После копии');
+    await settled(page);
+    await page.getByRole('button', { name: 'Главная' }).click();
+    await cardAction(page, 'Копии', 'Восстановить из копии…', true);
+    const rows = dialog.getByRole('option');
+    await expect(rows).toHaveCount(1);
+    await expect(rows.first()).toHaveText(/^Копия за \d\d\/\d\d\/\d{4}$/);
+    await expect(rows.first()).toHaveAttribute('aria-selected', 'true');
+    // `Enter` in the list: the workspace becomes the copy and opens.
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.tab.is-active')).toHaveText('Копии');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['До копии']);
+
+    // The store as it was is the newest copy: restoring it takes the restore back.
+    await page.getByRole('button', { name: 'Главная' }).click();
+    await cardAction(page, 'Копии', 'Восстановить из копии…', true);
+    await expect(rows).toHaveCount(2);
+    await expect(rows.nth(0)).toHaveText(/^До восстановления \d\d\/\d\d\/\d{4} \d\d:\d\d$/);
+    await expect(rows.nth(1)).toHaveText(/^Копия за /);
+    await rows.nth(1).click();
+    await expect(rows.nth(1)).toHaveAttribute('aria-selected', 'true');
+    await rows.nth(0).click();
+    await dialog.getByRole('button', { name: 'Восстановить' }).click();
+    await expect
+      .poll(async () => (await graphNow(page)).names)
+      .toEqual(['До копии', 'После копии']);
   });
 
   test('a workspace goes out as .strata.zip and comes back as a copy', async ({ page }) => {

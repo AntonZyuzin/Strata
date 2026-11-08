@@ -1,4 +1,5 @@
 import {
+  type Backup,
   CoreError,
   type HomeBackend,
   type HomeState,
@@ -11,25 +12,30 @@ import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickFolder, pickSavePath } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
+import type { Clock, DateFormat } from '../prefs';
 import { IconButton } from '../TabBar';
 import { keepJob } from '../workspace/imports';
+import { RestoreDialog } from './RestoreDialog';
 
 /**
  * The home screen (✅ Q-16-12): the workspaces of this device as cards, last
  * opened first, like the files of Figma; a new one, a folder from disk. The
  * profile, the language and «О программе» live in «Настройки» (✅ Q-06-23).
  * A card opens its workspace in a tab; its actions are icons on the card and
- * its right-button menu.
+ * its right-button menu, «Восстановить из копии…» among them (10 §3.5).
  */
 
 type Dialog =
   | { t: 'create' }
   | { t: 'rename'; entry: WorkspaceEntry }
-  | { t: 'remove'; entry: WorkspaceEntry };
+  | { t: 'remove'; entry: WorkspaceEntry }
+  /** The workspace's copies: null until the backend answers. */
+  | { t: 'restore'; entry: WorkspaceEntry; backups: Backup[] | null };
 
-/** What went wrong, in words: the core's, or the interface's own for what it knows (10 §3.6). */
+/** What went wrong, in words: the core's, or the interface's own for what it knows (10 §3.5–3.6). */
 function message(locale: Locale, e: unknown): string {
   if (e instanceof CoreError && e.code === 'locked') return t(locale, 'home.locked');
+  if (e instanceof CoreError && e.code === 'damaged') return t(locale, 'home.damaged');
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -57,6 +63,8 @@ export function download(name: string, bytes: Uint8Array): void {
 
 export function HomeScreen(props: {
   locale: Locale;
+  /** The date form and the clock in force: the copies' dates read so. */
+  reading: { date: DateFormat; clock: Clock };
   home: HomeBackend;
   onOpen: (opened: Opened) => void;
   onRenamed: (id: string, name: string) => void;
@@ -186,6 +194,17 @@ export function HomeScreen(props: {
       return s;
     });
 
+  /** «Восстановить из копии…» (10 §3.5): the window opens at once, the copies come after. */
+  const askRestore = (w: WorkspaceEntry) => {
+    setError(null);
+    setDialog({ t: 'restore', entry: w, backups: null });
+    home.backups(w.id).then(
+      (backups) =>
+        setDialog((d) => (d?.t === 'restore' && d.entry.id === w.id ? { ...d, backups } : d)),
+      (e: unknown) => setError(e),
+    );
+  };
+
   /** A card's actions in its right-button menu (06 §5). */
   const actions = (w: WorkspaceEntry): MenuEntry[] => [
     {
@@ -199,6 +218,7 @@ export function HomeScreen(props: {
       onSelect: () => setDialog({ t: 'rename', entry: w }),
     },
     { label: t(locale, 'home.export'), disabled: w.missing, onSelect: () => void exportArchive(w) },
+    { label: t(locale, 'home.restore'), disabled: w.missing, onSelect: () => askRestore(w) },
     {
       label: t(locale, 'home.remove'),
       separated: true,
@@ -277,7 +297,7 @@ export function HomeScreen(props: {
         </div>
       </div>
       <div className="home-content">
-        {error !== null ? (
+        {error !== null && dialog?.t !== 'restore' ? (
           <p
             className="home-error"
             role="alert"
@@ -371,6 +391,24 @@ export function HomeScreen(props: {
           onCommit={(name) =>
             void (dialog.t === 'create' ? run(() => home.create(name)) : rename(dialog.entry, name))
           }
+        />
+      ) : null}
+      {dialog?.t === 'restore' ? (
+        <RestoreDialog
+          locale={locale}
+          name={dialog.entry.name}
+          backups={dialog.backups}
+          date={props.reading.date}
+          clock={props.reading.clock}
+          busy={busy}
+          error={
+            error !== null ? t(locale, 'home.error', { message: message(locale, error) }) : null
+          }
+          onRestore={(b) => void run(() => home.restore(dialog.entry.id, b.id))}
+          onCancel={() => {
+            setDialog(null);
+            setError(null);
+          }}
         />
       ) : null}
       {dialog?.t === 'remove' ? (

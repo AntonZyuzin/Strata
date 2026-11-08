@@ -675,7 +675,10 @@ export class CoreError extends Error {
   constructor(
     message: string,
     readonly invalid: boolean,
-    /** What the interface words in its own way: `locked` — the folder is open in another process (10 §3.6). */
+    /**
+     * What the interface words in its own way: `locked` — the folder is open
+     * in another process (10 §3.6); `damaged` — a copy that cannot be restored (§3.5).
+     */
     readonly code?: string,
   ) {
     super(message);
@@ -960,6 +963,15 @@ export interface Opened {
 }
 
 /** The home screen's side of the core: the workspaces of this device. */
+/** A copy of a workspace's store (10 §3.5): a day's, or the store as it was before a restore. */
+export interface Backup {
+  /** What a restore asks for: `store-YYYYMMDD` or `replaced-<unix ms>`. */
+  id: string;
+  /** Unix ms: the day's midnight (UTC), or the moment of the restore. */
+  at: number;
+  kind: 'day' | 'replaced';
+}
+
 export interface HomeBackend {
   /** Where the workspaces live: a folder per workspace, or this browser. */
   readonly where: 'desktop' | 'browser';
@@ -979,6 +991,15 @@ export interface HomeBackend {
   setPreview(id: string, png: Uint8Array): Promise<void>;
   preview(id: string): Promise<Uint8Array | null>;
   setProfile(profile: Profile): Promise<HomeState>;
+  /** The copies of a workspace's store (10 §3.5), the newest first. */
+  backups(id: string): Promise<Backup[]>;
+  /**
+   * «Восстановить из копии» (10 §3.5): the workspace becomes its copy
+   * `backup` and opens; its tab, if it had one, starts afresh. The store as
+   * it was stays as a copy of its own, `replaced`. A copy that is damaged or
+   * another workspace's is refused, `damaged`, and nothing changes.
+   */
+  restore(id: string, backup: string): Promise<Opened>;
   /**
    * The workspace as `.strata.zip` (10 §3.5): on desktop into the file `to`
    * (nothing comes back), in a browser as bytes to download.
@@ -1014,6 +1035,7 @@ type HomeResponse =
   | ({ type: 'opened' } & Opened)
   | ({ type: 'importing' } & Opened)
   | { type: 'preview'; png: string | null }
+  | { type: 'backups'; backups: Backup[] }
   | { type: 'done' };
 
 /**
@@ -1088,6 +1110,12 @@ export function jsonHome(
       return r.type === 'preview' && r.png ? fromBase64(r.png) : null;
     },
     setProfile: (profile) => state({ call: 'setProfile', profile }),
+    backups: async (id) => {
+      const r = await call({ call: 'backups', id });
+      if (r.type !== 'backups') throw new CoreError(`expected backups, got ${r.type}`, false);
+      return r.backups;
+    },
+    restore: (id, backup) => opened({ call: 'restore', id, backup }),
     exportArchive: async (id, to) => {
       if (!to) throw new CoreError('the desktop exports into a file', true);
       await call({ call: 'export', id, path: to });

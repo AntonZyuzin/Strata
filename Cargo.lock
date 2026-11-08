@@ -4357,6 +4357,7 @@ dependencies = [
 name = "strata-core-wasm"
 version = "0.0.1"
 dependencies = [
+ "serde_json",
  "strata-core",
  "wasm-bindgen",
 ]

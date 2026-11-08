@@ -38,6 +38,9 @@ pub enum StoreError {
     /// The workspace's folder is open in another process (10 §3.6): who, as its `.lock` says.
     #[error("the workspace is open in another process ({0})")]
     Locked(String),
+    /// A copy of the store that cannot be restored (10 §3.5): damaged, or of another workspace.
+    #[error("the copy cannot be restored: {0}")]
+    Damaged(String),
 }
 
 /// A document as stored: a snapshot and the updates after it, in order.

@@ -2543,6 +2543,31 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin-top: calc(8 * var(--u));
 }
 
+/* «Восстановить из копии» (10 §3.5): the copies in a sunken list, a row
+   each, the chosen one inverse as in the Tab menu; eight rows high before
+   they load and after, then it scrolls; what failed on one line under it. */
+.restore-list {
+  height: calc(8 * var(--st-size-row) + 2 * var(--u));
+  padding: var(--u) 0;
+  overflow-y: auto;
+  background: var(--st-color-surface-sunken);
+  box-shadow: var(--st-bevel-sunken);
+}
+
+.restore-list:focus-visible {
+  box-shadow:
+    var(--st-bevel-sunken),
+    0 0 0 var(--u) var(--st-color-shadow);
+}
+
+.restore-error {
+  margin: calc(4 * var(--u)) 0 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-attention);
+}
+
 /* «Своя иконка» (07 §6.4–6.5): the original, then the mask in three bubbles
    on the Scene's ground; the style's rows under them, the labels in a column
    as wide as the longest language has it; the modes share one strip evenly,

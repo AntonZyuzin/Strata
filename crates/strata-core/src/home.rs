@@ -593,6 +593,16 @@ pub enum Request {
         id: String,
         path: String,
     },
+    /// The copies of the workspace's store (10 §3.5), the newest first.
+    Backups {
+        id: String,
+    },
+    /// «Восстановить из копии» (10 §3.5): the workspace's store becomes its
+    /// copy `backup`; its tab closes first, and the workspace opens again.
+    Restore {
+        id: String,
+        backup: String,
+    },
     /// The archive at `path` as a new workspace, opened.
     Import {
         path: String,
@@ -634,6 +644,9 @@ pub enum Response {
     },
     Preview {
         png: Option<String>,
+    },
+    Backups {
+        backups: Vec<crate::backups::Backup>,
     },
     /// A vault is coming in as a new workspace, open: its batches follow
     /// as `import` events (13 §3.3).
@@ -768,6 +781,19 @@ pub fn handle(
             bytes
                 .and_then(|b| std::fs::write(&path, b).map_err(io))
                 .map(|()| Response::Done)
+        }
+        Request::Backups { id } => home.entry(&id).map(|e| Response::Backups {
+            backups: crate::folder::list(&e.path),
+        }),
+        Request::Restore { id, backup } => {
+            // The tab lets the folder go: its `.lock` is the restore's for the while.
+            desk.release(&id);
+            let done = home
+                .entry(&id)
+                .map(|e| e.path.clone())
+                .and_then(|path| crate::sqlite::restore_folder(&path, &backup))
+                .and_then(|()| home.open(&id));
+            opened(desk, done)
         }
         Request::Import { path } => {
             let done = std::fs::read(&path)
@@ -999,6 +1025,68 @@ mod tests {
         assert!(!desk.is_open(&a_id));
         ask(&mut home, &mut desk, json!({ "call": "open", "id": a_id }));
         assert_eq!(undo(&desk), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_workspace_comes_back_from_a_copy_through_the_home_screen() {
+        // 10 §3.5: «Восстановить из копии» on a card — the tab lets the folder
+        // go, the store becomes the copy, and the workspace opens afresh.
+        let dir = temp_dir();
+        let mut home = Home::load(&dir);
+        let mut desk = Desk::default();
+        let a = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "create", "name": "Копии" }),
+        );
+        let id = a["workspace"]["id"].as_str().expect("id").to_owned();
+        let root = a["root"].as_str().expect("root").to_owned();
+        let folder = PathBuf::from(a["workspace"]["path"].as_str().expect("path"));
+        let backups = |home: &mut Home, desk: &mut Desk| {
+            ask(home, desk, json!({ "call": "backups", "id": id }))
+        };
+        assert_eq!(
+            backups(&mut home, &mut desk),
+            json!({ "type": "backups", "backups": [] })
+        );
+        crate::folder::back_up(&folder.join("store.sqlite")).expect("today's copy");
+        let step = json!({
+            "call": "apply",
+            "label": { "key": "t.create" },
+            "ops": [{ "op": "createNode", "kind": "note", "name": "После копии", "net": root, "x": 0, "y": 0 }],
+        });
+        let ws = desk.current_mut().expect("open");
+        let out: Value =
+            serde_json::from_str(&crate::api::call(ws, &step.to_string())).expect("json");
+        assert_eq!(out["type"], "applied");
+        let list = backups(&mut home, &mut desk);
+        let copy = list["backups"][0].clone();
+        assert_eq!(copy["kind"], "day", "{list}");
+
+        // Its tab is open: the restore lets it go first.
+        let back = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "restore", "id": id, "backup": copy["id"] }),
+        );
+        assert_eq!(back["type"], "opened", "{back}");
+        let ws = desk.current_mut().expect("open again");
+        assert!(
+            ws.network_view(&root).expect("view").nodes.is_empty(),
+            "the note came after the copy"
+        );
+        assert_eq!(ws.history().undo, None, "no undo across a restore");
+        let list = backups(&mut home, &mut desk);
+        assert_eq!(list["backups"][0]["kind"], "replaced", "{list}");
+
+        // A copy that is not there: said so.
+        let none = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "restore", "id": id, "backup": "store-20200101" }),
+        );
+        assert_eq!(none["type"], "error", "{none}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

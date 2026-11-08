@@ -2,6 +2,7 @@
 //! desktop answers over Tauri IPC, on a workspace whose store lives in
 //! memory. The page keeps the store's bytes (IndexedDB) and opens them again.
 
+use strata_core::backups::{Backup, BackupKind};
 use strata_core::{MemoryStore, Workspace};
 use wasm_bindgen::prelude::*;
 
@@ -81,6 +82,18 @@ impl Core {
         strata_core::archive::unpack(bytes)
             .map(|u| u.info.workspace_id)
             .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// A copy of a store, of `kind` (`day` or `replaced`) at `now` (unix
+    /// ms), added to `backups` (10 §3.5): `{ backups, added, gone }` as JSON —
+    /// the page keeps its copies by the rules of the desktop's folder.
+    #[wasm_bindgen(js_name = addBackup)]
+    pub fn add_backup(backups: &str, kind: &str, now: f64) -> Result<String, JsError> {
+        let list: Vec<Backup> = serde_json::from_str(backups)?;
+        let kind: BackupKind = serde_json::from_value(kind.into())?;
+        // Unix ms are whole and far below 2^53: the cast loses nothing.
+        let added = strata_core::backups::add(&list, kind, now as i64);
+        Ok(serde_json::to_string(&added)?)
     }
 
     /// An archive as a workspace; `copy` gives it a new id (10 §3.6).

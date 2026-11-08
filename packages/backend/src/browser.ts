@@ -1,5 +1,6 @@
 import init, { Core as WasmCore } from '../pkg/strata_core.js';
 import {
+  type Backup,
   Core,
   CoreError,
   type HomeBackend,
@@ -20,11 +21,16 @@ import {
  * browser build serves e2e and `pnpm dev`; the desktop keeps folders.
  */
 
+/** A value to set under a key, or null: the key goes. */
+export type ShelfWrite = readonly [key: string, value: Uint8Array | null];
+
 /** Byte values by key. */
 export interface Shelf {
   get(key: string): Promise<Uint8Array | undefined>;
   set(key: string, value: Uint8Array): Promise<void>;
   delete(key: string): Promise<void>;
+  /** Writes kept together: all of them, or none. */
+  batch(writes: readonly ShelfWrite[]): Promise<void>;
 }
 
 export function memoryShelf(): Shelf {
@@ -36,6 +42,12 @@ export function memoryShelf(): Shelf {
     },
     delete: async (k) => {
       m.delete(k);
+    },
+    batch: async (writes) => {
+      for (const [k, v] of writes) {
+        if (v) m.set(k, v);
+        else m.delete(k);
+      }
     },
   };
 }
@@ -88,7 +100,8 @@ const partsOf = (k: string) => IDBKeyRange.bound(`${k}#`, `${k}#\uffff`);
 /**
  * A shelf in IndexedDB: one store of byte arrays; a value over `part`
  * bytes is kept in parts. A value and its parts are written in one
- * transaction and read in one, so a value is whole or not there.
+ * transaction and read in one, so a value is whole or not there; a batch
+ * is one transaction too.
  */
 export async function indexedDbShelf(name = 'strata', part = PART): Promise<Shelf> {
   const open = indexedDB.open(name, 1);
@@ -98,6 +111,22 @@ export async function indexedDbShelf(name = 'strata', part = PART): Promise<Shel
     const t = db.transaction('kv', 'readwrite');
     f(t.objectStore('kv'));
     return committed(t);
+  };
+  const put = (store: IDBObjectStore, k: string, v: Uint8Array) => {
+    // Whole or in parts, never both: the old parts go first.
+    store.delete(partsOf(k));
+    if (v.byteLength <= part) {
+      store.put(v, k);
+      return;
+    }
+    const n = Math.ceil(v.byteLength / part);
+    store.put({ parts: n, length: v.byteLength } satisfies Parts, k);
+    // A copy each: a view would carry its whole buffer into the clone.
+    for (let i = 0; i < n; i++) store.put(v.slice(i * part, (i + 1) * part), partKey(k, i));
+  };
+  const remove = (store: IDBObjectStore, k: string) => {
+    store.delete(k);
+    store.delete(partsOf(k));
   };
   return {
     get: async (k) => {
@@ -120,23 +149,14 @@ export async function indexedDbShelf(name = 'strata', part = PART): Promise<Shel
       }
       return whole;
     },
-    set: (k, v) =>
+    set: (k, v) => write((store) => put(store, k, v)),
+    delete: (k) => write((store) => remove(store, k)),
+    batch: (writes) =>
       write((store) => {
-        // Whole or in parts, never both: the old parts go first.
-        store.delete(partsOf(k));
-        if (v.byteLength <= part) {
-          store.put(v, k);
-          return;
+        for (const [k, v] of writes) {
+          if (v) put(store, k, v);
+          else remove(store, k);
         }
-        const n = Math.ceil(v.byteLength / part);
-        store.put({ parts: n, length: v.byteLength } satisfies Parts, k);
-        // A copy each: a view would carry its whole buffer into the clone.
-        for (let i = 0; i < n; i++) store.put(v.slice(i * part, (i + 1) * part), partKey(k, i));
-      }),
-    delete: (k) =>
-      write((store) => {
-        store.delete(k);
-        store.delete(partsOf(k));
       }),
   };
 }
@@ -155,11 +175,24 @@ export function loadCore(bytes?: BufferSource): Promise<unknown> {
 interface Saved {
   workspaces: WorkspaceEntry[];
   profile: Profile;
+  /** The copies of each workspace's store (10 §3.5), the newest first. */
+  backups: Record<string, Backup[]>;
+}
+
+/** What a copy comes to by the core's rules (`strata_core::backups::add`). */
+interface BackupPlan {
+  backups: Backup[];
+  added: Backup | null;
+  gone: string[];
 }
 
 const HOME = 'home';
 const ws = (id: string) => `ws:${id}`;
 const preview = (id: string) => `preview:${id}`;
+const backupKey = (id: string, backup: string) => `backup:${id}:${backup}`;
+const DAY_MS = 86_400_000;
+const dayOf = (ms: number) => Math.floor(ms / DAY_MS);
+const encoded = (saved: Saved) => new TextEncoder().encode(JSON.stringify(saved));
 /** Calls that write: the store's bytes go to the shelf after them. */
 const WRITES = new Set([
   'apply',
@@ -183,13 +216,14 @@ export async function browserHome(
 ): Promise<HomeBackend> {
   await loadCore();
   const raw = await shelf.get(HOME);
-  let saved: Saved = { workspaces: [], profile: { name: '' } };
+  let saved: Saved = { workspaces: [], profile: { name: '' }, backups: {} };
   if (raw) {
     try {
       saved = { ...saved, ...(JSON.parse(new TextDecoder().decode(raw)) as Partial<Saved>) };
     } catch {
       // A broken list starts empty; the workspaces' bytes stay on the shelf.
     }
+    if (typeof saved.backups !== 'object' || saved.backups === null) saved.backups = {};
   }
   // The workspaces open in tabs, with their undo (05 §11); one on the canvas.
   const tabs = new Map<string, WasmCore>();
@@ -202,7 +236,39 @@ export async function browserHome(
     return p;
   };
 
-  const save = () => shelf.set(HOME, new TextEncoder().encode(JSON.stringify(saved)));
+  const save = () => shelf.set(HOME, encoded(saved));
+  /** The day each workspace in memory had its copy made, or found made (10 §3.5). */
+  const copied = new Map<string, number>();
+  /**
+   * A copy of workspace `id`'s store, `bytes`, of `kind`, by the core's
+   * rules (10 §3.5, the desktop's folder alike): its writes on the shelf —
+   * the copy, the copies that go — and the list after it.
+   */
+  const plan = (id: string, bytes: Uint8Array, kind: Backup['kind']) => {
+    const p = JSON.parse(
+      WasmCore.addBackup(JSON.stringify(saved.backups[id] ?? []), kind, now()),
+    ) as BackupPlan;
+    const writes: ShelfWrite[] = p.gone.map((g) => [backupKey(id, g), null]);
+    if (p.added) writes.unshift([backupKey(id, p.added.id), bytes]);
+    return { writes, backups: { ...saved.backups, [id]: p.backups } };
+  };
+  /**
+   * Today's copy of workspace `id`, `bytes`, unless it has one: in one write
+   * with the list. A copy that fails is tried again the next time, as the
+   * desktop's is.
+   */
+  const backUpToday = async (id: string, bytes: Uint8Array) => {
+    copied.set(id, dayOf(now()));
+    const p = plan(id, bytes, 'day');
+    if (p.writes.length === 0) return;
+    const next: Saved = { ...saved, backups: p.backups };
+    try {
+      await shelf.batch([...p.writes, [HOME, encoded(next)]]);
+      saved = next;
+    } catch {
+      copied.delete(id);
+    }
+  };
   const state = (): HomeState => ({
     workspaces: [...saved.workspaces].sort(
       (a, b) => b.openedAt - a.openedAt || a.name.localeCompare(b.name),
@@ -218,6 +284,8 @@ export async function browserHome(
   };
   const remember = async (core: WasmCore): Promise<Opened> => {
     const entry: WorkspaceEntry = { id: core.id(), name: core.rootName(), openedAt: now() };
+    // A workspace made today has its first copy when a day has passed (10 §3.5).
+    if (!copied.has(entry.id)) copied.set(entry.id, dayOf(now()));
     saved.workspaces = [...saved.workspaces.filter((e) => e.id !== entry.id), entry];
     await shelf.set(ws(entry.id), core.bytes());
     await save();
@@ -228,9 +296,11 @@ export async function browserHome(
     current = { id: entry.id, core };
     return { workspace: entry, root: core.root() };
   };
-  const load = async (id: string): Promise<WasmCore> => {
+  /** Workspace `id` from the shelf; `backUp` — opened: today's copy first (10 §3.5). */
+  const load = async (id: string, backUp = false): Promise<WasmCore> => {
     const bytes = await shelf.get(ws(id));
     if (!bytes) throw new CoreError(`no workspace ${id} in this browser`, true);
+    if (backUp) await backUpToday(id, bytes);
     return WasmCore.open(bytes);
   };
 
@@ -244,7 +314,10 @@ export async function browserHome(
       // An import driven batch by batch is kept once, as its last one lands.
       const ended = call === 'importStep' && out.includes('"report":');
       if ((WRITES.has(call) || ended) && !out.includes('"type":"error"')) {
-        await shelf.set(ws(c.id), c.core.bytes());
+        const bytes = c.core.bytes();
+        await shelf.set(ws(c.id), bytes);
+        // A day passed with the workspace open: its copy (10 §3.5).
+        if (copied.get(c.id) !== dayOf(now())) await backUpToday(c.id, bytes);
       }
       return out;
     }),
@@ -323,7 +396,7 @@ export async function browserHome(
         return remember(WasmCore.create(n));
       }),
     // A workspace in a tab comes back as it was, its undo too.
-    open: (id) => later(async () => remember(tabs.get(id) ?? (await load(id)))),
+    open: (id) => later(async () => remember(tabs.get(id) ?? (await load(id, true)))),
     close: () =>
       later(async () => {
         current = null;
@@ -363,15 +436,59 @@ export async function browserHome(
         await save();
         return state();
       }),
-    // A browser has no system trash: the workspace's bytes go too.
+    // A browser has no system trash: the workspace's bytes go too, its copies with them.
     remove: (id) =>
       later(async () => {
         release(id);
-        saved.workspaces = saved.workspaces.filter((e) => e.id !== id);
-        await shelf.delete(ws(id));
-        await shelf.delete(preview(id));
-        await save();
+        const { [id]: copies = [], ...backups } = saved.backups;
+        const next: Saved = {
+          ...saved,
+          workspaces: saved.workspaces.filter((e) => e.id !== id),
+          backups,
+        };
+        await shelf.batch([
+          [ws(id), null],
+          [preview(id), null],
+          ...copies.map((b): ShelfWrite => [backupKey(id, b.id), null]),
+          [HOME, encoded(next)],
+        ]);
+        saved = next;
         return state();
+      }),
+    backups: async (id) => [...(saved.backups[id] ?? [])].sort((a, b) => b.at - a.at),
+    // The copy is checked first — it opens, and it is this workspace — then
+    // the store as it was becomes a copy of its own in the same write as the
+    // copy put in its place (10 §3.5).
+    restore: (id, backup) =>
+      later(async () => {
+        const known = (saved.backups[id] ?? []).some((b) => b.id === backup);
+        const bytes = known ? await shelf.get(backupKey(id, backup)) : undefined;
+        if (!bytes) throw new CoreError(`no copy ${backup} of ${id} in this browser`, true);
+        const damaged = (why: string) =>
+          new CoreError(`the copy cannot be restored: ${why}`, false, 'damaged');
+        let c: WasmCore;
+        try {
+          c = WasmCore.open(bytes);
+        } catch (e) {
+          throw damaged(e instanceof Error ? e.message : String(e));
+        }
+        if (c.id() !== id) {
+          const theirs = c.id();
+          c.free();
+          throw damaged(`a copy of workspace ${theirs}`);
+        }
+        try {
+          release(id);
+          const was = await shelf.get(ws(id));
+          const p = was ? plan(id, was, 'replaced') : { writes: [], backups: saved.backups };
+          const next: Saved = { ...saved, backups: p.backups };
+          await shelf.batch([[ws(id), bytes], ...p.writes, [HOME, encoded(next)]]);
+          saved = next;
+        } catch (e) {
+          c.free();
+          throw e;
+        }
+        return remember(c);
       }),
     setPreview: (id, png) => later(() => shelf.set(preview(id), png)),
     preview: async (id) => (await shelf.get(preview(id))) ?? null,

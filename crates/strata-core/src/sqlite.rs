@@ -132,6 +132,24 @@ impl SqliteStore {
         })
     }
 
+    /// A copy of a store in `backups/` (10 §3.5), opened to be read: no
+    /// `.lock`, no backups of its own, no assets.
+    fn backup_at(path: &Path) -> std::result::Result<Self, StoreError> {
+        let db = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| StoreError::Damaged(e.to_string()))?;
+        Ok(Self {
+            db,
+            assets: None,
+            path: None,
+            backed_up: folder::day_now(),
+            backup: None,
+            _lock: None,
+        })
+    }
+
     /// A store in memory with the same tables (tests).
     pub fn in_memory() -> std::result::Result<Self, StoreError> {
         let db = Connection::open_in_memory().map_err(io)?;
@@ -535,6 +553,21 @@ pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
     Ok(ws)
 }
 
+/// «Восстановить из копии» (10 §3.5): folder `dir`'s store becomes its copy
+/// `backup`. The copy is read as a workspace first: one that is not, or is
+/// another workspace's, is refused, and nothing changes.
+pub fn restore_folder(dir: &Path, backup: &str) -> Result<()> {
+    let id = folder_id(dir)?;
+    let copy = Workspace::open(SqliteStore::backup_at(&folder::backup_path(dir, backup)?)?)
+        .map_err(|e| StoreError::Damaged(e.to_string()))?;
+    if copy.id() != id {
+        return Err(StoreError::Damaged(format!("a copy of workspace {}", copy.id())).into());
+    }
+    drop(copy);
+    folder::restore(dir, backup)?;
+    Ok(())
+}
+
 /// The app's default workspace folder in `data_dir`: opened, or created on first run.
 pub fn open_or_create(
     data_dir: &Path,
@@ -552,8 +585,40 @@ pub fn open_or_create(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::backups::BackupKind;
     use crate::{Label, Op};
     use strata_model::{NodeId, NodeKind};
+
+    /// A note named `name` in the root network of `ws`.
+    fn note(ws: &mut Workspace<SqliteStore>, name: &str) {
+        let root = ws.root();
+        ws.apply(
+            &[Op::CreateNode {
+                id: None,
+                net: root,
+                kind: NodeKind::Note,
+                name: name.to_owned(),
+                x: 0.0,
+                y: 0.0,
+            }],
+            Label::new("t"),
+        )
+        .expect("a note");
+    }
+
+    /// The names of the nodes in the root network of `ws`, sorted.
+    fn names(ws: &mut Workspace<SqliteStore>) -> Vec<String> {
+        let root = ws.root();
+        let mut out: Vec<String> = ws
+            .network_view(&root)
+            .expect("view")
+            .nodes
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        out.sort();
+        out
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir =
@@ -649,7 +714,7 @@ mod tests {
             .collect();
         assert_eq!(
             names,
-            vec![format!("store-{}.sqlite", folder::day_stamp(day))]
+            vec![format!("store-{}.sqlite", crate::backups::day_stamp(day))]
         );
         // The snapshot is the store: the note is there.
         let copy = Connection::open(backups.join(&names[0])).expect("open the copy");
@@ -659,6 +724,74 @@ mod tests {
         assert_eq!(n, 2, "the workspace's own and the note's");
         drop(ws);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_comes_back_from_a_copy_and_the_restore_can_be_taken_back() {
+        // 10 §3.5: «Восстановить из копии» — the store becomes the copy; the
+        // store as it was goes into a copy of its own, which brings it back.
+        let dir = temp_dir("restore");
+        let mut ws = create_folder(&dir, "Копия").expect("create");
+        note(&mut ws, "До копии");
+        let day = folder::back_up(&dir.join("store.sqlite")).expect("today's copy");
+        note(&mut ws, "После копии");
+        let id = format!("store-{}", crate::backups::day_stamp(day));
+        // The folder is open: refused, nothing changes.
+        let open = restore_folder(&dir, &id).expect_err("the folder is open");
+        assert_eq!(open.code(), Some("locked"), "{open}");
+        drop(ws);
+        let ids =
+            |dir: &Path| -> Vec<String> { folder::list(dir).into_iter().map(|b| b.id).collect() };
+        assert_eq!(ids(&dir), std::slice::from_ref(&id));
+        restore_folder(&dir, &id).expect("restore");
+        let mut back = open_folder(&dir).expect("open the restored");
+        assert_eq!(names(&mut back), ["До копии"]);
+        drop(back);
+        // The store as it was is a copy now, the newest.
+        let list = folder::list(&dir);
+        assert_eq!(list.len(), 2, "{list:?}");
+        assert_eq!(list[0].kind, BackupKind::Replaced);
+        restore_folder(&dir, &list[0].id).expect("take the restore back");
+        let mut again = open_folder(&dir).expect("open");
+        assert_eq!(names(&mut again), ["До копии", "После копии"]);
+        drop(again);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_copy_or_another_workspaces_is_refused_and_nothing_changes() {
+        let dir = temp_dir("restore-bad");
+        let other = temp_dir("restore-other");
+        let mut ws = create_folder(&dir, "Своё").expect("create");
+        note(&mut ws, "Своя");
+        drop(ws);
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).expect("backups");
+        // Not a database at all.
+        std::fs::write(backups.join("store-20200101.sqlite"), b"not a database").expect("junk");
+        let e = restore_folder(&dir, "store-20200101").expect_err("junk");
+        assert_eq!(e.code(), Some("damaged"), "{e}");
+        // Another workspace's store.
+        drop(create_folder(&other, "Чужое").expect("other"));
+        folder::back_up(&other.join("store.sqlite")).expect("its copy");
+        let theirs = folder::list(&other)[0].id.clone();
+        std::fs::copy(
+            other.join("backups").join(format!("{theirs}.sqlite")),
+            backups.join("store-20200102.sqlite"),
+        )
+        .expect("copy");
+        let e = restore_folder(&dir, "store-20200102").expect_err("theirs");
+        assert_eq!(e.code(), Some("damaged"), "{e}");
+        // No such copy; a name that is no copy's.
+        assert!(restore_folder(&dir, "store-20200103").is_err());
+        assert!(restore_folder(&dir, "../store").is_err());
+        // Nothing changed: the store, and no copy from before a restore.
+        let mut ws = open_folder(&dir).expect("open");
+        assert_eq!(names(&mut ws), ["Своя"]);
+        assert!(folder::list(&dir).iter().all(|b| b.kind == BackupKind::Day));
+        drop(ws);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&other);
     }
 
     #[test]

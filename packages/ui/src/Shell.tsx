@@ -3,7 +3,7 @@ import { t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { checkUpdate, installUpdate, pickArchive, pickSavePath, type UpdateInfo } from './backend';
 import { download, HomeScreen } from './home/HomeScreen';
-import type { Prefs } from './prefs';
+import { type Prefs, reading } from './prefs';
 import { SettingsScreen } from './settings/SettingsScreen';
 import { type Tab, TabBar } from './TabBar';
 import { UpdateOffer, UpdateQuestion } from './UpdateDialogs';
@@ -319,6 +319,7 @@ export function Shell(props: {
           <HomeScreen
             key={homeKey}
             locale={locale}
+            reading={reading(prefs)}
             home={home}
             onOpen={(o) => {
               behind();

@@ -2,7 +2,7 @@
 import './assets';
 import { lazy } from 'react';
 
-export type { BoardHandle } from './BoardCanvas';
+export type { BoardHandle, PagePoint } from './BoardCanvas';
 export * from './binding';
 export type { SynthBoard } from './synth';
 export {

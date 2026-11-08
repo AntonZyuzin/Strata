@@ -71,7 +71,10 @@ interface WsHook {
   net(): string;
   settled(): Promise<void>;
   /** The open board's scene (13 §2.8). */
-  board?: { elements(): { type: string; text?: string; originalText?: string; link?: string }[] };
+  board?: {
+    elements(): { type: string; text?: string; originalText?: string; link?: string }[];
+    files(): string[];
+  };
   map(): {
     state: string;
     selectedId(): string | null;
@@ -4729,6 +4732,77 @@ test.describe('a workspace on the core', () => {
       )
       .toEqual(['См. [[Миссия]] и [[Нигде]]']);
     await expect.poll(async () => (await graphNow(page)).edges).toContain('Идеи→Миссия');
+  });
+
+  test('`Tab` on a board: a widget or a picture under the pointer (06 §5.1)', async ({ page }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Вставка на доску');
+    await page.mouse.move(460, 300);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('доска');
+    const kind = page.locator('.tab-menu-label', { hasText: /^(Доска|Board)$/ });
+    await page.locator('.tab-menu-row', { has: kind }).first().click();
+    await page.keyboard.type('Идеи');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '1');
+    await settled(page);
+    const open = async () => {
+      await select(page, 'Идеи');
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      await expect(page.locator('.board-window .excalidraw')).toBeVisible({ timeout: 30_000 });
+    };
+    await open();
+    const win = page.locator('.board-window');
+    const elements = () =>
+      page.evaluate(() => window.__strataWs?.board?.elements().map((e) => e.type) ?? []);
+    const stage = await box(page, '.board-window .board-stage');
+    const at = { x: stage.x + stage.width * 0.3, y: stage.y + stage.height * 0.4 };
+    // The pointer on the board, a click on its bare paper: the board has the keys.
+    await page.mouse.click(at.x, at.y);
+    await page.keyboard.press('Tab');
+    const menu = page.locator('.context-menu');
+    await expect(menu.getByRole('menuitem')).toHaveText(['Заметка', 'To-do', 'Картинка…']);
+    await menu.getByRole('menuitem', { name: 'Заметка' }).click();
+    await expect(menu).toHaveCount(0);
+    // The widget stands under the pointer, let in at once.
+    const note = win.locator('.board-widget[data-widget="note"]');
+    await expect(note).toBeVisible();
+    const b = await box(page, '.board-window .board-widget[data-widget="note"]');
+    expect(at.x).toBeGreaterThan(b.x);
+    expect(at.x).toBeLessThan(b.x + b.width);
+    expect(at.y).toBeGreaterThan(b.y);
+    expect(at.y).toBeLessThan(b.y + b.height);
+    // A picture: chosen from the disk, it goes where the menu was.
+    const elsewhere = { x: stage.x + stage.width * 0.75, y: stage.y + stage.height * 0.7 };
+    await page.mouse.click(elsewhere.x, elsewhere.y);
+    await page.keyboard.press('Tab');
+    const png = await page.evaluate(() => {
+      const c = document.createElement('canvas');
+      c.width = 80;
+      c.height = 60;
+      const g = c.getContext('2d') as CanvasRenderingContext2D;
+      g.fillStyle = '#b6f36b';
+      g.fillRect(0, 0, 80, 60);
+      return c.toDataURL('image/png').split(',')[1] ?? '';
+    });
+    const chooser = page.waitForEvent('filechooser');
+    await menu.getByRole('menuitem', { name: 'Картинка…' }).click();
+    await (await chooser).setFiles({
+      name: 'лист.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(png, 'base64'),
+    });
+    await expect.poll(elements).toEqual(['embeddable', 'image']);
+    // Kept in the board's document: closed and opened again, both are there.
+    await win.locator('.window-close').click();
+    await expect(win).toHaveCount(0);
+    await open();
+    await expect.poll(elements).toEqual(['embeddable', 'image']);
+    await expect
+      .poll(() => page.evaluate(() => window.__strataWs?.board?.files().length ?? 0))
+      .toBe(1);
   });
 
   test('widgets on a board: «Заметка» and «To-do» keep what is written, their [[links]] are wires (ADR-0006 item 4)', async ({

@@ -1,12 +1,13 @@
 /// <reference path="./css.d.ts" />
 
 // Excalidraw's own element package (its dependency, the same version): the embeddable's constructor.
-import { newEmbeddableElement } from '@excalidraw/element';
+import { newEmbeddableElement, newImageElement } from '@excalidraw/element';
 import {
   CaptureUpdateAction,
   Excalidraw,
   FONT_FAMILY,
   newElementWith,
+  viewportCoordsToSceneCoords,
 } from '@excalidraw/excalidraw';
 import '@excalidraw/excalidraw/index.css';
 import type {
@@ -33,6 +34,36 @@ import { createWidget, parseWidgetLink, type WidgetKind, widgetKind } from './wi
 
 /** Scene units a new widget steps off one already in its place. */
 const CASCADE = 24;
+
+/** A picture put on the board is at most this long a side, in scene units. */
+const PICTURE_SIDE = 400;
+
+/** The pictures Excalidraw takes (its `IMAGE_MIME_TYPES`). */
+const PICTURE_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/svg+xml',
+]);
+
+/** A file's bytes as a data URL, for Excalidraw's files. */
+function dataUrl(file: Blob): Promise<string> {
+  return new Promise((done, fail) => {
+    const r = new FileReader();
+    r.onload = () => done(String(r.result));
+    r.onerror = () => fail(r.error);
+    r.readAsDataURL(file);
+  });
+}
+
+/** A file's id by its content: the same picture twice is one file (10 §11). */
+async function contentId(file: Blob): Promise<string> {
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+  return [...hash].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
 
 /** A new widget's size in scene units (ADR-0006 item 4). */
 const WIDGET_SIZE: Record<WidgetKind, { width: number; height: number }> = {
@@ -81,10 +112,30 @@ export interface BoardHandle {
   paint(which: BoardPaint, color: string): void;
   /**
    * A new widget (ADR-0006 item 4) of `kind`, its content `id` in the
-   * document, its element at the middle of the view, linked by `link`
-   * (05 §9.4), selected. One step of the scene's undo.
+   * document, its element at page point `at` — none: the middle of the
+   * view — linked by `link` (05 §9.4), selected. One step of the scene's
+   * undo.
    */
-  insertWidget(kind: WidgetKind, id: string, link: string): void;
+  insertWidget(kind: WidgetKind, id: string, link: string, at?: PagePoint): void;
+  /**
+   * A picture (06 §5.1, `Tab` on a board) centred at page point `at` — none:
+   * the middle of the view — at most 400 a side, selected; one step of the
+   * scene's undo. False — not a picture the board takes.
+   */
+  insertPicture(file: File, at?: PagePoint): Promise<boolean>;
+}
+
+/** A point of the page, CSS px. */
+export interface PagePoint {
+  x: number;
+  y: number;
+}
+
+/** The scene point at page point `at`, or the middle of the view (screen = (scene + scroll) × zoom). */
+function centreOf(st: AppState, at?: PagePoint): { x: number; y: number } {
+  if (at) return viewportCoordsToSceneCoords({ clientX: at.x, clientY: at.y }, st);
+  const z = st.zoom.value;
+  return { x: st.width / 2 / z - st.scrollX, y: st.height / 2 / z - st.scrollY };
 }
 
 export function BoardCanvas(props: {
@@ -198,15 +249,15 @@ export function BoardCanvas(props: {
               captureUpdate: touched ? CaptureUpdateAction.IMMEDIATELY : CaptureUpdateAction.NEVER,
             });
           },
-          insertWidget: (kind, id, link) => {
+          insertWidget: (kind, id, link, at) => {
             createWidget(doc, id, kind);
             const st = a.getAppState();
             const { width, height } = WIDGET_SIZE[kind];
-            // The middle of the view: screen = (scene + scroll) × zoom; a
-            // widget already there — a step down and right, as windows cascade.
-            const z = st.zoom.value;
-            let x = st.width / 2 / z - st.scrollX - width / 2;
-            let y = st.height / 2 / z - st.scrollY - height / 2;
+            // At the point, or the middle of the view; a widget already
+            // there — a step down and right, as windows cascade.
+            const c = centreOf(st, at);
+            let x = c.x - width / 2;
+            let y = c.y - height / 2;
             const taken = a
               .getSceneElements()
               .filter((e) => e.type === 'embeddable')
@@ -239,6 +290,45 @@ export function BoardCanvas(props: {
               },
               captureUpdate: CaptureUpdateAction.IMMEDIATELY,
             });
+          },
+          insertPicture: async (file, at) => {
+            if (!PICTURE_TYPES.has(file.type)) return false;
+            let size: { width: number; height: number };
+            try {
+              const bmp = await createImageBitmap(file);
+              size = { width: bmp.width, height: bmp.height };
+              bmp.close();
+            } catch {
+              return false;
+            }
+            const id = (await contentId(file)) as BinaryFileData['id'];
+            a.addFiles([
+              {
+                id,
+                dataURL: (await dataUrl(file)) as BinaryFileData['dataURL'],
+                mimeType: file.type as BinaryFileData['mimeType'],
+                created: Date.now(),
+              },
+            ]);
+            const k = Math.min(1, PICTURE_SIDE / Math.max(size.width, size.height, 1));
+            const width = size.width * k;
+            const height = size.height * k;
+            const c = centreOf(a.getAppState(), at);
+            const el = newImageElement({
+              type: 'image',
+              x: c.x - width / 2,
+              y: c.y - height / 2,
+              width,
+              height,
+              fileId: id,
+              status: 'saved',
+            });
+            a.updateScene({
+              elements: [...a.getSceneElementsIncludingDeleted(), el],
+              appState: { selectedElementIds: { [el.id]: true } },
+              captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+            });
+            return true;
           },
           elements: () => a.getSceneElements() as unknown as BoardElement[],
           activeTool: () => a.getAppState().activeTool.type,

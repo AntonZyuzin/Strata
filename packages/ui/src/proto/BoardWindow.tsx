@@ -9,6 +9,7 @@ import {
   type BoardHandle,
   type BoardPaint,
   type BoardTool,
+  type PagePoint,
   WIDGET_KINDS,
   type WidgetKind,
   widgetLink,
@@ -17,6 +18,7 @@ import { type GlyphName, glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { LoroDoc } from 'loro-crdt';
 import { type CSSProperties, Suspense, useEffect, useMemo, useRef, useState } from 'react';
+import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import {
   DockEdge,
   dockRoom,
@@ -97,15 +99,50 @@ export function BoardWindow(props: {
   });
   const board = useRef<BoardHandle | null>(null);
   const box = useRef<HTMLElement>(null);
+  const stage = useRef<HTMLDivElement>(null);
+  const picture = useRef<HTMLInputElement>(null);
+  /** The pointer over the board, page px: `Tab` puts things there (06 §5.1). */
+  const pointer = useRef<PagePoint | null>(null);
+  /** The `Tab` menu (06 §5.1) at a page point; a picture chosen goes there too. */
+  const [inserting, setInserting] = useState<PagePoint | null>(null);
+  const pictureAt = useRef<PagePoint | null>(null);
   // The widgets' own undo, as long as the window is open (10 §9.2).
   const undo = useMemo(() => widgetUndo(props.doc), [props.doc]);
   useEffect(() => () => undo.free(), [undo]);
   const ids = props.ids;
-  const insert = (kind: WidgetKind) => {
+  const insert = (kind: WidgetKind, at?: PagePoint) => {
     if (!ids) return;
     const id = newId();
-    board.current?.insertWidget(kind, id, widgetLink(ids.workspace, ids.board, id));
+    board.current?.insertWidget(kind, id, widgetLink(ids.workspace, ids.board, id), at);
   };
+  /** `Tab` on the board (06 §5.1): what to put under the pointer, or in the middle. */
+  const openInsert = () => {
+    const r = stage.current?.getBoundingClientRect();
+    const p = pointer.current;
+    const inside = p && r && p.x >= r.left && p.x <= r.right && p.y >= r.top && p.y <= r.bottom;
+    setInserting(
+      inside
+        ? p
+        : { x: (r?.left ?? 0) + (r?.width ?? 0) / 2, y: (r?.top ?? 0) + (r?.height ?? 0) / 2 },
+    );
+  };
+  const insertItems = (at: PagePoint): MenuEntry[] => [
+    ...(ids
+      ? WIDGET_KINDS.map(
+          (kind): MenuEntry => ({
+            label: t(locale, `board.widget.${kind}` as const),
+            onSelect: () => insert(kind, at),
+          }),
+        )
+      : []),
+    {
+      label: t(locale, 'board.insertPicture'),
+      onSelect: () => {
+        pictureAt.current = at;
+        picture.current?.click();
+      },
+    },
+  ];
   const title = props.name || t(locale, 'note.untitled');
   const colorOf = (name: BoardColorName) =>
     BOARD_COLORS.find((c) => c.name === name)?.color ?? 'transparent';
@@ -130,6 +167,17 @@ export function BoardWindow(props: {
       }}
       onKeyDownCapture={(e) => {
         if (e.ctrlKey || e.metaKey || e.altKey || editable(e.target)) return;
+        const onBoard =
+          e.target === box.current ||
+          (e.target instanceof Node && stage.current?.contains(e.target) === true);
+        if (e.key === 'Tab' && !e.shiftKey && onBoard) {
+          // On the board `Tab` puts something there, as on the canvas (06 §5.1);
+          // on the toolbar it walks the buttons.
+          e.preventDefault();
+          e.stopPropagation();
+          openInsert();
+          return;
+        }
         const k = TOOL_BY_KEY.get(e.key.toUpperCase());
         if (!k) return;
         // Excalidraw would refuse the switch itself: the tool is the host's.
@@ -211,7 +259,13 @@ export function BoardWindow(props: {
             </div>
           ) : null}
         </fieldset>
-        <div className="board-stage">
+        <div
+          ref={stage}
+          className="board-stage"
+          onPointerMove={(e) => {
+            pointer.current = { x: e.clientX, y: e.clientY };
+          }}
+        >
           <Suspense fallback={null}>
             <BoardCanvas
               doc={props.doc}
@@ -226,8 +280,31 @@ export function BoardWindow(props: {
               )}
             />
           </Suspense>
+          <input
+            ref={picture}
+            className="sr-only"
+            type="file"
+            accept="image/*"
+            tabIndex={-1}
+            // The menu's «Картинка…» is the control; this one only opens the chooser.
+            aria-hidden="true"
+            onChange={(e) => {
+              const f = e.currentTarget.files?.[0];
+              e.currentTarget.value = '';
+              if (f) void board.current?.insertPicture(f, pictureAt.current ?? undefined);
+            }}
+          />
         </div>
       </div>
+      {inserting ? (
+        <ContextMenu
+          x={inserting.x}
+          y={inserting.y}
+          label={t(locale, 'board.insert')}
+          items={insertItems(inserting)}
+          onClose={() => setInserting(null)}
+        />
+      ) : null}
       <fieldset className="board-colors">
         <legend className="sr-only">{t(locale, 'board.colors')}</legend>
         <span

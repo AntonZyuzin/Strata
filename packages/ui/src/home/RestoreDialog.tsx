@@ -107,6 +107,7 @@ export function RestoreDialog(props: {
               <div
                 className="tab-menu-empty"
                 role="option"
+                tabIndex={-1}
                 aria-selected="false"
                 aria-disabled="true"
                 title={t(locale, 'home.noBackupsHint')}

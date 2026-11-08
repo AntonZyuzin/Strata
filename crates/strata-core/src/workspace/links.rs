@@ -619,10 +619,10 @@ impl<S: Store> Workspace<S> {
                 if let Some(x) = end("ghost") {
                     o.ghosts
                         .insert(link_key(x), (key.to_owned(), x.to_string()));
-                } else if let Some(to) = end("to").and_then(|t| NodeId::parse(t).ok()) {
-                    if read(index, "edgeOrigin", &format!("{key}|text")).is_some() {
-                        o.wires.insert(to, key.to_owned());
-                    }
+                } else if let Some(to) = end("to").and_then(|t| NodeId::parse(t).ok())
+                    && read(index, "edgeOrigin", &format!("{key}|text")).is_some()
+                {
+                    o.wires.insert(to, key.to_owned());
                 }
             });
         }
@@ -1211,12 +1211,10 @@ impl<S: Store> Workspace<S> {
                     .get("to")
                     .and_then(Val::as_str)
                     .and_then(|s| NodeId::parse(s).ok())
+                    && into.contains(&to)
+                    && read(shard, "edgeOrigin", &format!("{key}|text")).is_some()
                 {
-                    if into.contains(&to)
-                        && read(shard, "edgeOrigin", &format!("{key}|text")).is_some()
-                    {
-                        notes.insert(from);
-                    }
+                    notes.insert(from);
                 }
             }
         }

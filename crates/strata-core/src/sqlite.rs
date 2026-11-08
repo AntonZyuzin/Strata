@@ -4,6 +4,7 @@
 //! small, one per gesture, and a crash keeps all of a changeset or none.
 
 use crate::changeset::Changeset;
+use crate::folder::{self, FolderLock};
 use crate::store::{Status, Store, StoreError, StoredDoc};
 use crate::workspace::{CoreError, Result, Workspace};
 use rusqlite::{Connection, OptionalExtension, params};
@@ -19,6 +20,23 @@ pub struct SqliteStore {
     db: Connection,
     /// `assets/` of the workspace folder (10 §3.1); none for a store in memory.
     assets: Option<PathBuf>,
+    /// The database's file; none in memory.
+    path: Option<PathBuf>,
+    /// The day (since 1970, UTC) the daily backup was last seen to (10 §3.5).
+    backed_up: i64,
+    /// The backup under way, if any: the store closes after it, so a folder
+    /// let go holds no half written snapshot.
+    backup: Option<std::thread::JoinHandle<()>>,
+    /// The folder's `.lock` (10 §3.6), held as long as the store is open.
+    _lock: Option<FolderLock>,
+}
+
+impl Drop for SqliteStore {
+    fn drop(&mut self) {
+        if let Some(backup) = self.backup.take() {
+            let _ = backup.join();
+        }
+    }
 }
 
 const SCHEMA: &str = "
@@ -92,20 +110,56 @@ impl SqliteStore {
         Ok(out)
     }
 
+    /// The store of a folder: its `.lock` taken first (10 §3.6) — a folder
+    /// another process has open is refused, [`StoreError::Locked`].
     pub fn open(path: &Path) -> std::result::Result<Self, StoreError> {
+        let lock = match path.parent() {
+            Some(dir) => Some(FolderLock::take(dir)?),
+            None => None,
+        };
         let db = Connection::open(path).map_err(io)?;
         db.pragma_update(None, "journal_mode", "WAL").map_err(io)?;
         db.pragma_update(None, "synchronous", "FULL").map_err(io)?;
         db.execute_batch(SCHEMA).map_err(io)?;
         let assets = path.parent().map(|d| d.join("assets"));
-        Ok(Self { db, assets })
+        Ok(Self {
+            db,
+            assets,
+            path: Some(path.to_owned()),
+            backed_up: folder::day_now(),
+            backup: None,
+            _lock: lock,
+        })
     }
 
     /// A store in memory with the same tables (tests).
     pub fn in_memory() -> std::result::Result<Self, StoreError> {
         let db = Connection::open_in_memory().map_err(io)?;
         db.execute_batch(SCHEMA).map_err(io)?;
-        Ok(Self { db, assets: None })
+        Ok(Self {
+            db,
+            assets: None,
+            path: None,
+            backed_up: folder::day_now(),
+            backup: None,
+            _lock: None,
+        })
+    }
+
+    /// Today's backup of the folder's store (10 §3.5), on a thread of its
+    /// own: a large store does not hold the open or the next step up.
+    pub fn back_up_today(&mut self) {
+        let Some(path) = self.path.clone() else {
+            return;
+        };
+        self.backed_up = folder::day_now();
+        if let Some(before) = self.backup.take() {
+            let _ = before.join();
+        }
+        self.backup = Some(std::thread::spawn(move || {
+            // A failed backup is tried again at the next open or the next day.
+            let _ = folder::back_up(&path);
+        }));
     }
 
     /// `assets/ab/cd/<sha256>` (10 §3.1).
@@ -190,7 +244,12 @@ impl Store for SqliteStore {
             ],
         )
         .map_err(io)?;
-        tx.commit().map_err(io)
+        tx.commit().map_err(io)?;
+        // A day passed with the folder open: its backup (10 §3.5).
+        if folder::day_now() != self.backed_up {
+            self.back_up_today();
+        }
+        Ok(())
     }
 
     fn append(
@@ -431,6 +490,14 @@ pub fn import_folder(
     Ok(ws)
 }
 
+/// The id of the workspace in folder `dir`, as its `strata.json` says.
+pub fn folder_id(dir: &Path) -> Result<String> {
+    let info: FolderInfo =
+        serde_json::from_slice(&std::fs::read(dir.join("strata.json")).map_err(folder_err)?)
+            .map_err(folder_err)?;
+    Ok(info.workspace_id)
+}
+
 /// A workspace folder: checks `strata.json` against the store.
 pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
     let info: FolderInfo =
@@ -442,7 +509,10 @@ pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
             info.format_version
         )));
     }
-    let ws = Workspace::open(SqliteStore::open(&dir.join("store.sqlite"))?)?;
+    let mut store = SqliteStore::open(&dir.join("store.sqlite"))?;
+    // Today's backup before anything else touches the store (10 §3.5, §13).
+    store.back_up_today();
+    let ws = Workspace::open(store)?;
     if ws.id() != info.workspace_id {
         return Err(CoreError::Invalid(
             "strata.json and store.sqlite belong to different workspaces".to_owned(),
@@ -512,6 +582,68 @@ mod tests {
             create_folder(&dir, "x").is_err(),
             "a folder is not created twice"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_open_elsewhere_is_refused_until_let_go() {
+        // 10 §3.6: `.lock` keeps a second opener out; letting go opens it again.
+        let dir = temp_dir("lock");
+        let first = create_folder(&dir, "Замок").expect("create");
+        let again = open_folder(&dir).expect_err("the folder is open");
+        assert_eq!(again.code(), Some("locked"), "{again}");
+        assert!(
+            std::fs::read_to_string(dir.join(".lock"))
+                .expect("who holds it")
+                .contains(&format!("pid {}", std::process::id()))
+        );
+        drop(first);
+        let reopened = open_folder(&dir).expect("let go, it opens");
+        drop(reopened);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_folder_is_backed_up_once_a_day_and_whole() {
+        // 10 §3.5: `VACUUM INTO backups/store-YYYYMMDD.sqlite`, once a day;
+        // a snapshot a crash left half written goes.
+        let dir = temp_dir("backup");
+        let mut ws = create_folder(&dir, "Копия").expect("create");
+        let root = ws.root();
+        ws.apply(
+            &[Op::CreateNode {
+                id: None,
+                net: root,
+                kind: NodeKind::Note,
+                name: "Заметка".to_owned(),
+                x: 0.0,
+                y: 0.0,
+            }],
+            Label::new("t"),
+        )
+        .expect("a note");
+        let store = dir.join("store.sqlite");
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).expect("backups");
+        std::fs::write(backups.join("store-20200101.sqlite.part"), b"half").expect("half");
+        let day = folder::back_up(&store).expect("backup");
+        assert_eq!(folder::back_up(&store).expect("the same day"), day);
+        let names: Vec<String> = std::fs::read_dir(&backups)
+            .expect("backups")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            names,
+            vec![format!("store-{}.sqlite", folder::day_stamp(day))]
+        );
+        // The snapshot is the store: the note is there.
+        let copy = Connection::open(backups.join(&names[0])).expect("open the copy");
+        let n: i64 = copy
+            .query_row("SELECT count(*) FROM changesets", [], |r| r.get(0))
+            .expect("changesets");
+        assert_eq!(n, 2, "the workspace's own and the note's");
+        drop(ws);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

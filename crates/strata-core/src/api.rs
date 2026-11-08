@@ -270,6 +270,9 @@ pub enum Response {
     Error {
         message: String,
         invalid: bool,
+        /// What the interface words in its own way (`CoreError::code`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
 }
 
@@ -437,6 +440,7 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, crate::CoreError::Invalid(_)),
+        code: e.code().map(str::to_owned),
         message: e.to_string(),
     })
 }
@@ -474,6 +478,7 @@ pub fn call<S: Store>(ws: &mut Workspace<S>, json: &str) -> String {
         Err(e) => Response::Error {
             message: format!("bad request: {e}"),
             invalid: true,
+            code: None,
         },
     };
     serde_json::to_string(&response).unwrap_or_else(|e| {

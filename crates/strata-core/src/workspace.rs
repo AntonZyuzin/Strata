@@ -212,6 +212,17 @@ pub enum CoreError {
     Invalid(String),
 }
 
+impl CoreError {
+    /// What the interface words in its own way: `locked` — the folder is
+    /// open in another process (10 §3.6).
+    pub fn code(&self) -> Option<&'static str> {
+        match self {
+            CoreError::Store(StoreError::Locked(_)) => Some("locked"),
+            _ => None,
+        }
+    }
+}
+
 pub type Result<T> = std::result::Result<T, CoreError>;
 
 fn engine(e: impl std::fmt::Display) -> CoreError {
@@ -2192,10 +2203,10 @@ impl<S: Store> Workspace<S> {
             match self.text_field(n, "status") {
                 Some(status) if is_final(&status) => fold.done += 1,
                 _ => {
-                    if let Some(d) = self.text_field(n, "deadline") {
-                        if fold.nearest.as_ref().is_none_or(|x| d < *x) {
-                            fold.nearest = Some(d);
-                        }
+                    if let Some(d) = self.text_field(n, "deadline")
+                        && fold.nearest.as_ref().is_none_or(|x| d < *x)
+                    {
+                        fold.nearest = Some(d);
                     }
                 }
             }
@@ -3068,10 +3079,11 @@ impl<S: Store> Workspace<S> {
         }
         // Lists show their ticks (05 §6.4): their documents stay in memory.
         for id in &ids {
-            if let Ok(node) = NodeId::parse(id) {
-                if self.alive(node) && self.kind(node) == Some(NodeKind::Checklist) {
-                    self.ensure_doc(&format!("content/{id}"))?;
-                }
+            if let Ok(node) = NodeId::parse(id)
+                && self.alive(node)
+                && self.kind(node) == Some(NodeKind::Checklist)
+            {
+                self.ensure_doc(&format!("content/{id}"))?;
             }
         }
         let children = self.children();
@@ -3288,10 +3300,10 @@ impl<S: Store> Workspace<S> {
                         *external.entry(n.to_text()).or_default() += 1;
                     }
                 }
-                if let (Some(x), Some(y)) = (bubble(a), bubble(b)) {
-                    if x != y {
-                        *rolled.entry((x.min(y), x.max(y))).or_default() += 1;
-                    }
+                if let (Some(x), Some(y)) = (bubble(a), bubble(b))
+                    && x != y
+                {
+                    *rolled.entry((x.min(y), x.max(y))).or_default() += 1;
                 }
             }
         }

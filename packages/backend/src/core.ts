@@ -675,6 +675,8 @@ export class CoreError extends Error {
   constructor(
     message: string,
     readonly invalid: boolean,
+    /** What the interface words in its own way: `locked` — the folder is open in another process (10 §3.6). */
+    readonly code?: string,
   ) {
     super(message);
     this.name = 'CoreError';
@@ -699,10 +701,10 @@ export function fromBase64(s: string): Uint8Array {
 async function ask<T extends { type: string }>(send: Transport, request: unknown): Promise<T> {
   const answer = JSON.parse(await send(JSON.stringify(request))) as
     | T
-    | { type: 'error'; message: string; invalid: boolean };
+    | { type: 'error'; message: string; invalid: boolean; code?: string };
   if (answer.type === 'error') {
-    const e = answer as { message: string; invalid: boolean };
-    throw new CoreError(e.message, e.invalid);
+    const e = answer as { message: string; invalid: boolean; code?: string };
+    throw new CoreError(e.message, e.invalid, e.code);
   }
   return answer as T;
 }

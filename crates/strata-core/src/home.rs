@@ -102,11 +102,12 @@ impl Home {
         };
         let early = dir.join("Strata.strata");
         let known = home.saved.workspaces.iter().any(|e| e.path == early);
-        if !known && early.join("strata.json").exists() {
-            if let Ok(ws) = open_folder(&early) {
-                home.remember(&ws, &early, 0);
-                let _ = home.save();
-            }
+        if !known
+            && early.join("strata.json").exists()
+            && let Ok(ws) = open_folder(&early)
+        {
+            home.remember(&ws, &early, 0);
+            let _ = home.save();
         }
         home
     }
@@ -644,6 +645,9 @@ pub enum Response {
     Error {
         message: String,
         invalid: bool,
+        /// What the interface words in its own way (`CoreError::code`): `locked`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        code: Option<String>,
     },
 }
 
@@ -696,10 +700,18 @@ pub fn handle(
                 opened(desk, done)
             }
         },
-        Request::Add { path } => {
-            let done = home.add(Path::new(&path));
-            opened(desk, done)
-        }
+        // A folder this app has open already (its `.lock` is ours): its tab.
+        Request::Add { path } => match crate::sqlite::folder_id(Path::new(&path)) {
+            Ok(id) if desk.is_open(&id) => home.touch(&id).map(|workspace| {
+                let root = desk.get_mut(&id).map(|w| w.root()).unwrap_or_default();
+                desk.current = Some(id);
+                Response::Opened { workspace, root }
+            }),
+            _ => {
+                let done = home.add(Path::new(&path));
+                opened(desk, done)
+            }
+        },
         Request::Close => {
             desk.current = None;
             Ok(home_of(home, desk))
@@ -776,6 +788,7 @@ pub fn handle(
     };
     result.unwrap_or_else(|e| Response::Error {
         invalid: matches!(e, CoreError::Invalid(_)),
+        code: e.code().map(str::to_owned),
         message: e.to_string(),
     })
 }
@@ -792,6 +805,7 @@ pub fn call(
         Err(e) => Response::Error {
             message: format!("bad request: {e}"),
             invalid: true,
+            code: None,
         },
     };
     serde_json::to_string(&response).unwrap_or_else(|e| {

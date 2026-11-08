@@ -216,15 +216,15 @@ pub fn percent_decode(s: &str) -> String {
     let mut i = 0;
     while i < b.len() {
         let hex = |c: u8| (c as char).to_digit(16);
-        if b[i] == b'%' {
-            if let (Some(h), Some(l)) = (
+        if b[i] == b'%'
+            && let (Some(h), Some(l)) = (
                 b.get(i + 1).and_then(|&c| hex(c)),
                 b.get(i + 2).and_then(|&c| hex(c)),
-            ) {
-                out.push((h * 16 + l) as u8);
-                i += 3;
-                continue;
-            }
+            )
+        {
+            out.push((h * 16 + l) as u8);
+            i += 3;
+            continue;
         }
         out.push(b[i]);
         i += 1;
@@ -513,13 +513,13 @@ pub fn task_items(text: &str) -> Vec<TaskItem> {
     while at < text.len() {
         let end = text[at..].find('\n').map_or(text.len(), |i| at + i);
         let line = &text[at..end];
-        if !code.iter().any(|r| r.contains(&at)) {
-            if let Some(item) = task_line(line) {
-                out.push(TaskItem {
-                    line: at..end,
-                    ..item
-                });
-            }
+        if !code.iter().any(|r| r.contains(&at))
+            && let Some(item) = task_line(line)
+        {
+            out.push(TaskItem {
+                line: at..end,
+                ..item
+            });
         }
         at = end + 1;
     }

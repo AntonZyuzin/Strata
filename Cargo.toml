@@ -28,7 +28,8 @@ default-members = [
 [workspace.package]
 version = "0.0.1"
 edition = "2024"
-rust-version = "1.85"
+# 1.89: `File::try_lock` of the standard library, the folder's `.lock` (10 §3.6).
+rust-version = "1.89"
 license = "AGPL-3.0-or-later"
 repository = "https://github.com/AntonZyuzin/Strata"
 authors = ["Strata contributors"]

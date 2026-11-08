@@ -35,6 +35,9 @@ impl Status {
 pub enum StoreError {
     #[error("storage: {0}")]
     Io(String),
+    /// The workspace's folder is open in another process (10 §3.6): who, as its `.lock` says.
+    #[error("the workspace is open in another process ({0})")]
+    Locked(String),
 }
 
 /// A document as stored: a snapshot and the updates after it, in order.

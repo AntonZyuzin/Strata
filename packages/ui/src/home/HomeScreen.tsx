@@ -1,10 +1,11 @@
-import type {
-  HomeBackend,
-  HomeState,
-  Opened,
-  PickedVault,
-  VaultFile,
-  WorkspaceEntry,
+import {
+  CoreError,
+  type HomeBackend,
+  type HomeState,
+  type Opened,
+  type PickedVault,
+  type VaultFile,
+  type WorkspaceEntry,
 } from '@strata/backend';
 import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -26,7 +27,9 @@ type Dialog =
   | { t: 'rename'; entry: WorkspaceEntry }
   | { t: 'remove'; entry: WorkspaceEntry };
 
-function message(e: unknown): string {
+/** What went wrong, in words: the core's, or the interface's own for what it knows (10 §3.6). */
+function message(locale: Locale, e: unknown): string {
+  if (e instanceof CoreError && e.code === 'locked') return t(locale, 'home.locked');
   return e instanceof Error ? e.message : String(e);
 }
 
@@ -63,7 +66,8 @@ export function HomeScreen(props: {
   const [state, setState] = useState<HomeState | null>(null);
   const [previews, setPreviews] = useState<Map<string, string>>(new Map());
   const [dialog, setDialog] = useState<Dialog | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  /** What failed last; worded at render, in the language shown. */
+  const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: WorkspaceEntry } | null>(null);
@@ -78,7 +82,7 @@ export function HomeScreen(props: {
         if (!live) return;
         setState(s);
       })
-      .catch((e: unknown) => setError(message(e)));
+      .catch((e: unknown) => setError(e));
     return () => {
       live = false;
     };
@@ -123,7 +127,7 @@ export function HomeScreen(props: {
       } catch (e) {
         // What was under way is over: its note goes, the failure stays.
         setNote(null);
-        setError(message(e));
+        setError(e);
       } finally {
         busyRef.current = false;
         setBusy(false);
@@ -273,13 +277,13 @@ export function HomeScreen(props: {
         </div>
       </div>
       <div className="home-content">
-        {error ? (
+        {error !== null ? (
           <p
             className="home-error"
             role="alert"
-            title={t(locale, 'home.error', { message: error })}
+            title={t(locale, 'home.error', { message: message(locale, error) })}
           >
-            {t(locale, 'home.error', { message: error })}
+            {t(locale, 'home.error', { message: message(locale, error) })}
           </p>
         ) : null}
         {note ? (

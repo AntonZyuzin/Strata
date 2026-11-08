@@ -1308,18 +1308,18 @@ impl<S: Store> Workspace<S> {
             &PRIORITY[..],
             &ASSIGNEES[..],
         ];
-        if options.checklists {
-            if let Some(list) = strata_markdown::checklist(body) {
-                e.role = Role::List;
-                e.meta
-                    .push(("marker", LoroValue::from(list.marker.to_string())));
-                e.meta
-                    .push(("indent", LoroValue::from(list.indent.as_str())));
-                e.meta
-                    .push(("done", LoroValue::from(list.done.to_string())));
-                e.list = Some(list);
-                return;
-            }
+        if options.checklists
+            && let Some(list) = strata_markdown::checklist(body)
+        {
+            e.role = Role::List;
+            e.meta
+                .push(("marker", LoroValue::from(list.marker.to_string())));
+            e.meta
+                .push(("indent", LoroValue::from(list.indent.as_str())));
+            e.meta
+                .push(("done", LoroValue::from(list.done.to_string())));
+            e.list = Some(list);
+            return;
         }
         if options.tasks && task_keys.iter().any(|k| has(k)) {
             e.role = Role::Task;
@@ -1833,18 +1833,18 @@ impl<S: Store> Workspace<S> {
             if let Value::Nested(_) = v {
                 report.at(e.id, "property", "info", &e.raw, "nested", key.clone());
             }
-            if let Some(kind) = types.get(key) {
-                if !fits(kind, &v) {
-                    report.at(
-                        e.id,
-                        "property",
-                        "info",
-                        &e.raw,
-                        "typeMismatch",
-                        format!("{key}: {kind}"),
-                    );
-                    v = Value::Text(v.text());
-                }
+            if let Some(kind) = types.get(key)
+                && !fits(kind, &v)
+            {
+                report.at(
+                    e.id,
+                    "property",
+                    "info",
+                    &e.raw,
+                    "typeMismatch",
+                    format!("{key}: {kind}"),
+                );
+                v = Value::Text(v.text());
             }
             for t in v.texts() {
                 if let Some(target) = property_link(&t) {

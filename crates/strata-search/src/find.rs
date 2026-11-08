@@ -161,11 +161,9 @@ impl Find {
                 continue;
             }
             // `-пауза`: a flag's name after `-` is the flag (§3.6).
-            if not {
-                if let Some(flag) = flag_of(&rest) {
-                    find.terms.push(Term::Flag { flag, not });
-                    continue;
-                }
+            if not && let Some(flag) = flag_of(&rest) {
+                find.terms.push(Term::Flag { flag, not });
+                continue;
             }
             let text = if rest.contains(['*', '?']) {
                 Text::Mask {

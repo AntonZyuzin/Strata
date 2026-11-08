@@ -131,6 +131,7 @@ import { OwnIconDialog } from './OwnIconDialog';
 import {
   blobOf,
   decodePicture,
+  encodePng,
   MASK_SIDE,
   OWN_ICON,
   ownIconMask,
@@ -400,7 +401,8 @@ export function WorkspaceScreen(props: {
   const [ownPick, setOwnPick] = useState<{
     ids: string[];
     original: { file: File } | { sha: string };
-    picture: { px: Pixels; url: string; name: string };
+    /** `seq` tells one picture from the next: the dialog starts afresh with another. */
+    picture: { px: Pixels; name: string; seq: number };
     style: StyleParams;
   } | null>(null);
   /** The presets with their authors, loaded when the palette first opens. */
@@ -592,6 +594,8 @@ export function WorkspaceScreen(props: {
   const ownGiven = useRef(new Set<string>());
   /** Gives the canvas the masks of the own icons its nodes have; set each render. */
   const ownIconsRef = useRef<() => void>(() => undefined);
+  /** The pictures «Своя иконка» was opened with, counted. */
+  const ownSeq = useRef(0);
   /** Link assets already asked for a preview this session. */
   const previewed = useRef(new Set<string>());
   const eventsRef = useRef<EditorEvents | null>(null);
@@ -2302,7 +2306,11 @@ export function WorkspaceScreen(props: {
   const setIcon = (ids: readonly string[], icon: string | null) => {
     const g = graph.current;
     if (!g) return;
-    const nodes = ids.filter((id) => g.nodes.has(id));
+    // A node that has it already makes no step.
+    const nodes = ids.filter((id) => {
+      const n = g.nodes.get(id);
+      return n && (n.attrs.icon ?? null) !== icon;
+    });
     if (nodes.length === 0) return;
     g.transaction({ key: 'change.icon', params: { n: nodes.length } }, (tx) => {
       for (const id of nodes) tx.attr(id, 'icon', icon);
@@ -2319,7 +2327,7 @@ export function WorkspaceScreen(props: {
         setOwnPick({
           ids,
           original: { file },
-          picture: { px, url: URL.createObjectURL(file), name: file.name },
+          picture: { px, name: file.name, seq: ++ownSeq.current },
           style,
         }),
       () => toast('own.unreadable', { name: file.name }),
@@ -2337,7 +2345,7 @@ export function WorkspaceScreen(props: {
         setOwnPick({
           ids,
           original: { sha: own.sha },
-          picture: { px, url: URL.createObjectURL(blob), name: '' },
+          picture: { px, name: '', seq: ++ownSeq.current },
           style: own.style,
         });
       })
@@ -2349,10 +2357,6 @@ export function WorkspaceScreen(props: {
     (ref: string) => ownIconUrl(ref, (sha) => core.asset(sha)),
     [core],
   );
-
-  // The original's address lives as long as the dialog shows it.
-  const ownUrl = ownPick?.picture.url;
-  useEffect(() => () => (ownUrl ? URL.revokeObjectURL(ownUrl) : undefined), [ownUrl]);
 
   /**
    * The masks of one's own icons on the canvas (07 §6.6): made for the
@@ -4093,17 +4097,19 @@ export function WorkspaceScreen(props: {
       ) : null}
       {ownPick ? (
         <OwnIconDialog
-          key={ownPick.picture.url}
+          key={ownPick.picture.seq}
           locale={locale}
           picture={ownPick.picture}
           style={ownPick.style}
-          onDone={(style) => {
+          onDone={(style, baked) => {
             const pick = ownPick;
             setOwnPick(null);
             focusCanvas();
             const { original } = pick;
-            const stored =
-              'file' in original
+            // The eraser's work is a picture of its own; untouched, the original goes.
+            const stored = baked
+              ? encodePng(baked).then((bytes) => core.putAsset(bytes))
+              : 'file' in original
                 ? original.file.arrayBuffer().then((b) => core.putAsset(new Uint8Array(b)))
                 : Promise.resolve(original.sha);
             void stored.then((sha) => setIcon(pick.ids, ownIconRef(sha, style))).catch(failed);

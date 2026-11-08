@@ -9,24 +9,27 @@ describe("one's own icon's reference (07 §6.6)", () => {
     for (const mode of STYLE_MODES) {
       for (const threshold of [null, 0, 97, 255]) {
         for (const invert of [false, true]) {
-          const ref = ownIconRef(SHA, { mode, threshold, invert });
-          const back = parseOwnIcon(ref);
-          // The modes with no threshold of their own keep none (07 §6.5).
-          const kept = mode === 'engraving' || mode === 'pixel' ? threshold : null;
-          expect(back, ref).toEqual({ sha: SHA, style: { mode, threshold: kept, invert } });
-          expect(ownIconRef(SHA, back?.style ?? { mode, threshold, invert })).toBe(ref);
+          for (const background of ['auto', 'alpha'] as const) {
+            const style = { mode, threshold, invert, background };
+            const ref = ownIconRef(SHA, style);
+            const back = parseOwnIcon(ref);
+            // The modes with no threshold of their own keep none (07 §6.5).
+            const kept = mode === 'engraving' || mode === 'pixel' ? threshold : null;
+            expect(back, ref).toEqual({ sha: SHA, style: { ...style, threshold: kept } });
+            expect(ownIconRef(SHA, back?.style ?? style)).toBe(ref);
+          }
         }
       }
     }
   });
 
   it('writes the threshold as a whole number of 0–255', () => {
-    expect(ownIconRef(SHA, { mode: 'pixel', threshold: 96.6, invert: false })).toBe(
-      `asset/${SHA}/pixel/t97`,
-    );
-    expect(ownIconRef(SHA, { mode: 'engraving', threshold: 300, invert: true })).toBe(
-      `asset/${SHA}/engraving/t255/i`,
-    );
+    expect(
+      ownIconRef(SHA, { mode: 'pixel', threshold: 96.6, invert: false, background: 'auto' }),
+    ).toBe(`asset/${SHA}/pixel/t97`);
+    expect(
+      ownIconRef(SHA, { mode: 'engraving', threshold: 300, invert: true, background: 'alpha' }),
+    ).toBe(`asset/${SHA}/engraving/t255/a/i`);
   });
 
   it('takes no other spelling, as the core takes none', () => {
@@ -38,6 +41,9 @@ describe("one's own icon's reference (07 §6.6)", () => {
       `asset/${SHA}/pixel/t09`,
       `asset/${SHA}/pixel/i/t9`,
       `asset/${SHA}/pixel/i/i`,
+      `asset/${SHA}/pixel/i/a`,
+      `asset/${SHA}/pixel/a/a`,
+      `asset/${SHA}/pixel/a/t9`,
       `asset/${SHA.slice(1)}/pixel`,
       null,
       undefined,

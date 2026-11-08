@@ -48,10 +48,13 @@ export {
 } from './looks';
 export { ShakeDetector } from './shake';
 export {
+  cutout,
   DEFAULT_STYLE,
+  foreground,
   inkShare,
   MASK_SIDE,
   STYLE_MODES,
+  type StyleBackground,
   type StyleMode,
   type StyleParams,
   type StyleResult,

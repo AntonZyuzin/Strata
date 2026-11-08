@@ -14,14 +14,27 @@ import type { Pixels } from './backdrop';
 export type StyleMode = 'engraving' | 'pixel' | 'silhouette' | 'photo' | 'as-is';
 export const STYLE_MODES: StyleMode[] = ['engraving', 'pixel', 'silhouette', 'photo', 'as-is'];
 
+/**
+ * How the background goes (07 §6.4): `auto` — the picture's transparency,
+ * and in an opaque picture a flood from the corners; `alpha` — only what is
+ * transparent, what the eraser took included.
+ */
+export type StyleBackground = 'auto' | 'alpha';
+
 export interface StyleParams {
   mode: StyleMode;
   /** 0..255; null is automatic (Otsu). */
   threshold: number | null;
   invert: boolean;
+  background: StyleBackground;
 }
 
-export const DEFAULT_STYLE: StyleParams = { mode: 'engraving', threshold: null, invert: false };
+export const DEFAULT_STYLE: StyleParams = {
+  mode: 'engraving',
+  threshold: null,
+  invert: false,
+  background: 'auto',
+};
 
 /** Side of the produced mask, the largest of 07 §6.7. */
 export const MASK_SIDE = 128;
@@ -74,27 +87,45 @@ export function otsu(values: Float32Array, weight: Float32Array): number {
 /**
  * Foreground weight per pixel (0..1). A picture with real transparency uses
  * its alpha; an opaque one is flooded from the four corners through pixels
- * close to the corner colour (07 §6.4, «заливка от углов»).
+ * close to the corner colour (07 §6.4, «заливка от углов»), unless `flood`
+ * is off. `erased` marks the pixels the eraser took (1): background in any
+ * case, but not the picture's own transparency, so a few strokes do not
+ * turn a flooded picture into a transparent one. The flood passes what is
+ * transparent or erased, and starts from no corner that is.
  */
 export function foreground(
   px: Pixels,
   tolerance = 40,
+  flood = true,
+  erased?: Uint8Array,
 ): { weight: Float32Array; kind: StyleResult['background'] } {
   const { width: w, height: h, data } = px;
   const n = w * h;
   const weight = new Float32Array(n);
   let transparent = 0;
+  let rubbed = 0;
   for (let i = 0; i < n; i++) {
     const a = data[i * 4 + 3] ?? 255;
-    weight[i] = a / 255;
     if (a < 250) transparent++;
+    if (erased?.[i]) {
+      rubbed++;
+      weight[i] = 0;
+    } else {
+      weight[i] = a / 255;
+    }
   }
+  const see = transparent > 0 || rubbed > 0 ? 'alpha' : 'none';
   if (transparent > n * 0.05) return { weight, kind: 'alpha' };
-  weight.fill(1);
+  if (!flood) return { weight, kind: see };
+  const alpha = Float32Array.from(weight);
+  // Background already: the flood goes through it.
+  const clear = (i: number) => (data[i * 4 + 3] ?? 255) < 250 || (erased?.[i] ?? 0) === 1;
   const seen = new Uint8Array(n);
   const stack: number[] = [];
   let flooded = 0;
   for (const start of [0, w - 1, (h - 1) * w, n - 1]) {
+    // A corner that is clear has no colour to flood by.
+    if (clear(start)) continue;
     const r0 = data[start * 4] ?? 0;
     const g0 = data[start * 4 + 1] ?? 0;
     const b0 = data[start * 4 + 2] ?? 0;
@@ -106,7 +137,7 @@ export function foreground(
         Math.abs((data[i * 4] ?? 0) - r0) +
         Math.abs((data[i * 4 + 1] ?? 0) - g0) +
         Math.abs((data[i * 4 + 2] ?? 0) - b0);
-      if (d > tolerance) continue;
+      if (d > tolerance && !clear(i)) continue;
       seen[i] = 1;
       weight[i] = 0;
       flooded++;
@@ -118,11 +149,21 @@ export function foreground(
     }
   }
   // A flood that took almost everything found no figure: keep the picture whole.
-  if (flooded > n * 0.97 || flooded === 0) {
-    weight.fill(1);
-    return { weight, kind: 'none' };
-  }
+  if (flooded > n * 0.97 || flooded === 0) return { weight: alpha, kind: see };
   return { weight, kind: 'flood' };
+}
+
+/**
+ * The picture with its background gone (07 §6.4): the colours, the alpha
+ * the foreground's weight. What the eraser took is kept so: with the style's
+ * `alpha` background it gives the same mask again.
+ */
+export function cutout(px: Pixels, weight: Float32Array): Pixels {
+  const data = new Uint8ClampedArray(px.data);
+  for (let i = 0; i < weight.length; i++) {
+    data[i * 4 + 3] = Math.round((weight[i] ?? 0) * 255);
+  }
+  return { width: px.width, height: px.height, data };
 }
 
 /** Bounding box of the foreground, squared and padded by 6 %, inside the picture. */
@@ -238,9 +279,16 @@ function unsharp(grey: Float32Array, side: number): void {
 
 const BAYER4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
 
-/** The whole pipeline: picture → square ink mask of MASK_SIDE (07 §6.4–6.5). */
-export function stylize(px: Pixels, params: StyleParams = DEFAULT_STYLE): StyleResult {
-  const { weight, kind } = foreground(px);
+/**
+ * The whole pipeline: picture → square ink mask of MASK_SIDE (07 §6.4–6.5);
+ * `erased` — the pixels the eraser took.
+ */
+export function stylize(
+  px: Pixels,
+  params: StyleParams = DEFAULT_STYLE,
+  erased?: Uint8Array,
+): StyleResult {
+  const { weight, kind } = foreground(px, 40, params.background !== 'alpha', erased);
   const crop = squareCrop(px.width, px.height, weight);
   const side = MASK_SIDE;
   const mask = new Uint8ClampedArray(side * side);

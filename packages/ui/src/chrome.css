@@ -2550,17 +2550,38 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin-bottom: calc(8 * var(--u));
 }
 
-.own-original,
 .own-bubble {
   flex: none;
   width: calc(56 * var(--u));
   height: calc(56 * var(--u));
 }
 
+/* The picture without its background, large enough for the eraser's brush. */
+.own-original-box {
+  position: relative;
+  flex: none;
+  width: calc(112 * var(--u));
+  height: calc(112 * var(--u));
+}
+
 .own-original {
-  object-fit: contain;
-  background: var(--st-color-surface-sunken);
+  display: block;
+  width: 100%;
+  height: 100%;
   box-shadow: var(--st-bevel-sunken);
+}
+
+.own-original.is-erasing {
+  cursor: none;
+  touch-action: none;
+}
+
+/* The brush where the pointer is: a circle of its size. */
+.own-brush {
+  position: absolute;
+  border: var(--u) solid var(--st-color-accent);
+  border-radius: 50%;
+  pointer-events: none;
 }
 
 .own-bubble {
@@ -2614,9 +2635,23 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   border-left: 0;
 }
 
-.own-mode[aria-pressed="true"] {
+.own-mode[aria-pressed="true"],
+.own-eraser[aria-pressed="true"] {
   background: var(--st-color-surface-sunken);
   box-shadow: var(--st-bevel-sunken);
+}
+
+.own-modes.own-backgrounds {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+/* The eraser: a square toggle, its 1-bit glyph (07 §6.2). */
+.own-eraser {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: var(--st-size-control);
+  padding: 0;
 }
 
 .own-auto {

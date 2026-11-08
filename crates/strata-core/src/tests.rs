@@ -1473,6 +1473,9 @@ fn ones_own_icon_is_a_stored_picture_and_its_style() {
             format!("asset/{sha}/silhouette/i"),
             format!("asset/{sha}/photo/t0/i"),
             format!("asset/{sha}/as-is/t255/i"),
+            // Only the transparent as background (07 §6.4).
+            format!("asset/{sha}/silhouette/a"),
+            format!("asset/{sha}/engraving/t40/a/i"),
         ] {
             set(&mut w, &n, "icon", Some(Val::str(good.clone()))).expect(&good);
             let icon = w.node_details(&n).expect("details").attrs.icon;
@@ -1502,6 +1505,9 @@ fn ones_own_icon_is_a_stored_picture_and_its_style() {
         format!("asset/{sha}/pixel/i/i"),
         format!("asset/{sha}/pixel/i/"),
         format!("asset/{sha}/pixel/x"),
+        format!("asset/{sha}/pixel/a/a"),
+        format!("asset/{sha}/pixel/i/a"),
+        format!("asset/{sha}/pixel/a/t9"),
     ] {
         assert!(
             set(&mut w, &n, "icon", Some(Val::str(bad.clone()))).is_err(),

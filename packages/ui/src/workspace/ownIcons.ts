@@ -13,19 +13,21 @@ export function takesThreshold(mode: StyleMode): boolean {
 
 /**
  * The reference of one's own icon, one spelling per style (07 §6.6):
- * `asset/<sha256>/<mode>[/t<threshold>][/i]` — no threshold is Otsu's.
+ * `asset/<sha256>/<mode>[/t<threshold>][/a][/i]` — no threshold is Otsu's,
+ * `a` keeps only the transparent as background, with no flood from the corners.
  */
 export function ownIconRef(sha: string, style: StyleParams): string {
   let ref = `${OWN_ICON}${sha}/${style.mode}`;
   if (style.threshold !== null && takesThreshold(style.mode)) {
     ref += `/t${Math.max(0, Math.min(255, Math.round(style.threshold)))}`;
   }
+  if (style.background === 'alpha') ref += '/a';
   if (style.invert) ref += '/i';
   return ref;
 }
 
 const REF =
-  /^asset\/([0-9a-fA-F]{64})\/(engraving|pixel|silhouette|photo|as-is)(?:\/t(0|[1-9]\d{0,2}))?(\/i)?$/;
+  /^asset\/([0-9a-fA-F]{64})\/(engraving|pixel|silhouette|photo|as-is)(?:\/t(0|[1-9]\d{0,2}))?(\/a)?(\/i)?$/;
 
 /** The original and the style of one's own icon; null — the value is not one. */
 export function parseOwnIcon(ref: string | null | undefined): {
@@ -38,7 +40,12 @@ export function parseOwnIcon(ref: string | null | undefined): {
   if (threshold !== null && threshold > 255) return null;
   return {
     sha: m[1],
-    style: { mode: m[2] as StyleMode, threshold, invert: m[4] !== undefined },
+    style: {
+      mode: m[2] as StyleMode,
+      threshold,
+      invert: m[5] !== undefined,
+      background: m[4] === undefined ? 'auto' : 'alpha',
+    },
   };
 }
 
@@ -68,6 +75,24 @@ export async function decodePicture(blob: Blob): Promise<Pixels> {
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/**
+ * A picture as PNG bytes: what the eraser left (07 §6.4), its background in
+ * the alpha, goes to the store so.
+ */
+export async function encodePng(px: Pixels): Promise<Uint8Array> {
+  const canvas = document.createElement('canvas');
+  canvas.width = px.width;
+  canvas.height = px.height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('2D canvas is not available');
+  const img = ctx.createImageData(px.width, px.height);
+  img.data.set(px.data);
+  ctx.putImageData(img, 0, 0);
+  const blob = await new Promise<Blob | null>((done) => canvas.toBlob(done, 'image/png'));
+  if (!blob) throw new Error('the picture would not encode');
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 /**

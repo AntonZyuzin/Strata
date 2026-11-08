@@ -51,6 +51,7 @@ interface WsHook {
     node(id: string): Promise<{ icon?: string; status?: string; color?: number }>;
     view(net: string): Promise<{ nodes: { id: string; name: string; size?: string }[] }>;
     putAsset(bytes: Uint8Array): Promise<string>;
+    asset(sha: string): Promise<Uint8Array>;
     ownIcons(): Promise<string[]>;
   };
   editor(): {
@@ -1412,18 +1413,26 @@ for (const deviceScaleFactor of [1, 2]) {
       });
       const dialog = page.locator('.own-icon-dialog');
       await expect(dialog).toBeVisible();
-      // The longest mode by hand: «Силуэт» / «Silhouette».
+      // The longest mode by hand: «Силуэт» / «Silhouette»; the longest background,
+      // «Только прозрачное» / «Transparent only»; the eraser on.
       await dialog.locator('.own-mode[data-mode="silhouette"]').click();
+      await dialog.locator('.own-mode[data-background="alpha"]').click();
+      await dialog.locator('.own-eraser').click();
+      await expect(dialog.locator('.own-eraser')).toHaveAttribute('aria-pressed', 'true');
       expect(await overflowing(page, '.own-icon-dialog'), `${locale} the dialog must fit`).toEqual(
         [],
       );
       boxes.push({
         dialog: await box(page, '.own-icon-dialog'),
         previews: await box(page, '.own-icon-dialog .own-previews'),
-        modes: await box(page, '.own-icon-dialog .own-modes'),
+        original: await box(page, '.own-icon-dialog .own-original'),
+        modes: await box(page, '.own-icon-dialog .own-modes:not(.own-backgrounds)'),
         first: await box(page, '.own-icon-dialog .own-mode[data-mode="engraving"]'),
         last: await box(page, '.own-icon-dialog .own-mode[data-mode="as-is"]'),
         slider: await box(page, '.own-icon-dialog .own-threshold'),
+        backgrounds: await box(page, '.own-icon-dialog .own-backgrounds'),
+        alpha: await box(page, '.own-icon-dialog .own-mode[data-background="alpha"]'),
+        eraser: await box(page, '.own-icon-dialog .own-eraser'),
         actions: await box(page, '.own-icon-dialog .own-actions'),
       });
       await page.keyboard.press('Escape');
@@ -1433,10 +1442,14 @@ for (const deviceScaleFactor of [1, 2]) {
     for (const part of [
       'dialog',
       'previews',
+      'original',
       'modes',
       'first',
       'last',
       'slider',
+      'backgrounds',
+      'alpha',
+      'eraser',
       'actions',
     ] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
@@ -4221,7 +4234,7 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('KeyZ');
     await expect(own).toHaveAttribute('aria-pressed', 'true');
     await own.click();
-    await expect(dialog.locator('.own-original')).toHaveAttribute('src', /^blob:/);
+    await expect(dialog.locator('.own-original')).toBeVisible();
     await mode('Пиксель').click();
     await expect(mode('Пиксель')).toHaveAttribute('aria-pressed', 'true');
     await expect(mode('Гравюра')).toHaveAttribute('aria-pressed', 'false');
@@ -4269,6 +4282,85 @@ test.describe('a workspace on the core', () => {
         icon: `asset/${sha}/pixel/t90/i`,
         core: `asset/${sha}/pixel/t90/i`,
       });
+  });
+
+  test('«Своя иконка»: the background — «Только прозрачное», the eraser and its undo (07 §6.4, S10 step 3)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Фон иконки');
+    await createNode(page, 460, 300, 'Карта');
+    const map = await idOf(page, 'Карта');
+    await settled(page);
+    const png = await discPng(page);
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    const chooser = page.waitForEvent('filechooser');
+    await page.locator('.icon-palette .icon-own').click();
+    await (await chooser).setFiles({
+      name: 'диск.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(png, 'base64'),
+    });
+    const dialog = page.locator('.own-icon-dialog');
+    const background = (b: string) => dialog.locator(`.own-mode[data-background="${b}"]`);
+    const eraser = dialog.getByRole('button', { name: 'Ластик' });
+    await expect(background('auto')).toHaveAttribute('aria-pressed', 'true');
+    await expect(eraser).toHaveAttribute('aria-pressed', 'false');
+    // «Только прозрачное»: no flood from the corners, the original's own picture.
+    await background('alpha').click();
+    await expect(background('alpha')).toHaveAttribute('aria-pressed', 'true');
+    await dialog.getByRole('button', { name: 'Готово' }).click();
+    await expect.poll(async () => (await iconState(page, map)).core).toMatch(/\/engraving\/a$/);
+    const plain = (await iconState(page, map)).core ?? '';
+    const sha = plain.split('/')[1] ?? '';
+    // The node's own icon opens with its background; the eraser rubs a stroke out.
+    await page.keyboard.press('KeyZ');
+    await page.locator('.icon-palette .icon-own').click();
+    await expect(background('alpha')).toHaveAttribute('aria-pressed', 'true');
+    await background('auto').click();
+    await eraser.click();
+    await expect(eraser).toHaveAttribute('aria-pressed', 'true');
+    const rub = async () => {
+      const b = await box(page, '.own-icon-dialog .own-original');
+      await page.mouse.move(b.x + b.width * 0.2, b.y + b.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(b.x + b.width * 0.5, b.y + b.height / 2, { steps: 6 });
+      await page.mouse.up();
+    };
+    await rub();
+    await expect(dialog.locator('.own-brush')).toBeVisible();
+    // `Ctrl+Z` takes the stroke back, not the workspace's step; `Ctrl+Shift+Z` gives it again.
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+Shift+z');
+    expect((await iconState(page, map)).core).toBe(plain);
+    await dialog.getByRole('button', { name: 'Готово' }).click();
+    await expect(dialog).toHaveCount(0);
+    // The picture as the eraser left it is a picture of its own: a PNG, the background in its alpha.
+    await expect.poll(async () => (await iconState(page, map)).core).not.toBe(plain);
+    const rubbed = (await iconState(page, map)).core ?? '';
+    expect(rubbed).toMatch(/^asset\/[0-9a-f]{64}\/engraving\/a$/);
+    const baked = rubbed.split('/')[1] ?? '';
+    expect(baked).not.toBe(sha);
+    const head = await page.evaluate(
+      async (id) => [...(await (window.__strataWs as WsHook).core.asset(id)).slice(0, 4)],
+      baked,
+    );
+    expect(head).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    await expect.poll(async () => (await iconState(page, map)).shows).toBe('own');
+    // A stroke taken back leaves nothing to bake: the picture stays the one it was.
+    await page.keyboard.press('KeyZ');
+    await page.locator('.icon-palette .icon-own').click();
+    await eraser.click();
+    await rub();
+    await page.keyboard.press('Control+z');
+    await dialog.getByRole('button', { name: 'Готово' }).click();
+    await expect(dialog).toHaveCount(0);
+    expect((await iconState(page, map)).core).toBe(rubbed);
+    // One step of undo for each «Готово».
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await iconState(page, map)).core).toBe(plain);
   });
 
   test("Z: «Свои» — the workspace's own icons first; a picture dropped on the palette (07 §6.4–6.5)", async ({

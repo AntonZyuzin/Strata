@@ -381,6 +381,14 @@ const ru = {
   'icons.group.own': 'Свои',
   'icons.group.presets': 'Пресеты',
   'own.title': 'Своя иконка',
+  'own.background': 'Фон',
+  'own.background.auto': 'Авто',
+  'own.background.alpha': 'Только прозрачное',
+  'own.backgroundHint.auto':
+    'Фон — прозрачное в картинке, а у непрозрачной — заливка от углов по цвету угла',
+  'own.backgroundHint.alpha': 'Фон — только прозрачное в картинке и стёртое ластиком',
+  'own.eraser': 'Ластик',
+  'own.eraserHint': 'Ластик — стереть фон на картинке слева; Ctrl+Z — вернуть мазок',
   'own.keys': 'Enter — готово · Esc — отмена',
   'own.original': 'Оригинал',
   'own.states': 'На холсте: обычная, выделенная, приглушённая',
@@ -1409,6 +1417,16 @@ const en: Catalog = {
   'icons.group.own': 'Own',
   'icons.group.presets': 'Presets',
   'own.title': 'Own icon',
+  'own.background': 'Background',
+  'own.background.auto': 'Auto',
+  'own.background.alpha': 'Transparent only',
+  'own.backgroundHint.auto':
+    'The background is what the picture has transparent; in an opaque one, a flood from the corners by their colour',
+  'own.backgroundHint.alpha':
+    'The background is only what the picture has transparent and what the eraser took',
+  'own.eraser': 'Eraser',
+  'own.eraserHint':
+    'Eraser — rub the background out on the picture at the left; Ctrl+Z brings a stroke back',
   'own.keys': 'Enter to finish · Esc to cancel',
   'own.original': 'Original',
   'own.states': 'On the canvas: normal, selected, dimmed',

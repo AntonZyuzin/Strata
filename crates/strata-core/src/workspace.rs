@@ -173,11 +173,12 @@ fn is_sha256(s: &str) -> bool {
 /// The stylization modes of 07 §6.5.
 const ICON_STYLES: [&str; 5] = ["engraving", "pixel", "silhouette", "photo", "as-is"];
 
-/// One's own icon (05 §4.1 `IconRef`, 07 §6.5–6.6), one spelling per style:
-/// `asset/<sha256>/<mode>[/t<threshold>][/i]` — the original, the mode, the
-/// threshold 0–255 when set by hand (none — Otsu's), `i` when inverted. The
-/// mask is a derivative, rebuilt from them (05 §12). The original's SHA-256,
-/// when the value reads so.
+/// One's own icon (05 §4.1 `IconRef`, 07 §6.4–6.6), one spelling per style:
+/// `asset/<sha256>/<mode>[/t<threshold>][/a][/i]` — the original, the mode,
+/// the threshold 0–255 when set by hand (none — Otsu's), `a` when only the
+/// transparent is background (no flood from the corners), `i` when inverted.
+/// The mask is a derivative, rebuilt from them (05 §12). The original's
+/// SHA-256, when the value reads so.
 fn uploaded_icon(s: &str) -> Option<&str> {
     let mut parts = s.strip_prefix("asset/")?.split('/');
     let sha = parts.next().filter(|sha| is_sha256(sha))?;
@@ -192,8 +193,10 @@ fn uploaded_icon(s: &str) -> Option<&str> {
         }
         next = parts.next();
     }
-    if next == Some("i") {
-        next = parts.next();
+    for flag in ["a", "i"] {
+        if next == Some(flag) {
+            next = parts.next();
+        }
     }
     next.is_none().then_some(sha)
 }

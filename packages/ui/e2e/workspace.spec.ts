@@ -2483,7 +2483,7 @@ test.describe('a workspace on the core', () => {
     await made.click();
     await revert.click();
     await expect(win.locator('.history-result')).toHaveText(
-      'Сначала откатите то, что сделано после',
+      'На нём стоят более поздние изменения: сначала откатите их',
     );
     await expect.poll(async () => (await graphNow(page)).names).toEqual(['Вторая', 'Первая']);
     // «Показать» goes to its node.

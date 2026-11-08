@@ -1,6 +1,6 @@
 import type { Backup } from '@strata/backend';
 import { type Locale, t } from '@strata/i18n';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { keepTab } from '../focusTrap';
 import { type Clock, type DateFormat, formatDate, formatTime } from '../prefs';
 
@@ -50,6 +50,8 @@ export function RestoreDialog(props: {
   const list = useRef<HTMLDivElement>(null);
   const rows = backups ?? [];
   const chosen = rows[Math.min(index, rows.length - 1)];
+  /** The rows' ids: the list names the chosen one to a screen reader (WAI-ARIA listbox). */
+  const ids = useId();
 
   useEffect(() => {
     list.current?.focus();
@@ -89,6 +91,7 @@ export function RestoreDialog(props: {
             className="restore-list"
             role="listbox"
             aria-label={t(locale, 'home.backups')}
+            aria-activedescendant={chosen ? `${ids}-${rows.indexOf(chosen)}` : undefined}
             tabIndex={0}
             onKeyDown={(e) => {
               if (e.key === 'ArrowDown') setIndex((i) => Math.min(rows.length - 1, i + 1));
@@ -101,7 +104,13 @@ export function RestoreDialog(props: {
             }}
           >
             {backups && rows.length === 0 ? (
-              <div className="tab-menu-empty" title={t(locale, 'home.noBackupsHint')}>
+              <div
+                className="tab-menu-empty"
+                role="option"
+                aria-selected="false"
+                aria-disabled="true"
+                title={t(locale, 'home.noBackupsHint')}
+              >
                 {t(locale, 'home.noBackups')}
               </div>
             ) : null}
@@ -110,6 +119,7 @@ export function RestoreDialog(props: {
               return (
                 <div
                   key={b.id}
+                  id={`${ids}-${i}`}
                   role="option"
                   tabIndex={-1}
                   aria-selected={b === chosen}

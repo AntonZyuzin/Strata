@@ -2546,7 +2546,21 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 /* «Восстановить из копии» (10 §3.5): the copies in a sunken list, a row
    each, the chosen one inverse as in the Tab menu; eight rows high before
    they load and after, then it scrolls; what failed on one line under it. */
+.restore-dialog {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 32 * var(--u));
+}
+
+.restore-dialog > .window-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
 .restore-list {
+  flex: 0 1 auto;
+  min-height: calc(3 * var(--st-size-row) + 2 * var(--u));
   height: calc(8 * var(--st-size-row) + 2 * var(--u));
   padding: var(--u) 0;
   overflow-y: auto;
@@ -2573,11 +2587,23 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
    changeset taken back grey; what «Откатить» came to on one line under it.
    The columns in ch, wide enough for either language's dates. */
 .history-window {
+  display: flex;
+  flex-direction: column;
   width: min(84ch, calc(100vw - 32px));
+  max-height: calc(100vh - 32 * var(--u));
 }
 
+.history-window > .window-body {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Fourteen rows; fewer when the screen is short (zoom 200 %), never under four. */
 .history-list {
+  flex: 0 1 auto;
   height: calc(14 * var(--st-size-row) + 2 * var(--u));
+  min-height: calc(4 * var(--st-size-row) + 2 * var(--u));
   padding: var(--u) 0;
   overflow-y: auto;
   background: var(--st-color-surface-sunken);
@@ -2616,12 +2642,18 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   color: inherit;
 }
 
+/* Taken back: struck through, not only grey (WCAG 1.4.1), and muted, not
+   disabled, so it reads at 7.8:1 (1.4.3); struck through when chosen too. */
+.history-row.is-reverted .history-what {
+  text-decoration: line-through;
+}
+
 .history-row.is-reverted:not(.is-current) > span {
-  color: var(--st-color-text-disabled);
+  color: var(--st-color-text-muted);
 }
 
 .history-more {
-  margin: var(--u) calc(4 * var(--u));
+  margin-right: auto;
 }
 
 .history-result {

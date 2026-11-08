@@ -1,6 +1,6 @@
 import type { Journal, JournalEntry } from '@strata/backend';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { keepTab } from '../focusTrap';
 import { type Clock, type DateFormat, formatDate, formatTime } from '../prefs';
 import { changeText } from './changes';
@@ -74,6 +74,8 @@ export function HistoryWindow(props: {
   const [line, setLine] = useState<string | null>(null);
   const box = useRef<HTMLElement>(null);
   const list = useRef<HTMLDivElement>(null);
+  /** The rows' ids: the list names the chosen one to a screen reader (WAI-ARIA listbox). */
+  const ids = useId();
   const { load } = props;
 
   useEffect(() => {
@@ -93,6 +95,12 @@ export function HistoryWindow(props: {
   useEffect(() => {
     list.current?.querySelector('.is-current')?.scrollIntoView({ block: 'nearest' });
   }, [index]);
+
+  /** Another row chosen: what the last action came to was about the one before. */
+  const choose = (i: number) => {
+    setIndex(i);
+    setLine(null);
+  };
 
   const all = rows ?? [];
   const chosen = all[Math.min(index, all.length - 1)];
@@ -188,12 +196,14 @@ export function HistoryWindow(props: {
             className="history-list"
             role="listbox"
             aria-label={t(locale, 'history.list')}
+            aria-activedescendant={chosen ? `${ids}-${all.indexOf(chosen)}` : undefined}
             tabIndex={0}
             onKeyDown={(e) => {
-              if (e.key === 'ArrowDown') setIndex((i) => Math.min(all.length - 1, i + 1));
-              else if (e.key === 'ArrowUp') setIndex((i) => Math.max(0, i - 1));
-              else if (e.key === 'Home') setIndex(0);
-              else if (e.key === 'End') setIndex(Math.max(0, all.length - 1));
+              const at = Math.min(index, all.length - 1);
+              if (e.key === 'ArrowDown') choose(Math.min(all.length - 1, at + 1));
+              else if (e.key === 'ArrowUp') choose(Math.max(0, at - 1));
+              else if (e.key === 'Home') choose(0);
+              else if (e.key === 'End') choose(Math.max(0, all.length - 1));
               else if (e.key === 'Enter') void show(chosen);
               else return;
               e.preventDefault();
@@ -213,6 +223,7 @@ export function HistoryWindow(props: {
               return (
                 <div
                   key={e.id}
+                  id={`${ids}-${i}`}
                   role="option"
                   tabIndex={-1}
                   data-id={e.id}
@@ -220,7 +231,7 @@ export function HistoryWindow(props: {
                   className={classes.join(' ')}
                   onPointerDown={(ev) => {
                     ev.preventDefault();
-                    setIndex(i);
+                    if (i !== index) choose(i);
                     list.current?.focus();
                   }}
                   onDoubleClick={() => void show(e)}
@@ -235,21 +246,26 @@ export function HistoryWindow(props: {
                   <span className="history-what" title={what}>
                     {what}
                   </span>
+                  {/* Taken back: struck through and grey to the eye, said to a screen reader. */}
+                  {back ? <span className="sr-only">{back}</span> : null}
                 </div>
               );
             })}
-            {more ? (
-              <button type="button" className="history-more" onClick={() => void loadMore()}>
-                {t(locale, 'history.more')}
-              </button>
-            ) : null}
           </div>
           <p className="history-result" role="status" title={line ?? undefined}>
             {line}
           </p>
           <div className="dialog-actions">
+            {/* Older rows: a button of the window, not a row of the list. */}
+            {more ? (
+              <button type="button" className="history-more" onClick={() => void loadMore()}>
+                {t(locale, 'history.more')}
+              </button>
+            ) : null}
+            {/* `Enter` in the list shows: the default button is the one it presses. */}
             <button
               type="button"
+              className="is-default"
               title={t(locale, 'history.showHint')}
               disabled={!chosen}
               onClick={() => void show(chosen)}
@@ -258,7 +274,6 @@ export function HistoryWindow(props: {
             </button>
             <button
               type="button"
-              className="is-default"
               title={why ?? t(locale, 'history.revertHint')}
               aria-disabled={Boolean(why) || busy}
               disabled={!chosen || busy}

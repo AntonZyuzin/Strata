@@ -4759,9 +4759,35 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(async () => (await reflections()).map((r) => [r.id, r.net]))
       .toEqual([[sketch, archive]]);
-    // A click on it: «Эскиз» in 2D, in «Архив» — not at the root, its primary.
+    // Flown near «Архив»: the shortcut's mark by the ring, as in 2D (06 §12.2).
+    await page.keyboard.press('Control+o');
+    await page.locator('.map-search input').fill('Архив');
+    await page.locator('.map-search input').press('Enter');
+    await expect(page.locator('.proto-map-pin.is-shortcut:not([hidden])')).toHaveCount(1, {
+      timeout: 10_000,
+    });
+    await page.keyboard.press('Escape');
+    // Over it: «Эскиз ×2» by the ring, then the card «Также в» (08 §2.3, §6.2).
     const [ring] = await reflections();
-    await page.mouse.click(ring?.x ?? 0, ring?.y ?? 0);
+    await page.mouse.move(ring?.x ?? 0, ring?.y ?? 0);
+    await expect(page.locator('.proto-map-label.is-hover')).toHaveText('Эскиз ×2');
+    await expect(
+      page.locator('.map-card.is-full .map-card-label', { hasText: 'Также в' }),
+    ).toBeVisible();
+    // The card closed, a click on the ring: «Эскиз» in 2D, in «Архив» — not
+    // at the root, its primary.
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.map-card.is-full')).toHaveCount(0);
+    // The map settles after the flight: the ring where it is once still.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => (window.__strataWs?.map() as unknown as { still: boolean } | null)?.still,
+        ),
+      )
+      .toBe(true);
+    const now = (await reflections())[0];
+    await page.mouse.click(now?.x ?? 0, now?.y ?? 0);
     await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
     await expect(ws).toHaveAttribute('data-depth', '2');
     await expect(page.locator('.ins-title-name')).toHaveText('Эскиз');

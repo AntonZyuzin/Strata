@@ -281,6 +281,8 @@ export class Map3D {
    * contextual network while that star stays selected.
    */
   private via: string | null = null;
+  /** The reflection under the pointer (08 §2.3): its index; null — none, or a star. */
+  private hoveredReflection: number | null = null;
   /** Brief cards by node, and the full one (08 §6.2). */
   private readonly briefs = new Map<string, HTMLElement>();
   private full: {
@@ -294,6 +296,8 @@ export class Map3D {
   private readonly details = new Map<string, NodeDetails>();
   /** Pin marks of pinned stars on the screen. */
   private readonly pinMarks = new Map<string, HTMLElement>();
+  /** The shortcut's marks by the reflections near enough (08 §2.3), a pool by index. */
+  private readonly ringMarks: HTMLElement[] = [];
   /** «Закрепить на карте» (08 §3.6): laid-out positions by node, on this device. */
   private pins = new Map<string, [number, number, number]>();
   /** Keys of flying held (08 §5.2), the wheel's speed, when flying began. */
@@ -341,7 +345,10 @@ export class Map3D {
     c.addEventListener('pointerup', (e) => this.pointerUp(e));
     c.addEventListener('pointercancel', () => this.cancelGesture());
     c.addEventListener('pointerleave', () => {
-      if (!this.gesture) this.hover(null);
+      if (!this.gesture) {
+        this.hoveredReflection = null;
+        this.hover(null);
+      }
     });
     c.addEventListener('contextmenu', (e) => e.preventDefault());
     c.addEventListener('wheel', (e) => this.wheel(e), { passive: false });
@@ -411,6 +418,7 @@ export class Map3D {
     this.corners.remove();
     this.closeCards();
     for (const m of this.pinMarks.values()) m.remove();
+    for (const m of this.ringMarks) m.remove();
   }
 
   /**
@@ -1494,6 +1502,7 @@ export class Map3D {
     map.projectAll(map.reflectionCentres, map.reflectionCount, this.rscr);
     this.placeLabels();
     this.placePins();
+    this.placeRingMarks();
     this.placeCards();
   }
 
@@ -1571,7 +1580,14 @@ export class Map3D {
     this.pointer = p;
     const g = this.gesture;
     if (!g) {
-      this.hover(this.space ? this.pick(p.x, p.y) : null);
+      // A reflection nearer than any star: its node, its label by the ring (08 §2.3).
+      const star = this.space ? this.pick(p.x, p.y) : null;
+      const r = this.space ? this.reflectionAt(p.x, p.y, star) : null;
+      const was = this.hoveredReflection;
+      this.hoveredReflection = r;
+      this.hover(r === null ? star : (this.space?.x.appear?.[r * 2] ?? star));
+      // From a star to its own reflection the node stays: the label moves.
+      if (r !== was) this.placeLabels();
       return;
     }
     if (g.t === 'grab') {
@@ -1702,15 +1718,30 @@ export class Map3D {
     return best;
   }
 
+  /** A reflection on the canvas as of the last frame: centre and radius, CSS px. */
+  private ringAt(k: number): { x: number; y: number; r: number } | null {
+    const depth = this.rscr[k * 3 + 2] ?? 0;
+    const b = this.space?.x.appear?.[k * 2];
+    if (depth <= 0 || b === undefined) return null;
+    const r = (0.6 * this.starSize(b) * this.pxPerUnit()) / depth / 2;
+    return { x: this.rscr[k * 3] ?? 0, y: this.rscr[k * 3 + 1] ?? 0, r };
+  }
+
+  /** The reflection under a point, nearer than star `star`: its index; null — none. */
+  private reflectionAt(x: number, y: number, star: number | null): number | null {
+    const hit = this.pickReflection(x, y, star);
+    return hit?.k ?? null;
+  }
+
   /**
    * The reflection under a point (08 §2.3), when nearer than star `star`: its
-   * node's body and its network. Reached as a star of 60 % is.
+   * node's body, its network and its index. Reached as a star of 60 % is.
    */
   private pickReflection(
     x: number,
     y: number,
     star: number | null,
-  ): { b: number; net: string } | null {
+  ): { b: number; net: string; k: number } | null {
     const space = this.space;
     const appear = space?.x.appear;
     if (!space || !appear || appear.length === 0) return null;
@@ -1723,7 +1754,7 @@ export class Map3D {
       return d / Math.max(PICK_PX, (this.starSize(b) * ppu) / depth / 2);
     };
     let bestScore = star === null ? 1 : Math.min(1, starScore(star));
-    let best: { b: number; net: string } | null = null;
+    let best: { b: number; net: string; k: number } | null = null;
     for (let k = 0; k * 2 < appear.length; k++) {
       const depth = s[k * 3 + 2] ?? 0;
       if (depth <= 0) continue;
@@ -1733,7 +1764,7 @@ export class Map3D {
       const score = d / reach;
       if (score < bestScore) {
         bestScore = score;
-        best = { b, net: space.ids[appear[k * 2 + 1] ?? 0] ?? '' };
+        best = { b, net: space.ids[appear[k * 2 + 1] ?? 0] ?? '', k };
       }
     }
     return best;
@@ -2043,16 +2074,23 @@ export class Map3D {
       const id = this.space?.ids[b];
       return id !== undefined && (this.full?.id === id || this.briefs.has(id));
     };
-    const put = (el: HTMLElement, b: number | null) => {
-      const s = b === null || carded(b) ? null : this.local3(b);
+    const put = (el: HTMLElement, b: number | null, ring: number | null = null) => {
+      const s = b === null || carded(b) ? null : ring === null ? this.local3(b) : this.ringAt(ring);
       el.hidden = this.state !== '3d' || !s || !this.onScreen(s);
       if (!s || el.hidden || b === null) return;
-      el.textContent = this.names[b] ?? '';
+      // By a reflection: its node and how many places it has, «×N» (08 §2.3).
+      const places = 1 + (this.items.get(this.space?.ids[b] ?? '')?.appears?.length ?? 0);
+      el.textContent = ring === null ? (this.names[b] ?? '') : `${this.names[b] ?? ''} ×${places}`;
       el.style.left = `${this.canvas.offsetLeft + s.x}px`;
       el.style.top = `${this.canvas.offsetTop + s.y - s.r}px`;
     };
     put(this.label, this.selected);
-    put(this.hoverLabel, this.hovered !== this.selected ? this.hovered : null);
+    const ring = this.hoveredReflection;
+    put(
+      this.hoverLabel,
+      this.hovered !== this.selected || ring !== null ? this.hovered : null,
+      ring,
+    );
     const s = this.selected === null ? null : this.local3(this.selected);
     this.corners.hidden = this.state !== '3d' || !s || !this.onScreen(s);
     if (s && !this.corners.hidden) {
@@ -2061,6 +2099,33 @@ export class Map3D {
       this.corners.style.top = `${this.canvas.offsetTop + s.y - half}px`;
       this.corners.style.width = `${2 * half}px`;
       this.corners.style.height = `${2 * half}px`;
+    }
+  }
+
+  /**
+   * The shortcut's mark by each reflection near enough (08 §2.3): an
+   * appearance's 8 × 8 glyph, as in 2D (06 §12.2), at the ring's top right.
+   */
+  private placeRingMarks(): void {
+    const count = this.space?.x.appear ? this.space.x.appear.length / 2 : 0;
+    for (let k = 0; k < Math.max(count, this.ringMarks.length); k++) {
+      const s = k < count ? this.ringAt(k) : null;
+      let mark = this.ringMarks[k];
+      if (!s || 2 * s.r < PIN_PX || !this.onScreen(s) || this.state !== '3d') {
+        if (mark) mark.hidden = true;
+        continue;
+      }
+      if (!mark) {
+        mark = document.createElement('span');
+        mark.className = 'proto-map-pin is-shortcut';
+        mark.setAttribute('aria-hidden', 'true');
+        mark.style.setProperty('--glyph', glyphUrl('shortcut'));
+        this.host.append(mark);
+        this.ringMarks[k] = mark;
+      }
+      mark.hidden = false;
+      mark.style.left = `${this.canvas.offsetLeft + s.x + 0.7 * s.r}px`;
+      mark.style.top = `${this.canvas.offsetTop + s.y - 0.7 * s.r}px`;
     }
   }
 

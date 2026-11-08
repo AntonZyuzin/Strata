@@ -47,6 +47,19 @@ impl NodeKind {
     pub const fn is_task(self) -> bool {
         matches!(self, Self::Task | Self::Project)
     }
+
+    /// Its name as the documents spell it (the serde name).
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Network => "network",
+            Self::Project => "project",
+            Self::Task => "task",
+            Self::Note => "note",
+            Self::Board => "board",
+            Self::Checklist => "checklist",
+            Self::Asset => "asset",
+        }
+    }
 }
 
 /// The flags of 05 §7, Houdini's rethought: `R` key, `Q` pause, `E`
@@ -124,6 +137,13 @@ mod tests {
         assert!(!NodeKind::Note.has_canvas());
         assert!(NodeKind::Task.is_task() && NodeKind::Project.is_task());
         assert!(!NodeKind::Network.is_task() && !NodeKind::Note.is_task());
+    }
+
+    #[test]
+    fn a_kinds_name_is_its_serde_name() {
+        for k in NodeKind::ALL {
+            assert_eq!(serde_json::to_value(k).unwrap(), k.as_str());
+        }
     }
 
     #[test]

@@ -566,6 +566,10 @@ pub struct NetworkView {
     /// none on the root itself, and none set — «Туман».
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_background: Option<Background>,
+    /// The kinds' icons of the workspace (05 §3 `kindIcons`, §4.1): kind →
+    /// the icon its nodes without their own show.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub kind_icons: BTreeMap<String, String>,
 }
 
 /// A node in the trash.
@@ -1814,6 +1818,30 @@ impl<S: Store> Workspace<S> {
                         background.as_ref().map(background_val),
                     );
                 }
+                Op::SetKindIcon { kind, icon } => {
+                    // A setting of the workspace (05 §3); an asset's icon is its content's (05 §4.4).
+                    if *kind == NodeKind::Asset {
+                        return Err(invalid(
+                            "an asset has no kind's icon: its icon is its content's",
+                        ));
+                    }
+                    if let Some(v) = icon {
+                        let ok = is_icon_preset(v)
+                            || match uploaded_icon(v) {
+                                Some(sha) => self.store.asset(sha)?.is_some(),
+                                None => false,
+                            };
+                        if !ok {
+                            return Err(invalid(format!("kind's icon {v}: not an icon it takes")));
+                        }
+                    }
+                    put(
+                        "manifest",
+                        "kindIcon",
+                        kind.as_str(),
+                        icon.as_deref().map(Val::str),
+                    );
+                }
             }
         }
         Ok(out)
@@ -2972,9 +3000,9 @@ impl<S: Store> Workspace<S> {
         out
     }
 
-    /// One's own icons the workspace's live nodes have (07 §6.5): «Свои» of
-    /// the palette `Z`, each once, the one the most nodes have first, then
-    /// by spelling. A node in the trash lends none.
+    /// One's own icons the workspace's live nodes and kinds have (07 §6.5,
+    /// 05 §4.1): «Свои» of the palette `Z`, each once, the one the most nodes
+    /// have first, then by spelling. A node in the trash lends none.
     pub fn own_icons(&self) -> Vec<String> {
         let mut count: HashMap<String, usize> = HashMap::new();
         for shard in self.index_shards() {
@@ -2997,9 +3025,29 @@ impl<S: Store> Workspace<S> {
                 }
             }
         }
+        // A kind's icon is one the workspace has, too (05 §4.1).
+        for icon in self.kind_icons().into_values() {
+            if uploaded_icon(&icon).is_some() {
+                *count.entry(icon).or_default() += 1;
+            }
+        }
         let mut out: Vec<(String, usize)> = count.into_iter().collect();
         out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         out.into_iter().map(|(icon, _)| icon).collect()
+    }
+
+    /// The kinds' icons of the workspace (05 §3 `kindIcons`, §4.1): kind's
+    /// name → the icon its nodes without their own show.
+    pub fn kind_icons(&self) -> BTreeMap<String, String> {
+        let LoroValue::Map(m) = self.docs["manifest"].get_map("kindIcon").get_value() else {
+            return BTreeMap::new();
+        };
+        m.iter()
+            .filter_map(|(kind, v)| {
+                let icon = Val::from_loro(v)?.as_str()?.to_owned();
+                Some((kind.clone(), icon))
+            })
+            .collect()
     }
 
     /// The network as the canvas draws it (10 §7.3).
@@ -3142,6 +3190,7 @@ impl<S: Store> Workspace<S> {
             wire_style,
             background,
             workspace_background,
+            kind_icons: self.kind_icons(),
         })
     }
 

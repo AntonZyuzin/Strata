@@ -232,6 +232,10 @@ function loadRecent(): string[] {
 
 const pair = (a: string, b: string) => `${a}\u0000${b}`;
 
+/** The kinds' icons as one string, to tell whether a view brought others (05 §4.1). */
+const kindIconsKey = (m: Partial<Record<string, string>>) =>
+  JSON.stringify(Object.entries(m).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+
 /** A quick mark is set by holding its digit this long (06 §10.3). */
 const MARK_HOLD_MS = 600;
 const DIGITS: Partial<Record<string, number>> = {
@@ -596,6 +600,8 @@ export function WorkspaceScreen(props: {
   const ownIconsRef = useRef<() => void>(() => undefined);
   /** The pictures «Своя иконка» was opened with, counted. */
   const ownSeq = useRef(0);
+  /** The kinds' icons of the workspace (05 §3, §4.1), as the last view of the core gave them. */
+  const kindIconsRef = useRef<Partial<Record<NodeKind, string>>>({});
   /** Link assets already asked for a preview this session. */
   const previewed = useRef(new Set<string>());
   const eventsRef = useRef<EditorEvents | null>(null);
@@ -1162,6 +1168,8 @@ export function WorkspaceScreen(props: {
         (pid) => peopleRef.current.find((p) => p.id === pid)?.color ?? 0,
       );
       graph.current = g;
+      kindIconsRef.current = nv.kind_icons ?? {};
+      v.setKindDefaults(kindIconsRef.current);
       ownIconsRef.current();
       g.subscribe((e) => {
         for (const event of geckoEvents(e)) gecko.current?.react(event);
@@ -1607,6 +1615,13 @@ export function WorkspaceScreen(props: {
               ? { ...n, background: nv.background, workspace_background: nv.workspace_background }
               : n,
           );
+          // The kinds' icons a step or its undo changed (05 §4.1).
+          const kinds = nv.kind_icons ?? {};
+          if (kindIconsKey(kinds) !== kindIconsKey(kindIconsRef.current)) {
+            kindIconsRef.current = kinds;
+            viewRef.current?.setKindDefaults(kinds);
+            ownIconsRef.current();
+          }
           // A step made since the question is not in the answer yet; the
           // looks read back below move the version too, so it is asked first.
           const fresh = g.version === at;
@@ -2318,6 +2333,32 @@ export function WorkspaceScreen(props: {
   };
 
   /**
+   * The icon of the nodes' kinds (05 §3, §4.1, S10 step 5): every node of
+   * those kinds without its own shows it; these nodes give their own up to
+   * show it too. One step of undo; an asset has no kind's icon.
+   */
+  const setKindIcon = (ids: readonly string[], icon: string | null) => {
+    const g = graph.current;
+    if (!g) return;
+    const nodes = ids.flatMap((id) => {
+      const n = g.nodes.get(id);
+      return n && n.ghostOf === null && n.kind !== 'asset' ? [n] : [];
+    });
+    const kinds = [...new Set(nodes.map((n) => n.kind))];
+    if (kinds.length === 0) return;
+    const ops: CoreOp[] = [
+      ...kinds.map((kind): CoreOp => ({ op: 'setKindIcon', kind, icon })),
+      ...nodes
+        .filter((n) => n.attrs.icon != null)
+        .map((n): CoreOp => ({ op: 'setAttr', id: n.id, key: 'icon', value: null })),
+    ];
+    const names = kinds.map((k) => t(locale, `kind.${k}` as MessageKey)).join(', ');
+    void coreStep(ops, 'change.kindIcon', { kind: names })
+      .then(() => loadRef.current())
+      .catch(failed);
+  };
+
+  /**
    * «Своя иконка» with a picture from the disk (07 §6.4): decoded for the
    * dialog, stored only on «Готово».
    */
@@ -2368,7 +2409,8 @@ export function WorkspaceScreen(props: {
     if (!v || !g) return;
     const used = new Set<string>();
     for (const n of g.nodes.values()) {
-      const ref = n.attrs.icon;
+      // Its own icon, or its kind's of the workspace (05 §4.1).
+      const ref = n.attrs.icon ?? kindIconsRef.current[n.kind];
       if (ref?.startsWith(OWN_ICON)) used.add(ref);
     }
     const given = ownGiven.current;
@@ -3997,6 +4039,10 @@ export function WorkspaceScreen(props: {
           own={ownIcons}
           ownMask={ownMaskUrl}
           current={g?.nodes.get(iconPick.ids[0] ?? '')?.attrs.icon ?? null}
+          kindIcon={(() => {
+            const n = g?.nodes.get(iconPick.ids[0] ?? '');
+            return n ? (net?.kind_icons?.[n.kind] ?? null) : null;
+          })()}
           kind={(() => {
             const n = g?.nodes.get(iconPick.ids[0] ?? '');
             if (!n) return 'note';
@@ -4009,9 +4055,10 @@ export function WorkspaceScreen(props: {
           bounds={seenBounds()}
           search={searchClient()}
           size={g?.nodes.get(iconPick.ids[0] ?? '')?.size ?? null}
-          onPick={(icon) => {
+          onPick={(icon, forKind) => {
             setIconPick(null);
-            setIcon(iconPick.ids, icon);
+            if (forKind) setKindIcon(iconPick.ids, icon);
+            else setIcon(iconPick.ids, icon);
             focusCanvas();
           }}
           onOwn={(file) => {

@@ -49,7 +49,10 @@ interface WsHook {
   core: {
     tree(): Promise<{ id: string; name: string; parent?: string }[]>;
     node(id: string): Promise<{ icon?: string; status?: string; color?: number }>;
-    view(net: string): Promise<{ nodes: { id: string; name: string; size?: string }[] }>;
+    view(net: string): Promise<{
+      nodes: { id: string; name: string; size?: string }[];
+      kind_icons?: Record<string, string>;
+    }>;
     putAsset(bytes: Uint8Array): Promise<string>;
     asset(sha: string): Promise<Uint8Array>;
     ownIcons(): Promise<string[]>;
@@ -4361,6 +4364,89 @@ test.describe('a workspace on the core', () => {
     // One step of undo for each «Готово».
     await page.keyboard.press('Control+z');
     await expect.poll(async () => (await iconState(page, map)).core).toBe(plain);
+  });
+
+  test("Z: `Ctrl+Enter` makes the icon the kind's, for every node of the kind (05 §4.1, S10 step 5)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Иконка вида');
+    await createNode(page, 460, 300, 'Карта');
+    await createNode(page, 760, 420, 'План');
+    await createTask(page, 'Дело');
+    const [map, plan, job] = [
+      await idOf(page, 'Карта'),
+      await idOf(page, 'План'),
+      await idOf(page, 'Дело'),
+    ];
+    const kindIcons = () =>
+      page.evaluate(async () => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        return (await ws.core.view(ws.net())).kind_icons ?? {};
+      });
+    const shows = async (id: string) => (await iconState(page, id)).shows;
+    // «План» has a preset of its own; `Ctrl+Enter` on «Карта» gives the notes' kind the compass.
+    await select(page, 'План');
+    await page.keyboard.press('KeyZ');
+    const palette = page.locator('.icon-palette');
+    await palette.locator('.icon-cell[data-icon="lorc/owl"]').click();
+    await expect.poll(() => iconState(page, plan)).toMatchObject({ core: 'game-icons/lorc/owl' });
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    await expect(palette.getByRole('textbox', { name: 'Найти иконку' })).toHaveAttribute(
+      'title',
+      /Ctrl\+Enter — для всего вида/,
+    );
+    await page.keyboard.type('компас');
+    await expect(palette.locator('.icon-cell').first()).toHaveAttribute(
+      'data-icon',
+      'lorc/compass',
+    );
+    await page.keyboard.press('Control+Enter');
+    await expect(palette).toHaveCount(0);
+    await expect.poll(kindIcons).toEqual({ note: 'game-icons/lorc/compass' });
+    // Every note shows it, its own icon none; «План» keeps its own; the task its kind's glyph.
+    await expect
+      .poll(() => iconState(page, map))
+      .toEqual({ shows: 'preset', icon: null, core: null });
+    expect(await iconState(page, plan)).toMatchObject({
+      shows: 'preset',
+      core: 'game-icons/lorc/owl',
+    });
+    expect(await shows(job)).toBe('kind');
+    // The palette shows the kind's icon pressed in for a node with none of its own.
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    await expect(palette.locator('.icon-cell[data-icon="lorc/compass"]')).toHaveClass(/is-chosen/);
+    await expect(palette.locator('.icon-cell[data-icon="lorc/compass"]')).toHaveClass(/is-current/);
+    // `Ctrl`+click on a cell with «План» chosen: its own owl goes, it shows the kind's too.
+    await page.keyboard.press('Escape');
+    await select(page, 'План');
+    await page.keyboard.press('KeyZ');
+    await palette.locator('.icon-cell[data-icon="lorc/eyeball"]').click({ modifiers: ['Control'] });
+    await expect.poll(kindIcons).toEqual({ note: 'game-icons/lorc/eyeball' });
+    await expect
+      .poll(() => iconState(page, plan))
+      .toEqual({ shows: 'preset', icon: null, core: null });
+    // One step of undo: the compass and «План»'s owl come back together.
+    await page.keyboard.press('Control+z');
+    await expect.poll(kindIcons).toEqual({ note: 'game-icons/lorc/compass' });
+    await expect.poll(async () => (await iconState(page, plan)).core).toBe('game-icons/lorc/owl');
+    // `Ctrl`+click on «Значок вида» gives the kind its glyph back.
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    await palette.getByRole('button', { name: 'Значок вида' }).click({ modifiers: ['Control'] });
+    await expect.poll(kindIcons).toEqual({});
+    await expect.poll(() => shows(map)).toBe('kind');
+    // It comes back with the workspace.
+    await page.keyboard.press('Control+z');
+    await expect.poll(kindIcons).toEqual({ note: 'game-icons/lorc/compass' });
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await expect.poll(() => shows(map)).toBe('preset');
   });
 
   test("Z: «Свои» — the workspace's own icons first; a picture dropped on the palette (07 §6.4–6.5)", async ({

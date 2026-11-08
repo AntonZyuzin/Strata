@@ -1,6 +1,6 @@
 import { type GlyphName, glyphUrl } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, MouseEvent, ReactNode } from 'react';
 import { Icon, type IconName } from './icons/Icon';
 
 /**
@@ -36,7 +36,7 @@ export function IconButton(props: {
   className?: string | undefined;
   /** A toggle: shown pressed, said pressed. */
   pressed?: boolean | undefined;
-  onClick: () => void;
+  onClick: (e: MouseEvent<HTMLButtonElement>) => void;
   children?: ReactNode;
 }) {
   return (

@@ -59,6 +59,8 @@ export function IconPalette(props: {
   ownMask: (ref: string) => Promise<string>;
   /** The node's `icon` now (a preset's or one's own reference, or none — its kind's icon). */
   current: string | null;
+  /** The kind's icon of the workspace (05 §4.1): what the node shows with none of its own. */
+  kindIcon: string | null;
   /** The kind's icon of the first of the nodes: the button that takes a preset back shows it. */
   kind: IconName;
   /** The first node's size in this network, set by hand; null — by the rules. */
@@ -67,8 +69,11 @@ export function IconPalette(props: {
   y: number;
   bounds?: DOMRect | undefined;
   search: Pick<MenuSearch, 'rank'>;
-  /** An icon — a preset's or one's own reference — or null, back to the kind's. */
-  onPick: (icon: string | null) => void;
+  /**
+   * An icon — a preset's or one's own reference — or null, back to the
+   * kind's; `forKind` (`Ctrl`): the kind's icon of the workspace (05 §4.1).
+   */
+  onPick: (icon: string | null, forKind: boolean) => void;
   /** A size by hand, or null — back to the rules. */
   onSize: (size: NodeSize | null) => void;
   /** One's own icon: a picture from the disk, or null — restyle the one the node has. */
@@ -81,7 +86,7 @@ export function IconPalette(props: {
   /** Preset indices the query finds, best first; null — every preset, in order. */
   const [found, setFound] = useState<{ query: string; order: number[] } | null>(null);
   /** The cell under the keys, by the icon it gives; none found — the first. */
-  const [key, setKey] = useState<string | null>(props.current);
+  const [key, setKey] = useState<string | null>(props.current ?? props.kindIcon);
   /** The own icons' masks, by reference, as they come. */
   const [masks, setMasks] = useState<Readonly<Record<string, string>>>({});
   /** A picture is dragged over the palette. */
@@ -223,7 +228,7 @@ export function IconPalette(props: {
         go(rowMove(groups, at, -PAGE));
         break;
       case 'Enter':
-        if (current) props.onPick(current.value);
+        if (current) props.onPick(current.value, e.ctrlKey || e.metaKey);
         break;
       case 'Escape':
         props.onClose();
@@ -246,7 +251,8 @@ export function IconPalette(props: {
   const cellView = (c: Cell, i: number) => {
     const cls = ['icon-cell'];
     if (i === at) cls.push('is-current');
-    if (c.value === props.current) cls.push('is-chosen');
+    // What the node shows: its own icon, or its kind's.
+    if (c.value === (props.current ?? props.kindIcon)) cls.push('is-chosen');
     const says = lineOf(c);
     const mask = masks[c.value];
     return (
@@ -266,7 +272,7 @@ export function IconPalette(props: {
         onPointerDown={(e) => {
           // The query keeps the keys.
           e.preventDefault();
-          props.onPick(c.value);
+          props.onPick(c.value, e.ctrlKey || e.metaKey);
         }}
       >
         {c.preset ? (
@@ -330,8 +336,9 @@ export function IconPalette(props: {
           <IconButton
             icon={props.kind}
             label={t(locale, 'icons.kind')}
-            disabled={props.current === null}
-            onClick={() => props.onPick(null)}
+            title={t(locale, 'icons.kindHint')}
+            disabled={props.current === null && props.kindIcon === null}
+            onClick={(e) => props.onPick(null, e.ctrlKey || e.metaKey)}
           />
           <IconButton
             icon="filetype-image"

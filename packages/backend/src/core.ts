@@ -170,7 +170,12 @@ export type CoreOp =
   /** A bubble's size in network `net`, set by hand (06 §4.2); null — by the rules. */
   | { op: 'setSize'; id: string; net: string; size: NodeSize | null }
   /** The network's background (07 §7.4); the root's is the workspace's; null — none of its own. */
-  | { op: 'setBackground'; net: string; background: Background | null };
+  | { op: 'setBackground'; net: string; background: Background | null }
+  /**
+   * The kind's icon of the workspace (05 §3, §4.1): what its nodes without
+   * their own show; null — the built-in glyph. Not for assets.
+   */
+  | { op: 'setKindIcon'; kind: NodeKind; icon: string | null };
 
 export type CoreRequest =
   | { call: 'workspace' }
@@ -599,6 +604,8 @@ export interface NetworkView {
   background?: Background | undefined;
   /** The workspace's, which a network without its own shows; none on the root. */
   workspace_background?: Background | undefined;
+  /** The kinds' icons of the workspace (05 §3, §4.1): kind → what its nodes without their own show. */
+  kind_icons?: Partial<Record<NodeKind, string>> | undefined;
 }
 
 /**

@@ -1527,6 +1527,61 @@ fn ones_own_icon_is_a_stored_picture_and_its_style() {
 }
 
 #[test]
+fn a_kinds_icon_is_the_workspaces_setting_one_step_of_undo() {
+    // 05 §3, §4.1 (S10 step 5): what the nodes of a kind without an icon of
+    // their own show is the workspace's — a preset, or one's own icon whose
+    // original is stored; an asset has none; one step of undo each.
+    let mut w = ws();
+    let root = w.root();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    let shown = |w: &mut Workspace<MemoryStore>| w.network_view(&root).expect("view").kind_icons;
+    let step = |w: &mut Workspace<MemoryStore>, kind: NodeKind, icon: Option<&str>| {
+        w.apply(
+            &[Op::SetKindIcon {
+                kind,
+                icon: icon.map(str::to_owned),
+            }],
+            Label::new("t.kindIcon"),
+        )
+    };
+    assert!(shown(&mut w).is_empty());
+    step(&mut w, NodeKind::Note, Some("game-icons/lorc/quill")).expect("preset");
+    assert_eq!(
+        shown(&mut w).get("note").map(String::as_str),
+        Some("game-icons/lorc/quill")
+    );
+    // The node keeps no icon of its own: it shows its kind's.
+    assert_eq!(w.node_details(&note).expect("details").attrs.icon, None);
+    w.undo().expect("undo");
+    assert!(shown(&mut w).is_empty());
+    w.redo().expect("redo");
+    assert_eq!(shown(&mut w).len(), 1);
+    // One's own icon, its original stored, is among «Свои» (07 §6.5).
+    let sha = w.put_asset(b"\x89PNG a kind's").expect("store");
+    let own = format!("asset/{sha}/silhouette");
+    step(&mut w, NodeKind::Task, Some(&own)).expect("own icon");
+    assert_eq!(w.own_icons(), vec![own.clone()]);
+    // An asset has none; a value a node would not take is refused.
+    let missing = format!("asset/{}/engraving", "0".repeat(64));
+    for (kind, bad) in [
+        (NodeKind::Asset, "game-icons/lorc/quill"),
+        (NodeKind::Note, "filetype-pdf"),
+        (NodeKind::Note, missing.as_str()),
+        (NodeKind::Note, "asset/xyz"),
+    ] {
+        assert!(step(&mut w, kind, Some(bad)).is_err(), "{kind:?} {bad}");
+    }
+    // `null` gives the kind its built-in glyph back.
+    step(&mut w, NodeKind::Note, None).expect("back");
+    assert_eq!(shown(&mut w).keys().collect::<Vec<_>>(), vec!["task"]);
+    // It goes along with the workspace (10 §3.5).
+    let zip = crate::archive::export(&w).expect("export");
+    let unpacked = crate::archive::unpack(&zip).expect("unpack");
+    let again = crate::archive::import(&unpacked, MemoryStore::default(), false).expect("import");
+    assert_eq!(again.kind_icons().get("task"), Some(&own));
+}
+
+#[test]
 fn the_palettes_own_row_is_the_own_icons_live_nodes_have() {
     // 07 §6.5: «Свои» of the palette `Z` — each own icon of the workspace's
     // live nodes once, in any network, the one most nodes have first; a

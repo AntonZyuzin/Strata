@@ -344,6 +344,30 @@ export class CanvasView {
   private kindLines = false;
   /** The icon a node shows, a key of `setKindIcons`: its kind by default (07 §6.1). */
   iconKey: (n: GraphNode) => string = (n) => n.kind;
+  /** The kinds' icons of the workspace (05 §3, §4.1): kind → what its nodes without their own show. */
+  private kindDefaults: ReadonlyMap<string, string> = new Map();
+
+  /**
+   * The kinds' icons of the workspace (05 §3 `kindIcons`, §4.1): the nodes
+   * of a kind with no icon of their own show their kind's — a preset or one's
+   * own icon — instead of its built-in glyph.
+   */
+  setKindDefaults(icons: Readonly<Record<string, string>>): void {
+    const next = new Map(Object.entries(icons));
+    const old = this.kindDefaults;
+    if (next.size === old.size && [...next].every(([k, v]) => old.get(k) === v)) return;
+    this.kindDefaults = next;
+    for (const v of this.views.values()) {
+      this.applyPicture(v);
+      this.applyLevel(v);
+    }
+    this.invalidate();
+  }
+
+  /** The icon a node shows (05 §4.1): its own, or its kind's of the workspace. */
+  private iconRef(n: GraphNode): string | undefined {
+    return n.attrs.icon ?? this.kindDefaults.get(n.kind);
+  }
 
   /**
    * Icons by name (owner, 2026-10-24: the Chrome's SerenityOS
@@ -369,13 +393,13 @@ export class CanvasView {
    * atlas, or -1 — none, or one this build does not ship.
    */
   private chosenPreset(n: GraphNode): number {
-    const ref = n.attrs.icon;
+    const ref = this.iconRef(n);
     return ref?.startsWith(PRESET) ? this.icons.ids.indexOf(ref.slice(PRESET.length)) : -1;
   }
 
   /** One's own icon chosen by hand (07 §6.5–6.6): its mask, once the Chrome has made it. */
   private ownIcon(n: GraphNode): Texture | undefined {
-    const ref = n.attrs.icon;
+    const ref = this.iconRef(n);
     return ref?.startsWith(OWN) ? this.ownIcons.get(ref) : undefined;
   }
 
@@ -421,7 +445,7 @@ export class CanvasView {
       }
     }
     for (const v of this.views.values()) {
-      if (v.node.attrs.icon !== ref) continue;
+      if (this.iconRef(v.node) !== ref) continue;
       this.applyPicture(v);
       this.applyLevel(v);
     }

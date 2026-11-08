@@ -1521,6 +1521,56 @@ fn ones_own_icon_is_a_stored_picture_and_its_style() {
 }
 
 #[test]
+fn the_palettes_own_row_is_the_own_icons_live_nodes_have() {
+    // 07 §6.5: «Свои» of the palette `Z` — each own icon of the workspace's
+    // live nodes once, in any network, the one most nodes have first; a
+    // preset is no own icon, and a node in the trash lends its icon no more.
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    assert!(w.own_icons().is_empty());
+    let a = w.put_asset(b"\x89PNG one").expect("store");
+    let b = w.put_asset(b"\x89PNG two").expect("store");
+    let one = format!("asset/{a}/engraving");
+    let two = format!("asset/{b}/pixel/t96/i");
+    let net = create(&mut w, &root, NodeKind::Network, "Сеть");
+    let n1 = create(&mut w, &root, NodeKind::Note, "1");
+    let n2 = create(&mut w, &net, NodeKind::Task, "2");
+    let n3 = create(&mut w, &net, NodeKind::Note, "3");
+    let n4 = create(&mut w, &root, NodeKind::Note, "4");
+    for (n, icon) in [(&n1, &one), (&n2, &two), (&n3, &two)] {
+        set(&mut w, n, "icon", Some(Val::str(icon.clone()))).expect("own icon");
+    }
+    set(&mut w, &n4, "icon", Some(Val::str("game-icons/lorc/ace"))).expect("preset");
+    assert_eq!(w.own_icons(), vec![two.clone(), one.clone()]);
+    // The same picture in another style is another icon.
+    let restyled = format!("asset/{a}/silhouette");
+    set(&mut w, &n4, "icon", Some(Val::str(restyled.clone()))).expect("own icon");
+    assert_eq!(
+        w.own_icons(),
+        vec![two.clone(), one.clone(), restyled.clone()]
+    );
+    // The network goes to the trash with its nodes: their icon goes from the row.
+    w.apply(
+        &[Op::Trash {
+            ids: vec![net.clone()],
+        }],
+        Label::new("t.trash"),
+    )
+    .expect("trash");
+    let mut rest = vec![one.clone(), restyled.clone()];
+    rest.sort();
+    assert_eq!(w.own_icons(), rest);
+    w.apply(&[Op::Restore { ids: vec![net] }], Label::new("t.restore"))
+        .expect("restore");
+    assert_eq!(w.own_icons(), vec![two, one, restyled]);
+    // Back to the kind's icon: the row forgets it.
+    set(&mut w, &n1, "icon", None).expect("kind's icon");
+    let icons = w.own_icons();
+    assert!(!icons.iter().any(|i| i.contains("/engraving")), "{icons:?}");
+}
+
+#[test]
 fn the_star_map_reads_every_live_wire() {
     let mut w = ws();
     let root = w.root();

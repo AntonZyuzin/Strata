@@ -116,7 +116,7 @@ import { ExternalList } from './ExternalList';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { HelpWindow } from './HelpWindow';
-import { IconPalette, PRESET } from './IconPalette';
+import { IconPalette } from './IconPalette';
 import { ImportReportWindow, type ReportActions } from './ImportReportWindow';
 import { ImportStatus } from './ImportStatus';
 import { InfoCard } from './InfoCard';
@@ -135,6 +135,7 @@ import {
   OWN_ICON,
   ownIconMask,
   ownIconRef,
+  ownIconUrl,
   parseOwnIcon,
 } from './ownIcons';
 import { PathBar, type PathChildren } from './PathBar';
@@ -385,6 +386,8 @@ export function WorkspaceScreen(props: {
   const [net, setNet] = useState<NetworkView | null>(null);
   /** The icon palette `Z` (07 §6.3): for these nodes, at a page point. */
   const [iconPick, setIconPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
+  /** The workspace's own icons for the palette's «Свои» (07 §6.5), asked for as it opens. */
+  const [ownIcons, setOwnIcons] = useState<readonly string[]>([]);
   /** `C` (06 §2.1): the colour palette for these nodes, at a page point. */
   const [colorPick, setColorPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
   /** «Фон» (07 §7.4) at the menu's place: the network on the canvas's background. */
@@ -714,6 +717,7 @@ export function WorkspaceScreen(props: {
         const r = el.getBoundingClientRect();
         setIconPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
         void iconPresets().then(setPresets, refused);
+        void core.ownIcons().then(setOwnIcons, refused);
       },
       // `C` (06 §2.1): the colour palette at the cursor.
       colors: (e) => {
@@ -2340,6 +2344,12 @@ export function WorkspaceScreen(props: {
       .catch(failed);
   };
 
+  /** An own icon's mask as a picture, for the palette's «Свои» (07 §6.5). */
+  const ownMaskUrl = useCallback(
+    (ref: string) => ownIconUrl(ref, (sha) => core.asset(sha)),
+    [core],
+  );
+
   // The original's address lives as long as the dialog shows it.
   const ownUrl = ownPick?.picture.url;
   useEffect(() => () => (ownUrl ? URL.revokeObjectURL(ownUrl) : undefined), [ownUrl]);
@@ -3429,6 +3439,7 @@ export function WorkspaceScreen(props: {
         onSelect: () => {
           setIconPick({ ids: ed.flagTargets(n.id), x: ctx?.x ?? 0, y: ctx?.y ?? 0 });
           void iconPresets().then(setPresets, failed);
+          void core.ownIcons().then(setOwnIcons, failed);
         },
       },
       {
@@ -3979,6 +3990,8 @@ export function WorkspaceScreen(props: {
         <IconPalette
           locale={locale}
           presets={presets}
+          own={ownIcons}
+          ownMask={ownMaskUrl}
           current={g?.nodes.get(iconPick.ids[0] ?? '')?.attrs.icon ?? null}
           kind={(() => {
             const n = g?.nodes.get(iconPick.ids[0] ?? '');
@@ -3992,9 +4005,9 @@ export function WorkspaceScreen(props: {
           bounds={seenBounds()}
           search={searchClient()}
           size={g?.nodes.get(iconPick.ids[0] ?? '')?.size ?? null}
-          onPick={(id) => {
+          onPick={(icon) => {
             setIconPick(null);
-            setIcon(iconPick.ids, id === null ? null : `${PRESET}${id}`);
+            setIcon(iconPick.ids, icon);
             focusCanvas();
           }}
           onOwn={(file) => {

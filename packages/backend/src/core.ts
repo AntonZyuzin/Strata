@@ -207,6 +207,7 @@ export type CoreRequest =
   | { call: 'wires' }
   | { call: 'external'; net: string; id: string }
   | { call: 'people' }
+  | { call: 'ownIcons' }
   | { call: 'putAsset'; bytes: string }
   | { call: 'asset'; sha: string }
   | {
@@ -654,6 +655,7 @@ type CoreResponse =
   | { type: 'wires'; wires: WireEnds[] }
   | { type: 'external'; wires: ExternalWire[] }
   | { type: 'people'; people: Person[] }
+  | { type: 'ownIcons'; icons: string[] }
   | { type: 'asset'; sha: string; bytes?: string }
   | { type: 'importing'; progress: ImportProgress | null; history: History }
   | { type: 'interrupted'; label: ChangeLabel | null }
@@ -814,6 +816,11 @@ export class Core {
 
   async people(): Promise<Person[]> {
     return expect(await this.call({ call: 'people' }), 'people').people;
+  }
+
+  /** One's own icons the live nodes have, the most used first: «Свои» of the palette `Z` (07 §6.5). */
+  async ownIcons(): Promise<string[]> {
+    return expect(await this.call({ call: 'ownIcons' }), 'ownIcons').icons;
   }
 
   /** A picture or a file into the workspace; its SHA-256 back. */

@@ -2,6 +2,7 @@ import { applyTheme, fog, glyphUrl } from '@strata/design-tokens';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App';
+import { guardDrops } from './dropGuard';
 import './fonts/fonts.css';
 import './chrome.css';
 import { loadPixelPrefs, setPixelPrefs } from './pixel';
@@ -9,6 +10,7 @@ import { loadPrefs } from './prefs';
 import { readableOn } from './readable';
 
 applyTheme(document.documentElement);
+guardDrops(window);
 document.documentElement.style.setProperty('--st-check', glyphUrl('check'));
 // The marks at the right of selects and date fields, in the text's colour (07 §8.2).
 document.documentElement.style.setProperty('--st-chevron', glyphUrl('unfolded', fog.color.text));

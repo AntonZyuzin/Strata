@@ -102,6 +102,8 @@ pub enum Request {
         id: String,
     },
     People,
+    /// One's own icons the live nodes have (07 §6.5): «Свои» of the palette `Z`.
+    OwnIcons,
     /// A picture or a file, in base64; answers its SHA-256.
     PutAsset {
         bytes: String,
@@ -239,6 +241,9 @@ pub enum Response {
     People {
         people: Vec<Person>,
     },
+    OwnIcons {
+        icons: Vec<String>,
+    },
     /// An asset: its id, and its bytes in base64 when asked for.
     Asset {
         sha: String,
@@ -351,6 +356,9 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             .map(|wires| Response::External { wires }),
         Request::People => Ok(Response::People {
             people: ws.people(),
+        }),
+        Request::OwnIcons => Ok(Response::OwnIcons {
+            icons: ws.own_icons(),
         }),
         Request::PutAsset { bytes } => match B64.decode(bytes) {
             Ok(b) => ws

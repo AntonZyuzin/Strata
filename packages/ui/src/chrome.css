@@ -1406,7 +1406,9 @@ button:focus-visible {
 
 /* The icon palette `Z` (07 §6.3, ☑ Q-07-21): the Tab menu's window, a grid
    of presets as they look on a bubble — ink on paper — eight to a row; the
-   one under the keys framed in the accent, the node's own pressed in. */
+   one under the keys framed in the accent, the node's own pressed in. The
+   workspace's own icons come first, «Свои» (07 §6.5): then each group has
+   its name over it. */
 .icon-palette {
   --icon-cell: 5ch;
   --icon-gap: calc(2 * var(--u));
@@ -1414,15 +1416,53 @@ button:focus-visible {
 }
 
 .icon-grid {
+  /* Five rows whatever the query finds: the window does not jump while one types. */
+  height: calc(5 * var(--icon-cell) + 4 * var(--icon-gap) + 8 * var(--u));
+  padding: calc(4 * var(--u));
+  overflow-y: auto;
+}
+
+.icon-cells {
   display: grid;
   grid-template-columns: repeat(8, var(--icon-cell));
   grid-auto-rows: var(--icon-cell);
   gap: var(--icon-gap);
-  /* Five rows whatever the query finds: the window does not jump while one types. */
-  height: calc(5 * var(--icon-cell) + 4 * var(--icon-gap) + 8 * var(--u));
-  align-content: start;
-  padding: calc(4 * var(--u));
-  overflow-y: auto;
+}
+
+.icon-group {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.icon-group + .icon-group {
+  margin-top: calc(4 * var(--u));
+}
+
+.icon-group-name {
+  /* A legend shrinks to its text: the row is the grid's, whatever the language. */
+  width: 100%;
+  padding: 0 0 calc(2 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-text-muted);
+}
+
+/* One's own icon: its mask in the cell's ink, as the Scene tints it (07 §6.6). */
+.icon-own-mask {
+  width: 70%;
+  height: 70%;
+  background: currentColor;
+  -webkit-mask: var(--glyph) center / 100% 100% no-repeat;
+  mask: var(--glyph) center / 100% 100% no-repeat;
+}
+
+/* A picture dragged over the palette: it is «Своя иконка…» when let go (07 §6.4). */
+.icon-palette.is-dropping .icon-grid {
+  outline: calc(2 * var(--u)) dashed var(--st-color-accent);
+  outline-offset: calc(-2 * var(--u));
 }
 
 .icon-cell {
@@ -4200,14 +4240,16 @@ button.ws-path-step:active:not(:disabled) {
     color: HighlightText;
   }
 
-  .kind-icon {
+  .kind-icon,
+  .icon-own-mask {
     forced-color-adjust: none;
     background: CanvasText;
   }
 
   [aria-pressed="true"] .kind-icon,
   [aria-selected="true"] .kind-icon,
-  .is-current .kind-icon {
+  .is-current .kind-icon,
+  [aria-selected="true"] .icon-own-mask {
     background: HighlightText;
   }
 }

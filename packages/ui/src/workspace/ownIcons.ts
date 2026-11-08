@@ -109,4 +109,56 @@ export function ownIconMask(
   return done;
 }
 
+/** The masks as pictures, by reference: the palette draws them in ink (07 §6.5). */
+const urls = new Map<string, Promise<string>>();
+
+/**
+ * The mask of one's own icon as a picture whose alpha is the ink: a CSS
+ * mask over the text's colour draws it as the presets are drawn. Made once
+ * per reference.
+ */
+export function ownIconUrl(
+  ref: string,
+  asset: (sha: string) => Promise<Uint8Array>,
+): Promise<string> {
+  const known = urls.get(ref);
+  if (known) return known;
+  const done = ownIconMask(ref, asset).then((mask) => {
+    const side = Math.round(Math.sqrt(mask.length));
+    const canvas = document.createElement('canvas');
+    canvas.width = side;
+    canvas.height = side;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('2D canvas is not available');
+    const img = ctx.createImageData(side, side);
+    for (let i = 0; i < mask.length; i++) img.data[i * 4 + 3] = mask[i] ?? 0;
+    ctx.putImageData(img, 0, 0);
+    return canvas.toDataURL('image/png');
+  });
+  done.catch(() => urls.delete(ref));
+  urls.set(ref, done);
+  return done;
+}
+
+/**
+ * A drag that carries a file which may be a picture (07 §6.4). While one
+ * drags, only the files' types are to be read, and a system may give none.
+ */
+export function carriesPicture(dt: Pick<DataTransfer, 'items'> | null): boolean {
+  if (!dt) return false;
+  for (const item of Array.from(dt.items)) {
+    if (item.kind === 'file' && (item.type === '' || item.type.startsWith('image/'))) return true;
+  }
+  return false;
+}
+
+/** The first picture of a drop; a file of no type is tried — decoding tells. */
+export function droppedPicture(dt: Pick<DataTransfer, 'files'> | null): File | null {
+  if (!dt) return null;
+  for (const f of Array.from(dt.files)) {
+    if (f.type === '' || f.type.startsWith('image/')) return f;
+  }
+  return null;
+}
+
 export { MASK_SIDE };

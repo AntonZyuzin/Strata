@@ -2969,6 +2969,36 @@ impl<S: Store> Workspace<S> {
         out
     }
 
+    /// One's own icons the workspace's live nodes have (07 §6.5): «Свои» of
+    /// the palette `Z`, each once, the one the most nodes have first, then
+    /// by spelling. A node in the trash lends none.
+    pub fn own_icons(&self) -> Vec<String> {
+        let mut count: HashMap<String, usize> = HashMap::new();
+        for shard in self.index_shards() {
+            let LoroValue::Map(attrs) = shard.get_map("attr").get_value() else {
+                continue;
+            };
+            for (key, v) in attrs.iter() {
+                let Some(node) = key.strip_suffix("|icon") else {
+                    continue;
+                };
+                let Some(icon) = Val::from_loro(v).and_then(|v| v.as_str().map(str::to_owned))
+                else {
+                    continue;
+                };
+                if uploaded_icon(&icon).is_none() {
+                    continue;
+                }
+                if NodeId::parse(node).is_ok_and(|n| self.alive(n)) {
+                    *count.entry(icon).or_default() += 1;
+                }
+            }
+        }
+        let mut out: Vec<(String, usize)> = count.into_iter().collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        out.into_iter().map(|(icon, _)| icon).collect()
+    }
+
     /// The network as the canvas draws it (10 §7.3).
     pub fn network_view(&mut self, net: &str) -> Result<NetworkView> {
         let n = self.network(net)?;

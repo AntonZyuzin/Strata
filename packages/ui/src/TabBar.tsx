@@ -30,6 +30,8 @@ export function Glyph(props: { name: GlyphName }) {
 export function IconButton(props: {
   icon: IconName;
   label: string;
+  /** The tooltip, when it says more than the label. */
+  title?: string | undefined;
   disabled?: boolean | undefined;
   className?: string | undefined;
   /** A toggle: shown pressed, said pressed. */
@@ -43,7 +45,7 @@ export function IconButton(props: {
       className={['icon-button', props.className].filter(Boolean).join(' ')}
       aria-label={props.label}
       aria-pressed={props.pressed}
-      title={props.label}
+      title={props.title ?? props.label}
       disabled={props.disabled}
       onClick={props.onClick}
     >

@@ -50,6 +50,8 @@ interface WsHook {
     tree(): Promise<{ id: string; name: string; parent?: string }[]>;
     node(id: string): Promise<{ icon?: string; status?: string; color?: number }>;
     view(net: string): Promise<{ nodes: { id: string; name: string; size?: string }[] }>;
+    putAsset(bytes: Uint8Array): Promise<string>;
+    ownIcons(): Promise<string[]>;
   };
   editor(): {
     selected: string[];
@@ -128,6 +130,39 @@ const iconState = (page: Page, id: string) =>
     const core = (await ws.core.node(id)).icon ?? null;
     return { shows: ws.view.iconOf(id), icon, core };
   }, id);
+
+/** A dark disc on white as PNG in base64, as a file would bring a picture. */
+const discPng = (page: Page) =>
+  page.evaluate(() => {
+    const c = document.createElement('canvas');
+    c.width = 96;
+    c.height = 96;
+    const g = c.getContext('2d') as CanvasRenderingContext2D;
+    g.fillStyle = '#ffffff';
+    g.fillRect(0, 0, 96, 96);
+    g.fillStyle = '#202020';
+    g.beginPath();
+    g.arc(48, 48, 30, 0, Math.PI * 2);
+    g.fill();
+    return c.toDataURL('image/png').split(',')[1] ?? '';
+  });
+
+/** Node `id` gets one's own icon of the picture `png` (07 §6.6), in «Гравюра»; its reference back. */
+const giveOwnIcon = (page: Page, id: string, png: string) =>
+  page.evaluate(
+    async ({ id, b64 }) => {
+      const ws = window.__strataWs as WsHook;
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      const sha = await ws.core.putAsset(bytes);
+      const icon = `asset/${sha}/engraving`;
+      ws.graph()?.transaction({ key: 'change.icon' }, (tx) =>
+        (tx as { attr(id: string, key: string, value: string): void }).attr(id, 'icon', icon),
+      );
+      await ws.settled();
+      return icon;
+    },
+    { id, b64: png },
+  );
 
 /** A node's bubble as drawn — its radius — and its size by hand on the canvas and in the core. */
 const sizeState = (page: Page, id: string) =>
@@ -1289,10 +1324,19 @@ for (const deviceScaleFactor of [1, 2]) {
       await page.goto('/?plain');
       await createWorkspace(page, 'Иконки');
       await createNode(page, 460, 300, 'Карта');
+      // One's own icon in the workspace: the groups «Свои» and «Пресеты» have their names.
+      await giveOwnIcon(page, await idOf(page, 'Карта'), await discPng(page));
       await select(page, 'Карта');
       await page.keyboard.press('KeyZ');
       const palette = page.locator('.icon-palette');
-      await expect(palette.locator('.icon-cell')).toHaveCount(200);
+      await expect(palette.locator('.icon-cell')).toHaveCount(201);
+      await expect(palette.locator('.icon-group-name')).toHaveCount(2);
+      expect(await overflowing(page, '.icon-palette'), `${locale} the groups must fit`).toEqual([]);
+      const groups = {
+        ownGroup: await box(page, '.icon-palette .icon-group:first-child .icon-group-name'),
+        presetGroup: await box(page, '.icon-palette .icon-group:last-child .icon-group-name'),
+        firstPreset: await box(page, '.icon-palette .icon-group:last-child .icon-cell:first-child'),
+      };
       // The longest name under the keys: «Кольцо с бриллиантом» / «Round-bottom flask».
       await page.keyboard.type(locale === 'ru-RU' ? 'бриллиант' : 'flask');
       await expect(palette.locator('.icon-cell').first()).toHaveClass(/is-current/);
@@ -1301,18 +1345,30 @@ for (const deviceScaleFactor of [1, 2]) {
       );
       boxes.push({
         palette: await box(page, '.icon-palette'),
-        cell: await box(page, '.icon-palette .icon-cell:first-child'),
+        cell: await box(page, '.icon-palette .icon-cells > .icon-cell:first-child'),
         footer: await box(page, '.icon-palette .icon-palette-footer'),
         kind: await box(page, '.icon-palette .icon-palette-top button:not(.icon-own)'),
         own: await box(page, '.icon-palette .icon-own'),
         auto: await box(page, '.icon-palette .icon-size-choice.is-auto'),
         xl: await box(page, '.icon-palette .icon-size-choice:last-child'),
+        ...groups,
       });
       await page.keyboard.press('Escape');
       await context.close();
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
-    for (const part of ['palette', 'cell', 'footer', 'kind', 'own', 'auto', 'xl'] as const) {
+    for (const part of [
+      'palette',
+      'cell',
+      'footer',
+      'kind',
+      'own',
+      'auto',
+      'xl',
+      'ownGroup',
+      'presetGroup',
+      'firstPreset',
+    ] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -4213,6 +4269,93 @@ test.describe('a workspace on the core', () => {
         icon: `asset/${sha}/pixel/t90/i`,
         core: `asset/${sha}/pixel/t90/i`,
       });
+  });
+
+  test("Z: «Свои» — the workspace's own icons first; a picture dropped on the palette (07 §6.4–6.5)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Свои в палитре');
+    await createNode(page, 460, 300, 'Карта');
+    await createNode(page, 760, 420, 'План');
+    const [map, plan] = [await idOf(page, 'Карта'), await idOf(page, 'План')];
+    await settled(page);
+    const png = await discPng(page);
+    // «Карта» has one's own icon; the palette offers it to «План».
+    const ref = await giveOwnIcon(page, map, png);
+    await expect.poll(async () => (await iconState(page, map)).core).toBe(ref);
+    expect(await page.evaluate(() => (window.__strataWs as WsHook).core.ownIcons())).toEqual([ref]);
+    await select(page, 'План');
+    await page.keyboard.press('KeyZ');
+    const palette = page.locator('.icon-palette');
+    const groups = palette.locator('.icon-group-name');
+    await expect(groups).toHaveText(['Свои', 'Пресеты']);
+    const own = palette.locator(`.icon-cell[data-own="${ref}"]`);
+    await expect(own).toHaveCount(1);
+    await expect(palette.locator('.icon-cell')).toHaveCount(201);
+    // Its mask, drawn in the cell's ink; the first under the keys, its style below.
+    await expect(own.locator('.icon-own-mask')).toHaveAttribute(
+      'style',
+      /--glyph: url\("data:image\/png/,
+    );
+    await expect(own).toHaveClass(/is-current/);
+    await expect(palette.locator('.icon-palette-by')).toHaveText('Своя иконка · Гравюра');
+    // The arrows go by rows across the groups: down to the first preset, up again.
+    await page.keyboard.press('ArrowDown');
+    await expect(palette.locator('.icon-cell').nth(1)).toHaveClass(/is-current/);
+    await expect(palette.locator('.icon-palette-by')).toHaveText(/ · © .+, CC BY 3\.0$/);
+    await page.keyboard.press('ArrowUp');
+    await expect(own).toHaveClass(/is-current/);
+    // A query finds presets only: no groups then.
+    await page.keyboard.type('компас');
+    await expect(groups).toHaveCount(0);
+    await expect(own).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    // `Enter` gives it, one step of undo.
+    await page.keyboard.press('KeyZ');
+    await expect(own).toHaveClass(/is-current/);
+    await page.keyboard.press('Enter');
+    await expect(palette).toHaveCount(0);
+    await expect.poll(() => iconState(page, plan)).toEqual({ shows: 'own', icon: ref, core: ref });
+    // The node's own is pressed in, as a preset is.
+    await page.keyboard.press('KeyZ');
+    await expect(own).toHaveClass(/is-chosen/);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Control+z');
+    await expect
+      .poll(() => iconState(page, plan))
+      .toEqual({ shows: 'kind', icon: null, core: null });
+    // A picture dropped on the palette: «Своя иконка» with it; nothing is given before «Готово».
+    await page.keyboard.press('KeyZ');
+    await expect(palette).toBeVisible();
+    await page.evaluate((b64) => {
+      const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+      const dt = new DataTransfer();
+      dt.items.add(new File([bytes], 'план.png', { type: 'image/png' }));
+      const el = document.querySelector('.icon-palette');
+      for (const type of ['dragenter', 'dragover', 'drop']) {
+        el?.dispatchEvent(
+          new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true }),
+        );
+      }
+    }, png);
+    const dialog = page.locator('.own-icon-dialog');
+    await expect(dialog.locator('.own-original')).toHaveAttribute('title', 'план.png');
+    await expect(palette).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect((await iconState(page, plan)).core).toBeNull();
+    // A file let go where nothing takes it is refused, not opened in place of the app.
+    const refused = await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.items.add(new File(['x'], 'x.png', { type: 'image/png' }));
+      dt.dropEffect = 'copy';
+      const over = new DragEvent('dragover', { dataTransfer: dt, bubbles: true, cancelable: true });
+      document.querySelector('.ws-panel-probe')?.dispatchEvent(over);
+      return { prevented: over.defaultPrevented, effect: dt.dropEffect };
+    });
+    expect(refused).toEqual({ prevented: true, effect: 'none' });
   });
 
   test('Z: a bubble takes a size by hand here and the rules back, one step each (06 §4.2)', async ({

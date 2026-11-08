@@ -1,6 +1,6 @@
 //! Property tests of the model's invariants (05 §14, NFR-124): random
 //! sequences of the domain's operations — the refused ones too — with undo
-//! and redo. After every step the invariants hold, and a refused step leaves
+//! and redo, and the trash's purge (10 §10.4). After every step the invariants hold, and a refused step leaves
 //! the workspace as it was (a changeset is all or nothing, NFR-71).
 //!
 //! Merges are not here yet: the core reconciles the invariants after a merge
@@ -270,7 +270,7 @@ fn step(w: &mut Workspace<MemoryStore>, m: &mut Model, rng: &mut Rng) -> String 
             .unwrap_or_default()
     };
     let label = Label::new("props.step");
-    let ops: Vec<Op> = match rng.below(15) {
+    let ops: Vec<Op> = match rng.below(16) {
         0..=2 => {
             let id = NodeId::new().to_text();
             m.ids.insert(id.clone());
@@ -375,6 +375,16 @@ fn step(w: &mut Workspace<MemoryStore>, m: &mut Model, rng: &mut Rng) -> String 
             let mut ed = Editor::open(w, &note);
             ed.type_text(w, &note, &text);
             return format!("type {note}: {text}");
+        }
+        14 => {
+            // The trash's term passed for a node and its step (10 §10.4).
+            let Some(t) = rng.pick(&w.trash()) else {
+                return "purge: an empty trash".into();
+            };
+            return match w.purge_now(&t.id) {
+                Ok(gone) => format!("purge {}: {} gone", t.id, gone.len()),
+                Err(e) => format!("purge {}: REFUSED BUT CHANGED? ({e})", t.id),
+            };
         }
         _ => {
             let undo = rng.below(2) == 0;

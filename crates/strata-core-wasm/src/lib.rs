@@ -40,9 +40,10 @@ impl Core {
     /// A workspace from the bytes of [`Core::bytes`].
     pub fn open(bytes: &[u8]) -> Result<Core, JsError> {
         let store = MemoryStore::from_bytes(bytes).map_err(|e| JsError::new(&e.to_string()))?;
-        Workspace::open(store)
-            .map(|ws| Core { ws })
-            .map_err(|e| JsError::new(&e.to_string()))
+        let mut ws = Workspace::open(store).map_err(|e| JsError::new(&e.to_string()))?;
+        // The trash's term (05 §11, 10 §10.4); a purge that fails changes nothing.
+        let _ = ws.purge_expired();
+        Ok(Core { ws })
     }
 
     /// One call as JSON, as `strata_core::api::call`.

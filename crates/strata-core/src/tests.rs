@@ -3777,3 +3777,133 @@ fn a_background_comes_as_json_with_the_pipelines_defaults() {
         }
     );
 }
+
+// ── The trash's term (05 §11, 10 §10.3–10.4) ──────────────────────────
+
+/// A clock the purge's test sets by hand: days pass at once.
+static PURGE_NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+
+fn purge_clock() -> i64 {
+    PURGE_NOW.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+#[test]
+fn the_trash_lets_go_after_its_term_for_good() {
+    // 05 §11, 10 §10.4: a node in the trash longer than 30 days goes for
+    // good — its keys, its wires either way, its layout and its documents;
+    // a node placed elsewhere too keeps its life; the id is not made again.
+    use std::sync::atomic::Ordering;
+    const DAY: i64 = 86_400_000;
+    let t0 = 1_760_000_000_000;
+    PURGE_NOW.store(t0, Ordering::Relaxed);
+    let mut w = ws();
+    w.set_clock(purge_clock);
+    let root = w.root();
+    let net = create(&mut w, &root, NodeKind::Network, "Сеть");
+    let inside = create(&mut w, &net, NodeKind::Note, "Внутри");
+    let shared = create(&mut w, &root, NodeKind::Task, "Общая");
+    place(&mut w, &shared, &net).expect("an appearance in the network");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    for to in [&inside, &shared] {
+        op(
+            &mut w,
+            Op::Connect {
+                from: note.clone(),
+                to: to.clone(),
+            },
+        )
+        .expect("a wire");
+    }
+    Editor::open(&mut w, &inside).type_text(&mut w, &inside, "Текст внутри");
+    // The network goes to the trash with the note inside; the shared task stays.
+    op(
+        &mut w,
+        Op::Trash {
+            ids: vec![net.clone()],
+        },
+    )
+    .expect("trash the network");
+    PURGE_NOW.store(t0 + 10 * DAY, Ordering::Relaxed);
+    op(
+        &mut w,
+        Op::Trash {
+            ids: vec![note.clone()],
+        },
+    )
+    .expect("trash the note");
+    // 29 days: nothing goes.
+    PURGE_NOW.store(t0 + 29 * DAY, Ordering::Relaxed);
+    assert!(w.purge_expired().expect("purge").is_empty());
+    // 31 days: the network and what went with it go; the note, 21 days in the trash, stays.
+    PURGE_NOW.store(t0 + 31 * DAY, Ordering::Relaxed);
+    let mut gone = w.purge_expired().expect("purge");
+    gone.sort();
+    let mut expect = vec![net.clone(), inside.clone()];
+    expect.sort();
+    assert_eq!(gone, expect);
+    let trash: Vec<String> = w.trash().into_iter().map(|t| t.id).collect();
+    assert_eq!(trash, vec![note.clone()]);
+    let tree = w.tree();
+    assert!(!tree.iter().any(|i| i.id == net || i.id == inside));
+    let s = tree
+        .iter()
+        .find(|i| i.id == shared)
+        .expect("the shared task lives");
+    assert_eq!(s.parent.as_deref(), Some(root.as_str()));
+    assert!(s.appears.is_empty(), "{:?}", s.appears);
+    // Their documents and every key of theirs are gone.
+    for doc in [format!("content/{inside}"), format!("net/{net}")] {
+        assert!(w.store().load(&doc).expect("load").is_none(), "{doc}");
+    }
+    // The index as the store keeps it: its snapshot and the updates after.
+    let stored = w
+        .store()
+        .load("index/0/0")
+        .expect("load")
+        .expect("the index");
+    let d = loro::LoroDoc::new();
+    for bytes in stored.snapshot.iter().chain(stored.updates.iter()) {
+        d.import(bytes).expect("import");
+    }
+    let text = format!("{:?}", d.get_deep_value());
+    for id in [&net, &inside] {
+        let keys = text.matches(id.as_str()).count();
+        // Only `sys.purged` names it now — and that lives in another document.
+        assert_eq!(keys, 0, "{id} is still in the index");
+    }
+    assert_eq!(
+        w.history().undo,
+        None,
+        "a purge forgets the steps before it"
+    );
+    // The id is not made again (05 §14 rule 1).
+    let again = w.apply(
+        &[Op::CreateNode {
+            id: Some(inside.clone()),
+            kind: NodeKind::Note,
+            name: "Снова".to_owned(),
+            net: root.clone(),
+            x: 0.0,
+            y: 0.0,
+        }],
+        Label::new("t"),
+    );
+    assert!(again.is_err());
+    // The note comes back with its wire to the task; the one to what is gone is no more.
+    op(
+        &mut w,
+        Op::Restore {
+            ids: vec![note.clone()],
+        },
+    )
+    .expect("restore");
+    let wires: Vec<(String, String)> = w.wires().into_iter().map(|e| (e.from, e.to)).collect();
+    assert_eq!(wires, vec![(note.clone(), shared.clone())]);
+    assert!(w.purge_expired().expect("again").is_empty());
+    // It holds when the workspace opens again.
+    let bytes = w.into_store().to_bytes();
+    let mut again = Workspace::open(MemoryStore::from_bytes(&bytes).expect("bytes")).expect("open");
+    again.set_clock(purge_clock);
+    assert!(again.purge_expired().expect("purge").is_empty());
+    assert!(!again.tree().iter().any(|i| i.id == net || i.id == inside));
+}

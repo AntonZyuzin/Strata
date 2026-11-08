@@ -78,6 +78,9 @@ pub trait Store {
     fn append(&mut self, doc_id: &str, update: &[u8], ts: i64) -> Result<(), StoreError>;
     /// Every document in the store: an archive takes them all (10 §3.5).
     fn doc_ids(&self) -> Result<Vec<String>, StoreError>;
+    /// Documents gone for good with their history (10 §10.4, a node purged
+    /// from the trash), in one transaction; ones not there are nothing.
+    fn drop_docs(&mut self, doc_ids: &[String]) -> Result<(), StoreError>;
     /// The documents (as snapshots) and the journal of an archive, into an
     /// empty store, at once.
     fn restore(
@@ -243,6 +246,13 @@ impl Store for MemoryStore {
 
     fn doc_ids(&self) -> Result<Vec<String>, StoreError> {
         Ok(self.docs.keys().cloned().collect())
+    }
+
+    fn drop_docs(&mut self, doc_ids: &[String]) -> Result<(), StoreError> {
+        for id in doc_ids {
+            self.docs.remove(id);
+        }
+        Ok(())
     }
 
     fn restore(

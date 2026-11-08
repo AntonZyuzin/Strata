@@ -29,6 +29,7 @@ mod importing;
 mod links;
 mod paths;
 mod places;
+mod purge;
 
 #[cfg(test)]
 pub(crate) use import::TEST_BATCH;
@@ -36,6 +37,7 @@ pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
 pub use importing::{ImportBatch, ImportProgress, ImportShadow, PlannedImport, ReadyBatch};
 pub use links::{LinkTarget, LinkTargets};
 pub use paths::{PathHit, PathMissing, PathText, Resolved, escape_segment, parse_path, path_text};
+pub use purge::TRASH_DAYS;
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -1257,6 +1259,10 @@ impl<S: Store> Workspace<S> {
                     };
                     if self.kind(node).is_some() || made.contains_key(&node) {
                         return Err(invalid(format!("node {} already exists", node.to_text())));
+                    }
+                    // An id gone for good is not made again (05 §14 rule 1, 10 §10.4).
+                    if self.purged(&node.to_text()) {
+                        return Err(invalid(format!("node {} was purged", node.to_text())));
                     }
                     made.insert(node, *kind);
                     let key = node.to_text();

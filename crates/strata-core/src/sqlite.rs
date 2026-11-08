@@ -284,6 +284,17 @@ impl Store for SqliteStore {
             .map_err(io)
     }
 
+    fn drop_docs(&mut self, doc_ids: &[String]) -> std::result::Result<(), StoreError> {
+        let tx = self.db.transaction().map_err(io)?;
+        for id in doc_ids {
+            tx.execute("DELETE FROM updates WHERE doc_id = ?1", params![id])
+                .map_err(io)?;
+            tx.execute("DELETE FROM docs WHERE doc_id = ?1", params![id])
+                .map_err(io)?;
+        }
+        tx.commit().map_err(io)
+    }
+
     fn restore(
         &mut self,
         docs: &[(String, Vec<u8>)],
@@ -512,12 +523,15 @@ pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
     let mut store = SqliteStore::open(&dir.join("store.sqlite"))?;
     // Today's backup before anything else touches the store (10 §3.5, §13).
     store.back_up_today();
-    let ws = Workspace::open(store)?;
+    let mut ws = Workspace::open(store)?;
     if ws.id() != info.workspace_id {
         return Err(CoreError::Invalid(
             "strata.json and store.sqlite belong to different workspaces".to_owned(),
         ));
     }
+    // The trash's term (05 §11): a purge that fails leaves all as it was,
+    // and the workspace opens all the same.
+    let _ = ws.purge_expired();
     Ok(ws)
 }
 

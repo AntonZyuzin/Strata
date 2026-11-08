@@ -4,6 +4,7 @@ use crate::{Background, CopyAt, Label, MemoryStore, Op, Store, Workspace};
 use strata_model::{NodeId, NodeKind};
 
 mod import;
+mod journal;
 mod paths;
 mod props;
 

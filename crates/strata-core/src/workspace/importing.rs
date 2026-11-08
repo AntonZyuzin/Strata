@@ -300,8 +300,7 @@ impl<S: Store> Workspace<S> {
         // Notes already here whose links the new names answer (05 §8.5).
         self.links_after_but(&step, false, &plan.notes)?;
         if !step.writes.is_empty() {
-            self.undo.push(step);
-            self.redo.clear();
+            self.step(step);
         }
         Ok(ImportProgress {
             done,

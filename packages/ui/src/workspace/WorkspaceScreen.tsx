@@ -3,6 +3,7 @@ import {
   assetType,
   type Background,
   type ChangeLabel,
+  CoreError,
   type CoreOp,
   CoreSync,
   type ExternalWire,
@@ -108,6 +109,7 @@ import {
   stepMode,
   type WindowMode,
 } from './ContentWindow';
+import { changeText } from './changes';
 import type { AppActions, CommandContext } from './commands';
 import { DeleteDialog } from './DeleteDialog';
 import { CoreDocs } from './docs';
@@ -117,6 +119,7 @@ import { drawEmoji } from './emoji';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { HelpWindow } from './HelpWindow';
+import { HistoryWindow, type RevertResult } from './HistoryWindow';
 import { IconPalette } from './IconPalette';
 import { ImportReportWindow, type ReportActions } from './ImportReportWindow';
 import { ImportStatus } from './ImportStatus';
@@ -538,6 +541,8 @@ export function WorkspaceScreen(props: {
   const [palette, setPalette] = useState(false);
   /** «Клавиши» (06 §17), `?`. */
   const [help, setHelp] = useState(false);
+  /** «История изменений» (06 §1.2). */
+  const [journal, setJournal] = useState(false);
   /** The list behind a node's «↗N» (06 §14), by the mark at (x, y); `wires` null until the core answers. */
   const [external, setExternal] = useState<{
     id: string;
@@ -682,8 +687,7 @@ export function WorkspaceScreen(props: {
     return () => window.clearInterval(timer);
   }, [covered, view3d]);
 
-  const label = (l: ChangeLabel | null) =>
-    l ? t(locale, l.key as MessageKey, l.params ?? {}) : t(locale, 'proto.noSteps');
+  const label = (l: ChangeLabel | null) => (l ? changeText(locale, l) : t(locale, 'proto.noSteps'));
 
   const toast = useCallback(
     (
@@ -2320,6 +2324,30 @@ export function WorkspaceScreen(props: {
     void core.tree().then(setTree);
   };
 
+  /**
+   * «Откатить» in «История изменений» (10 §9.3): the core writes it as a step
+   * of undo; the graph's own undo is cleared, so `Ctrl+Z` goes to the core's
+   * history, and the canvas reads its network again — or the root, when the
+   * revert took its network away.
+   */
+  const revertChangeset = async (id: string): Promise<RevertResult> => {
+    await sync.current?.settled();
+    try {
+      const r = await core.revertChangeset(id);
+      graph.current?.clearHistory();
+      verdicts.current = new Map();
+      setHistory(r.history);
+      const here = (await core.tree()).some((i) => i.id === netRef.current);
+      await loadRef.current(here ? netRef.current : openedRef.current.root);
+      refreshTrash();
+      return { skipped: r.skipped, nothing: r.nothing };
+    } catch (e) {
+      if (e instanceof CoreError && e.code === 'depends') return { refused: 'depends' };
+      throw e;
+    }
+  };
+  const journalPage = useCallback((before?: string) => core.journal(before), [core]);
+
   const failed = (e: unknown) =>
     importingRef.current
       ? toast('import.busy')
@@ -3624,6 +3652,7 @@ export function WorkspaceScreen(props: {
     quality,
     setQuality: chooseQuality,
     help: () => setHelp(true),
+    history: () => setJournal(true),
     typePath: () => setPathAsk((n) => n + 1),
     nextArea: () => {
       const screen = host.current?.closest('.workspace');
@@ -4152,6 +4181,27 @@ export function WorkspaceScreen(props: {
           />
         );
       })()}
+      {journal ? (
+        <HistoryWindow
+          locale={locale}
+          load={journalPage}
+          date={reading(props.prefs).date}
+          clock={reading(props.prefs).clock}
+          onShow={async (id) => {
+            const [first] = await core.changesetNodes(id);
+            if (!first) return false;
+            setJournal(false);
+            focusCanvas();
+            await goNode(first, false);
+            return true;
+          }}
+          onRevert={revertChangeset}
+          onClose={() => {
+            setJournal(false);
+            focusCanvas();
+          }}
+        />
+      ) : null}
       {help ? (
         <HelpWindow
           locale={locale}

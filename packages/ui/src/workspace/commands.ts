@@ -50,6 +50,8 @@ export interface CommandContext {
   goMark(slot: number): void;
   /** The report of this workspace's import (13 §3.6), when there is one. */
   importReport?: (() => void) | undefined;
+  /** «История изменений» (06 §1.2). */
+  history(): void;
   /** A step on the star map (08 §5.2): what its keys do. */
   mapAct(action: MapAction): void;
   /** The star map's quality chosen by hand, or `auto` (08 §8.4). */
@@ -346,6 +348,13 @@ export const COMMANDS: readonly Command[] = [
     group: 'nav',
     why: (c) => (c.importReport ? null : 'cmd.why.report'),
     run: (c) => c.importReport?.(),
+  },
+  {
+    id: 'nav.history',
+    title: 'cmd.nav.history',
+    aliases: ['история', 'журнал', 'откат', 'наборы', 'history', 'journal', 'revert', 'changes'],
+    group: 'nav',
+    run: (c) => c.history(),
   },
   {
     id: 'app.save',

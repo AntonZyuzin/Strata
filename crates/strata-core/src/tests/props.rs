@@ -134,6 +134,19 @@ fn check(w: &mut Workspace<MemoryStore>, m: &mut Model) -> Result<(), String> {
             return Err(format!("{} is in the trash and alive", t.name));
         }
     }
+    // Rule 3, what the tree does not show: a node it leaves out — one that
+    // lies nowhere — is not alive; it is in the trash, gone, or not made.
+    for id in &m.ids {
+        if !by.contains_key(id.as_str())
+            && !trash.iter().any(|t| t.id == *id)
+            && w.node_details(id).is_ok()
+        {
+            return Err(format!("{id} is alive and lies nowhere"));
+        }
+    }
+    if !by.contains_key(root.as_str()) {
+        return Err("the root is gone".into());
+    }
     // Rule 1: ids are never reused — every id here was made by a step, and
     // the root is the root.
     for id in tree
@@ -270,7 +283,7 @@ fn step(w: &mut Workspace<MemoryStore>, m: &mut Model, rng: &mut Rng) -> String 
             .unwrap_or_default()
     };
     let label = Label::new("props.step");
-    let ops: Vec<Op> = match rng.below(16) {
+    let ops: Vec<Op> = match rng.below(17) {
         0..=2 => {
             let id = NodeId::new().to_text();
             m.ids.insert(id.clone());
@@ -384,6 +397,30 @@ fn step(w: &mut Workspace<MemoryStore>, m: &mut Model, rng: &mut Rng) -> String 
             return match w.purge_now(&t.id) {
                 Ok(gone) => format!("purge {}: {} gone", t.id, gone.len()),
                 Err(e) => format!("purge {}: REFUSED BUT CHANGED? ({e})", t.id),
+            };
+        }
+        15 => {
+            // «Откатить» any changeset of the journal (10 §9.3): taken back,
+            // skipped key by key, or refused — a later change stands on it.
+            let rows = w
+                .journal(None, usize::MAX)
+                .map(|j| j.entries)
+                .unwrap_or_default();
+            let Some(r) = rng.pick(&rows) else {
+                return "revert: an empty journal".into();
+            };
+            let before = seen(w);
+            return match w.revert_changeset(&r.id) {
+                Ok(report) => format!(
+                    "revert {} ({}): {} skipped",
+                    r.id,
+                    r.label.key,
+                    report.skipped.len()
+                ),
+                Err(e) if seen(w) != before => {
+                    format!("revert {}: REFUSED BUT CHANGED ({e})", r.id)
+                }
+                Err(e) => format!("revert {} ({}): refused ({e})", r.id, r.label.key),
             };
         }
         _ => {

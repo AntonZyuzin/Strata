@@ -201,6 +201,9 @@ export type CoreRequest =
   | { call: 'redo' }
   | { call: 'cancel' }
   | { call: 'history' }
+  | { call: 'journal'; before?: string | undefined; limit?: number | undefined }
+  | { call: 'changesetNodes'; id: string }
+  | { call: 'revertChangeset'; id: string }
   | { call: 'trash' }
   | { call: 'trashPreview'; ids: string[] }
   | { call: 'openDoc'; doc: string }
@@ -642,6 +645,47 @@ export interface TrashItem {
   batch: string;
 }
 
+/** Who made a changeset (05 §11, 10 §9.1). */
+export type ChangesetOrigin =
+  | { type: 'user' | 'ai' | 'import' | 'system' }
+  | { type: 'mcp'; client: string };
+
+/** What a row of «История изменений» is: a step, its undo, a redo, or a revert from the window. */
+export type JournalKind = 'step' | 'undo' | 'redo' | 'revert';
+
+/** Another changeset a row names. */
+export interface JournalRef {
+  id: string;
+  ts: number;
+  label: ChangeLabel;
+}
+
+/**
+ * Why a changeset cannot be reverted (06 §1.2): a long task under way, taken
+ * back already, a purge, the core's own following of texts and pages, the
+ * workspace's own making.
+ */
+export type JournalFixed = 'in-progress' | 'reverted' | 'purge' | 'derived' | 'workspace';
+
+/** A row of «История изменений» (06 §1.2, 10 §9.3). */
+export interface JournalEntry {
+  id: string;
+  ts: number;
+  origin: ChangesetOrigin;
+  label: ChangeLabel;
+  kind: JournalKind;
+  reverts?: JournalRef;
+  /** The revert that stands over it: it is taken back. */
+  revertedBy?: JournalRef;
+  fixed?: JournalFixed;
+}
+
+/** A page of the journal, the newest first; `more` — older rows follow. */
+export interface Journal {
+  entries: JournalEntry[];
+  more: boolean;
+}
+
 type CoreResponse =
   | { type: 'workspace'; id: string; root: string }
   | { type: 'view'; view: NetworkView }
@@ -649,8 +693,10 @@ type CoreResponse =
   | { type: 'copied'; id: string; history: History }
   | { type: 'copiedMany'; ids: string[]; history: History }
   | { type: 'placeable'; placeable: Placeable }
-  | { type: 'reverted'; report: unknown; history: History }
+  | { type: 'reverted'; report: { skipped: unknown[]; nothing?: boolean } | null; history: History }
   | { type: 'history'; history: History }
+  | { type: 'journal'; journal: Journal }
+  | { type: 'changesetNodes'; nodes: string[] }
   | { type: 'trash'; items: TrashItem[] }
   | { type: 'trashPreview'; preview: TrashPreview }
   | { type: 'doc'; doc: string; snapshot: string }
@@ -677,7 +723,8 @@ export class CoreError extends Error {
     readonly invalid: boolean,
     /**
      * What the interface words in its own way: `locked` — the folder is open
-     * in another process (10 §3.6); `damaged` — a copy that cannot be restored (§3.5).
+     * in another process (10 §3.6); `damaged` — a copy that cannot be restored
+     * (§3.5); `depends` — later changes stand on the changeset to revert (§9.3).
      */
     readonly code?: string,
   ) {
@@ -792,6 +839,31 @@ export class Core {
 
   async history(): Promise<History> {
     return expect(await this.call({ call: 'history' }), 'history').history;
+  }
+
+  /** A page of «История изменений» (06 §1.2): the newest first, older than row `before`. */
+  async journal(before?: string, limit?: number): Promise<Journal> {
+    return expect(await this.call({ call: 'journal', before, limit }), 'journal').journal;
+  }
+
+  /** The live nodes a changeset touched, in its order: «Показать». */
+  async changesetNodes(id: string): Promise<string[]> {
+    return expect(await this.call({ call: 'changesetNodes', id }), 'changesetNodes').nodes;
+  }
+
+  /**
+   * «Откатить» (10 §9.3): one step of undo; how many of its changes were
+   * changed since and stay. A later change that stands on it refuses it, `depends`.
+   */
+  async revertChangeset(
+    id: string,
+  ): Promise<{ skipped: number; nothing: boolean; history: History }> {
+    const r = expect(await this.call({ call: 'revertChangeset', id }), 'reverted');
+    return {
+      skipped: r.report?.skipped.length ?? 0,
+      nothing: r.report?.nothing ?? false,
+      history: r.history,
+    };
   }
 
   async trash(): Promise<TrashItem[]> {

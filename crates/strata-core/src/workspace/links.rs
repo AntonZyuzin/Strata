@@ -588,8 +588,7 @@ impl<S: Store> Workspace<S> {
             }
             Ok(())
         })?;
-        self.undo.push(cs.clone());
-        self.redo.clear();
+        self.step(cs.clone());
         Ok(cs)
     }
 

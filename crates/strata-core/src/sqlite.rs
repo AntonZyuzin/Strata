@@ -5,7 +5,7 @@
 
 use crate::changeset::Changeset;
 use crate::folder::{self, FolderLock};
-use crate::store::{Status, Store, StoreError, StoredDoc};
+use crate::store::{ChangesetHead, Status, Store, StoreError, StoredDoc};
 use crate::workspace::{CoreError, Result, Workspace};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
@@ -75,7 +75,11 @@ CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value BLOB);
 impl SqliteStore {
     /// Changesets of the journal by `filter`, oldest first, the writes of a
     /// long task's parts in them in order (10 §3.3).
-    fn journal(&self, filter: &str) -> std::result::Result<Vec<Changeset>, StoreError> {
+    fn journal(
+        &self,
+        filter: &str,
+        args: impl rusqlite::Params,
+    ) -> std::result::Result<Vec<Changeset>, StoreError> {
         let mut stmt = self
             .db
             .prepare(&format!(
@@ -83,7 +87,7 @@ impl SqliteStore {
             ))
             .map_err(io)?;
         let rows: Vec<Vec<u8>> = stmt
-            .query_map([], |r| r.get(0))
+            .query_map(args, |r| r.get(0))
             .map_err(io)?
             .collect::<rusqlite::Result<_>>()
             .map_err(io)?;
@@ -446,11 +450,52 @@ impl Store for SqliteStore {
     }
 
     fn unfinished(&self) -> std::result::Result<Vec<Changeset>, StoreError> {
-        self.journal("WHERE status = 'in-progress'")
+        self.journal("WHERE status = 'in-progress'", [])
     }
 
     fn changesets(&self) -> std::result::Result<Vec<Changeset>, StoreError> {
-        self.journal("")
+        self.journal("", [])
+    }
+
+    fn heads(&self) -> std::result::Result<Vec<ChangesetHead>, StoreError> {
+        let mut stmt = self
+            .db
+            .prepare(
+                "SELECT id, ts, origin, label, reverts, status FROM changesets ORDER BY ts, rowid",
+            )
+            .map_err(io)?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, i64>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, String>(5)?,
+                ))
+            })
+            .map_err(io)?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(io)?;
+        rows.into_iter()
+            .map(|(id, ts, origin, label, reverts, status)| {
+                Ok(ChangesetHead {
+                    origin: serde_json::from_str(&origin).map_err(io)?,
+                    label: serde_json::from_str(&label).map_err(io)?,
+                    status: Status::parse(&status)
+                        .ok_or_else(|| io(format!("changeset {id}: status {status}")))?,
+                    id,
+                    ts,
+                    reverts,
+                })
+            })
+            .collect()
+    }
+
+    fn changeset(&self, id: &str) -> std::result::Result<Option<Changeset>, StoreError> {
+        let mut one = self.journal("WHERE id = ?1", [id])?;
+        Ok(one.pop())
     }
 }
 

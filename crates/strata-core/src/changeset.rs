@@ -71,4 +71,7 @@ pub struct Changeset {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RevertReport {
     pub skipped: Vec<KeyWrite>,
+    /// Nothing was left to take back, and nothing was written (10 §9.3).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub nothing: bool,
 }

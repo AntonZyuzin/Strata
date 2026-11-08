@@ -40,15 +40,16 @@ pub mod workspace;
 
 pub use changeset::{Changeset, KeyWrite, Label, RevertReport, TextEdit};
 pub use ops::{BACKGROUND_PRESETS, Background, Op, WireStyle};
-pub use store::{MemoryStore, Status, Store, StoreError, StoredDoc};
+pub use store::{ChangesetHead, MemoryStore, Status, Store, StoreError, StoredDoc};
 pub use strata_model as model;
 pub use strata_model::Flag;
 pub use workspace::{
     Attrs, CopyAt, CoreError, Edited, ExternalWire, Fold, History, ImportBatch, ImportCounts,
-    ImportItem, ImportOptions, ImportProgress, ImportReport, ImportShadow, LinkTarget, LinkTargets,
-    Linked, NetworkView, NodeDetails, PathHit, PathMissing, PathText, Person, Place, Placeable,
-    PlannedImport, Prop, ReadyBatch, Resolved, Staying, TrashItem, TrashPreview, TreeItem,
-    ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace, escape_segment, parse_path, path_text,
+    ImportItem, ImportOptions, ImportProgress, ImportReport, ImportShadow, Journal, JournalEntry,
+    JournalKind, JournalRef, LinkTarget, LinkTargets, Linked, NetworkView, NodeDetails, PathHit,
+    PathMissing, PathText, Person, Place, Placeable, PlannedImport, Prop, ReadyBatch, Resolved,
+    Staying, TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
+    escape_segment, parse_path, path_text,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

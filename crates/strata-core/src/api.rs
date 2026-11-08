@@ -8,10 +8,13 @@ use crate::store::Store;
 use crate::vault::{Vault, VaultFile};
 pub use crate::workspace::CopyAt;
 use crate::workspace::{
-    Edited, ExternalWire, History, ImportOptions, ImportProgress, LinkTargets, NetworkView,
-    NodeDetails, Person, Placeable, Resolved, TrashItem, TrashPreview, TreeItem, WireEnds,
-    Workspace,
+    Edited, ExternalWire, History, ImportOptions, ImportProgress, Journal, LinkTargets,
+    NetworkView, NodeDetails, Person, Placeable, Resolved, TrashItem, TrashPreview, TreeItem,
+    WireEnds, Workspace,
 };
+
+/// Rows of «История изменений» a page brings unless asked otherwise.
+const JOURNAL_PAGE: usize = 100;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
@@ -63,6 +66,22 @@ pub enum Request {
     /// The last step reverted and forgotten: a gesture cancelled with Esc.
     Cancel,
     History,
+    /// A page of «История изменений» (06 §1.2): the newest first, older
+    /// than row `before` when given; 100 rows unless `limit` says.
+    Journal {
+        #[serde(default)]
+        before: Option<String>,
+        #[serde(default)]
+        limit: Option<usize>,
+    },
+    /// The live nodes a changeset of the journal touched: «Показать».
+    ChangesetNodes {
+        id: String,
+    },
+    /// «Откатить» a changeset of the journal (10 §9.3): one step of undo.
+    RevertChangeset {
+        id: String,
+    },
     Trash,
     /// What trashing `ids` would take, without taking it (06 §12.3).
     TrashPreview {
@@ -203,6 +222,12 @@ pub enum Response {
     History {
         history: History,
     },
+    Journal {
+        journal: Journal,
+    },
+    ChangesetNodes {
+        nodes: Vec<String>,
+    },
     Trash {
         items: Vec<TrashItem>,
     },
@@ -325,6 +350,18 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             report,
             history: ws.history(),
         }),
+        Request::Journal { before, limit } => ws
+            .journal(before.as_deref(), limit.unwrap_or(JOURNAL_PAGE))
+            .map(|journal| Response::Journal { journal }),
+        Request::ChangesetNodes { id } => ws
+            .changeset_nodes(&id)
+            .map(|nodes| Response::ChangesetNodes { nodes }),
+        Request::RevertChangeset { id } => {
+            ws.revert_changeset(&id).map(|report| Response::Reverted {
+                report: Some(report),
+                history: ws.history(),
+            })
+        }
         Request::Cancel => ws.cancel().map(|report| Response::Reverted {
             report,
             history: ws.history(),
@@ -439,7 +476,10 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             }),
     };
     result.unwrap_or_else(|e| Response::Error {
-        invalid: matches!(e, crate::CoreError::Invalid(_)),
+        invalid: matches!(
+            e,
+            crate::CoreError::Invalid(_) | crate::CoreError::Depends(_)
+        ),
         code: e.code().map(str::to_owned),
         message: e.to_string(),
     })

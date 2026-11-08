@@ -26,15 +26,18 @@ use strata_model::{
 
 mod import;
 mod importing;
+mod journal;
 mod links;
 mod paths;
 mod places;
 mod purge;
+mod structure;
 
 #[cfg(test)]
 pub(crate) use import::TEST_BATCH;
 pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
 pub use importing::{ImportBatch, ImportProgress, ImportShadow, PlannedImport, ReadyBatch};
+pub use journal::{Journal, JournalEntry, JournalKind, JournalRef, UNDO_DEPTH};
 pub use links::{LinkTarget, LinkTargets};
 pub use paths::{PathHit, PathMissing, PathText, Resolved, escape_segment, parse_path, path_text};
 pub use purge::TRASH_DAYS;
@@ -212,16 +215,22 @@ pub enum CoreError {
     /// The operation breaks the model's rules; nothing was written.
     #[error("{0}")]
     Invalid(String),
+    /// A revert from the journal that would break a rule of 05 §14: a later
+    /// change stands on what it takes away (10 §9.3); nothing was written.
+    #[error("later changes stand on this one: {0}")]
+    Depends(String),
 }
 
 impl CoreError {
     /// What the interface words in its own way: `locked` — the folder is
     /// open in another process (10 §3.6); `damaged` — a copy that cannot be
-    /// restored (§3.5).
+    /// restored (§3.5); `depends` — later changes stand on the changeset a
+    /// revert would take back (§9.3).
     pub fn code(&self) -> Option<&'static str> {
         match self {
             CoreError::Store(StoreError::Locked(_)) => Some("locked"),
             CoreError::Store(StoreError::Damaged(_)) => Some("damaged"),
+            CoreError::Depends(_) => Some("depends"),
             _ => None,
         }
     }
@@ -1018,6 +1027,18 @@ impl<S: Store> Workspace<S> {
         label: Label,
         build: impl FnOnce(&mut Tx<'_>) -> Result<()>,
     ) -> Result<Changeset> {
+        self.write_as(origin, label, None, build)
+    }
+
+    /// [`Self::write`] of a changeset that reverts changeset `reverts`
+    /// (10 §9.1): the journal keeps who took what back.
+    fn write_as(
+        &mut self,
+        origin: ChangesetOrigin,
+        label: Label,
+        reverts: Option<String>,
+        build: impl FnOnce(&mut Tx<'_>) -> Result<()>,
+    ) -> Result<Changeset> {
         self.writable()?;
         let mut tx = Tx {
             docs: &mut self.docs,
@@ -1032,7 +1053,7 @@ impl<S: Store> Workspace<S> {
             texts,
             ..
         } = tx;
-        self.finish(origin, label, before, (writes, texts), built)
+        self.finish((origin, label, reverts), before, (writes, texts), built)
     }
 
     /// The writes of an import in two passes, and back: the first goes into
@@ -1074,8 +1095,7 @@ impl<S: Store> Workspace<S> {
     /// failed — takes them back out of memory.
     fn finish(
         &mut self,
-        origin: ChangesetOrigin,
-        label: Label,
+        (origin, label, reverts): (ChangesetOrigin, Label, Option<String>),
         before: HashMap<String, VersionVector>,
         (writes, texts): (Vec<KeyWrite>, Vec<TextEdit>),
         built: Result<()>,
@@ -1093,7 +1113,7 @@ impl<S: Store> Workspace<S> {
             ts: (self.clock)(),
             origin,
             label,
-            reverts: None,
+            reverts,
             writes,
             texts,
         };
@@ -1126,8 +1146,7 @@ impl<S: Store> Workspace<S> {
     pub fn apply(&mut self, ops: &[Op], label: Label) -> Result<Changeset> {
         let changeset = self.commit_ops(ops, label)?;
         if !changeset.writes.is_empty() {
-            self.undo.push(changeset.clone());
-            self.redo.clear();
+            self.step(changeset.clone());
         }
         self.links_after(&changeset, true)?;
         Ok(changeset)
@@ -1154,7 +1173,7 @@ impl<S: Store> Workspace<S> {
             }
             None => {
                 if let Some(c) = changeset.as_ref().filter(|_| written) {
-                    self.undo.push(c.clone());
+                    self.push_undo(c.clone());
                 }
             }
         }
@@ -1873,8 +1892,17 @@ impl<S: Store> Workspace<S> {
             .is_some_and(|d| read(d, "placement", &key).is_some())
     }
 
-    /// Writes the old value back where a key still holds the new one (05 §11).
+    /// Writes the old value back where a key still holds the new one (05 §11):
+    /// an undo or a redo, under the step's own origin and label.
     fn revert(&mut self, cs: &Changeset) -> Result<(Changeset, RevertReport)> {
+        let (plan, skipped) = self.revert_plan(cs)?;
+        self.revert_with(cs, (cs.origin.clone(), cs.label.clone()), plan, skipped)
+    }
+
+    /// What reverting `cs` writes back, and what it skips (10 §9.3): a key
+    /// someone changed since, a wire a text holds since, a key of a node
+    /// gone for good (10 §10.4).
+    fn revert_plan(&mut self, cs: &Changeset) -> Result<(Vec<KeyWrite>, Vec<KeyWrite>)> {
         for w in &cs.writes {
             self.ensure_doc(&w.doc)?;
         }
@@ -1909,7 +1937,21 @@ impl<S: Store> Workspace<S> {
                     && !origins_gone.contains(&(w.doc.clone(), key))
             })
         });
-        let mut out = self.write(cs.origin.clone(), cs.label.clone(), |tx| {
+        self.keep_purged(cs, &mut plan, &mut skipped);
+        Ok((plan, skipped))
+    }
+
+    /// `plan` of reverting `cs` written as a changeset that reverts it, of
+    /// the origin and label given: an undo keeps the step's own, «Откатить»
+    /// in the journal is the user's whoever made the changeset (10 §9.3).
+    fn revert_with(
+        &mut self,
+        cs: &Changeset,
+        (origin, label): (ChangesetOrigin, Label),
+        plan: Vec<KeyWrite>,
+        skipped: Vec<KeyWrite>,
+    ) -> Result<(Changeset, RevertReport)> {
+        let out = self.write_as(origin, label, Some(cs.id.clone()), |tx| {
             for w in plan {
                 tx.set(&w.doc, &w.map, &w.key, w.before)?;
             }
@@ -1920,8 +1962,13 @@ impl<S: Store> Workspace<S> {
             }
             Ok(())
         })?;
-        out.reverts = Some(cs.id.clone());
-        Ok((out, RevertReport { skipped }))
+        Ok((
+            out,
+            RevertReport {
+                skipped,
+                nothing: false,
+            },
+        ))
     }
 
     /// Undoes the last step of this session's user (05 §11).
@@ -1942,7 +1989,7 @@ impl<S: Store> Workspace<S> {
         };
         let (again, report) = self.revert(&cs)?;
         self.links_after(&again, true)?;
-        self.undo.push(again);
+        self.push_undo(again);
         Ok(Some(report))
     }
 

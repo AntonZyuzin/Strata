@@ -6,7 +6,7 @@
 //! One changeset is one commit: the updates of every document it touched
 //! and the changeset itself, all or nothing (10 §3.3).
 
-use crate::changeset::Changeset;
+use crate::changeset::{Changeset, Label};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,29 @@ impl Status {
             Self::Reverted => "reverted",
         }
     }
+
+    /// As stored; `done` — what `applied` was written as before 2026-10-31.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "in-progress" => Some(Self::InProgress),
+            "applied" | "done" => Some(Self::Applied),
+            "reverted" => Some(Self::Reverted),
+            _ => None,
+        }
+    }
+}
+
+/// A changeset without its writes (10 §9.1): what «История изменений» lists
+/// (06 §1.2) — a journal of thousands reads fast, an import of 10 000 notes
+/// among them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ChangesetHead {
+    pub id: String,
+    pub ts: i64,
+    pub origin: strata_model::ChangesetOrigin,
+    pub label: Label,
+    pub reverts: Option<String>,
+    pub status: Status,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -76,6 +99,10 @@ pub trait Store {
     fn unfinished(&self) -> Result<Vec<Changeset>, StoreError>;
     /// Every changeset, oldest first; a long one with all its parts' writes.
     fn changesets(&self) -> Result<Vec<Changeset>, StoreError>;
+    /// Every changeset's head, oldest first: the journal without the writes.
+    fn heads(&self) -> Result<Vec<ChangesetHead>, StoreError>;
+    /// One changeset with its writes, a long one's with all its parts'.
+    fn changeset(&self, id: &str) -> Result<Option<Changeset>, StoreError>;
     /// An update of a content document outside any changeset: an editor's
     /// typing (15 §3.4), which has its own undo.
     fn append(&mut self, doc_id: &str, update: &[u8], ts: i64) -> Result<(), StoreError>;
@@ -106,6 +133,8 @@ pub struct MemoryStore {
     changesets: Vec<Changeset>,
     /// Long tasks' changesets still in progress, by id.
     open: BTreeSet<String>,
+    /// Long tasks' changesets taken back after they broke off (10 §3.3).
+    reverted: BTreeSet<String>,
     assets: BTreeMap<String, Vec<u8>>,
 }
 
@@ -116,6 +145,8 @@ struct Dump {
     changesets: Vec<Changeset>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     open: BTreeSet<String>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    reverted: BTreeSet<String>,
     #[serde(default)]
     assets: BTreeMap<String, String>,
 }
@@ -134,6 +165,7 @@ impl MemoryStore {
                 .collect(),
             changesets: self.changesets.clone(),
             open: self.open.clone(),
+            reverted: self.reverted.clone(),
             assets: self
                 .assets
                 .iter()
@@ -172,6 +204,7 @@ impl MemoryStore {
             docs,
             changesets: dump.changesets,
             open: dump.open,
+            reverted: dump.reverted,
             assets,
         })
     }
@@ -220,8 +253,11 @@ impl Store for MemoryStore {
         Ok(())
     }
 
-    fn close(&mut self, id: &str, _status: Status) -> Result<(), StoreError> {
+    fn close(&mut self, id: &str, status: Status) -> Result<(), StoreError> {
         self.open.remove(id);
+        if status == Status::Reverted {
+            self.reverted.insert(id.to_owned());
+        }
         Ok(())
     }
 
@@ -236,6 +272,31 @@ impl Store for MemoryStore {
 
     fn changesets(&self) -> Result<Vec<Changeset>, StoreError> {
         Ok(self.changesets.clone())
+    }
+
+    fn heads(&self) -> Result<Vec<ChangesetHead>, StoreError> {
+        Ok(self
+            .changesets
+            .iter()
+            .map(|c| ChangesetHead {
+                id: c.id.clone(),
+                ts: c.ts,
+                origin: c.origin.clone(),
+                label: c.label.clone(),
+                reverts: c.reverts.clone(),
+                status: if self.open.contains(&c.id) {
+                    Status::InProgress
+                } else if self.reverted.contains(&c.id) {
+                    Status::Reverted
+                } else {
+                    Status::Applied
+                },
+            })
+            .collect())
+    }
+
+    fn changeset(&self, id: &str) -> Result<Option<Changeset>, StoreError> {
+        Ok(self.changesets.iter().find(|c| c.id == id).cloned())
     }
 
     fn append(&mut self, doc_id: &str, update: &[u8], _ts: i64) -> Result<(), StoreError> {

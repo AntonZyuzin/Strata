@@ -33,6 +33,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   setMark: () => undefined,
   goMark: () => undefined,
   mapAct: () => undefined,
+  history: () => undefined,
   quality: 'auto',
   setQuality: () => undefined,
   help: () => undefined,

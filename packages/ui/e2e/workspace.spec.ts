@@ -752,6 +752,27 @@ async function openCard(page: Page) {
   });
 }
 
+/** A wire from node `from` to node `to`, by their names: one step of undo (05 §8). */
+async function connect(page: Page, from: string, to: string) {
+  const ends = [await idOf(page, from), await idOf(page, to), to] as const;
+  await page.evaluate(([a, b, name]) => {
+    window.__strataWs
+      ?.graph()
+      ?.transaction({ key: 'proto.change.connect', params: { name } } as { key: string }, (tx) =>
+        (tx as { connect(a: string, b: string): boolean }).connect(a, b),
+      );
+  }, ends);
+}
+
+/** «История изменений» opened from the palette by its name in the page's language. */
+async function openHistory(page: Page, name: string) {
+  await page.keyboard.press('Control+p');
+  await page.keyboard.type(name);
+  await expect(page.locator('.command-palette .tab-menu-row.is-current')).toContainText(name);
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.history-window [role="option"]').first()).toBeVisible();
+}
+
 /**
  * Workspace `name` with both kinds of copy of its store (10 §3.5): a node,
  * its tab closed and the workspace opened again — the opening copies it —
@@ -773,6 +794,48 @@ async function withBackups(page: Page, name: string, restore: string) {
   await page.waitForFunction(() => window.__strataWs?.graph() != null);
   await page.locator('.tabbar-logo').click();
   await expect(page.locator('.home-card')).toHaveCount(1);
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`«История изменений» keeps its frame in RU and EN @${deviceScaleFactor}x (06 §1.2)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const [locale, name] of [
+      ['ru-RU', 'История изменений'],
+      ['en-US', 'Change history'],
+    ] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 800, height: 500 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Журнал');
+      await createNode(page, 420, 300, 'Нода с очень длинным именем, которое не влезет в строку');
+      await settled(page);
+      // An undo and a redo: rows with their arrows.
+      await page.keyboard.press('Control+z');
+      await page.keyboard.press('Control+Shift+z');
+      await settled(page);
+      await openHistory(page, name);
+      expect(await overflowing(page, '.history-window'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.history-window'),
+        list: await box(page, '.history-list'),
+        actions: await box(page, '.history-window .dialog-actions'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'list', 'actions'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
 }
 
 for (const deviceScaleFactor of [1, 2]) {
@@ -2371,6 +2434,62 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.home-name')).toHaveText(['Работа 2026']);
     await page.locator('.home-open').click();
     await expect(page.locator('.tab.is-active')).toHaveText('Работа 2026');
+  });
+
+  test('«История изменений» reverts a changeset as a step of undo and refuses one a later change stands on (06 §1.2)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Журнал');
+    await createNode(page, 500, 300, 'Первая');
+    await createNode(page, 760, 420, 'Вторая');
+    await settled(page);
+    await openHistory(page, 'История изменений');
+    const win = page.locator('.history-window');
+    const rows = win.getByRole('option');
+    // The newest first: the second node, the first, the workspace's own making.
+    await expect(rows.first().locator('.history-who')).toHaveText('Вы');
+    await expect(rows.last().locator('.history-what')).toHaveText('Создание пространства');
+    await expect(rows.last().locator('.history-who')).toHaveText('Gexogon');
+    // The workspace's making cannot go back: the button says why.
+    await rows.last().click();
+    const revert = win.getByRole('button', { name: 'Откатить' });
+    await expect(revert).toHaveAttribute('aria-disabled', 'true');
+    await expect(revert).toHaveAttribute('title', 'Создание пространства не откатывается');
+    // The first node's making, two steps back: taken back alone.
+    const id = await rows.filter({ hasText: 'Первая' }).first().getAttribute('data-id');
+    const first = win.locator(`[data-id="${id}"]`);
+    await first.click();
+    await revert.click();
+    await expect(win.locator('.history-result')).toHaveText('Откачено полностью');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Вторая']);
+    // The revert on top, the row grey; `Ctrl+Z` takes the revert back.
+    await expect(rows.first().locator('.history-what')).toHaveText(/^Откат: /);
+    await expect(first).toHaveClass(/is-reverted/);
+    await page.keyboard.press('Escape');
+    await expect(win).toHaveCount(0);
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Вторая', 'Первая']);
+    await settled(page);
+
+    // A wire to the first node since: its making cannot go back.
+    await connect(page, 'Вторая', 'Первая');
+    await settled(page);
+    await openHistory(page, 'История изменений');
+    // `Ctrl+Z` of the revert: an undo of it.
+    await expect(rows.nth(1).locator('.history-what')).toHaveText(/^Отмена: Откат: /);
+    const made = rows.filter({ hasText: 'Первая' }).last();
+    await made.click();
+    await revert.click();
+    await expect(win.locator('.history-result')).toHaveText(
+      'Сначала откатите то, что сделано после',
+    );
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Вторая', 'Первая']);
+    // «Показать» goes to its node.
+    await win.getByRole('button', { name: 'Показать' }).click();
+    await expect(win).toHaveCount(0);
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Первая');
   });
 
   test('a workspace comes back from a copy, and the restore can be taken back (10 §3.5)', async ({

@@ -1203,6 +1203,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "fs4"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
+dependencies = [
+ "rustix",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4326,8 +4336,11 @@ name = "strata-cli"
 version = "0.0.1"
 dependencies = [
  "clap",
+ "serde",
+ "serde_json",
  "strata-core",
  "strata-model",
+ "sys-locale",
 ]
 
 [[package]]
@@ -4336,6 +4349,7 @@ version = "0.0.1"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
+ "fs4",
  "html5gum",
  "loro",
  "lz-str",
@@ -4535,6 +4549,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

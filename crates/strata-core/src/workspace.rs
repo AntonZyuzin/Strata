@@ -31,6 +31,7 @@ mod links;
 mod paths;
 mod places;
 mod purge;
+mod refs;
 mod structure;
 
 #[cfg(test)]

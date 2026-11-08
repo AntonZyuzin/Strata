@@ -136,22 +136,45 @@ impl SqliteStore {
         })
     }
 
-    /// A copy of a store in `backups/` (10 §3.5), opened to be read: no
-    /// `.lock`, no backups of its own, no assets.
-    fn backup_at(path: &Path) -> std::result::Result<Self, StoreError> {
+    /// A store, or a copy of one in `backups/` (10 §3.5), opened to be read
+    /// (11 §4.1): one read transaction for the whole of it, so a folder the
+    /// app has open and writes on is read as one snapshot; no `.lock`, no
+    /// backups of its own; its assets in `assets` when given. A file that
+    /// is no database is `Damaged`.
+    pub fn read(path: &Path, assets: Option<PathBuf>) -> std::result::Result<Self, StoreError> {
+        if !path.is_file() {
+            return Err(io(format!("no store at {}", path.display())));
+        }
+        let damaged = |e: rusqlite::Error| StoreError::Damaged(e.to_string());
+        // Read-write without creating: a WAL store wants its `-shm`.
         let db = Connection::open_with_flags(
             path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .map_err(|e| StoreError::Damaged(e.to_string()))?;
+        .map_err(damaged)?;
+        db.execute_batch("BEGIN").map_err(damaged)?;
         Ok(Self {
             db,
-            assets: None,
+            assets,
             path: None,
             backed_up: folder::day_now(),
             backup: None,
             _lock: None,
         })
+    }
+
+    /// `PRAGMA integrity_check`: its first problems, none when the store is whole.
+    pub fn integrity(&self) -> std::result::Result<Vec<String>, StoreError> {
+        let mut stmt = self
+            .db
+            .prepare("PRAGMA integrity_check(20)")
+            .map_err(|e| StoreError::Damaged(e.to_string()))?;
+        let rows: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .map_err(|e| StoreError::Damaged(e.to_string()))?
+            .collect::<rusqlite::Result<_>>()
+            .map_err(|e| StoreError::Damaged(e.to_string()))?;
+        Ok(rows.into_iter().filter(|r| r != "ok").collect())
     }
 
     /// A store in memory with the same tables (tests).
@@ -603,7 +626,7 @@ pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
 /// another workspace's, is refused, and nothing changes.
 pub fn restore_folder(dir: &Path, backup: &str) -> Result<()> {
     let id = folder_id(dir)?;
-    let copy = Workspace::open(SqliteStore::backup_at(&folder::backup_path(dir, backup)?)?)
+    let copy = Workspace::open(SqliteStore::read(&folder::backup_path(dir, backup)?, None)?)
         .map_err(|e| StoreError::Damaged(e.to_string()))?;
     if copy.id() != id {
         return Err(StoreError::Damaged(format!("a copy of workspace {}", copy.id())).into());

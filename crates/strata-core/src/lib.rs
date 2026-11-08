@@ -12,6 +12,7 @@
 //!   workspace folder and its `store.sqlite` (10 §3.1–3.3); [`folder`]: its
 //!   `.lock` and daily backups (10 §3.5–3.6); [`backups`]: which copies of a
 //!   store are made and kept, the folder's and the browser's alike;
+//!   [`doctor`]: `strata doctor` and `strata backup verify` (11 §4.1);
 //! - [`home`]: the workspaces of this device for the home screen (✅ Q-16-12);
 //! - [`archive`]: `.strata.zip`, a workspace as one file (10 §3.5);
 //! - `preview`: a link's preview fetched from its page (ADR-0012), native only;
@@ -23,6 +24,8 @@ pub mod api;
 pub mod archive;
 pub mod backups;
 pub mod changeset;
+#[cfg(feature = "sqlite")]
+pub mod doctor;
 #[cfg(feature = "sqlite")]
 pub mod folder;
 #[cfg(feature = "sqlite")]

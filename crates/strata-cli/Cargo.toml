@@ -14,8 +14,12 @@ path = "src/main.rs"
 
 [dependencies]
 clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 strata-core.workspace = true
 strata-model.workspace = true
+# The system's language for the messages (11 §4): Russian or English.
+sys-locale = "0.3"
 
 [lints]
 workspace = true

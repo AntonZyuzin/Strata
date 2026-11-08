@@ -9,6 +9,31 @@ use loro::LoroValue;
 use std::collections::{BTreeSet, HashSet};
 
 impl<S: Store> Workspace<S> {
+    /// What breaks rules 3, 5 and 6 of 05 §14 now, each a line: what
+    /// `strata doctor` reports (11 §4.1).
+    pub fn broken_rules(&self) -> Vec<String> {
+        self.broken().into_iter().collect()
+    }
+
+    /// Every document of the store opened in the engine (11 §4.1, `strata
+    /// backup verify`): how many there are; one that does not open is an
+    /// error naming it.
+    pub fn check_docs(&mut self) -> Result<usize> {
+        let ids = self.store.doc_ids()?;
+        for id in &ids {
+            self.ensure_doc(id)
+                .map_err(|e| CoreError::Invalid(format!("{id}: {e}")))?;
+        }
+        Ok(ids.len())
+    }
+
+    /// The schema the workspace was written with (10 §13).
+    pub fn schema(&self) -> i64 {
+        super::read(&self.docs["sys"], "sys", "schema")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0)
+    }
+
     /// What breaks rules 3, 5 and 6 now, each a line: a live node that lies
     /// nowhere or in a node with no canvas, a network inside itself, a wire
     /// with an end that is no node.

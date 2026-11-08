@@ -2,6 +2,7 @@ import type { HomeBackend, Opened } from '@strata/backend';
 import { t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { checkUpdate, installUpdate, pickArchive, pickSavePath, type UpdateInfo } from './backend';
+import { errorText } from './errors';
 import { download, HomeScreen } from './home/HomeScreen';
 import { type Prefs, reading } from './prefs';
 import { SettingsScreen } from './settings/SettingsScreen';
@@ -38,10 +39,6 @@ function loadTabs(): Tab[] {
   }
 }
 
-function message(e: unknown): string {
-  return e instanceof Error ? e.message : String(e);
-}
-
 export function Shell(props: {
   /** The device's settings: the language, how dates and times read (✅ Q-06-23). */
   prefs: Prefs;
@@ -53,6 +50,9 @@ export function Shell(props: {
 }) {
   const { prefs, home } = props;
   const locale = prefs.locale;
+  /** The language for a failure worded in a callback made once. */
+  const localeRef = useRef(locale);
+  localeRef.current = locale;
   /**
    * «Настройки» (✅ Q-06-23): a window the gear opens over the home or the
    * workspace, no tab of its own (owner, 2026-10-28: a tab only repeated the
@@ -127,7 +127,7 @@ export function Shell(props: {
     try {
       await f();
     } catch (e) {
-      setError(message(e));
+      setError(errorText(localeRef.current, e));
     } finally {
       busyRef.current = false;
     }
@@ -376,7 +376,7 @@ export function Shell(props: {
             installUpdate().catch((e: unknown) => {
               setInstalling(false);
               setOffer(null);
-              setError(message(e));
+              setError(errorText(locale, e));
             });
           }}
         />

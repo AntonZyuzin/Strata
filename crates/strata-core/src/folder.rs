@@ -112,6 +112,57 @@ pub fn day_now() -> i64 {
     unix_ms().div_euclid(DAY_MS)
 }
 
+/// Now, unix ms.
+pub fn unix_now() -> i64 {
+    unix_ms()
+}
+
+/// The week between two `integrity_check`s of a store (NFR-76).
+pub const CHECK_EVERY: i64 = 7 * DAY_MS;
+
+/// The week's `integrity_check` of `store` (NFR-76), on a connection of
+/// its own beside the open store, after the day's backup: done less than
+/// a week ago — nothing; whole — the date is kept; damaged — the store is
+/// marked, and its next open refuses it and offers a copy.
+pub fn check_weekly(store: &Path, now: i64) {
+    let Ok(db) = rusqlite::Connection::open(store) else {
+        return;
+    };
+    let _ = db.busy_timeout(std::time::Duration::from_secs(10));
+    let last = db
+        .query_row("SELECT value FROM meta WHERE key = 'checked'", [], |r| {
+            r.get::<_, String>(0)
+        })
+        .ok()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if now - last < CHECK_EVERY {
+        return;
+    }
+    let rows: rusqlite::Result<Vec<String>> = db
+        .prepare("PRAGMA integrity_check(20)")
+        .and_then(|mut stmt| stmt.query_map([], |r| r.get(0))?.collect());
+    use rusqlite::ErrorCode::{DatabaseCorrupt, NotADatabase};
+    let problems: Vec<String> = match rows {
+        Ok(rows) => rows.into_iter().filter(|r| r != "ok").collect(),
+        Err(e) if matches!(e.sqlite_error_code(), Some(DatabaseCorrupt | NotADatabase)) => {
+            vec![e.to_string()]
+        }
+        // Busy, or the disk: no verdict — tried again at the next open.
+        Err(_) => return,
+    };
+    let (key, value) = if problems.is_empty() {
+        ("checked", now.to_string())
+    } else {
+        ("damaged", problems.join("; "))
+    };
+    let _ = db.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [key, value.as_str()],
+    );
+}
+
 /// The file of copy `id` in `backups/`.
 fn file(folder: &Path, id: &str) -> PathBuf {
     folder.join("backups").join(format!("{id}.sqlite"))

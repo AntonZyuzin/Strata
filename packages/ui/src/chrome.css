@@ -2345,6 +2345,23 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   color: var(--st-color-attention);
 }
 
+/* A failure and, for a damaged store, its way back on the same line (NFR-76). */
+.home-error-line {
+  display: flex;
+  align-items: center;
+  gap: calc(6 * var(--u));
+  min-width: 0;
+}
+
+.home-error-line > .home-error {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.home-error-line > button {
+  flex: none;
+}
+
 .home-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, 30ch);

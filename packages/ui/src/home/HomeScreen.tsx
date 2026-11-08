@@ -12,6 +12,7 @@ import { formatAgo, type Locale, t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { pickFolder, pickSavePath } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
+import { errorText } from '../errors';
 import type { Clock, DateFormat } from '../prefs';
 import { IconButton } from '../TabBar';
 import { keepJob } from '../workspace/imports';
@@ -32,12 +33,7 @@ type Dialog =
   /** The workspace's copies: null until the backend answers. */
   | { t: 'restore'; entry: WorkspaceEntry; backups: Backup[] | null };
 
-/** What went wrong, in words: the core's, or the interface's own for what it knows (10 §3.5–3.6). */
-function message(locale: Locale, e: unknown): string {
-  if (e instanceof CoreError && e.code === 'locked') return t(locale, 'home.locked');
-  if (e instanceof CoreError && e.code === 'damaged') return t(locale, 'home.damaged');
-  return e instanceof Error ? e.message : String(e);
-}
+const message = errorText;
 
 /** The folder picked in `<input webkitdirectory>`: the first part of every relative path. */
 const vaultName = (files: readonly File[]) => files[0]?.webkitRelativePath.split('/')[0] ?? '';
@@ -79,6 +75,8 @@ export function HomeScreen(props: {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [menu, setMenu] = useState<{ x: number; y: number; entry: WorkspaceEntry } | null>(null);
+  /** The workspace whose store did not open, damaged (NFR-76): its copies are offered. */
+  const [broken, setBroken] = useState<WorkspaceEntry | null>(null);
   const busyRef = useRef(false);
   const vaultInput = useRef<HTMLInputElement>(null);
 
@@ -126,6 +124,7 @@ export function HomeScreen(props: {
       busyRef.current = true;
       setBusy(true);
       setError(null);
+      setBroken(null);
       setNote(null);
       try {
         const r = await f();
@@ -143,6 +142,17 @@ export function HomeScreen(props: {
     },
     [onOpen],
   );
+
+  /** A card's workspace in its tab; a damaged store offers its copies (NFR-76). */
+  const openCard = (w: WorkspaceEntry) =>
+    run(async () => {
+      try {
+        return await home.open(w.id);
+      } catch (e) {
+        if (e instanceof CoreError && e.code === 'corrupt') setBroken(w);
+        throw e;
+      }
+    });
 
   const exportArchive = (w: WorkspaceEntry) =>
     run(async () => {
@@ -210,7 +220,7 @@ export function HomeScreen(props: {
     {
       label: t(locale, 'home.openCard'),
       disabled: w.missing,
-      onSelect: () => void run(() => home.open(w.id)),
+      onSelect: () => void openCard(w),
     },
     {
       label: t(locale, 'home.rename'),
@@ -298,13 +308,21 @@ export function HomeScreen(props: {
       </div>
       <div className="home-content">
         {error !== null && dialog?.t !== 'restore' ? (
-          <p
-            className="home-error"
-            role="alert"
-            title={t(locale, 'home.error', { message: message(locale, error) })}
-          >
-            {t(locale, 'home.error', { message: message(locale, error) })}
-          </p>
+          <div className="home-error-line">
+            <p
+              className="home-error"
+              role="alert"
+              title={t(locale, 'home.error', { message: message(locale, error) })}
+            >
+              {t(locale, 'home.error', { message: message(locale, error) })}
+            </p>
+            {/* A damaged store: the way back is its copy (NFR-76). */}
+            {broken ? (
+              <button type="button" onClick={() => askRestore(broken)}>
+                {t(locale, 'home.restore')}
+              </button>
+            ) : null}
+          </div>
         ) : null}
         {note ? (
           <p className="home-note" role="status" title={note}>
@@ -334,7 +352,7 @@ export function HomeScreen(props: {
                   className="home-open"
                   title={w.path ? `${w.name} · ${w.path}` : w.name}
                   disabled={busy || w.missing}
-                  onClick={() => void run(() => home.open(w.id))}
+                  onClick={() => void openCard(w)}
                 >
                   <span className="home-preview st-pattern-50" aria-hidden="true">
                     {preview ? <img src={preview} alt="" /> : <b>{[...w.name][0] ?? '·'}</b>}

@@ -64,6 +64,9 @@ pub enum StoreError {
     /// A copy of the store that cannot be restored (10 §3.5): damaged, or of another workspace.
     #[error("the copy cannot be restored: {0}")]
     Damaged(String),
+    /// The workspace's own store is damaged (NFR-76): it is not opened, a copy is offered.
+    #[error("the workspace's store is damaged: {0}")]
+    Corrupt(String),
 }
 
 /// A document as stored: a snapshot and the updates after it, in order.

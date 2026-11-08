@@ -15,6 +15,33 @@ fn io(e: impl std::fmt::Display) -> StoreError {
     StoreError::Io(e.to_string())
 }
 
+/// SQLite's word that the file is damaged or no database (NFR-76), or any
+/// other failure.
+fn sqlite(e: rusqlite::Error) -> StoreError {
+    use rusqlite::ErrorCode::{DatabaseCorrupt, NotADatabase};
+    match e.sqlite_error_code() {
+        Some(DatabaseCorrupt | NotADatabase) => StoreError::Corrupt(e.to_string()),
+        _ => io(e),
+    }
+}
+
+/// A value of the store's `meta` table.
+fn meta(db: &Connection, key: &str) -> Option<String> {
+    db.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| {
+        r.get::<_, String>(0)
+    })
+    .ok()
+}
+
+fn set_meta(db: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
+    db.execute(
+        "INSERT INTO meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        [key, value],
+    )
+    .map(|_| ())
+}
+
 #[derive(Debug)]
 pub struct SqliteStore {
     db: Connection,
@@ -35,6 +62,10 @@ impl Drop for SqliteStore {
     fn drop(&mut self) {
         if let Some(backup) = self.backup.take() {
             let _ = backup.join();
+        }
+        // Closed as it should be: the next open needs no check (NFR-76).
+        if self.path.is_some() {
+            let _ = set_meta(&self.db, "clean", "1");
         }
     }
 }
@@ -115,16 +146,34 @@ impl SqliteStore {
     }
 
     /// The store of a folder: its `.lock` taken first (10 §3.6) — a folder
-    /// another process has open is refused, [`StoreError::Locked`].
+    /// another process has open is refused, [`StoreError::Locked`]. A store
+    /// found damaged (NFR-76) — by SQLite, by `quick_check` after a session
+    /// that did not close as it should, or by the weekly `integrity_check`
+    /// before — is refused, [`StoreError::Corrupt`]: a copy is offered.
     pub fn open(path: &Path) -> std::result::Result<Self, StoreError> {
         let lock = match path.parent() {
             Some(dir) => Some(FolderLock::take(dir)?),
             None => None,
         };
-        let db = Connection::open(path).map_err(io)?;
-        db.pragma_update(None, "journal_mode", "WAL").map_err(io)?;
-        db.pragma_update(None, "synchronous", "FULL").map_err(io)?;
-        db.execute_batch(SCHEMA).map_err(io)?;
+        let db = Connection::open(path).map_err(sqlite)?;
+        db.pragma_update(None, "journal_mode", "WAL")
+            .map_err(sqlite)?;
+        db.pragma_update(None, "synchronous", "FULL")
+            .map_err(sqlite)?;
+        db.execute_batch(SCHEMA).map_err(sqlite)?;
+        if let Some(why) = meta(&db, "damaged") {
+            return Err(StoreError::Corrupt(why));
+        }
+        // A store made before the flag was is taken as closed cleanly.
+        if meta(&db, "clean").as_deref() == Some("0") {
+            let check: String = db
+                .query_row("PRAGMA quick_check", [], |r| r.get(0))
+                .map_err(sqlite)?;
+            if check != "ok" {
+                return Err(StoreError::Corrupt(check));
+            }
+        }
+        set_meta(&db, "clean", "0").map_err(sqlite)?;
         let assets = path.parent().map(|d| d.join("assets"));
         Ok(Self {
             db,
@@ -204,6 +253,7 @@ impl SqliteStore {
         self.backup = Some(std::thread::spawn(move || {
             // A failed backup is tried again at the next open or the next day.
             let _ = folder::back_up(&path);
+            folder::check_weekly(&path, folder::unix_now());
         }));
     }
 
@@ -860,6 +910,63 @@ mod tests {
         drop(ws);
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn a_store_not_closed_cleanly_is_checked_and_a_damaged_one_refused() {
+        // NFR-76: a session that did not close leaves `clean` at 0, and the
+        // next open runs `quick_check`; a damaged store is refused, `corrupt`.
+        let dir = temp_dir("damage");
+        let mut ws = create_folder(&dir, "Порча").expect("create");
+        note(&mut ws, "Заметка");
+        drop(ws);
+        let store = dir.join("store.sqlite");
+        let raw = || Connection::open(&store).expect("raw");
+        assert_eq!(
+            meta(&raw(), "clean").as_deref(),
+            Some("1"),
+            "closed cleanly"
+        );
+        // As after a crash: checked, whole, opened.
+        set_meta(&raw(), "clean", "0").expect("crash");
+        let ws = open_folder(&dir).expect("whole after a crash");
+        assert_eq!(meta(&raw(), "clean").as_deref(), Some("0"), "open now");
+        drop(ws);
+        // Every page but the first spoilt, as by a failing disk.
+        set_meta(&raw(), "clean", "0").expect("crash");
+        let mut bytes = std::fs::read(&store).expect("bytes");
+        let page = 4096.min(bytes.len());
+        for b in &mut bytes[page..] {
+            *b = 0xAB;
+        }
+        std::fs::write(&store, bytes).expect("spoil");
+        let e = open_folder(&dir).expect_err("damaged");
+        assert_eq!(e.code(), Some("corrupt"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_weekly_check_keeps_its_date_and_a_store_it_marked_is_refused() {
+        let dir = temp_dir("weekly");
+        drop(create_folder(&dir, "Неделя").expect("create"));
+        let store = dir.join("store.sqlite");
+        let raw = || Connection::open(&store).expect("raw");
+        let now = 1_762_600_000_000;
+        folder::check_weekly(&store, now);
+        assert_eq!(meta(&raw(), "checked"), Some(now.to_string()));
+        // Within the week: not again.
+        folder::check_weekly(&store, now + folder::CHECK_EVERY - 1);
+        assert_eq!(meta(&raw(), "checked"), Some(now.to_string()));
+        // Marked damaged: refused at the next open, a copy is offered.
+        set_meta(
+            &raw(),
+            "damaged",
+            "*** in database main *** Page 7: btreeInitPage() returns error code 11",
+        )
+        .expect("mark");
+        let e = open_folder(&dir).expect_err("marked");
+        assert_eq!(e.code(), Some("corrupt"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

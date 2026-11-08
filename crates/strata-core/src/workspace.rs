@@ -225,12 +225,14 @@ pub enum CoreError {
 impl CoreError {
     /// What the interface words in its own way: `locked` — the folder is
     /// open in another process (10 §3.6); `damaged` — a copy that cannot be
-    /// restored (§3.5); `depends` — later changes stand on the changeset a
-    /// revert would take back (§9.3).
+    /// restored (§3.5); `corrupt` — the workspace's own store is damaged
+    /// (NFR-76); `depends` — later changes stand on the changeset a revert
+    /// would take back (§9.3).
     pub fn code(&self) -> Option<&'static str> {
         match self {
             CoreError::Store(StoreError::Locked(_)) => Some("locked"),
             CoreError::Store(StoreError::Damaged(_)) => Some("damaged"),
+            CoreError::Store(StoreError::Corrupt(_)) => Some("corrupt"),
             CoreError::Depends(_) => Some("depends"),
             _ => None,
         }

@@ -2492,6 +2492,54 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Первая');
   });
 
+  test('a damaged store is not opened and offers its copies (NFR-76)', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Порча');
+    await createNode(page, 600, 400, 'Уцелевшая');
+    await settled(page);
+    // Its tab closed and the workspace opened again: today's copy.
+    const close = page.getByRole('button', { name: 'Закрыть «Порча»' });
+    await close.click();
+    await openCard(page);
+    await close.click();
+    await expect(page.locator('.home-card')).toHaveCount(1);
+    // The store's bytes spoilt, as by a failing disk.
+    await page.evaluate(async () => {
+      const db = await new Promise<IDBDatabase>((ok, fail) => {
+        const r = indexedDB.open('strata');
+        r.onsuccess = () => ok(r.result);
+        r.onerror = () => fail(r.error);
+      });
+      const t = db.transaction('kv', 'readwrite');
+      const kv = t.objectStore('kv');
+      const keys = await new Promise<IDBValidKey[]>((ok) => {
+        const r = kv.getAllKeys();
+        r.onsuccess = () => ok(r.result);
+      });
+      const key = keys.find((k) => String(k).startsWith('ws:'));
+      if (key === undefined) throw new Error('no store');
+      kv.put(new TextEncoder().encode('not a store'), key);
+      await new Promise((done) => {
+        t.oncomplete = done;
+      });
+      db.close();
+    });
+    // Not opened: said so, and the copies are a button away.
+    await page.locator('.home-open').click();
+    await expect(page.locator('.home-error')).toHaveText(
+      'Не получилось: хранилище пространства повреждено',
+    );
+    await page
+      .locator('.home-error-line')
+      .getByRole('button', { name: 'Восстановить из копии…' })
+      .click();
+    const dialog = page.getByRole('dialog', { name: 'Восстановить «Порча»' });
+    await expect(dialog.getByRole('option')).toHaveCount(1);
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Уцелевшая']);
+  });
+
   test('a workspace comes back from a copy, and the restore can be taken back (10 §3.5)', async ({
     page,
   }) => {

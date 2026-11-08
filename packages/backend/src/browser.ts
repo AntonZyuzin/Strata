@@ -296,12 +296,23 @@ export async function browserHome(
     current = { id: entry.id, core };
     return { workspace: entry, root: core.root() };
   };
-  /** Workspace `id` from the shelf; `backUp` — opened: today's copy first (10 §3.5). */
+  /**
+   * Workspace `id` from the shelf; `backUp` — opened: today's copy too (10
+   * §3.5), of bytes that open. Bytes that do not are a damaged store, not
+   * copied (NFR-76): `corrupt`, and the home offers a copy.
+   */
   const load = async (id: string, backUp = false): Promise<WasmCore> => {
     const bytes = await shelf.get(ws(id));
     if (!bytes) throw new CoreError(`no workspace ${id} in this browser`, true);
+    let core: WasmCore;
+    try {
+      core = WasmCore.open(bytes);
+    } catch (e) {
+      const why = e instanceof Error ? e.message : String(e);
+      throw new CoreError(`the workspace's store is damaged: ${why}`, false, 'corrupt');
+    }
     if (backUp) await backUpToday(id, bytes);
-    return WasmCore.open(bytes);
+    return core;
   };
 
   const core = new Core((json) =>

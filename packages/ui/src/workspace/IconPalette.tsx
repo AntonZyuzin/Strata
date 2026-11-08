@@ -14,6 +14,7 @@ import type { IconName } from '../icons/Icon';
 import { pointerMoved } from '../pointer';
 import type { MenuSearch } from '../proto/menu';
 import { IconButton } from '../TabBar';
+import { emojiIn, withoutEmoji } from './emoji';
 import { rowMove } from './iconGrid';
 import { carriesPicture, droppedPicture, OWN_ICON, parseOwnIcon } from './ownIcons';
 
@@ -30,11 +31,18 @@ const SIZES: readonly (NodeSize | null)[] = [null, 's', 'm', 'l', 'xl'];
 
 const NONE: readonly string[] = [];
 
-/** A cell of the grid: the icon it gives — one's own or a preset's reference — and the preset. */
+/**
+ * A cell of the grid: the icon it gives — one's own or a preset's
+ * reference — and the preset; or an emoji of the query, for «Своя иконка».
+ */
 interface Cell {
   value: string;
   preset?: IconPreset;
+  emoji?: string;
 }
+
+/** The grid's groups, in their order: each from a row of its own. */
+type GroupId = 'emoji' | 'own' | 'presets';
 
 /**
  * The icon and size palette `Z` (06 §2, 07 §6.3, ☑ Q-07-21): the presets
@@ -78,6 +86,8 @@ export function IconPalette(props: {
   onSize: (size: NodeSize | null) => void;
   /** One's own icon: a picture from the disk, or null — restyle the one the node has. */
   onOwn: (file: File | null) => void;
+  /** One's own icon of an emoji of the query (07 §6.4): drawn by the system's font. */
+  onEmoji: (emoji: string) => void;
   onClose: () => void;
 }) {
   const { locale, presets, search } = props;
@@ -111,39 +121,51 @@ export function IconPalette(props: {
     return { terms, owner };
   }, [icons]);
 
+  // The presets are found by the query's words; its emoji are cells of their own.
+  const text = useMemo(() => withoutEmoji(query).trim(), [query]);
   useEffect(() => {
-    const q = query.trim();
-    if (q === '') return;
+    if (text === '') return;
     let live = true;
-    void search.rank(q, words.terms, words.terms.length).then((ranked) => {
+    void search.rank(text, words.terms, words.terms.length).then((ranked) => {
       if (!live) return;
       const order: number[] = [];
       for (const r of ranked) {
         const k = words.owner[r.index];
         if (k !== undefined && !order.includes(k)) order.push(k);
       }
-      setFound({ query, order });
+      setFound({ query: text, order });
     });
     return () => {
       live = false;
     };
-  }, [query, search, words]);
+  }, [text, search, words]);
 
   const shown = useMemo(() => {
     if (query.trim() === '') return icons.map((_, k) => k);
-    return found?.query === query ? found.order : [];
-  }, [query, found, icons]);
+    // Only emoji asked for: no presets under them.
+    if (text === '') return [];
+    return found?.query === text ? found.order : [];
+  }, [query, text, found, icons]);
 
-  // One's own icons have no words: a query finds presets only.
+  // One's own icons have no words: a query finds presets only, and the
+  // emoji it holds (07 §6.4).
   const own = query.trim() === '' ? props.own : NONE;
-  const cells = useMemo<Cell[]>(() => {
-    const out: Cell[] = own.map((value) => ({ value }));
+  const emoji = useMemo(() => emojiIn(query), [query]);
+  const groups = useMemo(() => {
+    const out: { id: GroupId; cells: Cell[] }[] = [];
+    if (emoji.length > 0) {
+      out.push({ id: 'emoji', cells: emoji.map((e) => ({ value: `emoji:${e}`, emoji: e })) });
+    }
+    if (own.length > 0) out.push({ id: 'own', cells: own.map((value) => ({ value })) });
+    const presets: Cell[] = [];
     for (const k of shown) {
       const preset = icons[k];
-      if (preset) out.push({ value: `${PRESET}${preset.id}`, preset });
+      if (preset) presets.push({ value: `${PRESET}${preset.id}`, preset });
     }
+    if (presets.length > 0) out.push({ id: 'presets', cells: presets });
     return out;
-  }, [own, shown, icons]);
+  }, [emoji, own, shown, icons]);
+  const cells = useMemo(() => groups.flatMap((g) => g.cells), [groups]);
 
   const { ownMask } = props;
   useEffect(() => {
@@ -190,8 +212,9 @@ export function IconPalette(props: {
   }, [at]);
 
   const authorOf = (id: string) => presets?.authors[id.split('/')[0] ?? '']?.name ?? '';
-  /** What a cell says: a preset's name and author, or one's own icon's style. */
+  /** What a cell says: a preset's name and author, one's own icon's style, an emoji. */
   const lineOf = (c: Cell) => {
+    if (c.emoji) return t(locale, 'icons.emojiCell', { emoji: c.emoji });
     if (c.preset) {
       const id = c.preset.id;
       return t(locale, 'icons.by', { name: iconName(locale, id), author: authorOf(id) });
@@ -201,7 +224,12 @@ export function IconPalette(props: {
   };
   const current = cells[at];
   const line = current ? lineOf(current) : '';
-  const groups = own.length > 0 ? [own.length, cells.length - own.length] : [cells.length];
+  const sizes = groups.map((g) => g.cells.length);
+  /** A cell given: an icon to the nodes, or an emoji into «Своя иконка». */
+  const pick = (c: Cell, forKind: boolean) => {
+    if (c.emoji) props.onEmoji(c.emoji);
+    else props.onPick(c.value, forKind);
+  };
 
   const onKey = (e: React.KeyboardEvent) => {
     const go = (i: number) => {
@@ -216,19 +244,19 @@ export function IconPalette(props: {
         go(at - 1);
         break;
       case 'ArrowDown':
-        go(rowMove(groups, at, 1));
+        go(rowMove(sizes, at, 1));
         break;
       case 'ArrowUp':
-        go(rowMove(groups, at, -1));
+        go(rowMove(sizes, at, -1));
         break;
       case 'PageDown':
-        go(rowMove(groups, at, PAGE));
+        go(rowMove(sizes, at, PAGE));
         break;
       case 'PageUp':
-        go(rowMove(groups, at, -PAGE));
+        go(rowMove(sizes, at, -PAGE));
         break;
       case 'Enter':
-        if (current) props.onPick(current.value, e.ctrlKey || e.metaKey);
+        if (current) pick(current, e.ctrlKey || e.metaKey);
         break;
       case 'Escape':
         props.onClose();
@@ -263,7 +291,8 @@ export function IconPalette(props: {
         aria-selected={i === at}
         aria-label={c.preset ? iconName(locale, c.preset.id) : says}
         data-icon={c.preset?.id}
-        data-own={c.preset ? undefined : c.value}
+        data-own={c.preset || c.emoji ? undefined : c.value}
+        data-emoji={c.emoji}
         className={cls.join(' ')}
         title={says}
         onPointerMove={(e) => {
@@ -272,10 +301,14 @@ export function IconPalette(props: {
         onPointerDown={(e) => {
           // The query keeps the keys.
           e.preventDefault();
-          props.onPick(c.value, e.ctrlKey || e.metaKey);
+          pick(c, e.ctrlKey || e.metaKey);
         }}
       >
-        {c.preset ? (
+        {c.emoji ? (
+          <span className="icon-emoji" aria-hidden="true">
+            {c.emoji}
+          </span>
+        ) : c.preset ? (
           <svg viewBox="0 0 512 512" aria-hidden="true">
             <path d={c.preset.d} />
           </svg>
@@ -384,26 +417,21 @@ export function IconPalette(props: {
           </fieldset>
         </div>
         <div ref={grid} className="icon-grid" role="listbox" aria-label={t(locale, 'icons.grid')}>
-          {own.length > 0 ? (
-            // Two groups under their names; one group needs none (owner, 2026-10-24).
-            <>
-              <fieldset className="icon-group">
-                <legend className="icon-group-name">{t(locale, 'icons.group.own')}</legend>
-                <div className="icon-cells">
-                  {cells.slice(0, own.length).map((c, i) => cellView(c, i))}
-                </div>
-              </fieldset>
-              <fieldset className="icon-group">
-                <legend className="icon-group-name">{t(locale, 'icons.group.presets')}</legend>
-                <div className="icon-cells">
-                  {cells.slice(own.length).map((c, i) => cellView(c, own.length + i))}
-                </div>
-              </fieldset>
-            </>
+          {groups.length > 1 ? (
+            // The groups under their names; one group needs none (owner, 2026-10-24).
+            groups.map((g, k) => {
+              const from = sizes.slice(0, k).reduce((a, b) => a + b, 0);
+              return (
+                <fieldset key={g.id} className="icon-group" data-group={g.id}>
+                  <legend className="icon-group-name">{t(locale, `icons.group.${g.id}`)}</legend>
+                  <div className="icon-cells">{g.cells.map((c, i) => cellView(c, from + i))}</div>
+                </fieldset>
+              );
+            })
           ) : (
             <div className="icon-cells">{cells.map((c, i) => cellView(c, i))}</div>
           )}
-          {presets && cells.length === 0 && (query.trim() === '' || found?.query === query) ? (
+          {presets && cells.length === 0 && (query.trim() === '' || found?.query === text) ? (
             <div className="tab-menu-empty icon-none">{t(locale, 'icons.none')}</div>
           ) : null}
         </div>

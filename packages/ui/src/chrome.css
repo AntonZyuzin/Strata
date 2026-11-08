@@ -1450,6 +1450,14 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
+/* An emoji of the query (07 §6.4): the system's colour glyph, a source for
+   «Своя иконка» — the bubble takes it monochrome. */
+.icon-emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: calc(var(--icon-cell) * 0.6);
+  line-height: 1;
+}
+
 /* One's own icon: its mask in the cell's ink, as the Scene tints it (07 §6.6). */
 .icon-own-mask {
   width: 70%;

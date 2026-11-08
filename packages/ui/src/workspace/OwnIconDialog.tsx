@@ -240,8 +240,9 @@ export function OwnIconDialog(props: {
   /**
    * The style, and the picture as the eraser left it — its background baked
    * into the alpha, for the style's `alpha` background; null — untouched.
+   * `forKind` (`Ctrl`): the kind's icon of the workspace (05 §4.1).
    */
-  onDone: (style: StyleParams, baked: Pixels | null) => void;
+  onDone: (style: StyleParams, baked: Pixels | null, forKind: boolean) => void;
   /** Another file chosen from the disk; the style chosen so far stays. */
   onAnother: (file: File, style: StyleParams) => void;
   onCancel: () => void;
@@ -267,14 +268,14 @@ export function OwnIconDialog(props: {
     () => foreground(picture.px, 40, shown.style.background !== 'alpha', eraser.erased).weight,
     [picture.px, shown, eraser],
   );
-  const finish = () => {
+  const finish = (forKind: boolean) => {
     if (!eraser.any) {
-      props.onDone(style, null);
+      props.onDone(style, null, forKind);
       return;
     }
     // What the eraser took, and the background as the style found it, into the alpha.
     const weight = foreground(picture.px, 40, style.background !== 'alpha', eraser.erased).weight;
-    props.onDone({ ...style, background: 'alpha' }, cutout(picture.px, weight));
+    props.onDone({ ...style, background: 'alpha' }, cutout(picture.px, weight), forKind);
   };
   const stroke = (phase: 'begin' | 'move' | 'end', x: number, y: number) => {
     if (phase === 'begin') eraser.begin(x, y);
@@ -313,13 +314,17 @@ export function OwnIconDialog(props: {
           } else if (e.key === 'Escape') {
             e.preventDefault();
             props.onCancel();
+          } else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+            // For the whole kind, wherever the focus is: a button takes no Ctrl+Enter.
+            e.preventDefault();
+            finish(true);
           } else if (
             e.key === 'Enter' &&
             !(e.target instanceof HTMLButtonElement) &&
             !(e.target instanceof HTMLInputElement && e.target.type === 'checkbox')
           ) {
             e.preventDefault();
-            finish();
+            finish(e.ctrlKey || e.metaKey);
           }
         }}
       >
@@ -463,7 +468,12 @@ export function OwnIconDialog(props: {
             <button type="button" onClick={props.onCancel}>
               {t(locale, 'own.cancel')}
             </button>
-            <button ref={done} type="button" className="is-default" onClick={finish}>
+            <button
+              ref={done}
+              type="button"
+              className="is-default"
+              onClick={(e) => finish(e.ctrlKey || e.metaKey)}
+            >
               {t(locale, 'own.done')}
             </button>
           </div>

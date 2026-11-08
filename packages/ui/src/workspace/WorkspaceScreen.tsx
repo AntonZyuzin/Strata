@@ -113,6 +113,7 @@ import { DeleteDialog } from './DeleteDialog';
 import { CoreDocs } from './docs';
 import { dueWord } from './due';
 import { ExternalList } from './ExternalList';
+import { drawEmoji } from './emoji';
 import { canvasFind, FindBar, type FindTarget, mapFind } from './FindBar';
 import { geckoEvents } from './gecko';
 import { HelpWindow } from './HelpWindow';
@@ -2374,6 +2375,24 @@ export function WorkspaceScreen(props: {
       () => toast('own.unreadable', { name: file.name }),
     );
 
+  /**
+   * «Своя иконка» with an emoji (07 §6.4): drawn by the system's font, it is
+   * the original, so it looks the same on every device afterwards.
+   */
+  const ownFromEmoji = (ids: string[], emoji: string) => {
+    const px = drawEmoji(emoji);
+    void encodePng(px)
+      .then((bytes) =>
+        setOwnPick({
+          ids,
+          original: { file: new File([bytes as BlobPart], `${emoji}.png`, { type: 'image/png' }) },
+          picture: { px, name: emoji, seq: ++ownSeq.current },
+          style: DEFAULT_STYLE,
+        }),
+      )
+      .catch(failed);
+  };
+
   /** «Своя иконка» for the nodes' own icon `ref`: its original from the store, its style. */
   const ownRestyle = (ids: string[], ref: string) => {
     const own = parseOwnIcon(ref);
@@ -4069,6 +4088,12 @@ export function WorkspaceScreen(props: {
             if (file) void ownFromFile(ids, file, parseOwnIcon(current)?.style ?? DEFAULT_STYLE);
             else if (current) ownRestyle(ids, current);
           }}
+          onEmoji={(emoji) => {
+            const ids = iconPick.ids;
+            setIconPick(null);
+            focusCanvas();
+            ownFromEmoji(ids, emoji);
+          }}
           onSize={(size) => {
             setIconPick(null);
             setSize(iconPick.ids, size);
@@ -4148,7 +4173,7 @@ export function WorkspaceScreen(props: {
           locale={locale}
           picture={ownPick.picture}
           style={ownPick.style}
-          onDone={(style, baked) => {
+          onDone={(style, baked, forKind) => {
             const pick = ownPick;
             setOwnPick(null);
             focusCanvas();
@@ -4159,7 +4184,13 @@ export function WorkspaceScreen(props: {
               : 'file' in original
                 ? original.file.arrayBuffer().then((b) => core.putAsset(new Uint8Array(b)))
                 : Promise.resolve(original.sha);
-            void stored.then((sha) => setIcon(pick.ids, ownIconRef(sha, style))).catch(failed);
+            void stored
+              .then((sha) => {
+                const ref = ownIconRef(sha, style);
+                if (forKind) setKindIcon(pick.ids, ref);
+                else setIcon(pick.ids, ref);
+              })
+              .catch(failed);
           }}
           onAnother={(file, style) => void ownFromFile(ownPick.ids, file, style)}
           onCancel={() => {

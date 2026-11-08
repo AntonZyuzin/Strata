@@ -4449,6 +4449,61 @@ test.describe('a workspace on the core', () => {
     await expect.poll(() => shows(map)).toBe('preset');
   });
 
+  test("Z: an emoji of the query becomes one's own icon; `Ctrl+Enter` in «Своя иконка» gives it to the kind (07 §6.4, S10 steps 1, 5)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Эмодзи');
+    await createNode(page, 460, 300, 'Карта');
+    await createNode(page, 760, 420, 'План');
+    const [map, plan] = [await idOf(page, 'Карта'), await idOf(page, 'План')];
+    await select(page, 'Карта');
+    await page.keyboard.press('KeyZ');
+    const palette = page.locator('.icon-palette');
+    // An emoji typed or picked from the system's panel: a cell of its own, first under the keys.
+    await page.keyboard.insertText('сова 🦉');
+    const owl = palette.locator('.icon-cell[data-emoji="🦉"]');
+    await expect(owl).toHaveCount(1);
+    await expect(owl).toHaveClass(/is-current/);
+    await expect(palette.locator('.icon-palette-by')).toHaveText('🦉 · эмодзи системы');
+    // With a preset found by the words too, each group has its name.
+    await expect(palette.locator('.icon-group-name')).toHaveText(['Эмодзи', 'Пресеты']);
+    await page.keyboard.press('Enter');
+    await expect(palette).toHaveCount(0);
+    const dialog = page.locator('.own-icon-dialog');
+    await expect(dialog.locator('.own-original')).toHaveAttribute('title', '🦉');
+    expect((await iconState(page, map)).core).toBeNull();
+    // `Ctrl+Enter`: the picture of the emoji is the kind's icon; every note shows it.
+    await page.keyboard.press('Control+Enter');
+    await expect(dialog).toHaveCount(0);
+    const kinds = () =>
+      page.evaluate(async () => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        return (await ws.core.view(ws.net())).kind_icons ?? {};
+      });
+    await expect
+      .poll(async () => (await kinds()).note ?? '')
+      .toMatch(/^asset\/[0-9a-f]{64}\/engraving$/);
+    const ref = (await kinds()).note ?? '';
+    // Stored as a picture: a PNG, the same on every device.
+    const head = await page.evaluate(
+      async (sha) => [...(await (window.__strataWs as WsHook).core.asset(sha)).slice(0, 4)],
+      ref.split('/')[1] ?? '',
+    );
+    expect(head).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    for (const id of [map, plan]) {
+      await expect
+        .poll(() => iconState(page, id))
+        .toEqual({ shows: 'own', icon: null, core: null });
+    }
+    // The palette offers it among «Свои».
+    await select(page, 'План');
+    await page.keyboard.press('KeyZ');
+    await expect(palette.locator(`.icon-cell[data-own="${ref}"]`)).toHaveClass(/is-chosen/);
+  });
+
   test("Z: «Свои» — the workspace's own icons first; a picture dropped on the palette (07 §6.4–6.5)", async ({
     page,
   }) => {

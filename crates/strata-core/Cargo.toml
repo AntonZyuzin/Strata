@@ -43,5 +43,10 @@ html5gum = { version = "0.8", optional = true }
 url = { version = "2.5", optional = true }
 encoding_rs = { version = "0.8", optional = true }
 
+[dev-dependencies]
+# The format corpus (NFR-78) reads its facts back exactly: a float parsed
+# without it may land one ulp away from the one written.
+serde_json = { workspace = true, features = ["float_roundtrip"] }
+
 [lints]
 workspace = true

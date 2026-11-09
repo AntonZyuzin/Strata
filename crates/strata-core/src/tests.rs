@@ -7,6 +7,7 @@ mod import;
 mod journal;
 mod paths;
 mod props;
+mod reconcile;
 
 fn ws() -> Workspace<MemoryStore> {
     let mut w = Workspace::create(MemoryStore::default(), "Корень").expect("create");

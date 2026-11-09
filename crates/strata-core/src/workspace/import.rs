@@ -75,7 +75,8 @@ pub struct ImportCounts {
 /// (`import.item.<code>`) and its detail.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImportItem {
-    /// `ghost`, `ambiguous`, `unsupported`, `renamed`, `property`, `canvas`, `skipped`.
+    /// `fixed`, `ghost`, `ambiguous`, `unsupported`, `renamed`, `property`,
+    /// `canvas`, `skipped`.
     pub section: String,
     /// `info`, `warn` or `error`: icons, never red (07).
     pub severity: String,
@@ -956,6 +957,50 @@ impl<S: Store> Workspace<S> {
                 _ => report.counts.notes += 1,
             }
         }
+
+        // 05 §14 on what the import leaves (NFR-77, 10 §8.5): its keys on
+        // this shadow, and the fixes found there written with them — one
+        // value a key, in the batch of its node — so undoing the import
+        // takes them back too. The report names each.
+        let mut writes = writes;
+        self.apply_in_memory(
+            writes
+                .iter()
+                .filter(|w| w.doc.starts_with("index/"))
+                .map(|w| (w.doc.clone(), w.map.clone(), w.key.clone(), w.after.clone()))
+                .collect(),
+        )?;
+        let (fixes, fixed) = self.reconcile_in_memory()?;
+        let folder_of: HashMap<NodeId, &String> = folders.iter().map(|(p, id)| (*id, p)).collect();
+        let name = |id: &str| {
+            NodeId::parse(id)
+                .ok()
+                .filter(|&n| self.kind(n).is_some())
+                .map_or_else(|| id.to_owned(), |n| self.name(n))
+        };
+        for f in &fixed {
+            let n = NodeId::parse(&f.node).ok();
+            let path = n
+                .and_then(|n| paths.get(&n).or_else(|| folder_of.get(&n).copied()))
+                .cloned()
+                .unwrap_or_default();
+            let detail = match &f.net {
+                Some(net) => format!("{} → {}", name(&f.node), name(net)),
+                None => name(&f.node),
+            };
+            let code = match f.fix {
+                "cycle" => "fixCycle",
+                "canvas" => "fixCanvas",
+                "trash" => "fixTrash",
+                "wire" => "fixWire",
+                _ => "fixRoot",
+            };
+            match n.filter(|&n| self.alive(n)) {
+                Some(n) => report.at(n, "fixed", "warn", &path, code, detail),
+                None => report.add("fixed", "warn", &path, code, detail),
+            }
+        }
+        writes.extend(fixes);
 
         // Batches (13 §3.3): the networks and what the canvases bring first,
         // then the files network by network, `BATCH_FILES` a batch.

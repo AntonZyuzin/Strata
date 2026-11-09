@@ -11,7 +11,7 @@
 
 use super::{Result, Store, Val, Workspace, invalid, read};
 use loro::LoroValue;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use strata_model::{NodeId, NodeKind, PlacementKey};
 
 /// What a step to the trash does (05 §5): the nodes that go, the placements
@@ -221,6 +221,41 @@ impl<S: Store> Workspace<S> {
         Ok(out)
     }
 
+    /// The placements a restore of `back` would bring back that close a
+    /// cycle in the nesting (05 §14 rule 5): on each cycle, the newest of
+    /// those it brings back — what lives keeps its own. `(net, child)`.
+    pub(super) fn restore_cuts(&self, back: &[NodeId]) -> HashSet<(NodeId, NodeId)> {
+        if !back
+            .iter()
+            .any(|&m| self.kind(m).is_some_and(NodeKind::has_canvas))
+        {
+            return HashSet::new();
+        }
+        let c = self.census();
+        let coming: HashSet<NodeId> = back.iter().copied().collect();
+        let nest = |n: NodeId| c.canvas(n) && (c.alive(n) || coming.contains(&n));
+        let mut kids: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+        let mut since: HashMap<(NodeId, NodeId), i64> = HashMap::new();
+        for (child, placed) in self.placements_every() {
+            if !nest(child) {
+                continue;
+            }
+            for (net, at) in placed {
+                if nest(net) {
+                    kids.entry(net).or_default().push(child);
+                    since.insert((net, child), at);
+                }
+            }
+        }
+        let back_in = |net: NodeId, child: NodeId| coming.contains(&net) || coming.contains(&child);
+        super::reconcile::cycle_cuts(kids, |net, child| {
+            let at = since.get(&(net, child)).copied();
+            (back_in(net, child), at, net, child)
+        })
+        .into_iter()
+        .collect()
+    }
+
     /// What the trash takes with `ids` (05 §5, ☑ Q-05-6): a node inside the
     /// networks that go, whose every placement is in them, goes too; a node
     /// placed elsewhere as well only loses its placements in them, and its
@@ -282,7 +317,8 @@ impl<S: Store> Workspace<S> {
     }
 }
 
-fn placed_at(v: &LoroValue) -> i64 {
+/// When a placement was made, from its value (`{ at }`); 0 when it does not say.
+pub(super) fn placed_at(v: &LoroValue) -> i64 {
     Val::from_loro(v)
         .and_then(|v| v.get("at").and_then(Val::as_i64))
         .unwrap_or(0)
@@ -371,7 +407,9 @@ impl<S: Store> Workspace<S> {
         }
     }
 
-    /// The nodes that went to the trash in the same step as `n`, `n` among them.
+    /// The nodes that went to the trash in the same step as `n` and lie
+    /// there still, `n` among them. A batch's mark left on a node out of the
+    /// trash — a revert key by key can leave one (10 §9.3) — takes nothing.
     pub(super) fn trashed_with(&self, n: NodeId) -> Vec<NodeId> {
         let batch = self
             .field(n, "trashBatch")
@@ -386,7 +424,9 @@ impl<S: Store> Workspace<S> {
             };
             for (id, v) in m.iter() {
                 let same = Val::from_loro(v).is_some_and(|v| v.as_str() == Some(batch.as_str()));
-                if let (true, Ok(m)) = (same, NodeId::parse(id)) {
+                if let (true, Ok(m)) = (same, NodeId::parse(id))
+                    && self.field(m, "trashedAt").is_some()
+                {
                     out.push(m);
                 }
             }

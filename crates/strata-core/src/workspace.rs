@@ -31,6 +31,7 @@ mod links;
 mod paths;
 mod places;
 mod purge;
+mod reconcile;
 mod refs;
 mod structure;
 
@@ -42,6 +43,7 @@ pub use journal::{Journal, JournalEntry, JournalKind, JournalRef, UNDO_DEPTH};
 pub use links::{LinkTarget, LinkTargets};
 pub use paths::{PathHit, PathMissing, PathText, Resolved, escape_segment, parse_path, path_text};
 pub use purge::TRASH_DAYS;
+pub use reconcile::Reconciled;
 
 /// Version of the documents' layout (10 §13).
 pub const SCHEMA: i64 = 1;
@@ -985,8 +987,7 @@ impl<S: Store> Workspace<S> {
     }
 
     fn kind(&self, node: NodeId) -> Option<NodeKind> {
-        let v = self.field(node, "kind")?;
-        serde_json::from_value(serde_json::Value::String(v.as_str()?.to_owned())).ok()
+        structure::kind_of(self.field(node, "kind")?)
     }
 
     fn alive(&self, node: NodeId) -> bool {
@@ -1612,6 +1613,15 @@ impl<S: Store> Workspace<S> {
                         }
                     }
                     let root = self.root;
+                    // What comes back yields to what lives (05 §14 rule 5):
+                    // a placement the restore would bring back and that
+                    // closes a cycle — a node left the trash on its own and
+                    // took in the network around it since — stays out.
+                    let cut = self.restore_cuts(&back);
+                    for &(net, child) in &cut {
+                        let key = PlacementKey::new(net, child).to_text();
+                        put(&self.index_doc(child), "placement", &key, None);
+                    }
                     for &m in &back {
                         let index = self.index_doc(m);
                         let key = m.to_text();
@@ -1637,7 +1647,8 @@ impl<S: Store> Workspace<S> {
                                 None,
                             );
                         }
-                        nets.retain(|&net| canvas(net));
+                        let kept = |net: NodeId| canvas(net) && !cut.contains(&(net, m));
+                        nets.retain(|&net| kept(net));
                         // Its networks all gone — in the trash and not coming
                         // back with it, or purged: it comes back to the root,
                         // which is its primary then (05 §11, 10 §10.3).
@@ -1645,12 +1656,12 @@ impl<S: Store> Workspace<S> {
                             self.alive(*net) || back.contains(net) || ov.made_in.contains_key(net)
                         };
                         let lies = nets.iter().any(live);
-                        if lies && primary.is_some_and(|p| !canvas(p)) {
+                        if lies && primary.is_some_and(|p| !kept(p)) {
                             let oldest = self
                                 .placements_of(m)
                                 .into_iter()
                                 .map(|(net, _)| net)
-                                .find(|&net| canvas(net))
+                                .find(|&net| kept(net))
                                 .or_else(|| nets.iter().copied().find(live));
                             if let Some(oldest) = oldest {
                                 put(&index, "primaryNet", &key, Some(Val::str(oldest.to_text())));
@@ -1954,7 +1965,74 @@ impl<S: Store> Workspace<S> {
             })
         });
         self.keep_purged(cs, &mut plan, &mut skipped);
+        self.unmade_wires(&mut plan);
         Ok((plan, skipped))
+    }
+
+    /// A node a revert unmakes — its kind goes, as an undone creation's —
+    /// takes along the wires its own text made since (05 §8.2 rule 4): a
+    /// note typed into after it was made links from it, and a wire from no
+    /// node breaks 05 §14 rule 6. A wire with another origin stays and the
+    /// revert is refused as a later change standing on it (10 §9.3); a
+    /// wire to it from another text turns into a ghost after the revert
+    /// (`links_after`, 05 §8.5). The revert keeps what it takes, so the
+    /// revert of it brings the wires back.
+    fn unmade_wires(&self, plan: &mut Vec<KeyWrite>) {
+        let unmade: HashSet<&str> = plan
+            .iter()
+            .filter(|w| w.doc.starts_with("index/") && w.map == "kind" && w.before.is_none())
+            .map(|w| w.key.as_str())
+            .collect();
+        if unmade.is_empty() {
+            return;
+        }
+        let planned: HashSet<(&str, &str, &str)> = plan
+            .iter()
+            .map(|w| (w.doc.as_str(), w.map.as_str(), w.key.as_str()))
+            .collect();
+        let mut more = Vec::new();
+        for id in &unmade {
+            let Ok(n) = NodeId::parse(id) else { continue };
+            // A wire lives in the shard of its `from` (10 §2.3).
+            let doc = self.index_doc(n);
+            let Some(shard) = self.docs.get(&doc) else {
+                continue;
+            };
+            let LoroValue::Map(edges) = shard.get_map("edge").get_value() else {
+                continue;
+            };
+            for (edge, v) in edges.iter() {
+                let from = Val::from_loro(v)
+                    .and_then(|v| v.get("from").and_then(Val::as_str).map(str::to_owned));
+                let text = format!("{edge}|text");
+                if from.as_deref() != Some(*id) || read(shard, "edgeOrigin", &text).is_none() {
+                    continue;
+                }
+                let others = links::ORIGINS
+                    .iter()
+                    .filter(|&&o| o != "text")
+                    .any(|o| read(shard, "edgeOrigin", &format!("{edge}|{o}")).is_some());
+                let mut keys = vec![("edgeOrigin", text.as_str())];
+                if !others {
+                    keys.extend([("edgeLabel", edge.as_str()), ("edge", edge.as_str())]);
+                }
+                for (map, key) in keys {
+                    if planned.contains(&(doc.as_str(), map, key)) {
+                        continue;
+                    }
+                    if let Some(now) = read(shard, map, key) {
+                        more.push(KeyWrite {
+                            doc: doc.clone(),
+                            map: map.to_owned(),
+                            key: key.to_owned(),
+                            before: None,
+                            after: Some(now),
+                        });
+                    }
+                }
+            }
+        }
+        plan.extend(more);
     }
 
     /// `plan` of reverting `cs` written as a changeset that reverts it, of

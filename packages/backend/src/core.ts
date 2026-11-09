@@ -295,8 +295,9 @@ export interface ImportCounts {
   skipped: number;
 }
 
-/** The sections of the report (13 §3.6), in their order. */
+/** The sections of the report (13 §3.6), in their order: what the core fixed first (NFR-77). */
 export const IMPORT_SECTIONS = [
+  'fixed',
   'ghost',
   'ambiguous',
   'unsupported',

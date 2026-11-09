@@ -3,17 +3,19 @@
 //! and redo, and the trash's purge (10 §10.4). After every step the invariants hold, and a refused step leaves
 //! the workspace as it was (a changeset is all or nothing, NFR-71).
 //!
-//! Merges are not here yet: the core reconciles the invariants after a merge
-//! with the sync of stage 2 (10 §8.5), and the merges come with it.
+//! Merges are not here yet: they come with the sync of stage 2. What a merge
+//! could break is made at the key level instead, and the reconcile of 10
+//! §8.5 (NFR-77) must leave none of it broken.
 //!
 //! `STRATA_PROPS=<n>` sets how many scenarios run, `STRATA_PROPS_SEED=<s>`
 //! the first seed; a failure names the seed and the steps that led to it.
 //! CI runs NFR-124's 10 000 in release; plain `cargo test` runs a few.
 
 use super::{Editor, create, text_of, ws};
+use crate::value::Val;
 use crate::{Label, MemoryStore, Op, Workspace};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use strata_model::{NodeId, NodeKind};
+use strata_model::{EdgeKey, NodeId, NodeKind};
 
 /// Scenarios of a plain `cargo test`; CI asks for 10 000 (NFR-124).
 const DEFAULT_SCENARIOS: u64 = 60;
@@ -120,8 +122,16 @@ impl Model {
     }
 }
 
-/// 05 §14 on what the workspace holds now.
-fn check(w: &mut Workspace<MemoryStore>, m: &mut Model) -> Result<(), String> {
+/// 05 §14 on what the workspace holds now; rule 7 when `texts` — a break
+/// made at the key level can leave a text whose link has no wire, which
+/// only saving the text mends.
+fn check_rules(w: &mut Workspace<MemoryStore>, m: &mut Model, texts: bool) -> Result<(), String> {
+    // What the core finds broken itself (`strata doctor`, 11 §4.1): rules
+    // 3, 5 and 6 on the keys, a hidden wire too.
+    let broken = w.broken_rules();
+    if !broken.is_empty() {
+        return Err(format!("broken: {broken:?}"));
+    }
     let root = w.root();
     let tree = w.tree();
     let trash = w.trash();
@@ -240,6 +250,9 @@ fn check(w: &mut Workspace<MemoryStore>, m: &mut Model) -> Result<(), String> {
         }
     }
     // Rule 7: a note's `[[X]]` to a live node is its wire to it.
+    if !texts {
+        return Ok(());
+    }
     let named: BTreeMap<&str, &str> = tree
         .iter()
         .map(|i| (i.name.as_str(), i.id.as_str()))
@@ -453,40 +466,223 @@ fn env_u64(key: &str, default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// A few nodes to start from: a folder with a note, a task in the root.
+fn start() -> (Workspace<MemoryStore>, Model) {
+    let mut w = ws();
+    let mut m = Model::default();
+    let root = w.root();
+    let folder = create(&mut w, &root, NodeKind::Network, "Папка");
+    let note = create(&mut w, &folder, NodeKind::Note, "Заметка");
+    let task = create(&mut w, &root, NodeKind::Task, "Задача");
+    m.ids.extend([folder, note, task]);
+    (w, m)
+}
+
+/// A scenario failed: its seed, why, and the steps that led there.
+fn fail(seed: u64, e: &str, log: &[String]) -> ! {
+    panic!(
+        "seed {seed}: {e}\nsteps:\n{}",
+        log.iter()
+            .enumerate()
+            .map(|(i, l)| format!("{:>3}. {l}", i + 1))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+}
+
+/// One random step, then the rules (rule 7 when `texts`); a refused step
+/// that changed the workspace fails too (NFR-71).
+fn step_checked(
+    w: &mut Workspace<MemoryStore>,
+    m: &mut Model,
+    rng: &mut Rng,
+    texts: bool,
+    log: &mut Vec<String>,
+) -> Result<(), String> {
+    let line = step(w, m, rng);
+    let broken = line.contains("REFUSED BUT CHANGED");
+    log.push(line);
+    check_rules(w, m, texts)?;
+    if broken {
+        return Err("a refused step changed the workspace (NFR-71)".into());
+    }
+    Ok(())
+}
+
 #[test]
 fn random_steps_keep_the_invariants_of_05_14() {
     let scenarios = env_u64("STRATA_PROPS", DEFAULT_SCENARIOS);
     let first = env_u64("STRATA_PROPS_SEED", 1);
     for seed in first..first + scenarios {
         let mut rng = Rng(seed);
-        let mut w = ws();
-        let mut m = Model::default();
-        // A few nodes to start from: a folder with a note, a task in the root.
-        let root = w.root();
-        let folder = create(&mut w, &root, NodeKind::Network, "Папка");
-        let note = create(&mut w, &folder, NodeKind::Note, "Заметка");
-        let task = create(&mut w, &root, NodeKind::Task, "Задача");
-        m.ids.extend([folder, note, task]);
+        let (mut w, mut m) = start();
         let mut log = Vec::new();
         for _ in 0..STEPS {
-            let line = step(&mut w, &mut m, &mut rng);
-            let broken = line.contains("REFUSED BUT CHANGED");
-            log.push(line);
-            if let Err(e) = check(&mut w, &mut m).and_then(|()| {
-                if broken {
-                    Err("a refused step changed the workspace (NFR-71)".into())
-                } else {
-                    Ok(())
-                }
-            }) {
-                panic!(
-                    "seed {seed}: {e}\nsteps:\n{}",
-                    log.iter()
-                        .enumerate()
-                        .map(|(i, l)| format!("{:>3}. {l}", i + 1))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                );
+            if let Err(e) = step_checked(&mut w, &mut m, &mut rng, true, &mut log) {
+                fail(seed, &e, &log);
+            }
+        }
+    }
+}
+
+/// The tests' clock (`super::ws`): placements made around it.
+const T: i64 = 1_760_000_000_000;
+
+/// One random break at the key level, the rules aside — what a bug of an
+/// import or a migration could leave (NFR-77): a line of the report.
+fn corrupt(w: &mut Workspace<MemoryStore>, rng: &mut Rng) -> String {
+    let tree = w.tree();
+    let root = w.root();
+    let trash: Vec<String> = w.trash().into_iter().map(|t| t.id).collect();
+    let live: Vec<String> = tree
+        .iter()
+        .filter(|i| i.id != root)
+        .map(|i| i.id.clone())
+        .collect();
+    let any: Vec<String> = tree
+        .iter()
+        .map(|i| i.id.clone())
+        .chain(trash.iter().cloned())
+        .collect();
+    let at = T + rng.below(1000) as i64 - 500;
+    let placed = |at: i64| Some(Val::map([("at", Val::Int(at))]));
+    let edge = |a: &str, b: &str| {
+        let id = |s: &str| NodeId::parse(s).expect("an id");
+        EdgeKey::between(id(a), id(b)).to_text()
+    };
+    let wire = |from: &str, to: &str| {
+        Some(Val::map([
+            ("from", Val::str(from.to_owned())),
+            ("to", Val::str(to.to_owned())),
+        ]))
+    };
+    let done = match rng.below(8) {
+        0 => {
+            // A placement goes.
+            let Some(item) = rng.pick(&tree.iter().filter(|i| i.id != root).collect::<Vec<_>>())
+            else {
+                return "corrupt: nothing placed".into();
+            };
+            let places: Vec<String> = item.parent.iter().chain(&item.appears).cloned().collect();
+            let Some(net) = rng.pick(&places) else {
+                return "corrupt: nowhere".into();
+            };
+            let id = &item.id;
+            w.set_raw(id, "placement", &format!("{net}/{id}"), None)
+                .map(|()| format!("corrupt: {id} out of {net}"))
+        }
+        1 => {
+            // Any node placed in any node: itself, the root, one in the trash.
+            let (Some(id), Some(net)) = (rng.pick(&any), rng.pick(&any)) else {
+                return "corrupt: no node".into();
+            };
+            w.set_raw(&id, "placement", &format!("{net}/{id}"), placed(at))
+                .map(|()| format!("corrupt: {id} placed in {net} at {at}"))
+        }
+        2 => {
+            // A node to the trash alone, the root too, a batch of its own.
+            let Some(id) = rng.pick(&any) else {
+                return "corrupt: no node".into();
+            };
+            w.set_raw(&id, "trashedAt", &id, Some(Val::Int(T)))
+                .and_then(|()| {
+                    let batch = Val::str(NodeId::new().to_text());
+                    w.set_raw(&id, "trashBatch", &id, Some(batch))
+                })
+                .map(|()| format!("corrupt: {id} to the trash alone"))
+        }
+        3 => {
+            // A node out of the trash alone.
+            let Some(id) = rng.pick(&trash) else {
+                return "corrupt: an empty trash".into();
+            };
+            w.set_raw(&id, "trashedAt", &id, None)
+                .and_then(|()| w.set_raw(&id, "trashBatch", &id, None))
+                .map(|()| format!("corrupt: {id} out of the trash alone"))
+        }
+        4 => {
+            // A wire to an id that is no node.
+            let Some(from) = rng.pick(&live) else {
+                return "corrupt: no node".into();
+            };
+            let to = NodeId::new().to_text();
+            let key = edge(&from, &to);
+            w.set_raw(&from, "edge", &key, wire(&from, &to))
+                .and_then(|()| {
+                    let origin = Some(Val::map([("at", Val::Int(at))]));
+                    w.set_raw(&from, "edgeOrigin", &format!("{key}|manual"), origin)
+                })
+                .map(|()| format!("corrupt: a wire {from} → {to}, no node"))
+        }
+        5 => {
+            // A wire of one node to itself.
+            let Some(id) = rng.pick(&live) else {
+                return "corrupt: no node".into();
+            };
+            w.set_raw(&id, "edge", &edge(&id, &id), wire(&id, &id))
+                .map(|()| format!("corrupt: a wire {id} → itself"))
+        }
+        6 => {
+            // A node's kind goes, and the node with it.
+            let Some(id) = rng.pick(&live) else {
+                return "corrupt: no node".into();
+            };
+            w.set_raw(&id, "kind", &id, None)
+                .map(|()| format!("corrupt: {id} has no kind"))
+        }
+        _ => {
+            // A primary that names any node.
+            let (Some(id), Some(net)) = (rng.pick(&live), rng.pick(&any)) else {
+                return "corrupt: no node".into();
+            };
+            w.set_raw(&id, "primaryNet", &id, Some(Val::str(net.clone())))
+                .map(|()| format!("corrupt: {id}'s primary is {net}"))
+        }
+    };
+    done.unwrap_or_else(|e| format!("corrupt: FAILED ({e})"))
+}
+
+#[test]
+fn a_broken_structure_is_reconciled_and_stays_whole() {
+    // NFR-77: whatever breaks rules 3, 5 and 6 at the key level, the
+    // reconcile leaves none broken (10 §8.5), and the workspace takes any
+    // step after it with the rules kept.
+    let scenarios = env_u64("STRATA_PROPS", DEFAULT_SCENARIOS);
+    let first = env_u64("STRATA_PROPS_SEED", 1);
+    for seed in first..first + scenarios {
+        let mut rng = Rng(seed ^ 0x5EED_0077);
+        let (mut w, mut m) = start();
+        let mut log = Vec::new();
+        for _ in 0..STEPS / 2 {
+            log.push(step(&mut w, &mut m, &mut rng));
+        }
+        for _ in 0..1 + rng.below(4) {
+            log.push(corrupt(&mut w, &mut rng));
+        }
+        // A session of its own, as after a migration: no undo from before.
+        let mut w = Workspace::open(w.into_store()).expect("open again");
+        w.set_clock(|| T);
+        match w.reconcile() {
+            Ok(fixed) => log.push(format!(
+                "reconcile: {}",
+                fixed.iter().map(|f| f.fix).collect::<Vec<_>>().join(", ")
+            )),
+            Err(e) => fail(seed, &format!("the reconcile failed: {e}"), &log),
+        }
+        let broken = w.broken_rules();
+        if !broken.is_empty() {
+            fail(seed, &format!("still broken: {broken:?}"), &log);
+        }
+        if let Err(e) = check_rules(&mut w, &mut m, false) {
+            fail(seed, &e, &log);
+        }
+        for _ in 0..STEPS / 2 {
+            if let Err(e) = step_checked(&mut w, &mut m, &mut rng, false, &mut log) {
+                fail(seed, &e, &log);
+            }
+            let broken = w.broken_rules();
+            if !broken.is_empty() {
+                fail(seed, &format!("broken again: {broken:?}"), &log);
             }
         }
     }

@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Locator, Page } from '@playwright/test';
 import { expect, test } from './fixtures';
 import { box, chWidth, LAYOUTS, overflowing } from './helpers';
 
@@ -70,6 +70,8 @@ interface WsHook {
   } | null;
   net(): string;
   settled(): Promise<void>;
+  /** The next content window of this kind fails at its render (NFR-80). */
+  faultWindow(kind: 'note' | 'board' | 'asset'): void;
   /** The open board's scene (13 §2.8). */
   board?: {
     elements(): { type: string; text?: string; originalText?: string; link?: string }[];
@@ -205,6 +207,43 @@ async function createNode(page: Page, x: number, y: number, name: string) {
   await expect(page.locator('.tab-menu')).toHaveCount(0);
   await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', String(before + 1));
   await page.keyboard.press('Escape');
+}
+
+/**
+ * The WebGL context of the canvas (`2d`) or of the star map (`3d`) lost, as
+ * when the GPU driver resets, and given back (NFR-80).
+ */
+async function loseContext(page: Page, which: '2d' | '3d') {
+  await page.evaluate(async (which) => {
+    const c =
+      which === '2d'
+        ? (window.__strataWs?.view.canvas as HTMLCanvasElement)
+        : document.querySelector<HTMLCanvasElement>('canvas.proto-map');
+    const gl = c?.getContext('webgl2') ?? c?.getContext('webgl');
+    // A lost context hands out no extensions: the one that lost it restores it.
+    const ext = gl?.getExtension('WEBGL_lose_context');
+    if (!ext) throw new Error('no WEBGL_lose_context');
+    ext.loseContext();
+    await new Promise((done) => setTimeout(done, 200));
+    ext.restoreContext();
+  }, which);
+}
+
+/** What `canvas` shows once two pictures in a row are the same. */
+async function still(canvas: Locator): Promise<Buffer> {
+  let last = await canvas.screenshot();
+  await expect
+    .poll(
+      async () => {
+        const next = await canvas.screenshot();
+        const same = next.equals(last);
+        last = next;
+        return same;
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(true);
+  return last;
 }
 
 async function select(page: Page, name: string) {
@@ -870,6 +909,48 @@ for (const deviceScaleFactor of [1, 2]) {
     }
     const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
     for (const part of ['window', 'list', 'actions'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`a failed window's screen keeps its frame in RU and EN @${deviceScaleFactor}x (NFR-80)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    const name = 'Нода с очень длинным именем, которое не влезет в заголовок окна';
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 800, height: 500 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Сбои');
+      await createNode(page, 420, 300, name);
+      await select(page, name);
+      await page.evaluate(() => window.__strataWs?.faultWindow('note'));
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Enter');
+      const failed = page.locator('.window-failed');
+      await expect(failed).toBeVisible();
+      // It takes the focus the window would have had: `Enter` closes it.
+      await expect(failed.locator('.dialog-actions .is-default')).toBeFocused();
+      expect(await overflowing(page, '.window-failed'), `${locale} text must fit`).toEqual([]);
+      boxes.push({
+        window: await box(page, '.window-failed'),
+        text: await box(page, '.window-failed-text'),
+        actions: await box(page, '.window-failed .dialog-actions'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'text', 'actions'] as const) {
       for (const k of ['x', 'y', 'width', 'height'] as const) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
@@ -2490,6 +2571,90 @@ test.describe('a workspace on the core', () => {
     await win.getByRole('button', { name: 'Показать' }).click();
     await expect(win).toHaveCount(0);
     await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Первая');
+  });
+
+  test('a window that fails shows its own error, and the canvas works on (NFR-80)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Сбои');
+    await createNode(page, 420, 300, 'Черновик');
+    await select(page, 'Черновик');
+    // The note's window fails at its render, once.
+    await page.evaluate(() => window.__strataWs?.faultWindow('note'));
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    const failed = page.getByRole('alertdialog', { name: 'Черновик' });
+    // What happened, and the error itself in the tooltip, for a bug report.
+    await expect(failed).toHaveAccessibleDescription('Окно дало сбой');
+    await expect(failed.locator('.window-failed-text')).toHaveAttribute(
+      'title',
+      'a fault injected into the note window',
+    );
+    // The canvas, its keys and its core work on.
+    await failed.getByRole('button', { name: 'Закрыть' }).click();
+    await createNode(page, 700, 420, 'После сбоя');
+    expect((await graphNow(page)).names).toEqual(['После сбоя', 'Черновик']);
+    // «Повторить» mounts the window anew: it opens.
+    await page.evaluate(() => window.__strataWs?.faultWindow('note'));
+    await select(page, 'Черновик');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await failed.getByRole('button', { name: 'Повторить' }).click();
+    await expect(page.locator('.note-window .cm-content')).toBeVisible();
+  });
+
+  test('the canvas draws again after its WebGL context is lost and restored (NFR-80)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Контекст');
+    await createNode(page, 500, 320, 'Первая');
+    await createNode(page, 700, 420, 'Вторая');
+    await settled(page);
+    // The gecko walks on its own over the canvas: out of the picture compared.
+    await page.addStyleTag({ content: '[data-gecko-layer] { visibility: hidden }' });
+    const canvas = page.locator('.proto-canvas canvas').first();
+    const before = await still(canvas);
+    await loseContext(page, '2d');
+    // The same scene drawn again.
+    await expect
+      .poll(async () => (await canvas.screenshot()).equals(before), { timeout: 10_000 })
+      .toBe(true);
+    // And it goes on: a node made after it is drawn.
+    await createNode(page, 600, 240, 'Третья');
+    expect((await graphNow(page)).names).toEqual(['Вторая', 'Первая', 'Третья']);
+  });
+
+  test('the star map draws again after its WebGL context is lost and restored (NFR-80)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    await createNode(page, 500, 320, 'Первая');
+    await createNode(page, 700, 420, 'Вторая');
+    await settled(page);
+    const ws = page.locator('.workspace');
+    const toggle = page.getByRole('button', { name: 'Холст или звёздная карта (M)' });
+    await toggle.click();
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
+    await page.addStyleTag({ content: '[data-gecko-layer] { visibility: hidden }' });
+    const map = page.locator('canvas.proto-map');
+    const before = await still(map);
+    await loseContext(page, '3d');
+    // Said, and the same scene drawn again (08 §7.4).
+    await expect(
+      page.locator('.toast', { hasText: 'Звёздная карта перезапускается: сбой графики' }),
+    ).toBeVisible();
+    await expect
+      .poll(async () => (await map.screenshot()).equals(before), { timeout: 10_000 })
+      .toBe(true);
+    // And it goes on: back to the canvas.
+    await toggle.click();
+    await expect(ws).toHaveAttribute('data-view', '2d', { timeout: 30_000 });
   });
 
   test('a damaged store is not opened and offers its copies (NFR-76)', async ({ page }) => {

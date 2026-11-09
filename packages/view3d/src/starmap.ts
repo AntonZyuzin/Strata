@@ -52,6 +52,13 @@ export interface StarMapOptions {
   /** Device pixel ratio, as Pixi's resolution (08 §7.1). */
   dpr: number;
   bloom: boolean;
+  /**
+   * The WebGL context is lost (08 §7.4, NFR-80): a driver reset, the GPU
+   * taken back by the system. three.js asks the browser for it again.
+   */
+  onLost?: () => void;
+  /** It is back and three.js holds it anew: a frame drawn now shows the scene. */
+  onRestored?: () => void;
 }
 
 /** Star diameters in world units: S, M, L of 06 §4.2. */
@@ -358,6 +365,9 @@ function quadCorners(): BufferAttribute {
 export class StarMap {
   readonly renderer: WebGLRenderer;
   readonly camera: PerspectiveCamera;
+  private readonly canvas: HTMLCanvasElement;
+  private readonly lost: () => void;
+  private readonly restored: () => void;
   private readonly scene = new Scene();
   private readonly bloomScene = new Scene();
   private readonly quadScene = new Scene();
@@ -408,9 +418,19 @@ export class StarMap {
       powerPreference: 'high-performance',
     });
     this.renderer.setPixelRatio(opts.dpr);
-    this.renderer.setClearColor(hex(fog.scene.bg), 1);
-    // Draw calls of several passes per frame are counted together (NFR-11).
-    this.renderer.info.autoReset = false;
+    this.setUp();
+    // After the renderer's own handlers: on restore three.js has made its
+    // state anew and uploads the scene's buffers and textures again at the
+    // next frame, from the copies it keeps in memory (08 §7.4); what it
+    // made anew with defaults is set again.
+    this.canvas = opts.canvas;
+    this.lost = () => opts.onLost?.();
+    this.restored = () => {
+      this.setUp();
+      opts.onRestored?.();
+    };
+    this.canvas.addEventListener('webglcontextlost', this.lost);
+    this.canvas.addEventListener('webglcontextrestored', this.restored);
     this.camera = new PerspectiveCamera(60, 1, 1, 1e6);
 
     const bg = new Color(hex(fog.scene.bg));
@@ -1041,6 +1061,13 @@ export class StarMap {
     this.links = null;
   }
 
+  /** What the renderer holds per context: set at the start and on restore. */
+  private setUp(): void {
+    this.renderer.setClearColor(hex(fog.scene.bg), 1);
+    // Draw calls of several passes per frame are counted together (NFR-11).
+    this.renderer.info.autoReset = false;
+  }
+
   dispose(): void {
     this.setSnapshot(null);
     this.clear();
@@ -1059,6 +1086,9 @@ export class StarMap {
     }
     this.quad.geometry.dispose();
     if (this.targets) for (const t of this.targets) t.dispose();
+    // The loss forced below is the map's end, not a failure to report.
+    this.canvas.removeEventListener('webglcontextlost', this.lost);
+    this.canvas.removeEventListener('webglcontextrestored', this.restored);
     this.renderer.dispose();
     // `dispose` frees the buffers but not the context, which would live
     // until the canvas is collected: a map is made again with every network

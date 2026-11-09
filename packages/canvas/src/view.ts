@@ -167,6 +167,9 @@ export class CanvasView {
       view.invalidate();
     });
     view.resizer.observe(host);
+    // A lost WebGL context comes back (NFR-80): Pixi makes its GPU
+    // resources anew from their sources, the frame is drawn again.
+    app.canvas.addEventListener('webglcontextrestored', () => view.invalidate());
     return view;
   }
 

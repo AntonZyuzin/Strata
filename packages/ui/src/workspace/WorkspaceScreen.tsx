@@ -155,6 +155,7 @@ import {
   pathText,
   samePath,
 } from './paths';
+import { WindowGuard, windowFaults } from './WindowGuard';
 
 /**
  * A workspace on the canvas (milestone 1A, 16 §4.7): its networks from the
@@ -1731,6 +1732,8 @@ export function WorkspaceScreen(props: {
           view: v,
           graph: () => graph.current,
           editor: () => editor.current,
+          // NFR-80: the next window of this kind fails once at its render.
+          faultWindow: (kind: string) => windowFaults.add(kind),
           core,
           net: () => netRef.current,
           map: () => map3d.current,
@@ -4314,64 +4317,86 @@ export function WorkspaceScreen(props: {
         />
       ) : null}
       {board ? (
-        <BoardWindow
+        <WindowGuard
           key={`board:${board.id}`}
           locale={locale}
-          name={nameOf(board.id)}
-          doc={board.doc}
-          ids={{ workspace: opened.workspace.id, board: board.id }}
-          mode={board.mode}
-          dock={dock}
-          onMode={(step) => setWindowMode('board', step)}
-          onLocate={() => locateWindow('board', board.id)}
-          onDock={dockWidth}
-          onChange={() => undefined}
-          onFocus={setBoardFocus}
-          onReady={(handle) => {
-            // For e2e: the scene of the open board.
-            const hook = (window as unknown as { __strataWs?: Record<string, unknown> }).__strataWs;
-            if (hook) hook.board = handle;
-          }}
+          kind="board"
+          title={nameOf(board.id)}
           onClose={() => closeWindow('board')}
-        />
+        >
+          <BoardWindow
+            locale={locale}
+            name={nameOf(board.id)}
+            doc={board.doc}
+            ids={{ workspace: opened.workspace.id, board: board.id }}
+            mode={board.mode}
+            dock={dock}
+            onMode={(step) => setWindowMode('board', step)}
+            onLocate={() => locateWindow('board', board.id)}
+            onDock={dockWidth}
+            onChange={() => undefined}
+            onFocus={setBoardFocus}
+            onReady={(handle) => {
+              // For e2e: the scene of the open board.
+              const hook = (window as unknown as { __strataWs?: Record<string, unknown> })
+                .__strataWs;
+              if (hook) hook.board = handle;
+            }}
+            onClose={() => closeWindow('board')}
+          />
+        </WindowGuard>
       ) : null}
       {viewer ? (
-        <AssetWindow
+        <WindowGuard
           key={`viewer:${viewer.id}`}
           locale={locale}
-          name={nameOf(viewer.id)}
-          type={viewer.type}
-          url={viewer.url}
-          file={viewer.file}
-          at={viewer.at}
-          mode={viewer.mode}
-          dock={dock}
-          panel={details !== null}
-          onMode={(step) => setWindowMode('viewer', step)}
-          onLocate={() => locateWindow('viewer', viewer.id)}
-          onDock={dockWidth}
-          onFocus={setViewerFocus}
-          onEscape={() => escapeWindow('viewer')}
+          kind="asset"
+          title={nameOf(viewer.id)}
           onClose={() => closeWindow('viewer')}
-        />
+        >
+          <AssetWindow
+            locale={locale}
+            name={nameOf(viewer.id)}
+            type={viewer.type}
+            url={viewer.url}
+            file={viewer.file}
+            at={viewer.at}
+            mode={viewer.mode}
+            dock={dock}
+            panel={details !== null}
+            onMode={(step) => setWindowMode('viewer', step)}
+            onLocate={() => locateWindow('viewer', viewer.id)}
+            onDock={dockWidth}
+            onFocus={setViewerFocus}
+            onEscape={() => escapeWindow('viewer')}
+            onClose={() => closeWindow('viewer')}
+          />
+        </WindowGuard>
       ) : null}
       {note ? (
-        <NoteWindow
+        <WindowGuard
           key={`note:${note.id}`}
           locale={locale}
-          name={nameOf(note.id)}
-          doc={note.doc}
-          at={note.at}
-          mode={note.mode}
-          dock={dock}
-          panel={details !== null}
-          onMode={(step) => setWindowMode('note', step)}
-          onLocate={() => locateWindow('note', note.id)}
-          onDock={dockWidth}
-          onChange={() => undefined}
-          onEscape={() => escapeWindow('note')}
+          kind="note"
+          title={nameOf(note.id)}
           onClose={() => closeWindow('note')}
-        />
+        >
+          <NoteWindow
+            locale={locale}
+            name={nameOf(note.id)}
+            doc={note.doc}
+            at={note.at}
+            mode={note.mode}
+            dock={dock}
+            panel={details !== null}
+            onMode={(step) => setWindowMode('note', step)}
+            onLocate={() => locateWindow('note', note.id)}
+            onDock={dockWidth}
+            onChange={() => undefined}
+            onEscape={() => escapeWindow('note')}
+            onClose={() => closeWindow('note')}
+          />
+        </WindowGuard>
       ) : null}
       {name ? (
         <NameInput

@@ -2599,6 +2599,28 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   color: var(--st-color-attention);
 }
 
+/* A content window that failed (NFR-80): its error screen the width of a
+   dialog, centred over the canvas one sees — between «Ноды» and the panel
+   (06 §13.1); with no room there, over the panel rather than gone. The
+   line in the attention colour, as the Chrome's other failures. */
+.window-failed {
+  position: absolute;
+  z-index: 15;
+  top: calc(48 * var(--u));
+  left: calc(var(--canvas-l, 0px) + 8 * var(--u));
+  right: calc(var(--canvas-r, 0px) + 8 * var(--u));
+  width: 56ch;
+  max-width: max(32ch, calc(100% - var(--canvas-l, 0px) - var(--canvas-r, 0px) - 16 * var(--u)));
+  margin-inline: auto;
+}
+
+.window-failed-text {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-attention);
+}
+
 /* «История изменений» (06 §1.2): rows of when, who and what in a sunken
    list of a fixed height, the chosen one inverse as in the Tab menu, a
    changeset taken back grey; what «Откатить» came to on one line under it.

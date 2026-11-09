@@ -807,6 +807,14 @@ export class Map3D {
         canvas: this.canvas,
         dpr: window.devicePixelRatio,
         bloom: QUALITY[this.quality].bloom,
+        // A lost WebGL context (08 §7.4, NFR-80): said while the map is on
+        // screen, and the scene drawn again once three.js has it back.
+        onLost: () => {
+          if (this.state !== '2d') this.nav?.toast('map.restarting');
+        },
+        onRestored: () => {
+          if (this.state !== '2d') this.draw();
+        },
       });
       map.setHalos(QUALITY[this.quality].halos);
       return map;

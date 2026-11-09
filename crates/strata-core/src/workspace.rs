@@ -220,6 +220,11 @@ pub enum CoreError {
     /// change stands on what it takes away (10 §9.3); nothing was written.
     #[error("later changes stand on this one: {0}")]
     Depends(String),
+    /// A folder refused as the second place for copies (10 §3.5): its code
+    /// — `place-folder`, `place-workspace`, `place-inside`, `place-write`
+    /// — and why; nothing was chosen.
+    #[error("{1}")]
+    Place(&'static str, String),
 }
 
 impl CoreError {
@@ -227,13 +232,15 @@ impl CoreError {
     /// open in another process (10 §3.6); `damaged` — a copy that cannot be
     /// restored (§3.5); `corrupt` — the workspace's own store is damaged
     /// (NFR-76); `depends` — later changes stand on the changeset a revert
-    /// would take back (§9.3).
+    /// would take back (§9.3); `place-…` — a folder refused as the second
+    /// place for copies (§3.5).
     pub fn code(&self) -> Option<&'static str> {
         match self {
             CoreError::Store(StoreError::Locked(_)) => Some("locked"),
             CoreError::Store(StoreError::Damaged(_)) => Some("damaged"),
             CoreError::Store(StoreError::Corrupt(_)) => Some("corrupt"),
             CoreError::Depends(_) => Some("depends"),
+            CoreError::Place(code, _) => Some(code),
             _ => None,
         }
     }
@@ -929,6 +936,12 @@ impl<S: Store> Workspace<S> {
 
     pub fn store(&self) -> &S {
         &self.store
+    }
+
+    /// The store's own settings — where its copies go (10 §3.5). Its data
+    /// changes only through the workspace.
+    pub fn store_mut(&mut self) -> &mut S {
+        &mut self.store
     }
 
     /// The store back, to open the workspace again (tests, closing).

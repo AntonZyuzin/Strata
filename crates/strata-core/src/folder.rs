@@ -169,7 +169,7 @@ fn file(folder: &Path, id: &str) -> PathBuf {
 }
 
 /// Copies `ids` gone from `backups/`, with what SQLite may keep beside them.
-fn let_go(folder: &Path, ids: &[String]) {
+pub(crate) fn let_go(folder: &Path, ids: &[String]) {
     for id in ids {
         let main = file(folder, id);
         for side in ["", "-wal", "-shm"] {
@@ -208,38 +208,49 @@ fn damaged(e: impl std::fmt::Display) -> StoreError {
     StoreError::Damaged(e.to_string())
 }
 
+/// Copy `from` checked (`PRAGMA quick_check`) and written whole into the
+/// new file `to` with `VACUUM INTO`: a damaged copy writes nothing.
+pub(crate) fn vacuum_checked(from: &Path, to: &Path) -> Result<(), StoreError> {
+    if to.exists() {
+        std::fs::remove_file(to).map_err(io)?;
+    }
+    let db = rusqlite::Connection::open_with_flags(
+        from,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(damaged)?;
+    let check: String = db
+        .query_row("PRAGMA quick_check", [], |r| r.get(0))
+        .map_err(damaged)?;
+    if check != "ok" {
+        return Err(damaged(check));
+    }
+    if let Err(e) = db.execute("VACUUM INTO ?1", [to.to_string_lossy().as_ref()]) {
+        let _ = std::fs::remove_file(to);
+        return Err(damaged(e));
+    }
+    Ok(())
+}
+
 /// «Восстановить из копии» (10 §3.5): the folder's store becomes its copy
-/// `id`. The copy is checked and written whole beside the store first — a
-/// damaged one changes nothing. The store as it is — perhaps the damaged
-/// one — goes into a copy of its own byte for byte, `replaced-<ms>`, so a
-/// restore can be taken back the same way. Nobody may have the folder open:
-/// its `.lock` is taken for the while. The workspace the copy is of is the
-/// caller's to check (`sqlite::restore_folder`).
+/// `id`. See [`restore_from`].
 pub fn restore(folder: &Path, id: &str) -> Result<(), StoreError> {
-    let from = backup_path(folder, id)?;
+    restore_from(folder, &backup_path(folder, id)?)
+}
+
+/// The folder's store becomes the copy in file `from` — of its own
+/// `backups/` or of the second place's (`second.rs`). The copy is checked
+/// and written whole beside the store first — a damaged one changes
+/// nothing. The store as it is — perhaps the damaged one — goes into a
+/// copy of its own byte for byte, `replaced-<ms>`, so a restore can be
+/// taken back the same way. Nobody may have the folder open: its `.lock`
+/// is taken for the while. The workspace the copy is of is the caller's to
+/// check (`sqlite::restore_folder`).
+pub fn restore_from(folder: &Path, from: &Path) -> Result<(), StoreError> {
     let _lock = FolderLock::take(folder)?;
     let store = folder.join("store.sqlite");
     let next = folder.join(format!("store.sqlite{PART}"));
-    if next.exists() {
-        std::fs::remove_file(&next).map_err(io)?;
-    }
-    {
-        let db = rusqlite::Connection::open_with_flags(
-            &from,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )
-        .map_err(damaged)?;
-        let check: String = db
-            .query_row("PRAGMA quick_check", [], |r| r.get(0))
-            .map_err(damaged)?;
-        if check != "ok" {
-            return Err(damaged(check));
-        }
-        if let Err(e) = db.execute("VACUUM INTO ?1", [next.to_string_lossy().as_ref()]) {
-            let _ = std::fs::remove_file(&next);
-            return Err(damaged(e));
-        }
-    }
+    vacuum_checked(from, &next)?;
     let mut gone = Vec::new();
     if store.exists() {
         let plan = backups::add(&list(folder), BackupKind::Replaced, unix_ms());

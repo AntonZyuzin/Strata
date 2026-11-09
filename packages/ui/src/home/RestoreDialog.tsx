@@ -12,7 +12,8 @@ const pad = (n: number) => String(n).padStart(2, '0');
  */
 export function backupLabel(locale: Locale, b: Backup, date: DateFormat, clock: Clock): string {
   if (b.kind === 'day') {
-    return t(locale, 'home.backupDay', {
+    // The second place's copy says so (10 §3.5): the same day may have both.
+    return t(locale, b.second ? 'home.backupSecond' : 'home.backupDay', {
       date: formatDate(new Date(b.at).toISOString().slice(0, 10), date),
     });
   }
@@ -119,7 +120,7 @@ export function RestoreDialog(props: {
               const label = backupLabel(locale, b, props.date, props.clock);
               return (
                 <div
-                  key={b.id}
+                  key={b.second ? `second:${b.id}` : b.id}
                   id={`${ids}-${i}`}
                   role="option"
                   tabIndex={-1}

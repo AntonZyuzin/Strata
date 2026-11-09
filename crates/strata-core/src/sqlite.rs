@@ -11,6 +11,22 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// The copy of the store at `path` into the second place `place`. A place
+/// that is not there or refuses the write keeps nothing of this day: the
+/// folder has its copy, and the next day's copy catches the place up.
+fn mirror(path: &Path, place: &Path) {
+    let Some(folder) = path.parent() else {
+        return;
+    };
+    if let Err(e) = crate::second::mirror(folder, place) {
+        eprintln!(
+            "the second place {} took no copy of {}: {e}",
+            place.display(),
+            folder.display()
+        );
+    }
+}
+
 /// A file's SHA-256 as it lies on the disk, in hex: an asset's id (10 §11).
 pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
     use sha2::Digest;
@@ -73,6 +89,9 @@ pub struct SqliteStore {
     /// The backup under way, if any: the store closes after it, so a folder
     /// let go holds no half written snapshot.
     backup: Option<std::thread::JoinHandle<()>>,
+    /// The second place for copies (10 §3.5, NFR-73): the day's copy goes
+    /// there too, with the assets; none — only into the folder.
+    second: Option<PathBuf>,
     /// The folder's `.lock` (10 §3.6), held as long as the store is open.
     _lock: Option<FolderLock>,
 }
@@ -200,6 +219,7 @@ impl SqliteStore {
             path: Some(path.to_owned()),
             backed_up: folder::day_now(),
             backup: None,
+            second: None,
             _lock: lock,
         })
     }
@@ -227,6 +247,7 @@ impl SqliteStore {
             path: None,
             backed_up: folder::day_now(),
             backup: None,
+            second: None,
             _lock: None,
         })
     }
@@ -255,6 +276,7 @@ impl SqliteStore {
             path: None,
             backed_up: folder::day_now(),
             backup: None,
+            second: None,
             _lock: None,
         })
     }
@@ -269,11 +291,34 @@ impl SqliteStore {
         if let Some(before) = self.backup.take() {
             let _ = before.join();
         }
+        let second = self.second.clone();
         self.backup = Some(std::thread::spawn(move || {
             // A failed backup is tried again at the next open or the next day.
             let _ = folder::back_up(&path);
+            if let Some(place) = second {
+                mirror(&path, &place);
+            }
             folder::check_weekly(&path, folder::unix_now());
         }));
+    }
+
+    /// The second place for copies (10 §3.5, NFR-73): set, the day's copies
+    /// go there too from now on; none — only into the folder.
+    pub fn set_second_place(&mut self, place: Option<PathBuf>) {
+        self.second = place;
+    }
+
+    /// The newest copy and the assets into the second place now, on the
+    /// backup's thread: a place just chosen gets the open workspace's copy
+    /// without waiting for the next day.
+    pub fn mirror_now(&mut self) {
+        let (Some(path), Some(place)) = (self.path.clone(), self.second.clone()) else {
+            return;
+        };
+        if let Some(before) = self.backup.take() {
+            let _ = before.join();
+        }
+        self.backup = Some(std::thread::spawn(move || mirror(&path, &place)));
     }
 
     /// `assets/ab/cd/<sha256>` (10 §3.1).
@@ -691,9 +736,21 @@ pub fn folder_id(dir: &Path) -> Result<String> {
 
 /// A workspace folder: checks `strata.json` against the store.
 pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
+    open_folder_with(dir, None)
+}
+
+/// A workspace folder whose day's copies go to the second place `second`
+/// too (10 §3.5, NFR-73). A folder of copies is no workspace: refused.
+pub fn open_folder_with(dir: &Path, second: Option<&Path>) -> Result<Workspace<SqliteStore>> {
     let info: FolderInfo =
         serde_json::from_slice(&std::fs::read(dir.join("strata.json")).map_err(folder_err)?)
             .map_err(folder_err)?;
+    if info.mode == crate::second::MODE {
+        return Err(CoreError::Invalid(format!(
+            "{} is a folder of copies: restore a workspace from it",
+            dir.display()
+        )));
+    }
     if info.format_version > FORMAT_VERSION {
         return Err(CoreError::Invalid(format!(
             "the folder's format {} is newer than this app's {FORMAT_VERSION}",
@@ -701,6 +758,7 @@ pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
         )));
     }
     let mut store = SqliteStore::open(&dir.join("store.sqlite"))?;
+    store.set_second_place(second.map(Path::to_owned));
     // Today's backup before anything else touches the store (10 §3.5, §13).
     store.back_up_today();
     let mut ws = Workspace::open(store)?;
@@ -719,14 +777,19 @@ pub fn open_folder(dir: &Path) -> Result<Workspace<SqliteStore>> {
 /// `backup`. The copy is read as a workspace first: one that is not, or is
 /// another workspace's, is refused, and nothing changes.
 pub fn restore_folder(dir: &Path, backup: &str) -> Result<()> {
+    restore_folder_from(dir, &folder::backup_path(dir, backup)?)
+}
+
+/// The same from the copy in file `from` — the second place's (10 §3.5).
+pub fn restore_folder_from(dir: &Path, from: &Path) -> Result<()> {
     let id = folder_id(dir)?;
-    let copy = Workspace::open(SqliteStore::read(&folder::backup_path(dir, backup)?, None)?)
+    let copy = Workspace::open(SqliteStore::read(from, None)?)
         .map_err(|e| StoreError::Damaged(e.to_string()))?;
     if copy.id() != id {
         return Err(StoreError::Damaged(format!("a copy of workspace {}", copy.id())).into());
     }
     drop(copy);
-    folder::restore(dir, backup)?;
+    folder::restore_from(dir, from)?;
     Ok(())
 }
 

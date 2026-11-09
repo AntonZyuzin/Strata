@@ -1,9 +1,17 @@
 import type { HomeBackend, Opened } from '@strata/backend';
 import { t } from '@strata/i18n';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { checkUpdate, installUpdate, pickArchive, pickSavePath, type UpdateInfo } from './backend';
+import {
+  checkUpdate,
+  installUpdate,
+  pickArchive,
+  pickFolder,
+  pickSavePath,
+  type UpdateInfo,
+} from './backend';
 import { errorText } from './errors';
 import { download, HomeScreen } from './home/HomeScreen';
+import { SecondPlaceQuestion } from './home/SecondPlaceQuestion';
 import { type Prefs, reading } from './prefs';
 import { SettingsScreen } from './settings/SettingsScreen';
 import { type Tab, TabBar } from './TabBar';
@@ -96,6 +104,38 @@ export function Shell(props: {
     if (prefs.updates === 'ask') setAsking(true);
     else if (prefs.updates === 'check') check();
   }, [props.updates, prefs.updates, check]);
+
+  // The second place for copies (10 §3.5, ☑ Q-14-9): asked once, at the
+  // first start of a home that has one to choose — the desktop's.
+  const [placeAsk, setPlaceAsk] = useState(false);
+  const [placeBusy, setPlaceBusy] = useState(false);
+  const [placeError, setPlaceError] = useState<string | null>(null);
+  useEffect(() => {
+    let live = true;
+    void home.home().then((s) => {
+      if (live && home.setSecondPlace && s.secondPlace === null && s.secondOffered === false) {
+        setPlaceAsk(true);
+      }
+    });
+    return () => {
+      live = false;
+    };
+  }, [home]);
+  const choosePlace = async () => {
+    setPlaceBusy(true);
+    setPlaceError(null);
+    try {
+      const path = await pickFolder();
+      // Cancelled: the question stays.
+      if (!path || !home.setSecondPlace) return;
+      await home.setSecondPlace(path);
+      setPlaceAsk(false);
+    } catch (e) {
+      setPlaceError(errorText(locale, e));
+    } finally {
+      setPlaceBusy(false);
+    }
+  };
 
   useEffect(() => {
     try {
@@ -359,6 +399,18 @@ export function Shell(props: {
             setAsking(false);
             props.onPrefs({ ...prefs, updates: yes ? 'check' : 'never' });
             if (yes) check();
+          }}
+        />
+      ) : placeAsk ? (
+        // After the updates' question: one question at a time.
+        <SecondPlaceQuestion
+          locale={locale}
+          busy={placeBusy}
+          error={placeError}
+          onChoose={() => void choosePlace()}
+          onLater={() => {
+            setPlaceAsk(false);
+            void home.setSecondPlace?.(null).catch(() => undefined);
           }}
         />
       ) : offer ? (

@@ -1,6 +1,8 @@
 import type { HomeBackend } from '@strata/backend';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { useEffect, useRef, useState } from 'react';
+import { pickFolder } from '../backend';
+import { errorText } from '../errors';
 import { LocaleSwitch } from '../LocaleSwitch';
 import {
   CARD_MODES,
@@ -52,6 +54,10 @@ export function SettingsScreen(props: {
   }, []);
   const [saved, setSaved] = useState<string | null>(null);
   const [name, setName] = useState('');
+  /** The second place for copies (10 §3.5); undefined — none to choose here. */
+  const [place, setPlace] = useState<string | null | undefined>(undefined);
+  const [placeError, setPlaceError] = useState<string | null>(null);
+  const choose = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let live = true;
@@ -59,11 +65,27 @@ export function SettingsScreen(props: {
       if (!live) return;
       setSaved(s.profile.name);
       setName(s.profile.name);
+      setPlace(s.secondPlace);
     });
     return () => {
       live = false;
     };
   }, [home]);
+
+  /** «Выбрать…» — the system's folder picker; «Убрать» — none. */
+  const changePlace = async (pick: boolean) => {
+    if (!home.setSecondPlace) return;
+    setPlaceError(null);
+    try {
+      const path = pick ? await pickFolder() : null;
+      if (pick && !path) return;
+      setPlace((await home.setSecondPlace(path)).secondPlace);
+      // «Убрать» goes with the place: the focus stays in the window, on «Выбрать…».
+      if (!pick) choose.current?.focus();
+    } catch (e) {
+      setPlaceError(errorText(locale, e));
+    }
+  };
 
   const saveName = () => {
     const v = name.trim();
@@ -284,6 +306,43 @@ export function SettingsScreen(props: {
             ) : null}
           </dl>
         </section>
+        {place !== undefined && home.setSecondPlace ? (
+          <section className="ins-section settings-copies">
+            <h3 className="ins-heading">{t(locale, 'settings.copies')}</h3>
+            <dl className="ins-fields">
+              <dt className="ins-label" title={t(locale, 'settings.secondHint')}>
+                {t(locale, 'settings.second')}
+              </dt>
+              <dd className="ins-value">
+                <span
+                  className={place ? 'settings-place' : 'settings-place is-none'}
+                  title={place ?? t(locale, 'settings.secondHint')}
+                >
+                  {place ?? t(locale, 'settings.secondNone')}
+                </span>
+              </dd>
+            </dl>
+            <div className="settings-place-actions">
+              {place ? (
+                <button
+                  type="button"
+                  title={t(locale, 'settings.secondRemoveHint')}
+                  onClick={() => void changePlace(false)}
+                >
+                  {t(locale, 'settings.secondRemove')}
+                </button>
+              ) : null}
+              <button ref={choose} type="button" onClick={() => void changePlace(true)}>
+                {t(locale, 'settings.secondChoose')}
+              </button>
+            </div>
+            {placeError ? (
+              <p className="settings-place-error" role="alert" title={placeError}>
+                {placeError}
+              </p>
+            ) : null}
+          </section>
+        ) : null}
         <section className="ins-section">
           <button type="button" className="settings-about" onClick={props.onAbout}>
             {t(locale, 'home.about')}

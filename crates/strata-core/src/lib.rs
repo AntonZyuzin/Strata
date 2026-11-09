@@ -34,6 +34,8 @@ pub mod ops;
 #[cfg(feature = "net")]
 pub mod preview;
 #[cfg(feature = "sqlite")]
+pub mod second;
+#[cfg(feature = "sqlite")]
 pub mod sqlite;
 pub mod store;
 pub mod synth;

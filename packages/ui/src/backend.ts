@@ -3,7 +3,7 @@
  * the window, the home screen's backend and the folder picker.
  */
 
-import { type HomeBackend, type ImportEvent, jsonHome } from '@strata/backend';
+import { type HomeBackend, type HomeState, type ImportEvent, jsonHome } from '@strata/backend';
 
 export interface BuildInfo {
   core: string;
@@ -110,7 +110,39 @@ export async function openHome(): Promise<HomeBackend> {
   // Tests keep a small store in parts, as a large one is (`?shelfPart=bytes`).
   const part = Number(q.get('shelfPart')) || undefined;
   const shelf = await indexedDbShelf('strata', part);
-  return browserHome(shelf, undefined, pause);
+  const home = await browserHome(shelf, undefined, pause);
+  // Layout tests show the desktop's second place for copies (10 §3.5) in a
+  // browser: `?secondPlace`; `?pick=<path>` is the folder chosen.
+  return q.has('secondPlace') ? withSecondPlace(home) : home;
+}
+
+/**
+ * A browser home with a second place for copies, for the layout tests: the
+ * place lives in the page, and the day's copies stand for its copies too.
+ */
+function withSecondPlace(home: HomeBackend): HomeBackend {
+  let place: string | null = null;
+  let offered = false;
+  const state = async (): Promise<HomeState> => ({
+    ...(await home.home()),
+    secondPlace: place,
+    secondOffered: offered,
+  });
+  return {
+    ...home,
+    home: state,
+    setSecondPlace: async (path) => {
+      place = path;
+      offered = true;
+      return state();
+    },
+    backups: async (id) => {
+      const own = await home.backups(id);
+      const days = place ? own.filter((b) => b.kind === 'day') : [];
+      return [...own, ...days.map((b) => ({ ...b, second: true }))];
+    },
+    restore: (id, backup) => home.restore(id, backup),
+  };
 }
 
 /** «Импорт…» on desktop: an archive picked in the system dialog; null when cancelled. */
@@ -128,9 +160,12 @@ export async function pickSavePath(name: string): Promise<string | null> {
   return save({ defaultPath: name, filters: [{ name: 'Gexogon', extensions: ['zip'] }] });
 }
 
-/** «Открыть…» on desktop: the system folder picker; null when cancelled. */
+/**
+ * «Открыть…» on desktop: the system folder picker; null when cancelled. In
+ * a browser `?pick=<path>` stands for the folder chosen, for the layout tests.
+ */
 export async function pickFolder(): Promise<string | null> {
-  if (!isTauri()) return null;
+  if (!isTauri()) return new URLSearchParams(window.location.search).get('pick');
   const { open } = await import('@tauri-apps/plugin-dialog');
   const path = await open({ directory: true });
   return typeof path === 'string' ? path : null;

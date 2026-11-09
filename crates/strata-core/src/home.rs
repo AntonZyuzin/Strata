@@ -14,7 +14,7 @@
 //! folder synced by iCloud or Dropbox would have two cores writing one
 //! SQLite file (10 §3.6).
 
-use crate::sqlite::{SqliteStore, create_folder, import_folder, open_folder};
+use crate::sqlite::{SqliteStore, create_folder, import_folder, open_folder, open_folder_with};
 use crate::workspace::{CoreError, Result, Workspace};
 use crate::{Label, Op};
 use base64::Engine as _;
@@ -44,10 +44,17 @@ pub struct Profile {
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Saved {
     workspaces: Vec<Entry>,
     #[serde(default)]
     profile: Profile,
+    /// The second place for copies (10 §3.5, NFR-73): one a device.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    second_place: Option<PathBuf>,
+    /// The first start asked about it already (☑ Q-14-9): asked once.
+    #[serde(default)]
+    second_offered: bool,
 }
 
 #[derive(Debug)]
@@ -160,6 +167,105 @@ impl Home {
         self.save()
     }
 
+    /// The second place for copies (10 §3.5, NFR-73), if one is chosen.
+    pub fn second_place(&self) -> Option<&Path> {
+        self.saved.second_place.as_deref()
+    }
+
+    /// Whether the first start's question about the second place is answered.
+    pub fn second_offered(&self) -> bool {
+        self.saved.second_offered
+    }
+
+    /// «Второе место для копий» chosen, or none — «Не сейчас», «Убрать»;
+    /// either way the first start's question is answered. Not a folder
+    /// this device can write, a workspace's or copies' own folder, a
+    /// folder inside a workspace: refused.
+    pub fn set_second_place(&mut self, place: Option<PathBuf>) -> Result<()> {
+        if let Some(p) = &place {
+            self.check_place(p)?;
+        }
+        self.saved.second_place = place;
+        self.saved.second_offered = true;
+        self.save()
+    }
+
+    fn check_place(&self, place: &Path) -> Result<()> {
+        let refused = |code, why: String| CoreError::Place(code, why);
+        let real = place
+            .canonicalize()
+            .ok()
+            .filter(|p| p.is_dir())
+            .ok_or_else(|| refused("place-folder", format!("{} is no folder", place.display())))?;
+        if real.join("strata.json").exists() {
+            return Err(refused(
+                "place-workspace",
+                format!(
+                    "{} is a workspace's folder or a folder of copies",
+                    place.display()
+                ),
+            ));
+        }
+        for e in &self.saved.workspaces {
+            if e.path.canonicalize().is_ok_and(|w| real.starts_with(w)) {
+                return Err(refused(
+                    "place-inside",
+                    format!("{} lies inside the workspace «{}»", place.display(), e.name),
+                ));
+            }
+        }
+        // The copies must be writable there: a probe, at once gone.
+        let probe = real.join(".gexogon-probe");
+        std::fs::write(&probe, b"")
+            .map_err(|e| refused("place-write", format!("{}: {e}", place.display())))?;
+        let _ = std::fs::remove_file(&probe);
+        Ok(())
+    }
+
+    /// A workspace's store learns where its copies go (10 §3.5).
+    fn equip(&self, ws: &mut Workspace<SqliteStore>) {
+        ws.store_mut()
+            .set_second_place(self.saved.second_place.clone());
+    }
+
+    /// A folder of copies (10 §3.5): the workspace's name, as its newest
+    /// copy has it, and its copies; none — it holds no copy that opens.
+    pub fn copies(&self, dir: &Path) -> Result<(String, Vec<crate::backups::Backup>)> {
+        let backups = crate::second::list(dir);
+        let newest = backups
+            .first()
+            .ok_or_else(|| invalid(format!("{} holds no copy", dir.display())))?;
+        let file = crate::folder::backup_path(dir, &newest.id)?;
+        let ws = Workspace::open(SqliteStore::read(&file, None)?)
+            .map_err(|e| crate::StoreError::Damaged(e.to_string()))?;
+        Ok((ws.root_name(), backups))
+    }
+
+    /// A workspace back from a folder of copies (10 §3.5: its own folder is
+    /// gone): copy `backup` and the assets become a new folder in
+    /// `<data>/Workspaces`, with the workspace's id, opened.
+    pub fn restore_copies(
+        &mut self,
+        dir: &Path,
+        backup: &str,
+    ) -> Result<(Workspace<SqliteStore>, Entry)> {
+        let file = crate::folder::backup_path(dir, backup)?;
+        let name = Workspace::open(SqliteStore::read(&file, None)?)
+            .map_err(|e| crate::StoreError::Damaged(e.to_string()))?
+            .root_name();
+        let path = self.new_folder(&name);
+        let info = crate::second::restore_into(dir, backup, &path)?;
+        let ws = open_folder_with(&path, self.second_place())?;
+        if ws.id() != info.workspace_id {
+            return Err(
+                crate::StoreError::Damaged(format!("a copy of workspace {}", ws.id())).into(),
+            );
+        }
+        let entry = self.remember(&ws, &path, now_ms());
+        self.save()?;
+        Ok((ws, entry))
+    }
+
     fn entry(&self, id: &str) -> Result<&Entry> {
         self.saved
             .workspaces
@@ -188,7 +294,8 @@ impl Home {
             return Err(invalid("a workspace needs a name"));
         }
         let path = self.new_folder(name);
-        let ws = create_folder(&path, name)?;
+        let mut ws = create_folder(&path, name)?;
+        self.equip(&mut ws);
         let entry = self.remember(&ws, &path, now_ms());
         self.save()?;
         Ok((ws, entry))
@@ -197,7 +304,7 @@ impl Home {
     /// A workspace of the list, opened.
     pub fn open(&mut self, id: &str) -> Result<(Workspace<SqliteStore>, Entry)> {
         let path = self.entry(id)?.path.clone();
-        let ws = open_folder(&path)?;
+        let ws = open_folder_with(&path, self.second_place())?;
         if ws.id() != id {
             return Err(invalid(
                 "the folder now holds another workspace: open it with «Открыть…»",
@@ -226,7 +333,7 @@ impl Home {
     /// «Открыть пространство…» (10 §3.6): a folder of the user's choice, added
     /// to the list or, for a known workspace that moved, its new place.
     pub fn add(&mut self, path: &Path) -> Result<(Workspace<SqliteStore>, Entry)> {
-        let ws = open_folder(path)?;
+        let ws = open_folder_with(path, self.second_place())?;
         let entry = self.remember(&ws, path, now_ms());
         self.save()?;
         Ok((ws, entry))
@@ -243,7 +350,8 @@ impl Home {
             .iter()
             .any(|e| e.id == unpacked.info.workspace_id);
         let path = self.new_folder(&unpacked.info.name);
-        let ws = import_folder(&path, &unpacked, known)?;
+        let mut ws = import_folder(&path, &unpacked, known)?;
+        self.equip(&mut ws);
         let entry = self.remember(&ws, &path, now_ms());
         self.save()?;
         Ok((ws, entry))
@@ -296,6 +404,7 @@ impl Home {
     ) -> Result<(Workspace<SqliteStore>, Entry, ImportTask)> {
         let folder = self.new_folder(name);
         let mut ws = create_folder(&folder, name)?;
+        self.equip(&mut ws);
         let shadow = ws.import_start(None)?;
         let entry = self.remember(&ws, &folder, now_ms());
         self.save()?;
@@ -598,9 +707,22 @@ pub enum Request {
         id: String,
     },
     /// «Восстановить из копии» (10 §3.5): the workspace's store becomes its
-    /// copy `backup`; its tab closes first, and the workspace opens again.
+    /// copy `backup` — of its folder, or of the second place (`second`);
+    /// its tab closes first, and the workspace opens again.
     Restore {
         id: String,
+        backup: String,
+        #[serde(default)]
+        second: bool,
+    },
+    /// «Второе место для копий» (10 §3.5, NFR-73): a folder, or none.
+    SetSecondPlace {
+        path: Option<String>,
+    },
+    /// A workspace back from the folder of copies `path`: its copy
+    /// `backup` and the assets as a new workspace folder, opened.
+    RestoreCopies {
+        path: String,
         backup: String,
     },
     /// The archive at `path` as a new workspace, opened.
@@ -632,10 +754,15 @@ pub enum Request {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum Response {
+    #[serde(rename_all = "camelCase")]
     Home {
         workspaces: Vec<Entry>,
         profile: Profile,
         current: Option<String>,
+        /// The second place for copies (10 §3.5); none — not chosen.
+        second_place: Option<String>,
+        /// The first start's question about it is answered.
+        second_offered: bool,
     },
     /// A workspace is open: the canvas starts at its root network.
     Opened {
@@ -646,6 +773,15 @@ pub enum Response {
         png: Option<String>,
     },
     Backups {
+        backups: Vec<crate::backups::Backup>,
+        /// The second place's copies of the workspace (10 §3.5).
+        second: Vec<crate::backups::Backup>,
+    },
+    /// «Открыть…» found a folder of copies, not a workspace (10 §3.5):
+    /// the workspace's name and its copies, for a restore.
+    Copies {
+        path: String,
+        name: String,
         backups: Vec<crate::backups::Backup>,
     },
     /// A vault is coming in as a new workspace, open: its batches follow
@@ -669,7 +805,17 @@ fn home_of(home: &Home, desk: &Desk) -> Response {
         workspaces: home.list(),
         profile: home.profile().clone(),
         current: desk.current.clone(),
+        second_place: home
+            .second_place()
+            .map(|p| p.to_string_lossy().into_owned()),
+        second_offered: home.second_offered(),
     }
+}
+
+/// The second place's folder of copies of the workspace in `path`, if any.
+fn second_copies(home: &Home, id: &str, path: &Path) -> Option<PathBuf> {
+    let dir = crate::second::copies_dir(home.second_place()?, id, path);
+    crate::second::is_copies(&dir).then_some(dir)
 }
 
 /// An import started: its workspace in a tab, its task for the shell's thread.
@@ -713,6 +859,14 @@ pub fn handle(
                 opened(desk, done)
             }
         },
+        // A folder of copies is no workspace: its copies, for a restore (10 §3.5).
+        Request::Add { path } if crate::second::is_copies(Path::new(&path)) => home
+            .copies(Path::new(&path))
+            .map(|(name, backups)| Response::Copies {
+                path,
+                name,
+                backups,
+            }),
         // A folder this app has open already (its `.lock` is ours): its tab.
         Request::Add { path } => match crate::sqlite::folder_id(Path::new(&path)) {
             Ok(id) if desk.is_open(&id) => home.touch(&id).map(|workspace| {
@@ -784,15 +938,41 @@ pub fn handle(
         }
         Request::Backups { id } => home.entry(&id).map(|e| Response::Backups {
             backups: crate::folder::list(&e.path),
+            second: second_copies(home, &id, &e.path)
+                .map(|dir| crate::second::list(&dir))
+                .unwrap_or_default(),
         }),
-        Request::Restore { id, backup } => {
+        Request::Restore { id, backup, second } => {
             // The tab lets the folder go: its `.lock` is the restore's for the while.
             desk.release(&id);
             let done = home
                 .entry(&id)
                 .map(|e| e.path.clone())
-                .and_then(|path| crate::sqlite::restore_folder(&path, &backup))
+                .and_then(|path| {
+                    if !second {
+                        return crate::sqlite::restore_folder(&path, &backup);
+                    }
+                    let dir = second_copies(home, &id, &path)
+                        .ok_or_else(|| invalid("the second place has no copies of it"))?;
+                    let from = crate::folder::backup_path(&dir, &backup)?;
+                    crate::sqlite::restore_folder_from(&path, &from)
+                })
                 .and_then(|()| home.open(&id));
+            opened(desk, done)
+        }
+        Request::SetSecondPlace { path } => {
+            let place = path.map(PathBuf::from);
+            home.set_second_place(place.clone()).map(|()| {
+                // The open workspaces copy there from now on, starting now.
+                for ws in &mut desk.tabs {
+                    ws.store_mut().set_second_place(place.clone());
+                    ws.store_mut().mirror_now();
+                }
+                home_of(home, desk)
+            })
+        }
+        Request::RestoreCopies { path, backup } => {
+            let done = home.restore_copies(Path::new(&path), &backup);
             opened(desk, done)
         }
         Request::Import { path } => {
@@ -813,7 +993,7 @@ pub fn handle(
         }
     };
     result.unwrap_or_else(|e| Response::Error {
-        invalid: matches!(e, CoreError::Invalid(_)),
+        invalid: matches!(e, CoreError::Invalid(_) | CoreError::Place(..)),
         code: e.code().map(str::to_owned),
         message: e.to_string(),
     })
@@ -1048,7 +1228,7 @@ mod tests {
         };
         assert_eq!(
             backups(&mut home, &mut desk),
-            json!({ "type": "backups", "backups": [] })
+            json!({ "type": "backups", "backups": [], "second": [] })
         );
         crate::folder::back_up(&folder.join("store.sqlite")).expect("today's copy");
         let step = json!({
@@ -1088,6 +1268,111 @@ mod tests {
         );
         assert_eq!(none["type"], "error", "{none}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copies_go_to_the_second_place_and_a_workspace_comes_back_from_it() {
+        // 10 §3.5, NFR-73: one place a device, asked once; the day's copy
+        // and the assets go there; a lost folder comes back from it.
+        let dir = temp_dir();
+        let place = temp_dir();
+        std::fs::create_dir_all(&place).expect("the place");
+        let mut home = Home::load(&dir);
+        let mut desk = Desk::default();
+        let state = ask(&mut home, &mut desk, json!({ "call": "home" }));
+        assert_eq!(
+            (state["secondPlace"].clone(), state["secondOffered"].clone()),
+            (Value::Null, json!(false))
+        );
+        let a = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "create", "name": "Архив" }),
+        );
+        let id = a["workspace"]["id"].as_str().expect("id").to_owned();
+        let folder = PathBuf::from(a["workspace"]["path"].as_str().expect("path"));
+        // Not a place, each said by its code: a folder inside the workspace,
+        // the workspace itself, no folder at all.
+        for (wrong, code) in [
+            (folder.join("backups"), "place-inside"),
+            (folder.clone(), "place-workspace"),
+            (place.join("нет такой"), "place-folder"),
+        ] {
+            if code != "place-folder" {
+                std::fs::create_dir_all(&wrong).expect("a folder");
+            }
+            let no = ask(
+                &mut home,
+                &mut desk,
+                json!({ "call": "setSecondPlace", "path": wrong.to_string_lossy() }),
+            );
+            assert_eq!(
+                (no["type"].clone(), no["code"].clone()),
+                (json!("error"), json!(code)),
+                "{no}"
+            );
+        }
+        crate::folder::back_up(&folder.join("store.sqlite")).expect("today's copy");
+        // Chosen: the open workspace's copy goes there at once.
+        let set = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "setSecondPlace", "path": place.to_string_lossy() }),
+        );
+        assert_eq!(set["secondPlace"], json!(place.to_string_lossy()), "{set}");
+        assert_eq!(set["secondOffered"], json!(true));
+        ask(&mut home, &mut desk, json!({ "call": "release", "id": id }));
+        let list = ask(&mut home, &mut desk, json!({ "call": "backups", "id": id }));
+        assert_eq!(list["second"].as_array().map(Vec::len), Some(1), "{list}");
+        let copy = list["second"][0]["id"].clone();
+        // Restored from the second place's copy, in its own folder.
+        let back = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "restore", "id": id, "backup": copy, "second": true }),
+        );
+        assert_eq!(back["type"], "opened", "{back}");
+        ask(&mut home, &mut desk, json!({ "call": "release", "id": id }));
+        // The folder gone with its disk: «Открыть…» on the folder of copies.
+        std::fs::remove_dir_all(&folder).expect("the disk failed");
+        let copies = crate::second::copies_dir(&place, &id, &folder);
+        let found = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "add", "path": copies.to_string_lossy() }),
+        );
+        assert_eq!(
+            (found["type"].clone(), found["name"].clone()),
+            (json!("copies"), json!("Архив")),
+            "{found}"
+        );
+        let again = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "restoreCopies", "path": copies.to_string_lossy(), "backup": found["backups"][0]["id"] }),
+        );
+        assert_eq!(again["type"], "opened", "{again}");
+        assert_eq!(again["workspace"]["id"], json!(id), "the same workspace");
+        let restored = PathBuf::from(again["workspace"]["path"].as_str().expect("path"));
+        assert!(restored.join("store.sqlite").is_file());
+        // The list knows it once, at its new folder; «Убрать» takes the place off.
+        let state = ask(&mut home, &mut desk, json!({ "call": "home" }));
+        assert_eq!(
+            state["workspaces"].as_array().map(Vec::len),
+            Some(1),
+            "{state}"
+        );
+        let off = ask(
+            &mut home,
+            &mut desk,
+            json!({ "call": "setSecondPlace", "path": null }),
+        );
+        assert_eq!(
+            (off["secondPlace"].clone(), off["secondOffered"].clone()),
+            (Value::Null, json!(true))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&place);
     }
 
     #[test]

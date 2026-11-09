@@ -2865,6 +2865,15 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   text-overflow: ellipsis;
 }
 
+/* A start question's refusal (10 §3.5): one line in the attention colour. */
+.start-error {
+  margin-top: calc(4 * var(--u));
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-attention);
+}
+
 /* An import going on (13 §3.3): the last line of the toasts at the foot of
    the canvas, as wide as they are, the batches counted and on a segmented
    track (07 §8.2). */
@@ -3314,6 +3323,44 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
 
 .settings-about {
   align-self: flex-start;
+}
+
+/* «Копии» (10 §3.5, NFR-73): the second place's folder on one line, cut
+   at its start — the end names the folder — and whole in its tooltip; its
+   buttons under it on the right, as a dialog's; what was refused in the
+   attention colour. The block runs right to left for the cut alone; the
+   marks around the path keep its slashes where they stand. */
+.settings-place {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+
+.settings-place::before,
+.settings-place::after {
+  content: "\200E";
+}
+
+.settings-place.is-none {
+  color: var(--st-color-text-muted);
+}
+
+.settings-place-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: calc(6 * var(--u));
+  margin-top: calc(8 * var(--u));
+}
+
+.settings-place-error {
+  margin: calc(6 * var(--u)) 0 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--st-color-attention);
 }
 
 /* A toggle that is on stays pressed in, as in Windows 98 (07 §8.2). */

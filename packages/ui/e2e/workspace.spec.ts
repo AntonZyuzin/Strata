@@ -916,6 +916,49 @@ for (const deviceScaleFactor of [1, 2]) {
   });
 }
 
+/** The longest place a layout test chooses: a share's deep folder. */
+const PLACE = '/Volumes/Резервные копии на сетевом диске/Gexogon/Каждый день';
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`the second place's question and its «Настройки» keep their frame in RU and EN @${deviceScaleFactor}x (10 §3.5)`, async ({
+    browser,
+  }) => {
+    const boxes = [];
+    for (const locale of ['ru-RU', 'en-US'] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 800, height: 500 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto(`/?plain&secondPlace&pick=${encodeURIComponent(PLACE)}`);
+      await expect(page.locator('#second-ask-title')).toBeVisible();
+      expect(await overflowing(page, '.update-dialog'), `${locale} text must fit`).toEqual([]);
+      const ask = {
+        window: await box(page, '.update-dialog'),
+        actions: await box(page, '.update-dialog .dialog-actions'),
+      };
+      await page.keyboard.press('Enter');
+      await expect(page.locator('#second-ask-title')).toHaveCount(0);
+      await page.locator('.tabbar-settings').click();
+      await expect(page.locator('.settings-place')).toHaveText(PLACE);
+      expect(await overflowing(page, '.settings'), `${locale} settings must fit`).toEqual([]);
+      boxes.push({
+        ...ask,
+        settings: await box(page, '.settings'),
+        copies: await box(page, '.settings-copies .ins-fields'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['window', 'actions', 'settings', 'copies'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+  });
+}
+
 for (const deviceScaleFactor of [1, 2]) {
   test(`a failed window's screen keeps its frame in RU and EN @${deviceScaleFactor}x (NFR-80)`, async ({
     browser,
@@ -2603,6 +2646,50 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Enter');
     await failed.getByRole('button', { name: 'Повторить' }).click();
     await expect(page.locator('.note-window .cm-content')).toBeVisible();
+  });
+
+  test('the second place is asked once at the start and changed in «Настройки» (10 §3.5, NFR-73)', async ({
+    page,
+  }) => {
+    await page.goto(`/?plain&secondPlace&pick=${encodeURIComponent('/Volumes/Копии')}`);
+    const ask = page.getByRole('alertdialog', { name: 'Дублировать копии?' });
+    await expect(ask).toHaveAccessibleDescription('Другой диск или сетевая папка');
+    // «Не сейчас» answers it too: nothing chosen, nothing asked again.
+    await page.keyboard.press('Escape');
+    await expect(ask).toHaveCount(0);
+    await page.locator('.tabbar-settings').click();
+    const copies = page.locator('.settings-copies');
+    await expect(copies.locator('.settings-place')).toHaveText('Не выбрано');
+    await expect(copies.getByRole('button', { name: 'Убрать' })).toHaveCount(0);
+    // «Выбрать…» — the system's folder picker; «Убрать» — none again.
+    await copies.getByRole('button', { name: 'Выбрать…' }).click();
+    await expect(copies.locator('.settings-place')).toHaveText('/Volumes/Копии');
+    await copies.getByRole('button', { name: 'Убрать' }).click();
+    await expect(copies.locator('.settings-place')).toHaveText('Не выбрано');
+    await page.keyboard.press('Escape');
+    // The second place's copies beside the folder's in «Восстановить из копии».
+    await withBackups(page, 'Копии', 'Восстановить из копии…');
+    await page.locator('.tabbar-settings').click();
+    await copies.getByRole('button', { name: 'Выбрать…' }).click();
+    await expect(copies.locator('.settings-place')).toHaveText('/Volumes/Копии');
+    await page.keyboard.press('Escape');
+    await cardAction(page, 'Копии', 'Восстановить из копии…', true);
+    const rows = page.locator('.restore-list [role="option"]');
+    await expect(rows).toHaveCount(3);
+    await expect(rows.filter({ hasText: ', второе место' })).toHaveCount(1);
+    expect(await overflowing(page, '.restore-dialog')).toEqual([]);
+  });
+
+  test('the second place is chosen at the first start with its default button (10 §3.5)', async ({
+    page,
+  }) => {
+    await page.goto(`/?plain&secondPlace&pick=${encodeURIComponent('/Volumes/Копии')}`);
+    const ask = page.getByRole('alertdialog', { name: 'Дублировать копии?' });
+    await expect(ask.getByRole('button', { name: 'Выбрать папку…' })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(ask).toHaveCount(0);
+    await page.locator('.tabbar-settings').click();
+    await expect(page.locator('.settings-copies .settings-place')).toHaveText('/Volumes/Копии');
   });
 
   test('the canvas draws again after its WebGL context is lost and restored (NFR-80)', async ({

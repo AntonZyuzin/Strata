@@ -31,7 +31,12 @@ type Dialog =
   | { t: 'rename'; entry: WorkspaceEntry }
   | { t: 'remove'; entry: WorkspaceEntry }
   /** The workspace's copies: null until the backend answers. */
-  | { t: 'restore'; entry: WorkspaceEntry; backups: Backup[] | null };
+  | { t: 'restore'; entry: WorkspaceEntry; backups: Backup[] | null }
+  /**
+   * «Открыть…» found a folder of copies of the second place (10 §3.5): the
+   * workspace named in it comes back from one of them as a new folder.
+   */
+  | { t: 'copies'; path: string; name: string; backups: Backup[] };
 
 const message = errorText;
 
@@ -119,7 +124,7 @@ export function HomeScreen(props: {
   }, [home, state]);
 
   const run = useCallback(
-    async (f: () => Promise<HomeState | Opened | undefined>) => {
+    async (f: () => Promise<HomeState | Opened | Dialog | undefined>) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
@@ -129,8 +134,9 @@ export function HomeScreen(props: {
       try {
         const r = await f();
         if (r && 'root' in r) onOpen(r);
-        else if (r) setState(r);
-        setDialog(null);
+        else if (r && 'workspaces' in r) setState(r);
+        // A result may be the next window: a folder of copies offers its restore.
+        setDialog(r && 't' in r ? r : null);
       } catch (e) {
         // What was under way is over: its note goes, the failure stays.
         setNote(null);
@@ -268,7 +274,11 @@ export function HomeScreen(props: {
               onClick={() =>
                 void run(async () => {
                   const path = await pickFolder();
-                  return path && home.add ? home.add(path) : undefined;
+                  if (!path || !home.add) return undefined;
+                  const r = await home.add(path);
+                  return 'copies' in r
+                    ? { t: 'copies', path: r.path, name: r.name, backups: r.backups }
+                    : r;
                 })
               }
             >
@@ -411,10 +421,10 @@ export function HomeScreen(props: {
           }
         />
       ) : null}
-      {dialog?.t === 'restore' ? (
+      {dialog?.t === 'restore' || dialog?.t === 'copies' ? (
         <RestoreDialog
           locale={locale}
-          name={dialog.entry.name}
+          name={dialog.t === 'restore' ? dialog.entry.name : dialog.name}
           backups={dialog.backups}
           date={props.reading.date}
           clock={props.reading.clock}
@@ -422,7 +432,15 @@ export function HomeScreen(props: {
           error={
             error !== null ? t(locale, 'home.error', { message: message(locale, error) }) : null
           }
-          onRestore={(b) => void run(() => home.restore(dialog.entry.id, b.id))}
+          onRestore={(b) =>
+            void run(() =>
+              dialog.t === 'restore'
+                ? home.restore(dialog.entry.id, b.id, b.second)
+                : home.restoreCopies
+                  ? home.restoreCopies(dialog.path, b.id)
+                  : Promise.resolve(undefined),
+            )
+          }
           onCancel={() => {
             setDialog(null);
             setError(null);

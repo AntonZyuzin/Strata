@@ -11,6 +11,11 @@ export function errorText(locale: Locale, e: unknown): string {
     if (e.code === 'locked') return t(locale, 'home.locked');
     if (e.code === 'damaged') return t(locale, 'home.damaged');
     if (e.code === 'corrupt') return t(locale, 'home.corrupt');
+    // A folder refused as the second place for copies (10 §3.5).
+    if (e.code === 'place-folder') return t(locale, 'second.notFolder');
+    if (e.code === 'place-workspace') return t(locale, 'second.workspace');
+    if (e.code === 'place-inside') return t(locale, 'second.inside');
+    if (e.code === 'place-write') return t(locale, 'second.unwritable');
   }
   return e instanceof Error ? e.message : String(e);
 }

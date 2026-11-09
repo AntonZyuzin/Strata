@@ -1027,6 +1027,13 @@ export interface HomeState {
   workspaces: WorkspaceEntry[];
   profile: Profile;
   current: string | null;
+  /**
+   * The second place for copies (10 §3.5, NFR-73): a folder, or null — not
+   * chosen. Undefined where there is none to choose: a browser.
+   */
+  secondPlace?: string | null;
+  /** The first start's question about it is answered (☑ Q-14-9). */
+  secondOffered?: boolean;
 }
 
 export interface Opened {
@@ -1042,6 +1049,19 @@ export interface Backup {
   /** Unix ms: the day's midnight (UTC), or the moment of the restore. */
   at: number;
   kind: 'day' | 'replaced';
+  /** A copy of the second place (10 §3.5, NFR-73), not of the workspace's folder. */
+  second?: boolean;
+}
+
+/**
+ * «Открыть…» found a folder of copies of the second place, not a workspace
+ * (10 §3.5): the workspace's name and its copies, for a restore.
+ */
+export interface FolderOfCopies {
+  copies: true;
+  path: string;
+  name: string;
+  backups: Backup[];
 }
 
 export interface HomeBackend {
@@ -1050,8 +1070,11 @@ export interface HomeBackend {
   home(): Promise<HomeState>;
   create(name: string): Promise<Opened>;
   open(id: string): Promise<Opened>;
-  /** «Открыть…»: a workspace folder of the user's choice (desktop). */
-  add?(path: string): Promise<Opened>;
+  /**
+   * «Открыть…»: a workspace folder of the user's choice (desktop); a folder
+   * of copies of the second place comes back as such, for a restore.
+   */
+  add?(path: string): Promise<Opened | FolderOfCopies>;
   /** Back to the home screen: the tabs' workspaces stay open behind it. */
   close(): Promise<HomeState>;
   /** A tab closes: its workspace leaves memory, and its undo with it (05 §11). */
@@ -1071,7 +1094,18 @@ export interface HomeBackend {
    * it was stays as a copy of its own, `replaced`. A copy that is damaged or
    * another workspace's is refused, `damaged`, and nothing changes.
    */
-  restore(id: string, backup: string): Promise<Opened>;
+  restore(id: string, backup: string, second?: boolean): Promise<Opened>;
+  /**
+   * «Второе место для копий» (10 §3.5, NFR-73): a folder, or null —
+   * «Не сейчас», «Убрать»; either answers the first start's question.
+   * Desktop only.
+   */
+  setSecondPlace?(path: string | null): Promise<HomeState>;
+  /**
+   * A workspace back from a folder of copies (10 §3.5: its own folder is
+   * gone): copy `backup` and the assets as a new folder, opened.
+   */
+  restoreCopies?(path: string, backup: string): Promise<Opened>;
   /**
    * The workspace as `.strata.zip` (10 §3.5): on desktop into the file `to`
    * (nothing comes back), in a browser as bytes to download.
@@ -1107,7 +1141,8 @@ type HomeResponse =
   | ({ type: 'opened' } & Opened)
   | ({ type: 'importing' } & Opened)
   | { type: 'preview'; png: string | null }
-  | { type: 'backups'; backups: Backup[] }
+  | { type: 'backups'; backups: Backup[]; second?: Backup[] }
+  | { type: 'copies'; path: string; name: string; backups: Backup[] }
   | { type: 'done' };
 
 /**
@@ -1137,7 +1172,13 @@ export function jsonHome(
   const state = async (request: Record<string, unknown>): Promise<HomeState> => {
     const r = await call(request);
     if (r.type !== 'home') throw new CoreError(`expected home, got ${r.type}`, false);
-    return { workspaces: r.workspaces, profile: r.profile, current: r.current };
+    return {
+      workspaces: r.workspaces,
+      profile: r.profile,
+      current: r.current,
+      secondPlace: r.secondPlace ?? null,
+      secondOffered: r.secondOffered ?? false,
+    };
   };
   const opened = async (request: Record<string, unknown>): Promise<Opened> => {
     const r = await call(request);
@@ -1168,7 +1209,14 @@ export function jsonHome(
     home: () => state({ call: 'home' }),
     create: (name) => opened({ call: 'create', name }),
     open: (id) => opened({ call: 'open', id }),
-    add: (path) => opened({ call: 'add', path }),
+    add: async (path) => {
+      const r = await call({ call: 'add', path });
+      if (r.type === 'copies') {
+        return { copies: true, path: r.path, name: r.name, backups: r.backups };
+      }
+      if (r.type !== 'opened') throw new CoreError(`expected opened, got ${r.type}`, false);
+      return { workspace: r.workspace, root: r.root };
+    },
     close: () => state({ call: 'close' }),
     release: (id) => state({ call: 'release', id }),
     rename: (id, name) => state({ call: 'rename', id, name }),
@@ -1185,9 +1233,12 @@ export function jsonHome(
     backups: async (id) => {
       const r = await call({ call: 'backups', id });
       if (r.type !== 'backups') throw new CoreError(`expected backups, got ${r.type}`, false);
-      return r.backups;
+      // The workspace folder's own, then the second place's (10 §3.5).
+      return [...r.backups, ...(r.second ?? []).map((b) => ({ ...b, second: true }))];
     },
-    restore: (id, backup) => opened({ call: 'restore', id, backup }),
+    restore: (id, backup, second = false) => opened({ call: 'restore', id, backup, second }),
+    setSecondPlace: (path) => state({ call: 'setSecondPlace', path }),
+    restoreCopies: (path, backup) => opened({ call: 'restoreCopies', path, backup }),
     exportArchive: async (id, to) => {
       if (!to) throw new CoreError('the desktop exports into a file', true);
       await call({ call: 'export', id, path: to });

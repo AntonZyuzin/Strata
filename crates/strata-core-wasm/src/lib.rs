@@ -70,6 +70,13 @@ impl Core {
         self.ws.store().to_bytes()
     }
 
+    /// The store's writes so far ([`MemoryStore::revision`]): the page keeps
+    /// [`Core::bytes`] after a call that moved it.
+    pub fn revision(&self) -> f64 {
+        // Exact in a JS number far beyond any session's writes (2^53).
+        self.ws.store().revision() as f64
+    }
+
     /// The workspace as `.strata.zip` (10 §3.5).
     #[wasm_bindgen(js_name = exportArchive)]
     pub fn export_archive(&self) -> Result<Vec<u8>, JsError> {

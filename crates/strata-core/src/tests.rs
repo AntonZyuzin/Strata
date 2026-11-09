@@ -899,6 +899,68 @@ fn every_node_has_a_content_document() {
 }
 
 #[test]
+fn the_memory_store_counts_what_writes_it_and_not_what_reads_it() {
+    // The browser keeps the store's bytes after any call that moved this
+    // count (10 §3.3): a step, a revert, a copy, an asset, an editor's text.
+    let mut w = ws();
+    let root = w.root();
+    let call = |w: &mut Workspace<MemoryStore>, json: String| {
+        let out = crate::api::call(w, &json);
+        assert!(!out.contains("\"type\":\"error\""), "{json}: {out}");
+        out
+    };
+    fn moved(w: &Workspace<MemoryStore>, seen: &mut u64, what: &str) {
+        assert!(w.store().revision() > *seen, "{what} wrote nothing");
+        *seen = w.store().revision();
+    }
+    let mut seen = w.store().revision();
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    moved(&w, &mut seen, "a step");
+    for read in [
+        r#"{"call":"tree"}"#.to_owned(),
+        r#"{"call":"journal"}"#.to_owned(),
+        format!(r#"{{"call":"node","id":"{note}"}}"#),
+        format!(r#"{{"call":"view","net":"{root}"}}"#),
+    ] {
+        call(&mut w, read.clone());
+        assert_eq!(w.store().revision(), seen, "{read} wrote");
+    }
+    call(
+        &mut w,
+        format!(
+            r#"{{"call":"apply","label":{{"key":"change.color"}},"ops":[{{"op":"setAttr","id":"{note}","key":"color","value":2}}]}}"#
+        ),
+    );
+    moved(&w, &mut seen, "a colour");
+    let journal: serde_json::Value =
+        serde_json::from_str(&call(&mut w, r#"{"call":"journal"}"#.to_owned())).expect("json");
+    let colour = journal["journal"]["entries"][0]["id"]
+        .as_str()
+        .expect("the colour's changeset")
+        .to_owned();
+    call(
+        &mut w,
+        format!(r#"{{"call":"revertChangeset","id":"{colour}"}}"#),
+    );
+    moved(&w, &mut seen, "a revert");
+    call(
+        &mut w,
+        format!(
+            r#"{{"call":"copyNode","from":"{note}","net":"{root}","x":100,"y":0,"inputs":[],"label":{{"key":"core.change.copy"}}}}"#
+        ),
+    );
+    moved(&w, &mut seen, "a copy");
+    call(&mut w, r#"{"call":"putAsset","bytes":"AQID"}"#.to_owned());
+    moved(&w, &mut seen, "an asset");
+    // The same bytes again: written once, never changed (10 §11).
+    call(&mut w, r#"{"call":"putAsset","bytes":"AQID"}"#.to_owned());
+    assert_eq!(w.store().revision(), seen, "the same asset again wrote");
+    let mut ed = Editor::open(&mut w, &note);
+    ed.type_text(&mut w, &note, "текст");
+    moved(&w, &mut seen, "an editor's text");
+}
+
+#[test]
 fn the_browser_keeps_a_workspace_as_bytes() {
     let mut w = ws();
     let root = w.root();

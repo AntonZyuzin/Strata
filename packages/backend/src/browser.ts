@@ -193,17 +193,6 @@ const backupKey = (id: string, backup: string) => `backup:${id}:${backup}`;
 const DAY_MS = 86_400_000;
 const dayOf = (ms: number) => Math.floor(ms / DAY_MS);
 const encoded = (saved: Saved) => new TextEncoder().encode(JSON.stringify(saved));
-/** Calls that write: the store's bytes go to the shelf after them. */
-const WRITES = new Set([
-  'apply',
-  'undo',
-  'redo',
-  'cancel',
-  'pushDoc',
-  'importCancel',
-  'settleInterrupted',
-]);
-
 /**
  * `HomeBackend` with the WASM core and a shelf. `pause` — milliseconds
  * between an import's batches: layout tests slow them down to watch them
@@ -320,11 +309,16 @@ export async function browserHome(
       const c = current;
       if (!c)
         return JSON.stringify({ type: 'error', message: 'no workspace is open', invalid: false });
+      const before = c.core.revision();
       const out = c.core.call(json);
       const call = (JSON.parse(json) as { call: string }).call;
-      // An import driven batch by batch is kept once, as its last one lands.
+      // A call that wrote, whichever it is, goes to the shelf with the
+      // store's bytes: a list of the calls that write missed a revert, a
+      // copy and a pinned link once. An import driven batch by batch is
+      // kept once, as its last one lands.
+      const wrote = c.core.revision() !== before;
       const ended = call === 'importStep' && out.includes('"report":');
-      if ((WRITES.has(call) || ended) && !out.includes('"type":"error"')) {
+      if ((wrote && call !== 'importStep') || ended) {
         const bytes = c.core.bytes();
         await shelf.set(ws(c.id), bytes);
         // A day passed with the workspace open: its copy (10 §3.5).

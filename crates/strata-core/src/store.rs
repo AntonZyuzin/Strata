@@ -139,6 +139,9 @@ pub struct MemoryStore {
     /// Long tasks' changesets taken back after they broke off (10 §3.3).
     reverted: BTreeSet<String>,
     assets: BTreeMap<String, Vec<u8>>,
+    /// Writes since the store was made or read: the browser keeps the
+    /// bytes after any call that changed it ([`MemoryStore::revision`]).
+    revision: u64,
 }
 
 /// [`MemoryStore`] as JSON: updates and assets in base64.
@@ -155,6 +158,14 @@ struct Dump {
 }
 
 impl MemoryStore {
+    /// How many writes the store has taken since it was made or read: a
+    /// call that leaves it as it was wrote nothing. The browser keeps the
+    /// store's bytes after every call that moved it, whatever the call
+    /// (10 §3.3) — a list of the calls that write would miss the next one.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// Everything in the store, for the browser to keep (IndexedDB).
     pub fn to_bytes(&self) -> Vec<u8> {
         let dump = Dump {
@@ -209,6 +220,7 @@ impl MemoryStore {
             open: dump.open,
             reverted: dump.reverted,
             assets,
+            revision: 0,
         })
     }
 }
@@ -231,6 +243,7 @@ impl Store for MemoryStore {
                 .push(bytes.clone());
         }
         self.changesets.push(changeset.clone());
+        self.revision += 1;
         Ok(())
     }
 
@@ -253,6 +266,7 @@ impl Store for MemoryStore {
                 self.open.insert(changeset.id.clone());
             }
         }
+        self.revision += 1;
         Ok(())
     }
 
@@ -261,6 +275,7 @@ impl Store for MemoryStore {
         if status == Status::Reverted {
             self.reverted.insert(id.to_owned());
         }
+        self.revision += 1;
         Ok(())
     }
 
@@ -308,6 +323,7 @@ impl Store for MemoryStore {
             .or_default()
             .updates
             .push(update.to_vec());
+        self.revision += 1;
         Ok(())
     }
 
@@ -319,6 +335,7 @@ impl Store for MemoryStore {
         for id in doc_ids {
             self.docs.remove(id);
         }
+        self.revision += 1;
         Ok(())
     }
 
@@ -337,13 +354,16 @@ impl Store for MemoryStore {
             );
         }
         self.changesets.extend(changesets.iter().cloned());
+        self.revision += 1;
         Ok(())
     }
 
     fn put_asset(&mut self, sha: &str, bytes: &[u8]) -> Result<(), StoreError> {
-        self.assets
-            .entry(sha.to_owned())
-            .or_insert_with(|| bytes.to_vec());
+        // Written once, never changed (10 §11): the same bytes again write nothing.
+        if !self.assets.contains_key(sha) {
+            self.assets.insert(sha.to_owned(), bytes.to_vec());
+            self.revision += 1;
+        }
         Ok(())
     }
 

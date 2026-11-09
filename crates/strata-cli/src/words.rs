@@ -109,10 +109,15 @@ pub fn backup_line(lang: Lang, b: &Backup) -> String {
 
 /// The first problems a check found, and how many more there are.
 fn problems(lang: Lang, c: &Check) -> String {
-    let count = c.facts.get("count").and_then(Value::as_u64).unwrap_or(0);
+    listed(lang, c, "count", "first")
+}
+
+/// The first of the problems under `first`, `count` of them in all.
+fn listed(lang: Lang, c: &Check, count: &str, first: &str) -> String {
+    let count = c.facts.get(count).and_then(Value::as_u64).unwrap_or(0);
     let first: Vec<String> = c
         .facts
-        .get("first")
+        .get(first)
         .and_then(Value::as_array)
         .map(|a| a.iter().map(|v| text(Some(v))).collect())
         .unwrap_or_default();
@@ -270,12 +275,7 @@ pub fn check_line(lang: Lang, c: &Check) -> String {
             f("newest")
         ),
         ("assets", Ok) => format!("{} {}", n("count"), lang.pick("на месте", "in place")),
-        ("assets", _) => format!(
-            "{} {}: {}",
-            lang.pick("нет файлов —", "missing files:"),
-            n("count"),
-            problems(lang, c)
-        ),
+        ("assets", _) => broken_assets(lang, c),
         ("backup", Ok) => format!(
             "{}: {}, {} {}",
             f("id"),
@@ -284,16 +284,33 @@ pub fn check_line(lang: Lang, c: &Check) -> String {
             n("docs")
         ),
         ("backup", _) if error => format!("{}: {}", f("id"), f("error")),
-        ("backup", _) => format!(
-            "{}: {} {}: {}",
-            f("id"),
-            lang.pick("нет файлов —", "missing files:"),
-            n("count"),
-            problems(lang, c)
-        ),
+        ("backup", _) => format!("{}: {}", f("id"), broken_assets(lang, c)),
         (_, v) => format!("{v:?}"),
     };
     format!("{name}: {what}")
+}
+
+/// Assets missing and assets damaged (NFR-72), each part when there is one.
+fn broken_assets(lang: Lang, c: &Check) -> String {
+    let n = |k: &str| c.facts.get(k).and_then(Value::as_u64).unwrap_or(0);
+    let mut parts = Vec::new();
+    if n("count") > 0 {
+        parts.push(format!(
+            "{} {}: {}",
+            lang.pick("нет файлов —", "missing files:"),
+            n("count"),
+            listed(lang, c, "count", "first")
+        ));
+    }
+    if n("damaged") > 0 {
+        parts.push(format!(
+            "{} {}: {}",
+            lang.pick("повреждены —", "damaged files:"),
+            n("damaged"),
+            listed(lang, c, "damaged", "damagedFirst")
+        ));
+    }
+    parts.join("; ")
 }
 
 /// A line for each outcome of `backup create` and `backup restore`.
@@ -335,4 +352,49 @@ pub fn locked(lang: Lang, who: &str) -> String {
 
 pub fn no_backups(lang: Lang) -> &'static str {
     lang.pick("Копий пока нет", "No backups yet")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn missing_and_damaged_assets_are_named_apart() {
+        // NFR-72: a file whose SHA-256 is not its name is damaged, not missing.
+        let facts: BTreeMap<&'static str, Value> = BTreeMap::from([
+            ("count", json!(1)),
+            ("first", json!(["a1"])),
+            ("damaged", json!(2)),
+            ("damagedFirst", json!(["b2", "c3"])),
+        ]);
+        let c = Check {
+            check: "assets",
+            verdict: Verdict::Fail,
+            facts,
+        };
+        assert_eq!(
+            check_line(Lang::Ru, &c),
+            "Ассеты: нет файлов — 1: a1; повреждены — 2: b2; c3"
+        );
+        assert_eq!(
+            check_line(Lang::En, &c),
+            "Assets: missing files: 1: a1; damaged files: 2: b2; c3"
+        );
+        let only_damaged = Check {
+            check: "assets",
+            verdict: Verdict::Fail,
+            facts: BTreeMap::from([
+                ("count", json!(0)),
+                ("first", json!([])),
+                ("damaged", json!(1)),
+                ("damagedFirst", json!(["b2"])),
+            ]),
+        };
+        assert_eq!(
+            check_line(Lang::Ru, &only_damaged),
+            "Ассеты: повреждены — 1: b2"
+        );
+    }
 }

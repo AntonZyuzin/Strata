@@ -11,6 +11,25 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// A file's SHA-256 as it lies on the disk, in hex: an asset's id (10 §11).
+pub(crate) fn file_sha256(path: &Path) -> std::io::Result<String> {
+    use sha2::Digest;
+    let mut hash = sha2::Sha256::new();
+    std::io::copy(&mut std::fs::File::open(path)?, &mut hash)?;
+    Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
+}
+
+/// A rename survives a power cut once its folder is synced (POSIX); where
+/// a folder cannot be opened as a file, the rename is the system's to keep.
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
 fn io(e: impl std::fmt::Display) -> StoreError {
     StoreError::Io(e.to_string())
 }
@@ -258,7 +277,7 @@ impl SqliteStore {
     }
 
     /// `assets/ab/cd/<sha256>` (10 §3.1).
-    fn asset_path(&self, sha: &str) -> std::result::Result<PathBuf, StoreError> {
+    pub(crate) fn asset_path(&self, sha: &str) -> std::result::Result<PathBuf, StoreError> {
         let dir = self
             .assets
             .as_ref()
@@ -418,17 +437,42 @@ impl Store for SqliteStore {
         tx.commit().map_err(io)
     }
 
+    /// NFR-72, 10 §3.3: a temporary file, synced, its SHA-256 checked as
+    /// it lies on the disk, then renamed and its folder synced — a broken
+    /// file never lies under an asset's name. One that does, left by an
+    /// older version or a failing disk, is written anew.
     fn put_asset(&mut self, sha: &str, bytes: &[u8]) -> std::result::Result<(), StoreError> {
+        use std::io::Write;
         let path = self.asset_path(sha)?;
-        if path.exists() {
+        if file_sha256(&path).is_ok_and(|on_disk| on_disk == sha) {
             return Ok(());
         }
         let dir = path.parent().ok_or_else(|| io("asset path"))?;
         std::fs::create_dir_all(dir).map_err(io)?;
-        // Written aside and renamed: an asset is there whole or not at all.
         let tmp = dir.join(format!("{sha}.tmp"));
-        std::fs::write(&tmp, bytes).map_err(io)?;
-        std::fs::rename(&tmp, &path).map_err(io)
+        let written = (|| -> std::io::Result<String> {
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(bytes)?;
+            f.sync_all()?;
+            drop(f);
+            file_sha256(&tmp)
+        })();
+        match written {
+            Ok(on_disk) if on_disk == sha => {}
+            Ok(on_disk) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(io(format!(
+                    "asset {sha} was written as {on_disk}: the disk changed it"
+                )));
+            }
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(io(e));
+            }
+        }
+        std::fs::rename(&tmp, &path).map_err(io)?;
+        sync_dir(dir);
+        Ok(())
     }
 
     fn asset(&self, sha: &str) -> std::result::Result<Option<Vec<u8>>, StoreError> {
@@ -743,6 +787,39 @@ mod tests {
             std::env::temp_dir().join(format!("strata-test-{name}-{}", NodeId::new().to_text()));
         let _ = std::fs::remove_dir_all(&dir);
         dir
+    }
+
+    #[test]
+    fn an_asset_lies_whole_under_its_name_or_not_at_all() {
+        // NFR-72, 10 §3.3: written aside, synced, checked, renamed.
+        let dir = temp_dir("assets");
+        let mut w = create_folder(&dir, "Корень").expect("a folder");
+        let bytes = b"\x89PNG a picture".to_vec();
+        let sha = w.put_asset(&bytes).expect("an asset");
+        let path = w.store().asset_path(&sha).expect("its path");
+        assert_eq!(std::fs::read(&path).expect("its file"), bytes);
+        assert_eq!(file_sha256(&path).expect("its hash"), sha);
+        // A damaged file under its name — a failing disk, an older
+        // version's cut write — is written anew, not kept.
+        std::fs::write(&path, b"\x89PNG a pict").expect("spoilt");
+        w.put_asset(&bytes).expect("again");
+        assert_eq!(std::fs::read(&path).expect("whole again"), bytes);
+        // A write cut before its rename leaves a `.tmp`: no asset.
+        let half = "ab".repeat(32);
+        let tmp_dir = dir.join("assets").join("ab").join("ab");
+        std::fs::create_dir_all(&tmp_dir).expect("its folder");
+        std::fs::write(tmp_dir.join(format!("{half}.tmp")), b"half").expect("a cut write");
+        assert!(w.asset(&half).expect("read").is_none());
+        assert_eq!(w.store().asset_ids().expect("ids"), vec![sha.clone()]);
+        // Nothing of a temporary file is left after a write.
+        let names: Vec<String> = std::fs::read_dir(path.parent().expect("its folder"))
+            .expect("the folder")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec![sha]);
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -245,7 +245,10 @@ pub fn doctor(dir: &Path, now: i64) -> Vec<Check> {
     out
 }
 
-/// The assets workspace `ws` refers to, looked for among its store's.
+/// The assets workspace `ws` refers to, looked for among its store's and
+/// read whole (NFR-72): a file whose SHA-256 is not its name is damaged.
+/// `count` and `first` name the missing ones, `damaged` and
+/// `damagedFirst` the damaged ones.
 fn assets_check(check: &'static str, ws: &mut Workspace<SqliteStore>) -> Check {
     let have: std::collections::BTreeSet<String> = ws
         .store()
@@ -256,16 +259,29 @@ fn assets_check(check: &'static str, ws: &mut Workspace<SqliteStore>) -> Check {
     match ws.referenced_assets() {
         Err(e) => Check::new(check, Verdict::Fail, vec![("error", json!(e.to_string()))]),
         Result::Ok(refs) => {
-            let missing: Vec<String> = refs
-                .iter()
-                .filter(|s| !have.contains(*s))
-                .cloned()
+            let (present, missing): (Vec<String>, Vec<String>) =
+                refs.iter().cloned().partition(|s| have.contains(s));
+            let damaged: Vec<String> = present
+                .into_iter()
+                .filter(|sha| {
+                    let whole = ws
+                        .store()
+                        .asset_path(sha)
+                        .ok()
+                        .and_then(|p| crate::sqlite::file_sha256(&p).ok());
+                    whole.as_deref() != Some(sha.as_str())
+                })
                 .collect();
-            if missing.is_empty() {
-                Check::new(check, Verdict::Ok, vec![("count", json!(refs.len()))])
-            } else {
-                Check::new(check, Verdict::Fail, named(&missing))
+            if missing.is_empty() && damaged.is_empty() {
+                return Check::new(check, Verdict::Ok, vec![("count", json!(refs.len()))]);
             }
+            let mut facts = named(&missing);
+            facts.push(("damaged", json!(damaged.len())));
+            facts.push((
+                "damagedFirst",
+                json!(damaged.iter().take(NAMED).collect::<Vec<_>>()),
+            ));
+            Check::new(check, Verdict::Fail, facts)
         }
     }
 }
@@ -452,6 +468,33 @@ mod tests {
         assert_eq!(checks[0].verdict, Verdict::Fail);
         assert!(checks[1..].iter().all(|c| c.verdict == Verdict::Skip));
         assert_eq!(checks.len(), 10);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_damaged_picture_is_told_from_a_missing_one() {
+        // NFR-72: a file whose SHA-256 is not its name is no asset.
+        let dir = temp_dir("damaged");
+        let sha = folder_with_a_picture(&dir);
+        let file = dir
+            .join("assets")
+            .join(&sha[0..2])
+            .join(&sha[2..4])
+            .join(&sha);
+        std::fs::write(&file, b"\x89PNG a pictur").expect("a byte lost");
+        let checks = doctor(&dir, 0);
+        let assets = checks.iter().find(|c| c.check == "assets").expect("assets");
+        assert_eq!(assets.verdict, Verdict::Fail);
+        assert_eq!(assets.facts["count"], json!(0), "none missing");
+        assert_eq!(assets.facts["damaged"], json!(1));
+        assert_eq!(assets.facts["damagedFirst"], json!([sha]));
+        // Put again — dropped once more on the canvas — it lies whole.
+        let mut ws = open_folder(&dir).expect("opens");
+        ws.put_asset(b"\x89PNG a picture").expect("written anew");
+        drop(ws);
+        let checks = doctor(&dir, 0);
+        let assets = checks.iter().find(|c| c.check == "assets").expect("assets");
+        assert_eq!(assets.verdict, Verdict::Ok);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

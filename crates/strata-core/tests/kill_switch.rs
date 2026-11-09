@@ -1,14 +1,17 @@
-//! The kill switch (NFR-69, NFR-71): a writer process applies changesets
-//! to a workspace folder and says which ones the core confirmed; it is
-//! killed (`kill -9`) at a random moment, the folder is opened again, and
-//! every confirmed changeset is there — whole, as is every other: a
-//! changeset is all of its ops or none.
+//! The kill switch (NFR-69, NFR-71, NFR-72): a writer process applies
+//! changesets to a workspace folder, each with an asset written before it,
+//! and says which ones the core confirmed; it is killed (`kill -9`) at a
+//! random moment, the folder is opened again, and every confirmed
+//! changeset is there — whole, as is every other: a changeset is all of
+//! its ops or none. Every confirmed asset is whole, and no file lies under
+//! an asset's name that is not: a cut write leaves a `.tmp` at most.
 //!
 //! The writer is this test binary run again with `STRATA_KILL_CHILD` set.
 //! `STRATA_KILL_ROUNDS=<n>` sets how many kills (NFR-69: 1 000, in a
 //! release step of CI), `STRATA_KILL_SEED` the generator's seed. A power
 //! cut in a VM, the other half of NFR-69, is the owner's to run (16 §4.9).
 
+use sha2::Digest;
 use std::collections::BTreeSet;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
@@ -27,6 +30,11 @@ const GROUP: usize = 3;
 const ROUNDS_PER_FOLDER: u64 = 20;
 /// A confirmation's line starts so: the test harness writes its own lines too.
 const CONFIRMED: &str = "confirmed ";
+/// The asset of a confirmed changeset on its line: `asset:<sha256>`.
+const ASSET: &str = "asset:";
+/// An asset's size: a kill falls anywhere in its write — the file made,
+/// its bytes written, synced, renamed — and a thousand rounds stay small.
+const ASSET_BYTES: usize = 16 * 1024;
 
 /// SplitMix64, as the property tests: a seed replays its kills.
 struct Rng(u64);
@@ -55,6 +63,10 @@ fn write_until_killed(dir: &Path) -> ! {
     let root = w.root();
     let mut out = std::io::stdout().lock();
     loop {
+        // Its own bytes each time: a new file to write, not one already there.
+        let seed = NodeId::new().to_text();
+        let bytes: Vec<u8> = seed.bytes().cycle().take(ASSET_BYTES).collect();
+        let sha = w.put_asset(&bytes).expect("the writer's asset");
         let ids: Vec<String> = (0..GROUP).map(|_| NodeId::new().to_text()).collect();
         let ops: Vec<Op> = ids
             .iter()
@@ -71,9 +83,36 @@ fn write_until_killed(dir: &Path) -> ! {
         w.apply(&ops, Label::new("kill.write"))
             .expect("the writer's changeset");
         // Confirmed: the core returned. The line says so.
-        writeln!(out, "{CONFIRMED}{}", ids.join(" ")).expect("stdout");
+        writeln!(out, "{CONFIRMED}{} {ASSET}{sha}", ids.join(" ")).expect("stdout");
         out.flush().expect("stdout");
     }
+}
+
+/// A file's SHA-256 in hex, as an asset's name is.
+fn sha256(path: &Path) -> String {
+    let bytes = std::fs::read(path).expect("an asset's file reads");
+    sha2::Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Every file under `assets/` with an asset's name: 64 hex digits.
+fn asset_files(dir: &Path) -> Vec<std::path::PathBuf> {
+    let mut out = Vec::new();
+    let mut stack = vec![dir.join("assets")];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+            let path = e.path();
+            let name = e.file_name().to_string_lossy().into_owned();
+            if path.is_dir() {
+                stack.push(path);
+            } else if name.len() == 64 && name.bytes().all(|c| c.is_ascii_hexdigit()) {
+                out.push(path);
+            }
+        }
+    }
+    out
 }
 
 /// The lines the writer finished, read while it runs and after it died:
@@ -123,6 +162,8 @@ fn a_killed_writer_loses_no_confirmed_changeset() {
     let mut confirmed: Vec<Vec<String>> = Vec::new();
     for round in 0..rounds {
         if round % ROUNDS_PER_FOLDER == 0 {
+            // The folder done with goes: a thousand rounds of assets add up.
+            let _ = std::fs::remove_dir_all(&dir);
             dir = tmp.join(format!("ws{round}"));
             drop(create_folder(&dir, "Корень").expect("the workspace"));
             confirmed.clear();
@@ -151,7 +192,7 @@ fn a_killed_writer_loses_no_confirmed_changeset() {
         let w = open_folder(&dir).unwrap_or_else(|e| panic!("round {round}: opens again: {e}"));
         let alive: BTreeSet<String> = w.tree().into_iter().map(|i| i.id).collect();
         for group in &confirmed {
-            for id in group {
+            for id in group.iter().filter(|t| !t.starts_with(ASSET)) {
                 assert!(
                     alive.contains(id),
                     "round {round}: a confirmed node is lost: {id} (of {} confirmed changesets)",
@@ -159,7 +200,36 @@ fn a_killed_writer_loses_no_confirmed_changeset() {
                 );
             }
         }
-        let made: BTreeSet<&String> = confirmed.iter().flatten().collect();
+        // NFR-72: every confirmed asset whole; no broken file under any
+        // asset's name, confirmed or cut by the kill.
+        for sha in confirmed
+            .iter()
+            .flatten()
+            .filter_map(|t| t.strip_prefix(ASSET))
+        {
+            let path = dir
+                .join("assets")
+                .join(&sha[0..2])
+                .join(&sha[2..4])
+                .join(sha);
+            assert!(
+                path.is_file(),
+                "round {round}: a confirmed asset is lost: {sha}"
+            );
+        }
+        for path in asset_files(&dir) {
+            let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+            assert_eq!(
+                Some(sha256(&path)),
+                name,
+                "round {round}: a broken file lies under an asset's name"
+            );
+        }
+        let made: BTreeSet<&String> = confirmed
+            .iter()
+            .flatten()
+            .filter(|t| !t.starts_with(ASSET))
+            .collect();
         let extra = alive.len() - 1 - made.len();
         assert!(
             extra.is_multiple_of(GROUP),

@@ -598,13 +598,6 @@ test('a board opens in its window; what is drawn stays in its document (ADR-0006
   };
   const pick = (tool: string) =>
     win.locator('.board-tools label', { has: page.locator(`input[value="${tool}"]`) }).click();
-  const drag = async (x0: number, y0: number, x1: number, y1: number) => {
-    const s = await box(page, '.board-stage');
-    await page.mouse.move(s.x + s.width * x0, s.y + s.height * y0);
-    await page.mouse.down();
-    await page.mouse.move(s.x + s.width * x1, s.y + s.height * y1, { steps: 8 });
-    await page.mouse.up();
-  };
 
   await openBoard();
   await expect.poll(scene).toEqual([]);

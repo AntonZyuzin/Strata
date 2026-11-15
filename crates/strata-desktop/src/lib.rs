@@ -3,7 +3,7 @@
 //! the workspaces of this device, ✅ Q-16-12; the tabs' workspaces stay in
 //! memory with their undo, `home::Desk`), `core` the calls for the workspace
 //! on the canvas (`strata_core::api`); `preview` fetches a link asset's preview
-//! (ADR-0012); `build_info` feeds «О программе» and the benchmark. An import
+//! (ADR-0012), `picture` a picture by its link for a board; `build_info` feeds «О программе» and the benchmark. An import
 //! of a vault runs on a thread of its own and tells the UI each batch as an
 //! `import` event (13 §3.3). `update_check` and `update_install` take a signed
 //! update (NFR-89) — in a build with the update key only, and asked by the UI
@@ -241,6 +241,22 @@ async fn preview(state: tauri::State<'_, Core>, id: String) -> Result<bool, Stri
     }
 }
 
+/// A picture by its link (06 §13.2, owner 2026-11-15): one dragged from a
+/// browser onto a board comes as a link, not a file. The core's link preview
+/// fetches it (ADR-0012: a link to a picture, or a page's picture; PNG, JPEG,
+/// GIF, WebP or AVIF up to 5 MiB) off the main thread; its bytes go back
+/// raw, none — empty.
+#[tauri::command]
+async fn picture(url: String) -> Result<tauri::ipc::Response, String> {
+    let fetched = tauri::async_runtime::spawn_blocking(move || strata_core::preview::fetch(&url))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    Ok(tauri::ipc::Response::new(
+        fetched.picture.unwrap_or_default(),
+    ))
+}
+
 /// Whether the window may go to `url`: the app's own page — `tauri://localhost`,
 /// `http(s)://tauri.localhost` on Windows, the dev server under `pnpm
 /// desktop:dev` — and the page's own frames (`blob:` of a PDF, 06 §13.4;
@@ -321,6 +337,7 @@ pub fn run() {
             build_info,
             core,
             home,
+            picture,
             preview,
             update_check,
             update_install

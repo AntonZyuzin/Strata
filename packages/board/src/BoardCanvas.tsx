@@ -29,7 +29,7 @@ import {
   writeFiles,
   writeLocal,
 } from './binding';
-import type { BoardPaint, BoardTool } from './tools';
+import type { BoardTool } from './tools';
 import { createWidget, parseWidgetLink, type WidgetKind, widgetKind } from './widgets';
 
 /** Scene units a new widget steps off one already in its place. */
@@ -105,11 +105,11 @@ export interface BoardHandle {
    */
   view(x: number, y: number, zoom: number, gesture?: boolean): void;
   /**
-   * A colour from the palette (07 §8.4): the selected elements take it, with
-   * the texts bound to them for the line, as Excalidraw's own panel does, and
-   * so do the next ones drawn. One step of undo.
+   * The text's colour from the palette (07 §8.4): the selected elements take
+   * it as their line, with the texts bound to them, as Excalidraw's own panel
+   * does, and so does the next text. One step of undo.
    */
-  paint(which: BoardPaint, color: string): void;
+  paint(color: string): void;
   /**
    * A new widget (ADR-0006 item 4) of `kind`, its content `id` in the
    * document, its element at page point `at` — none: the middle of the
@@ -221,7 +221,7 @@ export function BoardCanvas(props: {
         // `null` on unmount.
         if (!a) return;
         props.onReady?.({
-          paint: (which, color) => {
+          paint: (color) => {
             const st = a.getAppState();
             const picked = new Set(
               Object.entries(st.selectedElementIds).flatMap(([id, on]) => (on ? [id] : [])),
@@ -229,22 +229,14 @@ export function BoardCanvas(props: {
             if (st.editingTextElement) picked.add(st.editingTextElement.id);
             let touched = false;
             const elements = a.getSceneElementsIncludingDeleted().map((e) => {
-              const bound = which === 'stroke' && e.type === 'text' && e.containerId;
+              const bound = e.type === 'text' && e.containerId;
               const hit = picked.has(e.id) || (bound && picked.has(bound));
-              const now = which === 'stroke' ? e.strokeColor : e.backgroundColor;
-              if (!hit || e.isDeleted || now === color) return e;
+              if (!hit || e.isDeleted || e.strokeColor === color) return e;
               touched = true;
-              return newElementWith(
-                e,
-                which === 'stroke' ? { strokeColor: color } : { backgroundColor: color },
-              );
+              return newElementWith(e, { strokeColor: color });
             });
             a.updateScene({
-              appState: {
-                currentItemStrokeColor: which === 'stroke' ? color : st.currentItemStrokeColor,
-                currentItemBackgroundColor:
-                  which === 'fill' ? color : st.currentItemBackgroundColor,
-              },
+              appState: { currentItemStrokeColor: color },
               ...(touched ? { elements } : {}),
               captureUpdate: touched ? CaptureUpdateAction.IMMEDIATELY : CaptureUpdateAction.NEVER,
             });

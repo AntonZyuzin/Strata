@@ -73,7 +73,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { isTauri, linkPreview } from '../backend';
+import { isTauri, linkPreview, pictureOf } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { copyText } from '../clipboard';
 import { nodeIcon, nodeIconFile, nodeIconImages } from '../icons/Icon';
@@ -2793,6 +2793,21 @@ export function WorkspaceScreen(props: {
   };
 
   /**
+   * A picture dragged onto a board out of a browser comes as its link (06
+   * §13.2, owner 2026-11-15): the core fetches it on the desktop; a browser
+   * page cannot (Q-13-17). Either failure is said in a toast.
+   */
+  const pictureLink = async (url: string): Promise<File | null> => {
+    if (!isTauri()) {
+      toast('board.pictureBrowser');
+      return null;
+    }
+    const file = await pictureOf(url).catch(() => null);
+    if (!file) toast('board.pictureFailed', { url });
+    return file;
+  };
+
+  /**
    * A name typed in «Ноды» (owner 2026-11-15, as in Figma): a node of the
    * canvas's network is renamed on the canvas, as F2 does; another in the core.
    */
@@ -4387,6 +4402,7 @@ export function WorkspaceScreen(props: {
             onMode={(step) => setWindowMode('board', step)}
             onLocate={() => locateWindow('board', board.id)}
             onDock={dockWidth}
+            onPictureLink={pictureLink}
             onChange={() => undefined}
             onFocus={setBoardFocus}
             onReady={(handle) => {

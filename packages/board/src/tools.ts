@@ -1,37 +1,17 @@
 import { palette, people } from '@strata/design-tokens';
 
-/** The board's tools on Strata's toolbar (ADR-0006 item 3), Excalidraw's names. */
-export type BoardTool =
-  | 'selection'
-  | 'hand'
-  | 'rectangle'
-  | 'diamond'
-  | 'ellipse'
-  | 'arrow'
-  | 'line'
-  | 'freedraw'
-  | 'text'
-  | 'eraser';
+/**
+ * The board's tools on Strata's toolbar (ADR-0006 item 3), Excalidraw's
+ * names. A board is for pictures and text (owner 2026-11-15: fewer things,
+ * usable): shapes, arrows, lines, the pencil and the eraser went; what an
+ * older board holds of them stays and moves as anything else.
+ */
+export type BoardTool = 'selection' | 'hand' | 'text';
 
-export const BOARD_TOOLS: BoardTool[] = [
-  'selection',
-  'hand',
-  'rectangle',
-  'diamond',
-  'ellipse',
-  'arrow',
-  'line',
-  'freedraw',
-  'text',
-  'eraser',
-];
+export const BOARD_TOOLS: BoardTool[] = ['selection', 'hand', 'text'];
 
-/** The toolbar's groups (07 §8.2): select and hand | shapes | pencil, text, eraser. */
-export const BOARD_TOOL_GROUPS: BoardTool[][] = [
-  ['selection', 'hand'],
-  ['rectangle', 'diamond', 'ellipse', 'arrow', 'line'],
-  ['freedraw', 'text', 'eraser'],
-];
+/** The toolbar's groups (07 §8.2): select and hand | text — the picture's button beside it. */
+export const BOARD_TOOL_GROUPS: BoardTool[][] = [['selection', 'hand'], ['text']];
 
 /**
  * Excalidraw's letters for its tools. Its own switch is off while the host
@@ -40,14 +20,7 @@ export const BOARD_TOOL_GROUPS: BoardTool[][] = [
 export const BOARD_TOOL_KEYS: Record<BoardTool, string> = {
   selection: 'V',
   hand: 'H',
-  rectangle: 'R',
-  diamond: 'D',
-  ellipse: 'O',
-  arrow: 'A',
-  line: 'L',
-  freedraw: 'P',
   text: 'T',
-  eraser: 'E',
 };
 
 /** Names of the board's colours, for their titles. */
@@ -62,23 +35,17 @@ export type BoardColorName =
   | 'violet'
   | 'lilac'
   | 'pink'
-  | 'grey'
-  | 'none';
+  | 'grey';
 
 const PEOPLE_NAMES = ['green', 'teal', 'sky', 'blue', 'violet', 'lilac', 'pink', 'grey'] as const;
 
 /**
- * The board's palette (07 §8.4): paper, ink, yellow and the people's colours,
- * and «none» — transparent, for a shape without a fill. Excalidraw's own
- * palette is not shown (`ui={false}`).
+ * The board's palette (07 §8.4): the text's colour — paper, ink, yellow and
+ * the people's colours. Excalidraw's own palette is not shown (`ui={false}`).
  */
 export const BOARD_COLORS: { name: BoardColorName; color: string }[] = [
   { name: 'paper', color: palette.paper },
   { name: 'ink', color: palette.ink850 },
   { name: 'yellow', color: palette.yellow500 },
   ...PEOPLE_NAMES.map((name, i) => ({ name, color: people[i] ?? palette.paper })),
-  { name: 'none', color: 'transparent' },
 ];
-
-/** Which of an element's colours a pick sets: the line (and text), or the fill. */
-export type BoardPaint = 'stroke' | 'fill';

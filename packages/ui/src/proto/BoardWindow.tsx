@@ -7,7 +7,6 @@ import {
   BoardCanvas,
   type BoardColorName,
   type BoardHandle,
-  type BoardPaint,
   type BoardTool,
   type PagePoint,
   WIDGET_KINDS,
@@ -38,15 +37,21 @@ const WIDGET_GLYPH: Record<WidgetKind, GlyphName> = { note: 'note', todo: 'check
 const TOOL_GLYPH: Record<BoardTool, GlyphName> = {
   selection: 'select',
   hand: 'hand',
-  rectangle: 'rectangle',
-  diamond: 'diamond',
-  ellipse: 'ellipse',
-  arrow: 'arrow',
-  line: 'line',
-  freedraw: 'pencil',
   text: 'text',
-  eraser: 'eraser',
 };
+
+/** A picture's link from a drag out of a browser: its `text/uri-list`, or an `<img>` of its HTML. */
+function pictureLink(data: DataTransfer): string | null {
+  const list = data
+    .getData('text/uri-list')
+    .split(/\r?\n/)
+    .map((l) => l.trim())
+    .find((l) => l && !l.startsWith('#'));
+  const html = data.getData('text/html');
+  const img = html ? /<img[^>]+src="([^"]+)"/i.exec(html)?.[1] : undefined;
+  const link = img ?? list ?? data.getData('text/plain').trim();
+  return /^https?:\/\/\S+$/i.test(link) ? link : null;
+}
 
 const TOOL_BY_KEY = new Map(BOARD_TOOLS.map((k) => [BOARD_TOOL_KEYS[k], k]));
 
@@ -64,10 +69,11 @@ function editable(target: EventTarget | null): boolean {
  * tools, `Delete` deletes its elements); `Esc` outside a gesture gives the
  * keyboard back to the canvas.
  *
- * Tools are icons with the name and Excalidraw's letter in the title; the
- * palette is a strip along the bottom, as Paint's (07 §8.4): a click gives
- * the line its colour, the right button the fill, to the selection and to
- * what is drawn next.
+ * A board is for pictures and text (owner 2026-11-15): select, hand and
+ * text, «Картинка…», the widgets; a picture also comes dropped as a file or
+ * as a link out of a browser, or pasted. Tools are icons with the name and
+ * Excalidraw's letter in the title; the palette is a strip along the bottom,
+ * as Paint's (07 §8.4): the text's colour, for the selection and the next.
  */
 export function BoardWindow(props: {
   locale: Locale;
@@ -89,6 +95,8 @@ export function BoardWindow(props: {
   onDock?: ((width: number) => void) | undefined;
   /** Whose frame by hand it keeps on this device (05 §13); none — no frame kept. */
   frameKey?: string | undefined;
+  /** A picture's link let go on the board: its file, fetched; null — none had (it says why). */
+  onPictureLink?: ((url: string) => Promise<File | null>) | undefined;
   onChange: () => void;
   onFocus: (inside: boolean) => void;
   onClose: () => void;
@@ -96,11 +104,8 @@ export function BoardWindow(props: {
 }) {
   const { locale } = props;
   const [tool, setTool] = useState<BoardTool>('selection');
-  // Excalidraw's start as BoardCanvas sets it: paper lines, no fill.
-  const [paints, setPaints] = useState<Record<BoardPaint, BoardColorName>>({
-    stroke: 'paper',
-    fill: 'none',
-  });
+  // Excalidraw's start as BoardCanvas sets it: paper text.
+  const [ink, setInk] = useState<BoardColorName>('paper');
   const board = useRef<BoardHandle | null>(null);
   const box = useRef<HTMLElement>(null);
   const stage = useRef<HTMLDivElement>(null);
@@ -139,13 +144,7 @@ export function BoardWindow(props: {
           }),
         )
       : []),
-    {
-      label: t(locale, 'board.insertPicture'),
-      onSelect: () => {
-        pictureAt.current = at;
-        picture.current?.click();
-      },
-    },
+    { label: t(locale, 'board.insertPicture'), onSelect: () => choosePicture(at) },
   ];
   // Moved or sized by hand, it keeps that frame (06 §2.2).
   const { frame, onTitleGrab, grips } = useWindowFrame(
@@ -156,13 +155,16 @@ export function BoardWindow(props: {
   const title = props.name || t(locale, 'note.untitled');
   const colorOf = (name: BoardColorName) =>
     BOARD_COLORS.find((c) => c.name === name)?.color ?? 'transparent';
-  const paint = (which: BoardPaint, name: BoardColorName) => {
-    setPaints((p) => ({ ...p, [which]: name }));
-    board.current?.paint(which, colorOf(name));
+  const paint = (name: BoardColorName) => {
+    setInk(name);
+    board.current?.paint(colorOf(name));
   };
-  const swatch = (name: BoardColorName) =>
-    name === 'none' ? undefined : ({ background: colorOf(name) } as CSSProperties);
   const named = (name: BoardColorName) => t(locale, `board.color.${name}` as const);
+  /** «Картинка…»: the chooser; the picture goes to `at`, else the middle of the view. */
+  const choosePicture = (at?: PagePoint) => {
+    pictureAt.current = at ?? null;
+    picture.current?.click();
+  };
   return (
     <section
       ref={box}
@@ -248,6 +250,21 @@ export function BoardWindow(props: {
                   </label>
                 );
               })}
+              {group.includes('text') ? (
+                <button
+                  type="button"
+                  className="board-tool board-picture"
+                  aria-label={t(locale, 'board.insertPicture')}
+                  title={t(locale, 'board.pictureHint')}
+                  onClick={() => choosePicture()}
+                >
+                  <span
+                    className="kind-icon"
+                    style={{ '--glyph': glyphUrl('picture') } as CSSProperties}
+                    aria-hidden="true"
+                  />
+                </button>
+              ) : null}
             </div>
           ))}
           {ids ? (
@@ -280,6 +297,19 @@ export function BoardWindow(props: {
           className="board-stage"
           onPointerMove={(e) => {
             pointer.current = { x: e.clientX, y: e.clientY };
+          }}
+          // A picture dragged out of a browser is a link, not a file: fetched
+          // and put where it was let go (Excalidraw takes the files itself).
+          onDropCapture={(e) => {
+            if (e.dataTransfer.files.length > 0 || !props.onPictureLink) return;
+            const link = pictureLink(e.dataTransfer);
+            if (!link) return;
+            e.preventDefault();
+            e.stopPropagation();
+            const at = { x: e.clientX, y: e.clientY };
+            void props.onPictureLink(link).then((file) => {
+              if (file) void board.current?.insertPicture(file, at);
+            });
           }}
         >
           <Suspense fallback={null}>
@@ -323,45 +353,21 @@ export function BoardWindow(props: {
       ) : null}
       <fieldset className="board-colors">
         <legend className="sr-only">{t(locale, 'board.colors')}</legend>
-        <span
-          className="board-pair"
-          role="img"
-          aria-label={t(locale, 'board.pair', {
-            stroke: named(paints.stroke),
-            fill: named(paints.fill),
-          })}
-          title={t(locale, 'board.pair', {
-            stroke: named(paints.stroke),
-            fill: named(paints.fill),
-          })}
-        >
-          <span
-            className={paints.fill === 'none' ? 'board-pair-fill is-none' : 'board-pair-fill'}
-            style={swatch(paints.fill)}
-          />
-          <span
-            className={paints.stroke === 'none' ? 'board-pair-stroke is-none' : 'board-pair-stroke'}
-            style={swatch(paints.stroke)}
-          />
-        </span>
         {BOARD_COLORS.map((c) => (
           <button
             key={c.name}
             type="button"
             className={
-              c.name === 'none' ? 'ins-swatch board-swatch is-none' : 'ins-swatch board-swatch'
+              c.name === ink ? 'ins-swatch board-swatch is-active' : 'ins-swatch board-swatch'
             }
             data-color={c.name}
-            style={swatch(c.name)}
+            style={{ background: c.color }}
             aria-label={named(c.name)}
+            aria-pressed={c.name === ink}
             title={t(locale, 'board.swatch', { name: named(c.name) })}
             // The text being typed keeps its focus and takes the colour.
             onMouseDown={(e) => e.preventDefault()}
-            onClick={() => paint('stroke', c.name)}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              paint('fill', c.name);
-            }}
+            onClick={() => paint(c.name)}
           />
         ))}
       </fieldset>

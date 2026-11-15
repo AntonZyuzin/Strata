@@ -608,21 +608,27 @@ test('a board opens in its window; what is drawn stays in its document (ADR-0006
 
   await openBoard();
   await expect.poll(scene).toEqual([]);
-  // A tool stays on after use (the host's tool): two rectangles in a row.
-  await pick('rectangle');
-  await drag(0.1, 0.1, 0.3, 0.3);
-  await drag(0.1, 0.4, 0.3, 0.6);
-  await pick('ellipse');
-  await drag(0.5, 0.1, 0.7, 0.3);
-  await expect.poll(scene).toEqual(['rectangle', 'rectangle', 'ellipse']);
-  // Text in Cyrillic, in Nunito from the app itself (the CSP blocks esm.sh).
+  // A board is for pictures and text (owner 2026-11-15): select, hand, text,
+  // «Картинка…» and the widgets — no shapes, lines or pencil.
+  expect(
+    await win
+      .locator('.board-tools input[type="radio"]')
+      .evaluateAll((all) => all.map((i) => (i as HTMLInputElement).value)),
+  ).toEqual(['selection', 'hand', 'text']);
+  // A tool stays on after use (the host's tool): two texts in a row, in
+  // Cyrillic, in Nunito from the app itself (the CSP blocks esm.sh).
   await pick('text');
   const s = await box(page, '.board-stage');
-  await page.mouse.click(s.x + s.width * 0.5, s.y + s.height * 0.7);
-  await expect(win.locator('textarea')).toBeFocused();
-  await page.keyboard.type('Свет и туман');
-  await page.keyboard.press('Escape');
-  await expect.poll(scene).toEqual(['rectangle', 'rectangle', 'ellipse', 'text']);
+  for (const [y, words] of [
+    [0.3, 'Свет и туман'],
+    [0.7, 'Утро'],
+  ] as const) {
+    await page.mouse.click(s.x + s.width * 0.3, s.y + s.height * y);
+    await expect(win.locator('textarea')).toBeFocused();
+    await page.keyboard.type(words);
+    await page.keyboard.press('Escape');
+  }
+  await expect.poll(scene).toEqual(['text', 'text']);
   await expect
     .poll(() =>
       page.evaluate(() =>
@@ -658,7 +664,7 @@ test('a board opens in its window; what is drawn stays in its document (ADR-0006
       }),
     );
   });
-  const drawn = ['rectangle', 'rectangle', 'ellipse', 'text', 'image'];
+  const drawn = ['text', 'text', 'image'];
   await expect.poll(scene).toEqual(drawn);
   const files = () => page.evaluate(() => (window.__strataProto as Hook).board?.files().length);
   await expect.poll(files).toBe(1);
@@ -676,7 +682,7 @@ test('a board opens in its window; what is drawn stays in its document (ADR-0006
   expect(errors).toEqual([]);
 });
 
-test("a board's palette colours the selection and what comes next; its letters pick tools (07 §8.4)", async ({
+test("a board's palette colours the text, selected and next; its letters pick its tools (07 §8.4)", async ({
   page,
 }) => {
   test.setTimeout(90_000);
@@ -693,65 +699,64 @@ test("a board's palette colours the selection and what comes next; its letters p
   const paints = () =>
     page.evaluate(
       () =>
-        (window.__strataProto as Hook).board
-          ?.elements()
-          .map((e) => [e.type, e.strokeColor, e.backgroundColor]) ?? null,
+        (window.__strataProto as Hook).board?.elements().map((e) => [e.type, e.strokeColor]) ??
+        null,
     );
   const tool = () => page.evaluate(() => (window.__strataProto as Hook).board?.activeTool());
   const swatch = (name: string) => win.locator(`.board-swatch[data-color="${name}"]`);
-  const drag = async (x0: number, y0: number, x1: number, y1: number) => {
+  const write = async (y: number, words: string) => {
     const s = await box(page, '.board-stage');
-    await page.mouse.move(s.x + s.width * x0, s.y + s.height * y0);
-    await page.mouse.down();
-    await page.mouse.move(s.x + s.width * x1, s.y + s.height * y1, { steps: 8 });
-    await page.mouse.up();
+    await page.mouse.click(s.x + s.width * 0.3, s.y + s.height * y);
+    await expect(win.locator('textarea')).toBeFocused();
+    await page.keyboard.type(words);
+    await page.keyboard.press('Escape');
   };
   const sky = '#5ec8e5';
-  const paper = '#f2efe6';
-  const yellow = '#e8c547';
   const pink = '#f28dc6';
 
   await openBoard();
-  // Before anything is drawn: the line from a click, the fill from the right button.
+  // Before anything is written: the next text's colour, the swatch pressed.
   await swatch('sky').click();
-  await swatch('paper').click({ button: 'right' });
-  await expect(win.locator('.board-pair-stroke')).toHaveCSS(
-    'background-color',
-    'rgb(94, 200, 229)',
-  );
-  await expect(win.locator('.board-pair-fill')).toHaveCSS('background-color', 'rgb(242, 239, 230)');
-  await win.locator('.board-tool', { has: page.locator('input[value="rectangle"]') }).click();
-  await drag(0.1, 0.1, 0.3, 0.3);
-  await expect.poll(paints).toEqual([['rectangle', sky, paper]]);
-  // Excalidraw's letters pick Strata's tools: its own switch is off.
-  await page.keyboard.press('o');
-  await expect.poll(tool).toBe('ellipse');
-  await expect(win.locator('.board-tool.is-active input')).toHaveValue('ellipse');
-  await swatch('yellow').click({ button: 'right' });
-  await drag(0.5, 0.1, 0.7, 0.3);
+  await expect(swatch('sky')).toHaveAttribute('aria-pressed', 'true');
+  await expect(swatch('paper')).toHaveAttribute('aria-pressed', 'false');
+  // Excalidraw's letters pick Strata's tools: its own switch is off; the
+  // tools the board no longer has are no letters. The board has the keys
+  // once clicked.
+  const paper = await box(page, '.board-stage');
+  await page.mouse.click(paper.x + paper.width * 0.8, paper.y + paper.height * 0.9);
+  await page.keyboard.press('t');
+  await expect.poll(tool).toBe('text');
+  await expect(win.locator('.board-tool.is-active input')).toHaveValue('text');
+  await write(0.3, 'Небо');
+  await write(0.6, 'Море');
   await expect.poll(paints).toEqual([
-    ['rectangle', sky, paper],
-    ['ellipse', sky, yellow],
+    ['text', sky],
+    ['text', sky],
   ]);
-  // The selection takes the colour in one step of undo.
   await page.keyboard.press('v');
   await expect.poll(tool).toBe('selection');
+  await page.keyboard.press('o');
+  await page.keyboard.press('r');
+  await expect.poll(tool).toBe('selection');
+  await page.keyboard.press('h');
+  await expect.poll(tool).toBe('hand');
+  await page.keyboard.press('v');
+  // The selection takes the colour in one step of undo.
   await page.keyboard.press('ControlOrMeta+a');
   await swatch('pink').click();
   await expect.poll(paints).toEqual([
-    ['rectangle', pink, paper],
-    ['ellipse', pink, yellow],
+    ['text', pink],
+    ['text', pink],
   ]);
   await page.keyboard.press('ControlOrMeta+z');
   await expect.poll(paints).toEqual([
-    ['rectangle', sky, paper],
-    ['ellipse', sky, yellow],
+    ['text', sky],
+    ['text', sky],
   ]);
   await page.keyboard.press('ControlOrMeta+Shift+z');
-  await swatch('none').click({ button: 'right' });
   const kept = [
-    ['rectangle', pink, 'transparent'],
-    ['ellipse', pink, 'transparent'],
+    ['text', pink],
+    ['text', pink],
   ];
   await expect.poll(paints).toEqual(kept);
   // The colours are the document's: the board opened again has them.

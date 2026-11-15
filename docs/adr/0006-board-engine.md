@@ -4,6 +4,7 @@
 - Дата: 2026-10-14
 - Связано: [05-domain-model.md](../05-domain-model.md) (§4.2, §12, §13), [06-canvas-ux.md](../06-canvas-ux.md) §13.2, [07-design-system.md](../07-design-system.md) (§3.2, §8.4), [10-storage-sync-collab.md](../10-storage-sync-collab.md) (§2.4, §8.4, §9.2, §11, §13), [12-mcp-ai.md](../12-mcp-ai.md) §7, [13-interop.md](../13-interop.md) §2.8, [14-nfr.md](../14-nfr.md), [15-architecture.md](../15-architecture.md) (§2.3, §7, §8.4, §8.5), [16-roadmap.md](../16-roadmap.md) (§5.2, §8.2), [ADR-0003](0003-sync-engine.md), [ADR-0004](0004-app-shell.md), [ADR-0005](0005-rendering.md), [ADR-0007](0007-text-editor.md); исследования [R5](../research/R5-board-engine.md) (главное), [R3](../research/R3-crdt-sync.md), [R2](../research/R2-obsidian-format.md), [R4](../research/R4-app-shell-rendering.md)
 - Уточнено: [ADR-0010](0010-kinds-not-classes.md) — классов нет: «Референсы» — обычная доска
+- Уточнено 2026-11-15 (✅ владелец: доска неюзабельна, меньше функций, главное — картинки и текст): на панели только выбор, рука, текст, «Картинка…» и виджеты; фигуры, стрелки, линии, карандаш и ластик убраны с панели (Excalidraw их по-прежнему рисует — старые доски открываются как были), палитра — цвет текста. Движок не меняется ([06](../06-canvas-ux.md) §13.2)
 
 ## Контекст
 

@@ -83,6 +83,36 @@ export async function linkPreview(id: string): Promise<boolean> {
 }
 
 /**
+ * A picture by its link (06 §13.2, ADR-0012): what a browser gives when a
+ * picture is dragged from it. On desktop the core fetches it — a link to a
+ * picture or a page's picture, PNG, JPEG, GIF, WebP or AVIF up to 5 MiB; a
+ * browser page cannot read another site (Q-13-17): null there, and when
+ * there is no picture.
+ */
+export async function pictureOf(url: string): Promise<File | null> {
+  if (!isTauri()) return null;
+  const { invoke } = await import('@tauri-apps/api/core');
+  const bytes = new Uint8Array(await invoke<ArrayBuffer>('picture', { url }));
+  if (bytes.length === 0) return null;
+  const type = pictureType(bytes);
+  if (!type) return null;
+  const name = new URL(url).pathname.split('/').pop() || 'picture';
+  return new File([bytes], name, { type });
+}
+
+/** A picture's type by its first bytes: the formats the core lets through. */
+export function pictureType(b: Uint8Array): string | null {
+  const at = (i: number, ...v: number[]) => v.every((x, k) => b[i + k] === x);
+  const ascii = (i: number, s: string) => at(i, ...[...s].map((c) => c.charCodeAt(0)));
+  if (at(0, 0x89, 0x50, 0x4e, 0x47)) return 'image/png';
+  if (at(0, 0xff, 0xd8, 0xff)) return 'image/jpeg';
+  if (ascii(0, 'GIF8')) return 'image/gif';
+  if (ascii(0, 'RIFF') && ascii(8, 'WEBP')) return 'image/webp';
+  if (ascii(4, 'ftypavi')) return 'image/avif';
+  return null;
+}
+
+/**
  * The home screen's backend (✅ Q-16-12): on desktop the Rust core over
  * Tauri IPC, workspaces in folders; in a browser the same core as WASM,
  * workspaces in IndexedDB (e2e, `pnpm dev`).

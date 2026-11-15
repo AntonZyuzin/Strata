@@ -5583,6 +5583,39 @@ test.describe('a workspace on the core', () => {
     await expect
       .poll(() => page.evaluate(() => window.__strataWs?.board?.files().length ?? 0))
       .toBe(1);
+    // «Картинка…» on the toolbar: the chooser, the picture in the middle of the view.
+    const fromBar = page.waitForEvent('filechooser');
+    await win.getByRole('button', { name: 'Картинка…' }).click();
+    await (await fromBar).setFiles({
+      name: 'второй.png',
+      mimeType: 'image/png',
+      buffer: Buffer.from(png, 'base64'),
+    });
+    await expect.poll(elements).toEqual(['embeddable', 'image', 'image']);
+    // A picture dragged out of a browser is a link: a browser page cannot
+    // load it (Q-13-17) — it says so, and nothing is put on the board.
+    await page.evaluate(() => {
+      const dt = new DataTransfer();
+      dt.setData('text/uri-list', 'https://example.com/cat.png');
+      dt.setData('text/html', '<img src="https://example.com/cat.png">');
+      const stage = document.querySelector('.board-window .board-stage') as HTMLElement;
+      const r = stage.getBoundingClientRect();
+      for (const type of ['dragover', 'drop']) {
+        stage.dispatchEvent(
+          new DragEvent(type, {
+            dataTransfer: dt,
+            bubbles: true,
+            cancelable: true,
+            clientX: r.left + r.width / 2,
+            clientY: r.top + r.height / 2,
+          }),
+        );
+      }
+    });
+    await expect(page.locator('.toast')).toContainText(
+      'В браузере картинку по ссылке не загрузить',
+    );
+    await expect.poll(elements).toEqual(['embeddable', 'image', 'image']);
   });
 
   test('widgets on a board: «Заметка» and «To-do» keep what is written, their [[links]] are wires (ADR-0006 item 4)', async ({

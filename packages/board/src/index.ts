@@ -11,7 +11,6 @@ export {
   BOARD_TOOL_KEYS,
   BOARD_TOOLS,
   type BoardColorName,
-  type BoardPaint,
   type BoardTool,
 } from './tools';
 export * from './widgets';

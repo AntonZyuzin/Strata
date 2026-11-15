@@ -5131,6 +5131,29 @@ test.describe('a workspace on the core', () => {
       return { prevented: over.defaultPrevented, effect: dt.dropEffect };
     });
     expect(refused).toEqual({ prevented: true, effect: 'none' });
+    // So is a picture dragged from a browser — a link, not a file; a field
+    // still takes a link or text typed in by the drop.
+    const link = await page.evaluate(() => {
+      const drag = (target: Element | null, type: string) => {
+        const dt = new DataTransfer();
+        dt.setData('text/uri-list', 'https://example.com/cat.png');
+        dt.setData('text/plain', 'https://example.com/cat.png');
+        const e = new DragEvent(type, { dataTransfer: dt, bubbles: true, cancelable: true });
+        target?.dispatchEvent(e);
+        return e.defaultPrevented;
+      };
+      const field = document.createElement('input');
+      document.body.append(field);
+      const probe = document.querySelector('.ws-panel-probe');
+      const out = {
+        over: drag(probe, 'dragover'),
+        drop: drag(probe, 'drop'),
+        field: drag(field, 'dragover'),
+      };
+      field.remove();
+      return out;
+    });
+    expect(link).toEqual({ over: true, drop: true, field: false });
   });
 
   test('Z: a bubble takes a size by hand here and the rules back, one step each (06 §4.2)', async ({

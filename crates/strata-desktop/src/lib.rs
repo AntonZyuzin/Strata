@@ -241,6 +241,42 @@ async fn preview(state: tauri::State<'_, Core>, id: String) -> Result<bool, Stri
     }
 }
 
+/// Whether the window may go to `url`: the app's own page — `tauri://localhost`,
+/// `http(s)://tauri.localhost` on Windows, the dev server under `pnpm
+/// desktop:dev` — and the page's own frames (`blob:` of a PDF, 06 §13.4;
+/// `about:blank`). Anything else stays out: a picture or a link let go where
+/// the page takes none would put itself in place of the app, with no way back.
+fn own_page(url: &tauri::Url, dev: Option<&tauri::Url>) -> bool {
+    match url.scheme() {
+        "tauri" => url.host_str() == Some("localhost"),
+        "blob" => true,
+        "about" => matches!(url.path(), "blank" | "srcdoc"),
+        "http" | "https" => {
+            url.host_str() == Some("tauri.localhost")
+                || dev.is_some_and(|d| d.origin() == url.origin())
+        }
+        _ => false,
+    }
+}
+
+/// A link the page opens in a new window (`target="_blank"`: the panel's link
+/// of an asset, 06 §13.4): a page of the web or a mail goes to the system's
+/// browser or mail; the page's own file (`blob:`) opens in a window of its
+/// own; nothing else opens.
+fn new_window<R: tauri::Runtime>(url: &tauri::Url) -> tauri::webview::NewWindowResponse<R> {
+    use tauri::webview::NewWindowResponse;
+    match url.scheme() {
+        "http" | "https" | "mailto" => {
+            if let Err(e) = open::that_detached(url.as_str()) {
+                eprintln!("could not open {url}: {e}");
+            }
+            NewWindowResponse::Deny
+        }
+        "blob" => NewWindowResponse::Allow,
+        _ => NewWindowResponse::Deny,
+    }
+}
+
 /// Starts the desktop application.
 pub fn run() {
     let mut builder = tauri::Builder::default().plugin(tauri_plugin_dialog::init());
@@ -261,6 +297,24 @@ pub fn run() {
                     desk: Desk::default(),
                 });
             app.manage(Core(Mutex::new(loaded)));
+            // The window is built here, not from tauri.conf.json, to keep it on
+            // the app's own page (`own_page`): its config has `create: false`.
+            let config = app
+                .config()
+                .app
+                .windows
+                .first()
+                .cloned()
+                .ok_or("tauri.conf.json has no window")?;
+            let dev = if cfg!(dev) {
+                app.config().build.dev_url.clone()
+            } else {
+                None
+            };
+            tauri::WebviewWindowBuilder::from_config(app.handle(), &config)?
+                .on_navigation(move |url| own_page(url, dev.as_ref()))
+                .on_new_window(|url, _| new_window(&url))
+                .build()?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -444,6 +498,40 @@ mod update_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_window_stays_on_the_apps_own_page() {
+        let url = |s: &str| tauri::Url::parse(s).unwrap();
+        let dev = url("http://localhost:5173/");
+        for own in [
+            "tauri://localhost/index.html",
+            "http://tauri.localhost/",
+            "https://tauri.localhost/?ws=1",
+            "blob:tauri://localhost/5f1c",
+            "about:blank",
+        ] {
+            assert!(own_page(&url(own), None), "{own}");
+        }
+        assert!(own_page(&url("http://localhost:5173/?plain"), Some(&dev)));
+        for away in [
+            "file:///Users/me/Pictures/cat.png",
+            "https://example.com/cat.png",
+            "http://localhost:5173/",
+            "tauri://example.com/",
+            "data:image/png;base64,AAAA",
+            "about:config",
+        ] {
+            assert!(!own_page(&url(away), None), "{away}");
+        }
+        assert!(!own_page(&url("http://localhost:4000/"), Some(&dev)));
+    }
+
+    #[test]
+    fn the_window_is_built_by_the_shell_not_from_the_config() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("tauri.conf.json");
+        assert_eq!(conf["app"]["windows"][0]["create"], false);
+    }
 
     #[test]
     fn machine_info_is_filled() {

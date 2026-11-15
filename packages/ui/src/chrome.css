@@ -27,6 +27,14 @@
   box-sizing: border-box;
 }
 
+/* Selected text anywhere — fields, the note's editor, the board's text: the
+   accent under dark text (07 §2.2). The engine's own highlight is light under
+   our light text, and the selection was not seen. */
+::selection {
+  background: var(--st-color-selection-bg);
+  color: var(--st-color-selection-fg);
+}
+
 html,
 body,
 #root {
@@ -1215,12 +1223,6 @@ button:focus-visible {
   background: transparent;
   border: 0;
   outline: none;
-}
-
-.tab-menu-prompt > input::selection,
-.name-input::selection {
-  background: var(--st-color-selection-bg);
-  color: var(--st-color-selection-fg);
 }
 
 .tab-menu-list {
@@ -3650,11 +3652,6 @@ button.ws-path-canonical:hover:not(:disabled) {
   border: var(--u) solid var(--st-color-frame);
   box-shadow: var(--st-bevel-sunken);
   outline: none;
-}
-
-.ws-path-input::selection {
-  background: var(--st-color-selection-bg);
-  color: var(--st-color-selection-fg);
 }
 
 .ws-path-input[aria-invalid="true"] {

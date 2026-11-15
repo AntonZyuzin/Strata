@@ -19,6 +19,26 @@ describe('design tokens', () => {
     expect(vars['--st-font-ui-prop']).toContain('Tiny5');
   });
 
+  it('keeps selected text readable, in focus and out of it (WCAG 1.4.3)', () => {
+    // Relative luminance and contrast ratio of WCAG 2.1.
+    const lum = (hex: string) => {
+      const [r, g, b] = [1, 3, 5].map((i) => {
+        const c = Number.parseInt(hex.slice(i, i + 2), 16) / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      });
+      return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
+    };
+    const ratio = (a: string, b: string) => {
+      const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+    };
+    const c = fog.color;
+    expect(ratio(c.selectionFg, c.selectionBg)).toBeGreaterThanOrEqual(4.5);
+    expect(ratio(c.text, c.selectionBlur)).toBeGreaterThanOrEqual(4.5);
+    // Out of focus the selection still stands out of the editor's ground.
+    expect(ratio(c.selectionBlur, c.surfaceSunken)).toBeGreaterThan(1.5);
+  });
+
   it('rounds the pixel unit and never goes below 1', () => {
     expect(pixelUnit(1)).toBe(1);
     expect(pixelUnit(1.25)).toBe(1);

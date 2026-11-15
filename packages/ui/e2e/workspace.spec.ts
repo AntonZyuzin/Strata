@@ -632,6 +632,72 @@ for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScal
   });
 }
 
+test('selected text is dark on the accent in fields and notes, light on grey out of focus (owner 2026-11-15)', async ({
+  page,
+}) => {
+  await page.goto('/?plain');
+  await createWorkspace(page, 'Выделение');
+  await createNode(page, 560, 360, 'Идея');
+  const colours = await page.evaluate(() => {
+    const css = getComputedStyle(document.documentElement);
+    const rgb = (v: string) => {
+      const probe = document.createElement('i');
+      probe.style.color = v;
+      document.body.append(probe);
+      const out = getComputedStyle(probe).color;
+      probe.remove();
+      return out;
+    };
+    return {
+      bg: rgb(css.getPropertyValue('--st-color-selection-bg')),
+      fg: rgb(css.getPropertyValue('--st-color-selection-fg')),
+      blur: rgb(css.getPropertyValue('--st-color-selection-blur')),
+      text: rgb(css.getPropertyValue('--st-color-text')),
+    };
+  });
+  // Every field: the engine's own highlight gives way to the accent — one rule
+  // of the Chrome for all (read from the style sheet: WebKit computes no
+  // style of `::selection`).
+  const rule = await page.evaluate(() => {
+    for (const sheet of document.styleSheets) {
+      for (const r of sheet.cssRules) {
+        if (r instanceof CSSStyleRule && r.selectorText === '::selection') {
+          return { bg: r.style.background, fg: r.style.color };
+        }
+      }
+    }
+    return null;
+  });
+  expect(rule).toEqual({
+    bg: 'var(--st-color-selection-bg)',
+    fg: 'var(--st-color-selection-fg)',
+  });
+  // A note: the drawn selection and its text.
+  await select(page, 'Идея');
+  await page.keyboard.press('Enter');
+  const editor = page.locator('.note-window .cm-content');
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.keyboard.type('Первая строка заметки', { delay: 20 });
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Shift+ArrowLeft');
+  const drawn = () =>
+    page.evaluate(() => {
+      const layer = document.querySelector('.note-window .cm-selectionBackground');
+      const mark = document.querySelector('.note-window .cm-st-selected');
+      return {
+        bg: layer ? getComputedStyle(layer).backgroundColor : null,
+        fg: mark ? getComputedStyle(mark).color : null,
+      };
+    });
+  await expect.poll(drawn).toEqual({ bg: colours.bg, fg: colours.fg });
+  // Out of focus the selection stays, quiet, and its text is the text's own.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await expect.poll(drawn).toEqual({ bg: colours.blur, fg: null });
+  expect(
+    await editor.evaluate((el) => getComputedStyle(el.querySelector('.cm-line') ?? el).color),
+  ).toBe(colours.text);
+});
+
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
   test(`a list's panel and «Слои» keep their size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
     browser,

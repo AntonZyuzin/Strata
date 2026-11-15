@@ -70,6 +70,8 @@ export const fog = {
     titleFg: palette.ink850,
     selectionBg: palette.lime400,
     selectionFg: palette.ink850,
+    /** Selected text of an editor out of focus: quiet, under light text. */
+    selectionBlur: palette.ink600,
     focus: palette.lime400,
     /** The one accent: the active tab, the default action, selection (owner, 2026-10-24). */
     accent: palette.lime400,

@@ -3831,6 +3831,15 @@ fn a_background_is_the_workspaces_or_a_networks_own() {
     photo.desaturate = 0.5;
     set(&mut w, &root, Some(photo.clone())).expect("one's own picture");
     assert_eq!(w.network_view(&root).expect("view").background, Some(photo));
+    // The dots over it (07 §7.2) are kept with it: none, and clear.
+    for dots in [0.0, 0.8] {
+        let dotted = Background {
+            dots,
+            ..Background::preset("dusk")
+        };
+        set(&mut w, &folder, Some(dotted.clone())).expect("dots");
+        assert_eq!(own(&mut w), Some(dotted));
+    }
 }
 
 #[test]
@@ -3846,6 +3855,27 @@ fn a_background_comes_as_json_with_the_pipelines_defaults() {
             net: "n".to_owned(),
             background: Some(Background::preset("depth")),
         }
+    );
+    // The dots that move with the canvas (07 §7.2): a background stored
+    // before them has them at the default; their opacity is 0–1.
+    let Op::SetBackground {
+        background: Some(b),
+        ..
+    } = op
+    else {
+        unreachable!()
+    };
+    assert_eq!(b.dots, 0.4);
+    assert!(b.invalid().is_none());
+    let none = Background {
+        dots: 0.0,
+        ..b.clone()
+    };
+    assert!(none.invalid().is_none());
+    let loud = Background { dots: 1.5, ..b };
+    assert_eq!(
+        loud.invalid().as_deref(),
+        Some("background dots 1.5: not within 0–1")
     );
 }
 

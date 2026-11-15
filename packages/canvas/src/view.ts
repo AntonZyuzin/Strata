@@ -131,6 +131,7 @@ export class CanvasView {
     this.decor = new Decor(pixelUnit(dpr), dpr, uiFontPx(dpr));
     this.decor.saysKind = (n) => this.pictures.has(n.id) || this.kindIcon(n) !== undefined;
     this.wires.setUnit(pixelUnit(dpr) / dpr);
+    this.background.setScale(pixelUnit(dpr) / dpr, dpr);
     this.rollupStyle = {
       color: PAPER,
       alpha: fog.scene.ghostAlpha,
@@ -336,6 +337,12 @@ export class CanvasView {
     const p95 = this.background.setPicture(px, look);
     this.invalidate();
     return p95;
+  }
+
+  /** The background's dots, `Background.dots` 0..1 (07 §7.2): over the picture, nothing baked again. */
+  setBackgroundDots(dots: number): void {
+    this.background.setDots(dots);
+    this.invalidate();
   }
 
   private readableOn = false;

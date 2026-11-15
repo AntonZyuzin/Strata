@@ -1,7 +1,8 @@
-import { fog, palette } from '@strata/design-tokens';
+import { fog, hex, palette } from '@strata/design-tokens';
 import { CanvasSource, Container, Sprite, Texture, TilingSprite } from 'pixi.js';
 import { luminanceQuantile, type Pixels } from './backdrop';
 import type { Camera } from './camera';
+import { DotGrid } from './dots';
 
 /**
  * The background of the Scene (07 §7.2): one «cover» sprite of a processed
@@ -10,10 +11,12 @@ import type { Camera } from './camera';
  * spots move with the same parallax as the picture, so they are baked into
  * it, their alpha the background's `fog` (0 — none): two full-screen layers
  * instead of five, which matters for fill rate on weak GPUs and software
- * WebGL. Nothing is blurred per frame and nothing moves by itself; the layer
- * redraws only with the camera, so idle costs nothing (07 §10.2) — but for
- * the crossfade of 300 ms when the background changes (07 §7.4), instant
- * with «less motion».
+ * WebGL. Over them, the dots that move with the canvas (`DotGrid`, 07 §7.2:
+ * the picture's parallax is a few per cent, panning reads against the dots),
+ * their opacity the background's `dots`. Nothing is blurred per frame and
+ * nothing moves by itself; the layer redraws only with the camera, so idle
+ * costs nothing (07 §10.2) — but for the crossfade of 300 ms when the
+ * background changes (07 §7.4), instant with «less motion».
  */
 
 /** Extra size of the cover on each side, so the parallax never shows an edge. */
@@ -63,13 +66,19 @@ function bake(px: Pixels, fogAmount: number): { texture: Texture; p95: number } 
   return { texture, p95 };
 }
 
-/** What a background lays over its picture (07 §7.1): `Background.grain`, `Background.fog`. */
+/** What a background lays over its picture (07 §7.1): `Background.grain` and `.fog`. */
 export interface BackgroundLook {
   /** 0..1: the grain's opacity is grain × 6 %. */
   grain: number;
   /** 0..1: 0 — no fog, else the spots' strength. */
   fog: number;
 }
+
+/**
+ * The dots' opacity at full strength: paper on a ground of L ≤ 0.10 (07 §7.1)
+ * through the grain — faint (0.4) lifts a dot by about 45 levels of 255.
+ */
+export const DOTS_MAX = 0.6;
 
 /** The crossfade between two backgrounds, ms (07 §7.4, §2.8 `bgFade`). */
 const FADE_MS = fog.dur.bgFade;
@@ -105,6 +114,8 @@ export class BackgroundLayer {
   private readonly outgoing = new Sprite();
   private readonly grain: TilingSprite;
   private readonly grainTex = grainTexture();
+  /** The dots that move with the canvas (07 §7.2); the view gives their unit and ratio. */
+  private readonly dots = new DotGrid(hex(palette.paper), 1, 1);
   private picture: Texture | null = null;
   private leaving: Texture | null = null;
   /** When the crossfade began; −1 — at its first frame; null — none. */
@@ -115,6 +126,8 @@ export class BackgroundLayer {
   /** The readable mode (07 §11.4): no grain, no fog. */
   private readable = false;
   private look: BackgroundLook;
+  /** `Background.dots` shown, 0..1 (07 §7.1). */
+  private dotsShown = 0;
 
   /** @param look the grain and the fog until a background gives its own (07 §7.2). */
   constructor(look: BackgroundLook = { grain: fog.scene.grainOpacity / 0.06, fog: 0.5 }) {
@@ -122,8 +135,22 @@ export class BackgroundLayer {
     this.grain = new TilingSprite({ texture: this.grainTex });
     this.cover.visible = false;
     this.outgoing.visible = false;
-    this.container.addChild(this.outgoing, this.cover, this.grain);
+    this.container.addChild(this.outgoing, this.cover, this.grain, this.dots.mesh);
     this.applyGrain();
+  }
+
+  /** The pixel unit (CSS px) and the device ratio the dots are drawn in (07 §2.3). */
+  setScale(unit: number, ratio: number): void {
+    this.dots.setScale(unit, ratio);
+  }
+
+  /**
+   * The background's dots, `Background.dots` 0..1 (07 §7.1): they lie over
+   * the picture, so a new strength bakes nothing again; 0 — none.
+   */
+  setDots(dots: number): void {
+    this.dotsShown = Math.max(0, Math.min(1, dots));
+    this.dots.setStrength(this.dotsShown, DOTS_MAX);
   }
 
   /**
@@ -168,11 +195,12 @@ export class BackgroundLayer {
     return false;
   }
 
-  /** The grain and the fog shown, whether a crossfade runs: for tests. */
-  state(): { grain: number; fog: number; fading: boolean } {
+  /** The grain, the fog and the dots shown, whether a crossfade runs: for tests. */
+  state(): { grain: number; fog: number; dots: number; fading: boolean } {
     return {
       grain: this.grain.visible ? this.look.grain : 0,
       fog: this.readable ? 0 : this.look.fog,
+      dots: this.dotsShown,
       fading: this.fadeStart !== null,
     };
   }
@@ -210,9 +238,11 @@ export class BackgroundLayer {
     }
     this.grain.width = w;
     this.grain.height = h;
+    this.dots.follow(cam, w, h);
   }
 
   destroy(): void {
+    this.dots.destroy();
     this.picture?.destroy(true);
     this.leaving?.destroy(true);
     this.grainTex.destroy(true);

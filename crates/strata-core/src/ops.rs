@@ -192,6 +192,11 @@ pub struct Background {
     /// Animated, by the person's wish only (07 §7.4).
     #[serde(default)]
     pub animated: bool,
+    /// The dots over the picture that move with the canvas, 0–1: their
+    /// opacity; 0 — none (07 §7.2, owner 2026-11-15: panning is read against
+    /// them). A background stored before them has the default.
+    #[serde(default = "Background::default_dots")]
+    pub dots: f64,
 }
 
 impl Background {
@@ -210,6 +215,9 @@ impl Background {
     fn default_grain() -> f64 {
         0.67
     }
+    fn default_dots() -> f64 {
+        0.4
+    }
 
     /// A preset with the pipeline's defaults.
     pub fn preset(id: &str) -> Self {
@@ -222,6 +230,7 @@ impl Background {
             grain: Self::default_grain(),
             fog: 0.0,
             animated: false,
+            dots: Self::default_dots(),
         }
     }
 
@@ -251,6 +260,7 @@ impl Background {
             ("vignette", self.vignette, 0.0, 1.0),
             ("grain", self.grain, 0.0, 1.0),
             ("fog", self.fog, 0.0, 1.0),
+            ("dots", self.dots, 0.0, 1.0),
         ];
         ranges
             .iter()

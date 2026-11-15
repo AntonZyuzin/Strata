@@ -1717,6 +1717,25 @@ button:focus-visible {
   outline: none;
 }
 
+/* «Точки» (07 §7.2): three equal segments across the palette's width, so
+   the frame is the same in every language; a long name ends in «…». */
+.bg-dots {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  padding: 0 calc(4 * var(--u)) calc(4 * var(--u));
+}
+
+.segmented.bg-dots label {
+  min-width: 0;
+}
+
+.bg-dots-name {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .bg-cell {
   border: var(--u) solid var(--st-color-frame);
   background-size: cover;

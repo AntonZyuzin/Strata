@@ -16,9 +16,37 @@ const PRESET_H = Math.round((BACKDROP_SIDE / 2) * 0.625);
 /** Derivatives made this session, by source and parameters: rebuilt, not stored (05 §12). */
 const made = new Map<string, Promise<Pixels>>();
 
+/** The dots' strength of a background that names none (07 §7.1): faint. */
+export const DOTS_DEFAULT = 0.4;
+
+/** A preset with the pipeline's defaults (07 §7.1), as the core fills them; its dots as given. */
+export function presetBackground(id: PresetId, dots = DOTS_DEFAULT): Background {
+  return {
+    source: `preset:${id}`,
+    blur: 8,
+    desaturate: 0.8,
+    maxL: 0.1,
+    vignette: 0.7,
+    grain: 0.67,
+    fog: 0,
+    animated: false,
+    dots,
+  };
+}
+
+/** One's own picture by its SHA-256, the pipeline's defaults; its dots as given. */
+export function pictureBackground(sha: string, dots = DOTS_DEFAULT): Background {
+  return { ...presetBackground('fog', dots), source: `asset:${sha}` };
+}
+
 /** What a background lays over its picture (07 §7.2): its grain and fog; none — the defaults (07 §7.1). */
 export function backgroundLook(b: Background | null): BackgroundLook {
   return { grain: b?.grain ?? 0.67, fog: b?.fog ?? 0 };
+}
+
+/** The dots over a background (07 §7.2), 0..1; none — the default. */
+export function backgroundDots(b: Background | null): number {
+  return b?.dots ?? DOTS_DEFAULT;
 }
 
 /** The readable mode's ceiling of one's own picture's 95th percentile of luminance (07 §11.4). */
@@ -35,6 +63,16 @@ export function plainBackdrop(): Pixels {
 export function backgroundKey(b: Background | null, readable = false): string {
   const key = b ? JSON.stringify(b) : 'preset:fog';
   return readable ? `readable:${key}` : key;
+}
+
+/**
+ * The key of a background's picture: all of it but the dots, which lie over
+ * the picture (07 §7.2) — another strength of them makes no new derivative.
+ */
+export function pictureKey(b: Background | null, readable = false): string {
+  // None is «Туман» with the pipeline's defaults (07 §7.1): the same picture.
+  const { dots: _, ...picture } = b ?? presetBackground('fog');
+  return backgroundKey(picture as Background, readable);
 }
 
 /** The pipeline's numbers of a background (07 §7.1); darker in the readable mode (§11.4). */
@@ -77,7 +115,7 @@ export function backgroundPixels(
   asset: (sha: string) => Promise<Uint8Array>,
   readable = false,
 ): Promise<Pixels> {
-  const key = backgroundKey(b, readable);
+  const key = pictureKey(b, readable);
   const known = made.get(key);
   if (known) return known;
   const source = b?.source ?? 'preset:fog';

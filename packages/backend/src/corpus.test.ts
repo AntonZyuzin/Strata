@@ -246,6 +246,7 @@ async function makeWorkspace(core: Core, root: string): Promise<void> {
     grain: 0.2,
     fog: 0.3,
     animated: false,
+    dots: 0.8,
   };
   await step(
     [{ op: 'setBackground', net: root, background: fog }],

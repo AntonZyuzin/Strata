@@ -2,6 +2,7 @@ import type { Background } from '@strata/backend';
 import { generatePreset, type PresetId, processBackdrop } from '@strata/canvas';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { DOTS_DEFAULT, presetBackground } from './backgrounds';
 
 /** CSS px between the window and the canvas's edges. */
 const MARGIN = 8;
@@ -9,24 +10,15 @@ const MARGIN = 8;
 /** The procedural presets of 07 §7.3, as the core knows them (`BACKGROUND_PRESETS`). */
 export const BACKGROUND_PRESETS: readonly PresetId[] = ['fog', 'depth', 'dusk', 'dust'];
 
-/** A preset with the pipeline's defaults (07 §7.1), as the core fills them. */
-export function presetBackground(id: PresetId): Background {
-  return {
-    source: `preset:${id}`,
-    blur: 8,
-    desaturate: 0.8,
-    maxL: 0.1,
-    vignette: 0.7,
-    grain: 0.67,
-    fog: 0,
-    animated: false,
-  };
-}
-
-/** One's own picture by its SHA-256, the pipeline's defaults. */
-export function pictureBackground(sha: string): Background {
-  return { ...presetBackground('fog'), source: `asset:${sha}` };
-}
+/**
+ * The dots' strengths of the palette's row «Точки» (07 §7.2, owner
+ * 2026-11-15): none, faint — the default — and clear.
+ */
+export const DOT_LEVELS = [
+  { id: 'none', dots: 0 },
+  { id: 'faint', dots: DOTS_DEFAULT },
+  { id: 'clear', dots: 0.8 },
+] as const;
 
 /** A preset's swatch, made once: the preset small, through the pipeline. */
 const swatches = new Map<PresetId, string>();
@@ -63,6 +55,8 @@ export function BackgroundPalette(props: {
   root: boolean;
   /** The network's own background; none — the workspace's. */
   current: Background | null;
+  /** The background shown: the network's own, else the workspace's; none — the default. */
+  shown: Background | null;
   x: number;
   y: number;
   bounds?: DOMRect | undefined;
@@ -114,12 +108,17 @@ export function BackgroundPalette(props: {
       : c.t === 'own'
         ? t(locale, 'bg.own')
         : t(locale, `proto.bg.${c.id}` as MessageKey);
+  /** The dots shown now: a new picture or preset keeps them. */
+  const dots = props.shown?.dots ?? DOTS_DEFAULT;
   const pick = (i: number) => {
     const c = cells[i];
     if (!c) return;
     if (c.t === 'own') file.current?.click();
-    else props.onPick(c.t === 'inherit' ? null : presetBackground(c.id));
+    else props.onPick(c.t === 'inherit' ? null : presetBackground(c.id, dots));
   };
+  /** The row «Точки»: the shown background with these dots, as this network's own. */
+  const pickDots = (level: number) =>
+    props.onPick({ ...(props.shown ?? presetBackground('fog')), dots: level });
 
   const label = t(locale, props.root ? 'bg.workspace' : 'bg.network');
   return (
@@ -196,6 +195,33 @@ export function BackgroundPalette(props: {
             );
           })}
         </div>
+        <div className="tab-menu-header" aria-hidden="true">
+          {t(locale, 'bg.dots')}
+        </div>
+        <fieldset className="segmented bg-dots">
+          <legend className="sr-only">{t(locale, 'bg.dots')}</legend>
+          {DOT_LEVELS.map((l) => (
+            <label
+              key={l.id}
+              title={t(locale, `bg.dots.${l.id}Hint`)}
+              className={Math.abs(dots - l.dots) < 0.05 ? 'is-active' : undefined}
+            >
+              <input
+                type="radio"
+                name="bg-dots"
+                value={l.id}
+                checked={Math.abs(dots - l.dots) < 0.05}
+                onChange={() => pickDots(l.dots)}
+                onKeyDown={(e) => {
+                  if (e.key !== 'Escape') return;
+                  e.preventDefault();
+                  props.onClose();
+                }}
+              />
+              <span className="bg-dots-name">{t(locale, `bg.dots.${l.id}`)}</span>
+            </label>
+          ))}
+        </fieldset>
         <input
           ref={file}
           className="sr-only"

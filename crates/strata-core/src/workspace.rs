@@ -704,6 +704,7 @@ fn background_val(b: &Background) -> Val {
         ("grain", Val::Float(b.grain)),
         ("fog", Val::Float(b.fog)),
         ("animated", Val::Bool(b.animated)),
+        ("dots", Val::Float(b.dots)),
     ])
 }
 
@@ -719,6 +720,8 @@ fn background_of(v: &Val) -> Option<Background> {
     b.grain = num("grain", b.grain);
     b.fog = num("fog", b.fog);
     b.animated = matches!(v.get("animated"), Some(Val::Bool(true)));
+    // Kept before the dots (07 §7.2): the default ones.
+    b.dots = num("dots", b.dots);
     Some(b)
 }
 

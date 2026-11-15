@@ -97,8 +97,17 @@ import { netItems, searchClient, visited, visits } from '../search';
 import { Glyph } from '../TabBar';
 import { AssetWindow, type Viewable, viewable } from './AssetWindow';
 import { areasOf, nextArea } from './areas';
-import { BackgroundPalette, pictureBackground } from './BackgroundPalette';
-import { backgroundKey, backgroundLook, backgroundPixels, plainBackdrop } from './backgrounds';
+import { BackgroundPalette } from './BackgroundPalette';
+import {
+  backgroundDots,
+  backgroundKey,
+  backgroundLook,
+  backgroundPixels,
+  DOTS_DEFAULT,
+  pictureBackground,
+  pictureKey,
+  plainBackdrop,
+} from './backgrounds';
 import { ColorPalette } from './ColorPalette';
 import { CommandPalette } from './CommandPalette';
 import {
@@ -373,6 +382,8 @@ export function WorkspaceScreen(props: {
   const readable = useReadable(props.prefs.readable);
   const readableRef = useRef(readable);
   readableRef.current = readable;
+  /** The dots over the background shown (07 §7.2), for the view made after the first render. */
+  const dotsRef = useRef(DOTS_DEFAULT);
   /**
    * Shows a network (the current one when none is given), after what is
    * queued; `way` is the entry path to it (05 §9.3), ids from the root —
@@ -1736,6 +1747,7 @@ export function WorkspaceScreen(props: {
         } else {
           // The readable mode's ground is plain (07 §11.4).
           v.setBackground(readableRef.current ? plainBackdrop() : fog(), backgroundLook(null));
+          v.setBackgroundDots(dotsRef.current);
         }
         // Test hook for e2e: the canvas, the graph and when the core has it all.
         (window as unknown as { __strataWs: unknown }).__strataWs = {
@@ -3744,8 +3756,14 @@ export function WorkspaceScreen(props: {
   // The network's background on the canvas (07 §7.4): its own, else the
   // workspace's, else «Туман» — made once per source and parameters.
   const shownBackground = net ? (net.background ?? net.workspace_background ?? null) : null;
-  const shownKey = backgroundKey(shownBackground, readable);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: by its key: a new object of the same background draws nothing new
+  const shownKey = pictureKey(shownBackground, readable);
+  const shownDots = backgroundDots(shownBackground);
+  dotsRef.current = shownDots;
+  // The dots lie over the picture: another strength bakes nothing again (07 §7.2).
+  useEffect(() => {
+    viewRef.current?.setBackgroundDots(shownDots);
+  }, [shownDots]);
+  // biome-ignore lint/correctness/useExhaustiveDependencies: by its picture's key: a new object of the same picture, or other dots, draws nothing new
   useEffect(() => {
     const v = viewRef.current;
     // `&plain`: no background (e2e on software WebGL).
@@ -4283,6 +4301,7 @@ export function WorkspaceScreen(props: {
           locale={locale}
           root={net.net === opened.root}
           current={net.background ?? null}
+          shown={shownBackground}
           x={bgPick.x}
           y={bgPick.y}
           bounds={seenBounds()}
@@ -4297,7 +4316,12 @@ export function WorkspaceScreen(props: {
             void file
               .arrayBuffer()
               .then((b) => core.putAsset(new Uint8Array(b)))
-              .then((sha) => setBackground(net.net, pictureBackground(sha)))
+              .then((sha) =>
+                setBackground(
+                  net.net,
+                  pictureBackground(sha, shownBackground?.dots ?? DOTS_DEFAULT),
+                ),
+              )
               .catch(failed);
           }}
           onClose={() => {

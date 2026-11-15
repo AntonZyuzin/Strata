@@ -633,6 +633,8 @@ export interface Background {
   /** The fog, 0–1; 0 — none. */
   fog: number;
   animated: boolean;
+  /** The dots that move with the canvas, 0–1: their opacity; 0 — none (07 §7.2). */
+  dots: number;
 }
 
 export interface History {

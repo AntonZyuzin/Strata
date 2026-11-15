@@ -6937,13 +6937,13 @@ test.describe('a workspace on the core', () => {
     // The full Scene: the background is drawn.
     await page.goto('/');
     await createWorkspace(page, 'Переходы');
-    type Layer = { state(): { grain: number; fog: number; fading: boolean } };
+    type Layer = { state(): { grain: number; fog: number; dots: number; fading: boolean } };
     const state = () =>
       page.evaluate(() =>
         ((window.__strataWs as WsHook).view as unknown as { background: Layer }).background.state(),
       );
-    // «Туман» with the pipeline's numbers: grain 0.67, no fog (07 §7.1).
-    await expect.poll(state).toEqual({ grain: 0.67, fog: 0, fading: false });
+    // «Туман» with the pipeline's numbers: grain 0.67, no fog, faint dots (07 §7.1).
+    await expect.poll(state).toEqual({ grain: 0.67, fog: 0, dots: 0.4, fading: false });
     // «Сумерки» from the menu fades in over «Туман» (07 §7.4), then stays.
     const c = await box(page, '.proto-canvas');
     await page.mouse.click(c.x + 120, c.y + c.height - 120, { button: 'right' });
@@ -6966,7 +6966,101 @@ test.describe('a workspace on the core', () => {
     await page.locator('.bg-palette').getByRole('option', { name: 'Сумерки' }).click();
     await expect(page.locator('.workspace')).toHaveAttribute('data-background', 'preset:dusk');
     expect(await watching).toBe(true);
-    await expect.poll(state).toEqual({ grain: 0.67, fog: 0, fading: false });
+    await expect.poll(state).toEqual({ grain: 0.67, fog: 0, dots: 0.4, fading: false });
+  });
+
+  test('the dots over a background move with the canvas; «Точки» sets them, one step, nothing baked again (07 §7.2, §7.4)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    // The full Scene: the background and its dots are drawn.
+    await page.goto('/');
+    await createWorkspace(page, 'Точки');
+    type Layer = { state(): { dots: number; fading: boolean } };
+    type Grid = { mesh: { visible: boolean }; uniforms: { uniforms: Record<string, unknown> } };
+    const state = () =>
+      page.evaluate(() =>
+        ((window.__strataWs as WsHook).view as unknown as { background: Layer }).background.state(),
+      );
+    const grid = () =>
+      page.evaluate(() => {
+        const bg = ((window.__strataWs as WsHook).view as unknown as { background: { dots: Grid } })
+          .background;
+        const u = bg.dots.uniforms.uniforms;
+        return {
+          visible: bg.dots.mesh.visible,
+          origin: Array.from(u.dotOrigin as Float32Array),
+          pitch: u.dotPitch as number,
+        };
+      });
+    // Faint by default (07 §7.1), on the nudge's grid of 24 at 100 %.
+    await expect.poll(state).toMatchObject({ dots: 0.4, fading: false });
+    expect((await grid()).visible).toBe(true);
+    expect((await grid()).pitch).toBe(24);
+    // They move with the canvas: the wheel's zoom moves the grid's origin
+    // with the world's and spreads its step with the zoom.
+    const c = await box(page, '.proto-canvas');
+    const before = (await grid()).origin;
+    await page.mouse.move(c.x + 200, c.y + 150);
+    await page.mouse.wheel(0, -240);
+    await expect.poll(async () => (await grid()).origin[0]).not.toBe(before[0]);
+    const after = await grid();
+    const cam = await page.evaluate(
+      () =>
+        (window.__strataWs as WsHook).view.camera as unknown as {
+          x: number;
+          y: number;
+          zoom: number;
+        },
+    );
+    expect(cam.zoom).toBeGreaterThan(1);
+    expect(after.origin[0]).toBeCloseTo(-cam.x * cam.zoom, 2);
+    expect(after.origin[1]).toBeCloseTo(-cam.y * cam.zoom, 2);
+    expect(after.pitch).toBeCloseTo(24 * cam.zoom, 3);
+    // «Точки» in «Фон пространства»: «Бледные» chosen; «Яркие» sets them without a crossfade.
+    const palette = page.locator('.bg-palette');
+    const open = async () => {
+      await page.mouse.click(c.x + 120, c.y + c.height - 120, { button: 'right' });
+      await page.locator('.context-menu').getByText('Фон пространства', { exact: true }).click();
+      await expect(palette).toBeVisible();
+    };
+    await open();
+    await expect(palette.getByRole('radio', { name: 'Бледные' })).toBeChecked();
+    const watching = page.evaluate(
+      () =>
+        new Promise<boolean>((resolve) => {
+          const bg = ((window.__strataWs as WsHook).view as unknown as { background: Layer })
+            .background;
+          let saw = false;
+          const t0 = performance.now();
+          const tick = () => {
+            if (bg.state().fading) saw = true;
+            if (performance.now() - t0 > 1500) resolve(saw);
+            else requestAnimationFrame(tick);
+          };
+          tick();
+        }),
+    );
+    const level = (name: string) => palette.locator('.bg-dots label', { hasText: name });
+    await level('Яркие').click();
+    await expect(palette).toHaveCount(0);
+    await expect.poll(async () => (await state()).dots).toBe(0.8);
+    expect(await watching).toBe(false);
+    // One step of undo brings the faint ones back.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await state()).dots).toBe(0.4);
+    // «Нет» — none; a preset chosen after keeps them so.
+    await open();
+    await level('Нет').click();
+    await expect.poll(async () => (await state()).dots).toBe(0);
+    expect((await grid()).visible).toBe(false);
+    await open();
+    await palette.getByRole('option', { name: 'Сумерки' }).click();
+    await expect(page.locator('.workspace')).toHaveAttribute('data-background', 'preset:dusk');
+    expect((await state()).dots).toBe(0);
+    await open();
+    await expect(palette.getByRole('radio', { name: 'Нет' })).toBeChecked();
   });
 
   test("a background: the workspace's on the root, a network's own, one's own picture; one step each (07 §7.4)", async ({

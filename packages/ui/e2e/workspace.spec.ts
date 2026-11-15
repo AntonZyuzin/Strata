@@ -3365,6 +3365,80 @@ test.describe('a workspace on the core', () => {
     expect(blocked).toEqual([]);
   });
 
+  test('a floating window moves by its title and sizes by its edges, kept for its node; a picture zooms and pans (owner 2026-11-15)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Рамки');
+    await dropMade(page, 'png', 'Скетч');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Скетч']);
+    await settled(page);
+    await select(page, 'Скетч');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    const win = page.locator('.asset-window');
+    await expect(win).toBeVisible();
+    const view = win.locator('.picture-view');
+    await expect(view).toHaveAttribute('data-zoom', '1.00');
+    // The wheel zooms at the cursor; a drag pans the zoomed picture.
+    const pic = await box(page, '.asset-window .picture-view');
+    await page.mouse.move(pic.x + pic.width / 2, pic.y + pic.height / 2);
+    await page.mouse.wheel(0, -400);
+    await expect
+      .poll(async () => Number(await view.getAttribute('data-zoom')))
+      .toBeGreaterThan(1.5);
+    const shift = () =>
+      win.locator('.picture-img').evaluate((i) => (i as HTMLElement).style.transform);
+    const before = await shift();
+    await page.mouse.down();
+    await page.mouse.move(pic.x + pic.width / 2 + 30, pic.y + pic.height / 2 + 20, { steps: 5 });
+    await page.mouse.up();
+    expect(await shift()).not.toBe(before);
+    // `0` fits it again; a double click zooms in there, another — back.
+    await page.keyboard.press('0');
+    await expect(view).toHaveAttribute('data-zoom', '1.00');
+    await page.mouse.dblclick(pic.x + pic.width / 2, pic.y + pic.height / 2);
+    await expect(view).toHaveAttribute('data-zoom', '3.00');
+    await page.mouse.dblclick(pic.x + pic.width / 2, pic.y + pic.height / 2);
+    await expect(view).toHaveAttribute('data-zoom', '1.00');
+    // The title plate moves the window.
+    const at = await box(page, '.asset-window');
+    const title = await box(page, '.asset-window .window-title h2');
+    await page.mouse.move(title.x + 10, title.y + title.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(title.x - 50, title.y + title.height / 2 + 60, { steps: 6 });
+    await page.mouse.up();
+    const moved = await box(page, '.asset-window');
+    expect(Math.abs(moved.x - (at.x - 60))).toBeLessThanOrEqual(1);
+    expect(Math.abs(moved.y - (at.y + 60))).toBeLessThanOrEqual(1);
+    // The corner sizes it; the picture fits the new room.
+    const corner = await box(page, '.asset-window .window-grip[data-edge="se"]');
+    await page.mouse.move(corner.x + corner.width / 2, corner.y + corner.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(corner.x + corner.width / 2 + 120, corner.y + corner.height / 2 + 90, {
+      steps: 6,
+    });
+    await page.mouse.up();
+    const sized = await box(page, '.asset-window');
+    expect(Math.abs(sized.width - (moved.width + 120))).toBeLessThanOrEqual(1);
+    expect(Math.abs(sized.height - (moved.height + 90))).toBeLessThanOrEqual(1);
+    await expect(win).toHaveAttribute('data-framed', 'true');
+    // A double click on the plate: over the canvas and back to the frame.
+    await page.mouse.dblclick(title.x - 40, sized.y + title.height / 2);
+    await expect(win).toHaveAttribute('data-mode', 'full');
+    await win.locator('.window-title h2').dblclick();
+    await expect(win).toHaveAttribute('data-mode', 'float');
+    expect(await box(page, '.asset-window')).toEqual(sized);
+    // Closed and opened again: the node's frame is kept on the device.
+    await win.locator('.window-close').click();
+    await expect(win).toHaveCount(0);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(win).toBeVisible();
+    expect(await box(page, '.asset-window')).toEqual(sized);
+  });
+
   test('where the WebView has no PDF viewer, pdf.js draws the pages (☑ Q-06-24)', async ({
     page,
   }) => {

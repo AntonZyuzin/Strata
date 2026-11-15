@@ -22,8 +22,10 @@ import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import {
   DockEdge,
   dockRoom,
+  frameStyle,
   type ModeStep,
   modeProps,
+  useWindowFrame,
   type WindowMode,
   WindowTitle,
 } from '../workspace/ContentWindow';
@@ -85,6 +87,8 @@ export function BoardWindow(props: {
   /** ◎: to the bubble on the canvas. */
   onLocate?: (() => void) | undefined;
   onDock?: ((width: number) => void) | undefined;
+  /** Whose frame by hand it keeps on this device (05 §13); none — no frame kept. */
+  frameKey?: string | undefined;
   onChange: () => void;
   onFocus: (inside: boolean) => void;
   onClose: () => void;
@@ -143,6 +147,12 @@ export function BoardWindow(props: {
       },
     },
   ];
+  // Moved or sized by hand, it keeps that frame (06 §2.2).
+  const { frame, onTitleGrab, grips } = useWindowFrame(
+    box,
+    props.frameKey,
+    (props.mode ?? 'float') === 'float',
+  );
   const title = props.name || t(locale, 'note.untitled');
   const colorOf = (name: BoardColorName) =>
     BOARD_COLORS.find((c) => c.name === name)?.color ?? 'transparent';
@@ -157,7 +167,11 @@ export function BoardWindow(props: {
     <section
       ref={box}
       className="window board-window"
-      {...modeProps(props.mode ?? 'float', props.dock ?? null, undefined)}
+      {...modeProps(
+        props.mode ?? 'float',
+        props.dock ?? null,
+        frame ? frameStyle(frame) : undefined,
+      )}
       // `F6` brings the focus here (06 §1.1): the board's keys are its own then.
       tabIndex={-1}
       aria-label={t(locale, 'board.label', { name: title })}
@@ -194,7 +208,9 @@ export function BoardWindow(props: {
         onLocate={props.onLocate}
         closeLabel={t(locale, 'board.close')}
         onClose={props.onClose}
+        onGrab={onTitleGrab}
       />
+      {grips}
       {props.mode === 'pinned' && props.onDock ? (
         <DockEdge
           locale={locale}

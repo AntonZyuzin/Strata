@@ -535,6 +535,77 @@ button:focus-visible {
   box-shadow: var(--st-bevel-sunken);
 }
 
+/* A floating window's edges and corners size it, its title plate moves it
+   (06 §2.2): bands of 6u astride the frame, corners of 10u. */
+.window-grip {
+  position: absolute;
+  z-index: 3;
+}
+
+.window-grip[data-edge="n"],
+.window-grip[data-edge="s"] {
+  left: calc(6 * var(--u));
+  right: calc(6 * var(--u));
+  height: calc(6 * var(--u));
+  cursor: ns-resize;
+}
+
+.window-grip[data-edge="n"] {
+  top: calc(-3 * var(--u));
+}
+
+.window-grip[data-edge="s"] {
+  bottom: calc(-3 * var(--u));
+}
+
+.window-grip[data-edge="e"],
+.window-grip[data-edge="w"] {
+  top: calc(6 * var(--u));
+  bottom: calc(6 * var(--u));
+  width: calc(6 * var(--u));
+  cursor: ew-resize;
+}
+
+.window-grip[data-edge="e"] {
+  right: calc(-3 * var(--u));
+}
+
+.window-grip[data-edge="w"] {
+  left: calc(-3 * var(--u));
+}
+
+.window-grip[data-edge="ne"],
+.window-grip[data-edge="nw"],
+.window-grip[data-edge="se"],
+.window-grip[data-edge="sw"] {
+  width: calc(10 * var(--u));
+  height: calc(10 * var(--u));
+}
+
+.window-grip[data-edge="ne"] {
+  top: calc(-3 * var(--u));
+  right: calc(-3 * var(--u));
+  cursor: nesw-resize;
+}
+
+.window-grip[data-edge="nw"] {
+  top: calc(-3 * var(--u));
+  left: calc(-3 * var(--u));
+  cursor: nwse-resize;
+}
+
+.window-grip[data-edge="se"] {
+  bottom: calc(-3 * var(--u));
+  right: calc(-3 * var(--u));
+  cursor: nwse-resize;
+}
+
+.window-grip[data-edge="sw"] {
+  bottom: calc(-3 * var(--u));
+  left: calc(-3 * var(--u));
+  cursor: nesw-resize;
+}
+
 /* An asset's viewer (06 §13.4): a picture or a video to its size within the
    canvas, a sound's player at a fixed width, a PDF at the board's share. */
 .asset-window {
@@ -567,11 +638,60 @@ button:focus-visible {
   box-shadow: var(--st-bevel-sunken);
 }
 
-.asset-body img,
-.asset-body video {
+.asset-video {
   display: block;
   max-width: 100%;
   max-height: 70vh;
+}
+
+/* The picture fitted, zoomed by the wheel at the cursor and panned by a
+   drag (06 §13.4); sized by hand, the window's body is the picture's room. */
+.picture-view {
+  display: grid;
+  place-items: center;
+  max-width: 100%;
+  overflow: hidden;
+  cursor: zoom-in;
+  outline: none;
+}
+
+.picture-view:focus-visible {
+  box-shadow: inset 0 0 0 var(--u) var(--st-color-focus);
+}
+
+.picture-view[data-zoomed] {
+  cursor: grab;
+}
+
+.picture-view[data-panning] {
+  cursor: grabbing;
+}
+
+.picture-img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  transform-origin: 0 0;
+  user-select: none;
+}
+
+.picture-view[data-pixels] .picture-img {
+  image-rendering: pixelated;
+}
+
+.asset-window[data-framed] .asset-body {
+  position: relative;
+  min-height: 0;
+}
+
+.asset-window[data-framed] .picture-view {
+  position: absolute;
+  inset: 0;
+}
+
+.asset-window[data-framed] .picture-img,
+.asset-window[data-framed] .asset-video {
+  max-height: 100%;
 }
 
 .asset-body audio {

@@ -4343,6 +4343,7 @@ export function WorkspaceScreen(props: {
         >
           <BoardWindow
             locale={locale}
+            frameKey={`board:${board.id}`}
             name={nameOf(board.id)}
             doc={board.doc}
             ids={{ workspace: opened.workspace.id, board: board.id }}
@@ -4373,6 +4374,7 @@ export function WorkspaceScreen(props: {
         >
           <AssetWindow
             locale={locale}
+            frameKey={`viewer:${viewer.id}`}
             name={nameOf(viewer.id)}
             type={viewer.type}
             url={viewer.url}
@@ -4400,6 +4402,7 @@ export function WorkspaceScreen(props: {
         >
           <NoteWindow
             locale={locale}
+            frameKey={`note:${note.id}`}
             name={nameOf(note.id)}
             doc={note.doc}
             at={note.at}

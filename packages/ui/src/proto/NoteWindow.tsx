@@ -5,9 +5,11 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   DockEdge,
   dockRoom,
+  frameStyle,
   type ModeStep,
   modeProps,
   settleIn,
+  useWindowFrame,
   type WindowMode,
   WindowTitle,
 } from '../workspace/ContentWindow';
@@ -34,6 +36,8 @@ export function NoteWindow(props: {
   onDock?: ((width: number) => void) | undefined;
   /** The properties panel is open: a floating window stays left of it. */
   panel?: boolean | undefined;
+  /** Whose frame by hand it keeps on this device (05 §13); none — no frame kept. */
+  frameKey?: string | undefined;
   onChange: (text: string) => void;
   onEscape: () => void;
   onClose: () => void;
@@ -68,11 +72,15 @@ export function NoteWindow(props: {
   useLayoutEffect(() => {
     if (place === null && floating) setPlace(settleIn(box.current, props.at));
   }, [place, floating]);
-  const float = place
-    ? { left: place.left, top: place.top, maxWidth: place.max }
-    : props.at.side === 'right'
-      ? { left: props.at.x, top: props.at.y }
-      : { right: `calc(100% - ${props.at.x}px)`, top: props.at.y };
+  // Moved or sized by hand, it keeps that frame (06 §2.2).
+  const { frame, onTitleGrab, grips } = useWindowFrame(box, props.frameKey, floating);
+  const float = frame
+    ? frameStyle(frame)
+    : place
+      ? { left: place.left, top: place.top, maxWidth: place.max }
+      : props.at.side === 'right'
+        ? { left: props.at.x, top: props.at.y }
+        : { right: `calc(100% - ${props.at.x}px)`, top: props.at.y };
   const title = props.name || t(locale, 'note.untitled');
   return (
     <section
@@ -95,7 +103,9 @@ export function NoteWindow(props: {
         onLocate={props.onLocate}
         closeLabel={t(locale, 'note.close')}
         onClose={props.onClose}
+        onGrab={onTitleGrab}
       />
+      {grips}
       {props.mode === 'pinned' && props.onDock ? (
         <DockEdge
           locale={locale}

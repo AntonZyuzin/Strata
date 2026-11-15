@@ -11,12 +11,15 @@ import {
 import {
   DockEdge,
   dockRoom,
+  frameStyle,
   type ModeStep,
   modeProps,
   settleIn,
+  useWindowFrame,
   type WindowMode,
   WindowTitle,
 } from './ContentWindow';
+import { type PictureKeys, PictureView } from './PictureView';
 
 /** pdf.js only for a PDF the WebView cannot show itself (ADR-0013). */
 const PdfView = lazy(() => import('./PdfView').then((m) => ({ default: m.PdfView })));
@@ -65,6 +68,8 @@ export function AssetWindow(props: {
   onDock?: ((width: number) => void) | undefined;
   /** The properties panel is open: a floating window stays left of it. */
   panel?: boolean | undefined;
+  /** Whose frame by hand it keeps on this device (05 §13); none — no frame kept. */
+  frameKey?: string | undefined;
   /** The focus came in or went out: inside, the canvas's keys are off. */
   onFocus: (inside: boolean) => void;
   onEscape: () => void;
@@ -74,6 +79,7 @@ export function AssetWindow(props: {
   const [own] = useState(ownPdfViewer);
   const title = props.name || t(locale, 'note.untitled');
   const ref = useRef<HTMLElement>(null);
+  const picture = useRef<PictureKeys | null>(null);
   /** Where it settled once its content had a size: inside the free canvas. */
   const [place, setPlace] = useState<{ left: number; top: number; max: number } | null>(null);
   // The canvas runs under «Ноды» and the panel: the window stays between them.
@@ -94,9 +100,12 @@ export function AssetWindow(props: {
   useLayoutEffect(() => {
     if (floating) setPlace(null);
   }, [floating, props.panel]);
+  // Moved or sized by hand, it keeps that frame (06 §2.2).
+  const { frame, onTitleGrab, grips } = useWindowFrame(ref, props.frameKey, floating);
   // A PDF takes the board's share of the canvas, not a place beside the bubble.
-  const style: CSSProperties | undefined =
-    type === 'pdf'
+  const style: CSSProperties | undefined = frame
+    ? frameStyle(frame)
+    : type === 'pdf'
       ? undefined
       : place
         ? { left: place.left, top: place.top, maxWidth: place.max }
@@ -108,6 +117,7 @@ export function AssetWindow(props: {
       ref={ref}
       className="window asset-window"
       data-type={type}
+      data-framed={frame ? true : undefined}
       {...modeProps(props.mode ?? 'float', props.dock ?? null, style)}
       aria-label={t(locale, 'asset.label', { name: title })}
       // A click inside takes the focus here, so Esc is the window's, not the canvas's.
@@ -120,6 +130,12 @@ export function AssetWindow(props: {
         if (e.key === 'Escape') {
           e.stopPropagation();
           props.onEscape();
+          return;
+        }
+        // `=` / `-` / `0` zoom the picture (06 §13.4); the canvas's keys are off here.
+        if (picture.current?.key(e)) {
+          e.preventDefault();
+          e.stopPropagation();
         }
       }}
     >
@@ -131,7 +147,9 @@ export function AssetWindow(props: {
         onLocate={props.onLocate}
         closeLabel={t(locale, 'asset.close')}
         onClose={props.onClose}
+        onGrab={onTitleGrab}
       />
+      {grips}
       {props.mode === 'pinned' && props.onDock ? (
         <DockEdge
           locale={locale}
@@ -143,11 +161,16 @@ export function AssetWindow(props: {
       <div className="asset-body">
         {/* Placed again once the picture or the video knows its size. */}
         {url && type === 'image' ? (
-          <img src={url} alt={title} onLoad={() => setPlace(null)} />
+          <PictureView url={url} alt={title} keys={picture} onLoad={() => setPlace(null)} />
         ) : null}
         {url && type === 'video' ? (
           // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions
-          <video src={url} controls onLoadedMetadata={() => setPlace(null)} />
+          <video
+            className="asset-video"
+            src={url}
+            controls
+            onLoadedMetadata={() => setPlace(null)}
+          />
         ) : null}
         {url && type === 'audio' ? (
           // biome-ignore lint/a11y/useMediaCaption: the user's own file has no captions

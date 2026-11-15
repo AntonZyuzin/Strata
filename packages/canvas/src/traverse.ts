@@ -79,6 +79,34 @@ export function arrowStep(
 }
 
 /**
+ * `Shift`+arrows (06 §10.3, owner 2026-11-15): to a node wired to `id` — an
+ * input or an output — that way: the nearest in the arrows' cone, else the
+ * one whose bearing is closest to the arrow; none ahead — none.
+ */
+export function wiredStep(graph: Graph, id: string, dir: Dir): string | null {
+  const from = graph.nodes.get(id);
+  if (!from || from.ghostOf) return null;
+  const ids = new Set([...graph.inputs(id), ...graph.outputs(id)]);
+  ids.delete(id);
+  const ends = [...ids]
+    .map((e) => graph.nodes.get(e))
+    .filter((n): n is NonNullable<typeof n> => !!n && !n.ghostOf);
+  const cone = nearestInDirection(from, dir, ends);
+  if (cone) return cone;
+  const [ux, uy] = UNIT[dir];
+  let best: { id: string; cos: number; d: number } | null = null;
+  for (const n of ends) {
+    const dx = n.x - from.x;
+    const dy = n.y - from.y;
+    const d = Math.hypot(dx, dy);
+    const cos = d > 0 ? (dx * ux + dy * uy) / d : 0;
+    if (cos <= 0) continue;
+    if (!best || cos > best.cos || (cos === best.cos && d < best.d)) best = { id: n.id, cos, d };
+  }
+  return best?.id ?? null;
+}
+
+/**
  * `PgUp` / `PgDn` (06 §10.3 «По цепочке»): up to an input, down to an output;
  * of several, the one most in that direction, else the nearest.
  */

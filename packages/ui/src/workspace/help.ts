@@ -25,7 +25,7 @@ export const HELP: readonly HelpGroup[] = [
   {
     title: 'help.g.camera',
     rows: [
-      row('help.pan', ['@mmbDrag'], ['Space', '@lmbDrag'], ['Shift', '@arrows']),
+      row('help.pan', ['@mmbDrag'], ['Space', '@lmbDrag']),
       row('help.zoom', ['@wheel'], ['='], ['−'], ['0']),
       row('help.fitAll', ['H']),
       row('help.frame', ['G'], ['F']),
@@ -46,6 +46,7 @@ export const HELP: readonly HelpGroup[] = [
       row('help.marks', ['Mod', '1…5'], ['1…5']),
       row('help.chain', ['PgUp'], ['PgDn'], ['Shift', 'PgUp'], ['Shift', 'PgDn']),
       row('help.arrows', ['@arrows']),
+      row('help.wired', ['Shift', '@arrows']),
       row('help.goTo', ['Mod', 'O']),
       row('help.find', ['Mod', 'F']),
       row('help.palette', ['Mod', 'P']),

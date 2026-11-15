@@ -6,6 +6,7 @@ import {
   chainStep,
   nearestInDirection,
   siblingStep,
+  wiredStep,
   wireStep,
 } from './traverse';
 
@@ -55,6 +56,21 @@ describe('walking the network from the keyboard (06 §10.3)', () => {
     expect(siblingStep(g, 'B', true)).toBe('C');
     expect(siblingStep(g, 'C', true)).toBeNull();
     expect(siblingStep(g, 'P', true)).toBeNull();
+  });
+
+  it('Shift and the arrows go along wires only (owner 2026-11-15)', () => {
+    const g = net();
+    // B is wired to P (up), Q (up and right), D (down); A and C beside it are not.
+    expect(wiredStep(g, 'B', 'up')).toBe('P');
+    expect(wiredStep(g, 'B', 'down')).toBe('D');
+    expect(wiredStep(g, 'B', 'left')).toBeNull();
+    // No wire within the cone to the right: the wired node whose bearing is nearest.
+    expect(wiredStep(g, 'B', 'right')).toBe('Q');
+    // A plain arrow goes to the unwired neighbour.
+    expect(arrowStep(g, 'B', 'right', { x: 0, y: 0 })).toBe('C');
+    // From A, its only wire goes up and right to P.
+    expect(wiredStep(g, 'A', 'right')).toBe('P');
+    expect(wiredStep(g, 'A', 'down')).toBeNull();
   });
 
   it('no key lands on a ghost (05 §8.5)', () => {

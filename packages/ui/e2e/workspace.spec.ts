@@ -4212,6 +4212,20 @@ test.describe('a workspace on the core', () => {
     await expect.poll(selected).toEqual(['Низ']);
     await page.keyboard.press('PageUp');
     await expect.poll(selected).toEqual(['Верх']);
+    // Shift and the arrows go along wires only (owner 2026-11-15): «Справа»
+    // is no neighbour of «Верх» by wire, «Низ» is; the camera stays.
+    const camAt = () =>
+      page.evaluate(() => {
+        const c = window.__strataWs?.view.camera as unknown as { x: number; y: number };
+        return { x: c.x, y: c.y };
+      });
+    const still = await camAt();
+    await page.keyboard.press('Shift+ArrowRight');
+    await page.keyboard.press('Shift+ArrowDown');
+    await expect.poll(selected).toEqual(['Низ']);
+    await page.keyboard.press('Shift+ArrowUp');
+    await expect.poll(selected).toEqual(['Верх']);
+    expect(await camAt()).toEqual(still);
   });
 
   test("the palette: «/» goes on as a path, «?» opens the keys, «Все команды» shows the rest grey, the bar's steps run (09 §3.5)", async ({

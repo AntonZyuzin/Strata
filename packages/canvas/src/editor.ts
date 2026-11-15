@@ -35,7 +35,15 @@ import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { radiusOf } from './looks';
 import { Minimap } from './minimap';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
-import { arrowStep, branchOf, chainStep, type Dir, siblingStep, wireStep } from './traverse';
+import {
+  arrowStep,
+  branchOf,
+  chainStep,
+  type Dir,
+  siblingStep,
+  wiredStep,
+  wireStep,
+} from './traverse';
 import { type CanvasView, NORMAL_WIRE } from './view';
 import type { WireStyle } from './wires';
 
@@ -2229,29 +2237,23 @@ export class Editor {
           this.nudge(ux * d, uy * d);
           return;
         }
-        if (!e.shiftKey) {
-          // To the nearest node that way (06 §10.3); none chosen — the one in the middle.
-          e.preventDefault();
-          const dir = ARROWS[e.code] ?? 'right';
-          const middle = cam.toWorld(this.seen() / 2, this.view.height / 2);
-          this.step(arrowStep(this.graph, this.current, dir, middle));
-          return;
-        }
+        // To the nearest node that way (06 §10.3), with `Shift` — to a node wired
+        // to this one (owner 2026-11-15; `Shift` panned before); none chosen —
+        // the one in the middle.
         e.preventDefault();
-        const step =
-          (e.code === 'ArrowLeft' || e.code === 'ArrowRight' ? this.view.width : this.view.height) /
-          8;
-        const dx = e.code === 'ArrowLeft' ? step : e.code === 'ArrowRight' ? -step : 0;
-        const dy = e.code === 'ArrowUp' ? step : e.code === 'ArrowDown' ? -step : 0;
-        cam.panBy(dx, dy);
-        break;
+        const dir = ARROWS[e.code] ?? 'right';
+        const middle = cam.toWorld(this.seen() / 2, this.view.height / 2);
+        const from = this.current && this.graph.nodes.has(this.current) ? this.current : null;
+        this.step(
+          e.shiftKey && from
+            ? wiredStep(this.graph, from, dir)
+            : arrowStep(this.graph, this.current, dir, middle),
+        );
+        return;
       }
       default:
         return;
     }
-    // The keys that reach here move the camera: a flight gives way.
-    this.view.stopFlight();
-    this.view.invalidate();
   }
 
   /** `Tab` (06 §5.1): at the free end of a wire being drawn, else at the cursor; `Shift+Tab` — a sibling. */

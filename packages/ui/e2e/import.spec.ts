@@ -60,9 +60,11 @@ test.describe('«Импорт из Obsidian…» outside the home (owner 2026-11
     await welcome.getByRole('button', { name: 'Импорт из Obsidian…' }).click();
     const picker = await chosen;
     await expect(welcome).toHaveCount(0);
-    expect(await picker.element().evaluate((el) => el.classList.contains('home-vault-input'))).toBe(
-      true,
-    );
+    expect(
+      await picker
+        .element()
+        .evaluate((el) => (el as Element).classList.contains('home-vault-input')),
+    ).toBe(true);
     await picker.setFiles(vaultDir());
     await expect(page.locator('.import-report')).toBeVisible({ timeout: 30_000 });
     await expect(page.locator('.tab', { hasText: 'V-synth' })).toBeVisible();

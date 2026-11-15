@@ -537,6 +537,10 @@ pub struct TreeItem {
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,
+    /// Its colour (05 §4.1): the rim of its bubble, the frame of its icon in
+    /// «Ноды» (owner 2026-11-15: the panel's icons were not tied to the canvas).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<i64>,
     /// Its flags (05 §7): templates are offered in the Tab menu.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub flags: Vec<Flag>,
@@ -3131,6 +3135,7 @@ impl<S: Store> Workspace<S> {
                     mime: look.mime,
                     url: look.url,
                     icon: look.icon,
+                    color: self.field(n, "color").and_then(|v| v.as_i64()),
                     flags: self.flags(n),
                     appears,
                 });

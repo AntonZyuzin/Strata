@@ -1,7 +1,9 @@
 import { hasCanvas, isFinal, type Placeable, type TrashItem, type TreeItem } from '@strata/backend';
+import { people } from '@strata/design-tokens';
 import { type Locale, t } from '@strata/i18n';
 import type { SearchClient } from '@strata/search';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type CSSProperties, useEffect, useMemo, useRef, useState } from 'react';
+import { ContextMenu } from '../ContextMenu';
 import { Icon, nodeIcon } from '../icons/Icon';
 import { Glyph } from '../TabBar';
 import { dueWord, nearDue } from './due';
@@ -45,6 +47,8 @@ export function Layers(props: {
   onOpen: (id: string) => void;
   /** A name typed in the row: the node's new name, one step (05 §4.1). */
   onRename: (id: string, name: string) => void;
+  /** «Цвет…» of a row, or `C` on it: the colour palette at (x, y), page px (06 §17). */
+  onColor: (id: string, x: number, y: number) => void;
   onRestore: (item: TrashItem) => void;
   /**
    * Rows dropped on a folder or project (05 §5 «Перенести», idea 4): their
@@ -60,6 +64,8 @@ export function Layers(props: {
   const [drag, setDrag] = useState<RowDrag | null>(null);
   /** The row whose name is being typed (a double click on it). */
   const [renaming, setRenaming] = useState<string | null>(null);
+  /** A row's menu by the right button, at page px. */
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   /** A drag just ended on its own row: the click that follows is not a choice. */
   const dragged = useRef(false);
   const label = useRef<HTMLDivElement>(null);
@@ -233,7 +239,7 @@ export function Layers(props: {
               )}
               {renaming === it.id ? (
                 <div className="layer-name">
-                  <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
+                  <LayerIcon item={it} open={kids && unfolded} />
                   <RowName
                     initial={it.name}
                     label={t(locale, 'proto.name.placeholder')}
@@ -260,12 +266,19 @@ export function Layers(props: {
                     else props.onOpen(it.id);
                   }}
                   onKeyDown={(e) => {
-                    if (e.key !== 'F2') return;
+                    if (e.key === 'F2') setRenaming(it.id);
+                    else if (e.code === 'KeyC' && !e.ctrlKey && !e.metaKey && !e.altKey) {
+                      const r = e.currentTarget.getBoundingClientRect();
+                      props.onColor(it.id, r.left + r.width / 2, r.bottom);
+                    } else return;
                     e.preventDefault();
-                    setRenaming(it.id);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setMenu({ id: it.id, x: e.clientX, y: e.clientY });
                   }}
                 >
-                  <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
+                  <LayerIcon item={it} open={kids && unfolded} />
                   {/* A cut name shows whole in its tooltip. */}
                   <span className="layer-label" title={it.name || t(locale, 'note.untitled')}>
                     {it.name || t(locale, 'note.untitled')}
@@ -324,6 +337,23 @@ export function Layers(props: {
       >
         {root ? branch(root.id, 0) : null}
       </ul>
+      {menu ? (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          label={items.find((i) => i.id === menu.id)?.name || t(locale, 'note.untitled')}
+          items={[
+            { label: t(locale, 'ctx.open'), hint: 'Enter', onSelect: () => props.onOpen(menu.id) },
+            { label: t(locale, 'ctx.rename'), hint: 'F2', onSelect: () => setRenaming(menu.id) },
+            {
+              label: t(locale, 'ctx.color'),
+              hint: 'C',
+              onSelect: () => props.onColor(menu.id, menu.x, menu.y),
+            },
+          ]}
+          onClose={() => setMenu(null)}
+        />
+      ) : null}
       {drag ? (
         <div
           ref={label}
@@ -392,5 +422,24 @@ function RowName(props: { initial: string; label: string; onDone: (name: string 
       }}
       onBlur={() => finish(value)}
     />
+  );
+}
+
+/**
+ * A row's icon (07 §6.1) in its node's colour, as the bubble's rim on the
+ * canvas (07 §4.5; owner 2026-11-15: the panel's icons were not tied to the
+ * canvas); without a colour of its own, no frame.
+ */
+function LayerIcon(props: { item: TreeItem; open: boolean }) {
+  const { item } = props;
+  const colour = item.color === undefined ? undefined : people[item.color];
+  return (
+    <span
+      className="layer-icon"
+      data-color={item.color}
+      style={colour ? ({ '--node-color': colour } as CSSProperties) : undefined}
+    >
+      <Icon name={nodeIcon(item.kind, item, props.open)} />
+    </span>
   );
 }

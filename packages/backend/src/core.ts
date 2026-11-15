@@ -512,6 +512,8 @@ export interface TreeItem {
   mime?: string;
   url?: string;
   icon?: string;
+  /** Its colour (05 §4.1): the rim of its bubble, the frame of its icon in «Ноды». */
+  color?: number;
   /** Its flags: templates are offered in the Tab menu (06 §5.2). */
   flags?: Flag[];
   /**

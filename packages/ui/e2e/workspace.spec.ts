@@ -5713,6 +5713,54 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.note-window')).toBeVisible();
   });
 
+  test("«Ноды» frame a node's icon in its colour and give colours too, to a node elsewhere as well (owner 2026-11-15)", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Цвета слоёв');
+    await createNode(page, 460, 300, 'Эскиз');
+    await makeFolder(page, 'Архив', 760, 420);
+    await select(page, 'Архив');
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '2');
+    await createNode(page, 560, 380, 'Черновик');
+    await page.keyboard.press('KeyU');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-depth', '1');
+    await settled(page);
+    const icon = (name: string) =>
+      page.locator('.layer-row', { hasText: name }).locator('.layer-icon');
+    const palette = page.locator('.color-palette');
+    // A colour given on the canvas frames the row's icon.
+    await select(page, 'Эскиз');
+    await page.keyboard.press('KeyC');
+    await page.keyboard.press('3');
+    await expect(icon('Эскиз')).toHaveAttribute('data-color', '2');
+    await expect(icon('Архив')).not.toHaveAttribute('data-color', /./);
+    // The row's menu: «Цвет…» opens the palette, a click gives the colour.
+    await page.locator('.layer-row', { hasText: 'Архив' }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Цвет…' }).click();
+    await expect(palette).toBeVisible();
+    await palette.locator('.color-cell').nth(6).click();
+    await expect(icon('Архив')).toHaveAttribute('data-color', '5');
+    // `C` on the row of a node in another network: through the core.
+    await page.locator('.layer-row', { hasText: 'Черновик' }).locator('.layer-name').focus();
+    await page.keyboard.press('KeyC');
+    await expect(palette).toBeVisible();
+    await page.keyboard.press('1');
+    await expect(icon('Черновик')).toHaveAttribute('data-color', '0');
+    const draft = await page.evaluate(async () => {
+      const ws = window.__strataWs as WsHook;
+      const item = (await ws.core.tree()).find((i) => i.name === 'Черновик');
+      return item ? (await ws.core.node(item.id)).color : null;
+    });
+    expect(draft).toBe(0);
+    // `0` takes it away; the frame goes.
+    await page.keyboard.press('KeyC');
+    await page.keyboard.press('0');
+    await expect(icon('Черновик')).not.toHaveAttribute('data-color', /./);
+  });
+
   test('a double click on a name renames: on the canvas and in «Ноды» (owner 2026-11-15)', async ({
     page,
   }) => {

@@ -402,7 +402,13 @@ export function WorkspaceScreen(props: {
   /** The workspace's own icons for the palette's «Свои» (07 §6.5), asked for as it opens. */
   const [ownIcons, setOwnIcons] = useState<readonly string[]>([]);
   /** `C` (06 §2.1): the colour palette for these nodes, at a page point. */
-  const [colorPick, setColorPick] = useState<{ ids: string[]; x: number; y: number } | null>(null);
+  const [colorPick, setColorPick] = useState<{
+    ids: string[];
+    x: number;
+    y: number;
+    /** Where the focus goes back: the row of «Ноды» it was opened from; none — the canvas. */
+    back?: HTMLElement | undefined;
+  } | null>(null);
   /** «Фон» (07 §7.4) at the menu's place: the network on the canvas's background. */
   const [bgPick, setBgPick] = useState<{ x: number; y: number } | null>(null);
   /**
@@ -2509,6 +2515,19 @@ export function WorkspaceScreen(props: {
       const n = g.nodes.get(id);
       return n && n.ghostOf === null && (n.color ?? null) !== color;
     });
+    // A row of «Ноды» from another network (owner 2026-11-15): through the core.
+    const away = ids.filter((id) => {
+      if (g.nodes.has(id)) return false;
+      const item = treeRef.current.find((i) => i.id === id);
+      return item !== undefined && (item.color ?? null) !== color;
+    });
+    if (away.length > 0) {
+      void coreStep(
+        away.map((id): CoreOp => ({ op: 'setAttr', id, key: 'color', value: color })),
+        'change.color',
+        { n: away.length },
+      ).catch(failed);
+    }
     if (nodes.length === 0) return;
     g.transaction({ key: 'change.color', params: { n: nodes.length } }, (tx) => {
       for (const id of nodes) tx.attr(id, 'color', color);
@@ -3804,6 +3823,16 @@ export function WorkspaceScreen(props: {
           onSelect={(id) => void selectLayer(id, false)}
           onOpen={(id) => void selectLayer(id, true)}
           onRename={renameNode}
+          onColor={(id, x, y) =>
+            setColorPick({
+              ids: [id],
+              x,
+              y,
+              back:
+                document.querySelector<HTMLElement>(`[data-layer="${id}"] .layer-name`) ??
+                undefined,
+            })
+          }
           onRestore={(item) => void restore(item)}
           onMove={(ids, to) => moves.current.layers(ids, to)}
           placeable={(to, ids) => placeableRef.current(to, ids)}
@@ -4294,18 +4323,24 @@ export function WorkspaceScreen(props: {
       {colorPick ? (
         <ColorPalette
           locale={locale}
-          current={g?.nodes.get(colorPick.ids[0] ?? '')?.color ?? null}
+          current={
+            g?.nodes.get(colorPick.ids[0] ?? '')?.color ??
+            tree.find((i) => i.id === colorPick.ids[0])?.color ??
+            null
+          }
           x={colorPick.x}
           y={colorPick.y}
           bounds={seenBounds()}
           onPick={(color) => {
             setColorPick(null);
             setColor(colorPick.ids, color);
-            focusCanvas();
+            if (colorPick.back?.isConnected) colorPick.back.focus();
+            else focusCanvas();
           }}
           onClose={() => {
             setColorPick(null);
-            focusCanvas();
+            if (colorPick.back?.isConnected) colorPick.back.focus();
+            else focusCanvas();
           }}
         />
       ) : null}

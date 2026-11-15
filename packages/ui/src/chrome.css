@@ -4045,6 +4045,18 @@ button.ws-path-step:active:not(:disabled) {
   box-shadow: none;
 }
 
+/* A row's icon framed in its node's colour, as the bubble's rim (07 §4.5):
+   an outline, so names stay in one column with a colour or without. */
+.layer-icon {
+  display: inline-flex;
+  flex: none;
+}
+
+.layer-icon[data-color] {
+  outline: calc(2 * var(--u)) solid var(--node-color);
+  outline-offset: var(--u);
+}
+
 .layer-label {
   min-width: 0;
   overflow: hidden;

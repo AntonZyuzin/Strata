@@ -1029,6 +1029,13 @@ fn attributes_take_only_the_values_of_05_6() {
     assert_eq!(n.attrs.deadline.as_deref(), Some("2026-02-28"));
     assert_eq!(n.attrs.priority.as_deref(), Some("urgent"));
     assert_eq!(n.attrs.color, Some(7));
+    // «Ноды» frame the icon in it (owner 2026-11-15).
+    let item = w
+        .tree()
+        .into_iter()
+        .find(|i| i.id == a)
+        .expect("in the tree");
+    assert_eq!(item.color, Some(7));
     // Cleared, and back with undo.
     set(&mut w, &a, "status", None).expect("clear");
     assert_eq!(

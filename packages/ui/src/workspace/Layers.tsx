@@ -28,7 +28,8 @@ interface RowDrag {
  * tree along the left edge, every node under its network; the workspace
  * itself is not a row — it is the whole board. A click selects
  * the node on the canvas (going into its network when needed), a double
- * click opens it, the triangle folds a branch. The filter on top keeps the
+ * click on its name renames it there, as in Figma (owner 2026-11-15), one
+ * on its icon opens it; the triangle folds a branch. The filter on top keeps the
  * nodes whose names match, by the search engine (09 §2: typos and the other
  * layout too), with the way to each; `Enter` goes to the first, `Esc`
  * clears it. The trash is the panel's foot.
@@ -42,6 +43,8 @@ export function Layers(props: {
   trash: TrashItem[];
   onSelect: (id: string) => void;
   onOpen: (id: string) => void;
+  /** A name typed in the row: the node's new name, one step (05 §4.1). */
+  onRename: (id: string, name: string) => void;
   onRestore: (item: TrashItem) => void;
   /**
    * Rows dropped on a folder or project (05 §5 «Перенести», idea 4): their
@@ -55,6 +58,8 @@ export function Layers(props: {
 }) {
   const { locale, items, current, selected, search } = props;
   const [drag, setDrag] = useState<RowDrag | null>(null);
+  /** The row whose name is being typed (a double click on it). */
+  const [renaming, setRenaming] = useState<string | null>(null);
   /** A drag just ended on its own row: the click that follows is not a choice. */
   const dragged = useRef(false);
   const label = useRef<HTMLDivElement>(null);
@@ -226,37 +231,62 @@ export function Layers(props: {
               ) : (
                 <span className="layer-fold" aria-hidden="true" />
               )}
-              <button
-                type="button"
-                className={isFinal(it.status) ? 'layer-name is-done' : 'layer-name'}
-                aria-current={it.id === current ? 'location' : undefined}
-                onPointerDown={(e) => press(e, it)}
-                onClick={() => {
-                  if (!dragged.current) props.onSelect(it.id);
-                }}
-                onDoubleClick={() => props.onOpen(it.id)}
-              >
-                <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
-                {/* A cut name shows whole in its tooltip. */}
-                <span className="layer-label" title={it.name || t(locale, 'note.untitled')}>
-                  {it.name || t(locale, 'note.untitled')}
-                </span>
-                {/* A near or past deadline's state (Q-07-22), its word in the tooltip. */}
-                {due ? (
-                  <span
-                    className="layer-due"
-                    data-due={due}
-                    role="img"
-                    aria-label={dueWord(it.deadline, locale) ?? ''}
-                    title={dueWord(it.deadline, locale) ?? ''}
+              {renaming === it.id ? (
+                <div className="layer-name">
+                  <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
+                  <RowName
+                    initial={it.name}
+                    label={t(locale, 'proto.name.placeholder')}
+                    onDone={(name) => {
+                      setRenaming(null);
+                      const typed = name?.trim();
+                      if (typed && typed !== it.name) props.onRename(it.id, typed);
+                    }}
                   />
-                ) : null}
-                {drag?.to === it.id && dropVerdict === 'refused' ? (
-                  <span className="layer-forbid">
-                    <Glyph name="forbid" />
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  className={isFinal(it.status) ? 'layer-name is-done' : 'layer-name'}
+                  aria-current={it.id === current ? 'location' : undefined}
+                  onPointerDown={(e) => press(e, it)}
+                  onClick={() => {
+                    if (!dragged.current) props.onSelect(it.id);
+                  }}
+                  // On the name — renames it in place; elsewhere on the row — opens.
+                  onDoubleClick={(e) => {
+                    const onName = (e.target as Element).closest('.layer-label') !== null;
+                    if (onName) setRenaming(it.id);
+                    else props.onOpen(it.id);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'F2') return;
+                    e.preventDefault();
+                    setRenaming(it.id);
+                  }}
+                >
+                  <Icon name={nodeIcon(it.kind, it, kids && unfolded)} />
+                  {/* A cut name shows whole in its tooltip. */}
+                  <span className="layer-label" title={it.name || t(locale, 'note.untitled')}>
+                    {it.name || t(locale, 'note.untitled')}
                   </span>
-                ) : null}
-              </button>
+                  {/* A near or past deadline's state (Q-07-22), its word in the tooltip. */}
+                  {due ? (
+                    <span
+                      className="layer-due"
+                      data-due={due}
+                      role="img"
+                      aria-label={dueWord(it.deadline, locale) ?? ''}
+                      title={dueWord(it.deadline, locale) ?? ''}
+                    />
+                  ) : null}
+                  {drag?.to === it.id && dropVerdict === 'refused' ? (
+                    <span className="layer-forbid">
+                      <Glyph name="forbid" />
+                    </span>
+                  ) : null}
+                </button>
+              )}
             </div>
             {kids && unfolded ? <ul>{branch(it.id, depth + 1)}</ul> : null}
           </li>
@@ -323,5 +353,44 @@ export function Layers(props: {
         </details>
       ) : null}
     </nav>
+  );
+}
+
+/**
+ * A row's name typed in place: `Enter` or leaving it keeps the text, `Esc`
+ * keeps the old name (null).
+ */
+function RowName(props: { initial: string; label: string; onDone: (name: string | null) => void }) {
+  const [value, setValue] = useState(props.initial);
+  const field = useRef<HTMLInputElement>(null);
+  const done = useRef(false);
+  useEffect(() => {
+    field.current?.focus();
+    field.current?.select();
+  }, []);
+  const finish = (name: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    props.onDone(name);
+  };
+  return (
+    <input
+      ref={field}
+      className="layer-edit"
+      value={value}
+      aria-label={props.label}
+      spellCheck={false}
+      autoComplete="off"
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.nativeEvent.isComposing) return;
+        if (e.key === 'Enter') finish(value);
+        else if (e.key === 'Escape') finish(null);
+        else return;
+        e.preventDefault();
+        e.stopPropagation();
+      }}
+      onBlur={() => finish(value)}
+    />
   );
 }

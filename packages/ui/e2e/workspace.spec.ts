@@ -41,6 +41,8 @@ interface WsHook {
     camera: { toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
     markOf(id: string, mark: 'external' | 'places'): { x: number; y: number } | null;
+    /** The middle of a node's label on screen, as drawn last. */
+    labelOf(id: string): { x: number; y: number } | null;
     canvas: HTMLCanvasElement;
     lens: ReadonlySet<string> | null;
     /** Nodes cut with `Ctrl+X`, half seen until the paste (06 §12.1). */
@@ -3092,7 +3094,12 @@ test.describe('a workspace on the core', () => {
     await expect(panel.locator('.ins-show')).toHaveCount(0);
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.locator('.layer-name', { hasText: 'Боёвка' }).dblclick();
+    // On the icon: a double click on the name renames (owner 2026-11-15).
+    await page
+      .locator('.layer-name', { hasText: 'Боёвка' })
+      .locator('.icon, .kind-icon')
+      .first()
+      .dblclick();
     await page.evaluate(() => window.__strataWs?.view.canvas.focus());
     await page.keyboard.press('Enter');
     await settled(page);
@@ -5612,6 +5619,61 @@ test.describe('a workspace on the core', () => {
     // A double click still opens the note.
     await page.mouse.dblclick(p.x, p.y);
     await expect(page.locator('.note-window')).toBeVisible();
+  });
+
+  test('a double click on a name renames: on the canvas and in «Ноды» (owner 2026-11-15)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Имена');
+    await createNode(page, 460, 300, 'Идея');
+    await createNode(page, 760, 420, 'План');
+    await settled(page);
+    const labelOf = (name: string) =>
+      idOf(page, name).then((id) =>
+        page.evaluate((id) => {
+          const ws = window.__strataWs;
+          const at = ws?.view.labelOf(id);
+          const r = ws?.view.canvas.getBoundingClientRect();
+          return at && r ? { x: r.left + at.x, y: r.top + at.y } : null;
+        }, id),
+      );
+    // On the canvas: a click on the label selects its node, a double click renames.
+    await select(page, 'План');
+    const label = await labelOf('Идея');
+    if (!label) throw new Error('no label of «Идея»');
+    await page.mouse.click(label.x, label.y);
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Идея');
+    await page.waitForTimeout(500);
+    await page.mouse.dblclick(label.x, label.y);
+    const field = page.locator('input.name-input');
+    await expect(field).toHaveValue('Идея');
+    await expect(page.locator('.tab-menu')).toHaveCount(0);
+    await field.fill('Замысел');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['План', 'Замысел'].sort());
+    // In «Ноды»: a double click on the name types it in place; Esc keeps the old one.
+    const row = page.locator('.layer-row', { hasText: 'План' });
+    await row.locator('.layer-label').dblclick();
+    const edit = page.locator('.ws-layers input.layer-edit');
+    await expect(edit).toBeFocused();
+    await expect(edit).toHaveValue('План');
+    await edit.press('Escape');
+    await expect(edit).toHaveCount(0);
+    await row.locator('.layer-label').dblclick();
+    await edit.fill('Маршрут');
+    await edit.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Замысел', 'Маршрут']);
+    await expect(page.locator('.layer-row', { hasText: 'Маршрут' })).toBeVisible();
+    // F2 on a row does the same; each rename is one step.
+    await page.locator('.layer-row', { hasText: 'Маршрут' }).locator('.layer-name').focus();
+    await page.keyboard.press('F2');
+    await expect(edit).toBeFocused();
+    await edit.press('Escape');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['План', 'Замысел'].sort());
   });
 
   test('Alt+drag copies in the core: the copy keeps its fields and size after a reload (06 §12.1)', async ({

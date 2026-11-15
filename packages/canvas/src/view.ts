@@ -552,6 +552,16 @@ export class CanvasView {
   }
 
   /** The rim mark under (sx, sy), CSS px, as last drawn: «↗N» or a shortcut. */
+  /** The node whose label is at (sx, sy), as drawn in the last frame. */
+  labelAt(sx: number, sy: number): string | null {
+    return this.decor.labelAt(sx, sy);
+  }
+
+  /** The middle of node `id`'s label on screen, as drawn in the last frame; for tests. */
+  labelOf(id: string): { x: number; y: number } | null {
+    return this.decor.labelOf(id);
+  }
+
   markAt(sx: number, sy: number): { id: string; mark: RimTarget } | null {
     return this.decor.markAt(sx, sy);
   }

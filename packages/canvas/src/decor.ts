@@ -139,6 +139,11 @@ export class Decor {
    * the glyphs show (d ≥ 32 px).
    */
   private readonly marks = new Map<string, RimTargetHit>();
+  /** The plates of the labels drawn in the last frame, CSS px of the canvas: a double click there renames. */
+  private readonly labelPlates = new Map<
+    string,
+    { x0: number; y0: number; x1: number; y1: number }
+  >();
   private antsFor: string | null = null;
   private antsStart = 0;
   reducedMotion = false;
@@ -227,6 +232,7 @@ export class Decor {
   ): boolean {
     const g = this.g;
     this.marks.clear();
+    this.labelPlates.clear();
     const rings = this.rings;
     g.clear();
     this.hatching.clear();
@@ -660,6 +666,25 @@ export class Decor {
     return best ? { id: best.id, mark: best.mark } : null;
   }
 
+  /**
+   * The node whose label is at (x, y), CSS px of the canvas, as drawn in the
+   * last frame (06 §17: a double click on the label renames); of two, the
+   * label drawn later, on top.
+   */
+  labelAt(x: number, y: number): string | null {
+    let found: string | null = null;
+    for (const [id, r] of this.labelPlates) {
+      if (x >= r.x0 && x <= r.x1 && y >= r.y0 && y <= r.y1) found = id;
+    }
+    return found;
+  }
+
+  /** The middle of node `id`'s label as drawn in the last frame, CSS px; for tests. */
+  labelOf(id: string): { x: number; y: number } | null {
+    const r = this.labelPlates.get(id);
+    return r ? { x: (r.x0 + r.x1) / 2, y: (r.y0 + r.y1) / 2 } : null;
+  }
+
   /** The middle of node `id`'s mark as drawn in the last frame, CSS px; for tests. */
   markOf(id: string, mark: RimTarget): { x: number; y: number } | null {
     const r = this.marks.get(`${mark}:${id}`);
@@ -729,6 +754,12 @@ export class Decor {
     t.position.set(left, top);
     t.visible = true;
     this.plate(left - 2 * U, top - U, t.width + 4 * U, px / this.dpr + 2 * U);
+    this.labelPlates.set(id, {
+      x0: left - 2 * U,
+      y0: top - U,
+      x1: left + t.width + 2 * U,
+      y1: top + px / this.dpr + U,
+    });
   }
 }
 

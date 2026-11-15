@@ -2773,6 +2773,19 @@ export function WorkspaceScreen(props: {
     if (open) eventsRef.current?.open?.(id);
   };
 
+  /**
+   * A name typed in «Ноды» (owner 2026-11-15, as in Figma): a node of the
+   * canvas's network is renamed on the canvas, as F2 does; another in the core.
+   */
+  const renameNode = (id: string, name: string) => {
+    const gr = graph.current;
+    if (gr?.nodes.has(id)) {
+      gr.transaction({ key: 'proto.change.rename', params: { name } }, (tx) => tx.rename(id, name));
+      return;
+    }
+    void coreStep([{ op: 'rename', id, name }], 'proto.change.rename', { name }).catch(failed);
+  };
+
   const g = graph.current;
   const ed = editor.current;
   const treeRef = useRef(tree);
@@ -3787,6 +3800,7 @@ export function WorkspaceScreen(props: {
           trash={trash ?? []}
           onSelect={(id) => void selectLayer(id, false)}
           onOpen={(id) => void selectLayer(id, true)}
+          onRename={renameNode}
           onRestore={(item) => void restore(item)}
           onMove={(ids, to) => moves.current.layers(ids, to)}
           placeable={(to, ids) => placeableRef.current(to, ids)}

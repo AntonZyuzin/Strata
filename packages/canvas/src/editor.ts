@@ -1380,6 +1380,30 @@ export class Editor {
       now - this.lastClick.time < DOUBLE_CLICK_MS &&
       Math.hypot(sx - this.lastClick.sx, sy - this.lastClick.sy) <= DRAG_PX;
     this.lastClick = { time: now, sx, sy };
+    // A label is drawn over what lies under it (06 §17): a click on it is its
+    // node's — it selects, a double click renames; only the bubble itself
+    // goes before it. Before, the click fell through to the empty canvas, and
+    // a double click there opened the Tab menu.
+    if (hit.t !== 'node' && hit.t !== 'ghost') {
+      const id = this.view.labelAt(sx, sy);
+      const node = id ? this.graph.nodes.get(id) : undefined;
+      if (id && node) {
+        if (node.ghostOf) {
+          this.resolveGhost(id, e.shiftKey);
+          return;
+        }
+        if (double && !e.shiftKey && !mod) {
+          this.select([id]);
+          this.current = id;
+          this.selectedWire = null;
+          this.events.change();
+          this.view.invalidate();
+          this.openName(id, false);
+          return;
+        }
+        hit = { t: 'node', id };
+      }
+    }
     if (hit.t === 'ghost') {
       this.resolveGhost(hit.id, e.shiftKey);
       return;

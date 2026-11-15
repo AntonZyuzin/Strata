@@ -893,6 +893,10 @@ const ru = {
   'flag.key': 'Ключевая',
   'flag.pause': 'Пауза',
   'flag.template': 'Шаблон',
+  'flag.key.what': 'Бабл крупнее; ключевые ноды — первыми в превью сети и в справке звёздной карты',
+  'flag.pause.what': 'Отложена: бабл приглушён, нода не входит в свёртки и прогресс',
+  'flag.template.what':
+    'Заготовка: нода появляется в Tab-меню в группе «Шаблоны», выбор там создаёт её копию',
   'proto.toast.notHealed': [
     'Отсоединено без залечивания: {n} вход',
     'Отсоединено без залечивания: {n} входа',
@@ -1992,6 +1996,11 @@ const en: Catalog = {
   'flag.key': 'Key',
   'flag.pause': 'Pause',
   'flag.template': 'Template',
+  'flag.key.what':
+    'A larger bubble; key nodes come first in the network’s preview and the star map’s card',
+  'flag.pause.what': 'Put off: the bubble is dimmed, the node counts in no roll-up or progress',
+  'flag.template.what':
+    'A blank: the node shows in the Tab menu under “Templates”, and choosing it there makes its copy',
   'proto.toast.notHealed': [
     'Detached without healing: {n} input',
     'Detached without healing: {n} inputs',

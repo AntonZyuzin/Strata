@@ -3399,6 +3399,7 @@ export function WorkspaceScreen(props: {
       label: t(locale, `flag.${f}` as MessageKey),
       hint,
       separated,
+      title: t(locale, `flag.${f}.what` as MessageKey),
       checked: flags.includes(f),
       onSelect: () => map.act(`flag:${f}` as MapAction, id),
     });
@@ -3537,6 +3538,8 @@ export function WorkspaceScreen(props: {
       hint,
       separated,
       checked: hit.every((x) => flagsOf(x).includes(f)),
+      // What a flag does, in its tooltip (05 §7; owner 2026-11-15 asked what E is).
+      title: t(locale, `flag.${f}.what` as MessageKey),
       onSelect: () => ed.switchFlag(f, ed.flagTargets(n.id)),
     });
     items.push(flag('key', 'R', true), flag('pause', 'Q'), flag('template', 'E'));

@@ -19,6 +19,8 @@ export interface MenuEntry {
   checked?: boolean | undefined;
   /** One of a choice, as a wire style (06 §6.2): ticked, it is the one chosen. */
   radio?: boolean;
+  /** What the entry does, in its tooltip (the Chrome explains only there). */
+  title?: string;
   onSelect: () => void;
 }
 
@@ -115,7 +117,7 @@ export function ContextMenu(props: {
                 {item.checked ? <Glyph name="check" /> : null}
               </span>
             ) : null}
-            <span className="context-menu-label" title={item.label}>
+            <span className="context-menu-label" title={item.title ?? item.label}>
               {item.label}
             </span>
             {item.hint ? <span className="context-menu-hint">{item.hint}</span> : null}

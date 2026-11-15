@@ -3838,6 +3838,10 @@ test.describe('a workspace on the core', () => {
       'aria-checked',
       'true',
     );
+    // What a flag does is in its tooltip (owner 2026-11-15 asked what E is).
+    await expect(
+      page.getByRole('menuitemcheckbox', { name: 'Шаблон' }).locator('.context-menu-label'),
+    ).toHaveAttribute('title', /Tab-меню/);
     await page.getByRole('menuitemcheckbox', { name: 'Пауза' }).click();
     expect(await flags('Шаги')).toEqual(['110']);
 

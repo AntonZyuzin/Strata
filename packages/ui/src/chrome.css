@@ -1752,16 +1752,26 @@ button:focus-visible {
   opacity: 0.5;
 }
 
+/* As wide as its text, centred and on whole device pixels by `NameInput`. */
 .name-input {
   position: absolute;
-  width: 24ch;
-  transform: translateX(-50%);
   min-height: var(--st-size-control);
   padding: 0 calc(3 * var(--u));
-  text-align: center;
+  text-align: left;
   background: var(--st-color-surface-sunken);
   border: var(--u) solid var(--st-color-frame);
   box-shadow: var(--st-bevel-sunken);
+}
+
+/* The name's text as the field draws it, measured and never seen. */
+.name-input-mirror {
+  position: absolute;
+  top: 0;
+  left: 0;
+  font: inherit;
+  white-space: pre;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 /* Font and window check of spike 9 (07 §13): wide window, samples one line each. */

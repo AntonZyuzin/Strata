@@ -698,6 +698,52 @@ test('selected text is dark on the accent in fields and notes, light on grey out
   ).toBe(colours.text);
 });
 
+for (const deviceScaleFactor of [1, 1.25, 2]) {
+  test.describe(`the name field @${deviceScaleFactor}x`, () => {
+    test.use({ deviceScaleFactor });
+
+    test('keeps its text on whole device pixels with every letter typed (owner 2026-11-15)', async ({
+      page,
+    }) => {
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Имена');
+      const c = await box(page, '.proto-canvas');
+      await page.mouse.move(c.x + c.width * 0.43, c.y + c.height * 0.41);
+      await page.keyboard.press('Tab');
+      await page.keyboard.type('Note');
+      await page.locator('.tab-menu-row', { hasText: 'Note' }).first().click();
+      const field = page.locator('input.name-input');
+      await expect(field).toBeVisible();
+      await page.keyboard.press('Control+a');
+      await page.keyboard.press('Backspace');
+      // Where the field and its first letter stand, in device pixels.
+      const spots = async () =>
+        field.evaluate((el) => {
+          const r = el.getBoundingClientRect();
+          const css = getComputedStyle(el);
+          const dpr = window.devicePixelRatio;
+          const text =
+            r.left + Number.parseFloat(css.borderLeftWidth) + Number.parseFloat(css.paddingLeft);
+          return { left: r.left * dpr, text: text * dpr, centre: (r.left + r.width / 2) * dpr };
+        });
+      const first = await spots();
+      for (const letter of 'Платон и ещё одно длинное имя') {
+        await page.keyboard.type(letter);
+        const s = await spots();
+        // Within Chromium's layout unit (1/64 px): drawn on the pixel either way.
+        expect(Math.abs(s.left - Math.round(s.left)), `field after «${letter}»`).toBeLessThan(0.05);
+        expect(Math.abs(s.text - Math.round(s.text)), `text after «${letter}»`).toBeLessThan(0.05);
+        // Centred under the bubble, a device pixel either way.
+        expect(Math.abs(s.centre - first.centre)).toBeLessThanOrEqual(1.01);
+      }
+      await page.keyboard.press('Enter');
+      await expect
+        .poll(async () => (await graphNow(page)).names)
+        .toEqual(['Платон и ещё одно длинное имя']);
+    });
+  });
+}
+
 for (const { viewport, deviceScaleFactor } of LAYOUTS.filter((l) => l.deviceScaleFactor !== 1.5)) {
   test(`a list's panel and «Слои» keep their size in RU and EN at ${viewport.width}×${viewport.height} @${deviceScaleFactor}x`, async ({
     browser,

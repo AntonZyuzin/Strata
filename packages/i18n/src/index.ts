@@ -577,7 +577,8 @@ const ru = {
   'map.card.keys':
     'Enter — войти · I — к скоплению · F — перелёт · Shift+I — закрепить справку · Esc — закрыть',
   'map.card.close': 'Закрыть справку',
-  'map.card.path': 'Путь',
+  'map.card.kind': 'Вид',
+  'map.card.net': 'Сеть',
   'map.card.more': ['ещё {n} путь', 'ещё {n} пути', 'ещё {n} путей'],
   'map.card.progress': 'Прогресс',
   'map.card.inside': 'Внутри',
@@ -1705,7 +1706,8 @@ const en: Catalog = {
   'map.card.keys':
     'Enter — open · I — into the cluster · F — fly to · Shift+I — keep the card · Esc — close',
   'map.card.close': 'Close the card',
-  'map.card.path': 'Path',
+  'map.card.kind': 'Kind',
+  'map.card.net': 'Network',
   'map.card.more': ['{n} more path', '{n} more paths'],
   'map.card.progress': 'Progress',
   'map.card.inside': 'Inside',

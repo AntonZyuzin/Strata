@@ -113,13 +113,18 @@ export function fullRows(
 ): { label: string; value: string; title?: string; kinds?: [NodeKind, number][] }[] {
   const L = (key: MessageKey, params?: Record<string, string | number>) => t(w.locale, key, params);
   const rows: { label: string; value: string; title?: string; kinds?: [NodeKind, number][] }[] = [];
+  // The kind in a word and the network the node lies in, by name (owner
+  // 2026-11-15: the title's icon alone did not say the kind; the parent was
+  // the end of a path). The whole path is the network's tooltip.
+  rows.push({ label: L('map.card.kind'), value: L(`kind.${d.kind}` as MessageKey) });
   const primary = d.places.find((p) => p.primary) ?? d.places[0];
   if (primary) {
     const others = d.places.length - 1;
-    const path = pathLabel(primary.path);
+    const parent = primary.path.at(-1)?.[1] ?? '';
     rows.push({
-      label: L('map.card.path'),
-      value: others > 0 ? `${path} · ${L('map.card.more', { n: others })}` : path,
+      label: L('map.card.net'),
+      value: others > 0 ? `${parent} · ${L('map.card.more', { n: others })}` : parent,
+      title: primary.path.map(([, name]) => name).join(' / '),
     });
   }
   if (d.status) rows.push({ label: L('ins.status'), value: stateLine(w, d.status, undefined) });

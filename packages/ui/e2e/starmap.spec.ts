@@ -189,8 +189,12 @@ test.describe('the star map without 2D (04 S6, 08 §1.2)', () => {
     // Step 5: its full card by it, the name said once.
     const card = page.locator('.map-card.is-full');
     await expect(card.locator('.map-card-name')).toHaveText('Плейтест');
-    await expect(card.locator('.map-card-label').first()).toHaveText('Путь');
-    await expect(card.locator('.map-card-value').first()).toHaveText('Проекты');
+    // Its kind in a word and its network by name, the whole path in the tooltip.
+    await expect(card.locator('.map-card-label').nth(0)).toHaveText('Вид');
+    await expect(card.locator('.map-card-value').nth(0)).toHaveText('Заметка');
+    await expect(card.locator('.map-card-label').nth(1)).toHaveText('Сеть');
+    await expect(card.locator('.map-card-value').nth(1)).toHaveText('Проекты');
+    await expect(card.locator('.map-card-value').nth(1)).toHaveAttribute('title', /\/ Проекты$/);
     expect((await ask(page, 'cards')).full).toBe(playtest);
     // Step 6: Tab — the note goes into «Проекты», wired from «Плейтест».
     await page.keyboard.press('Tab');

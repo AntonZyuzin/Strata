@@ -1902,7 +1902,7 @@ for (const deviceScaleFactor of [1, 2]) {
       boxes.push({
         card: await box(page, '.ws-info-card'),
         title: await box(page, '.ws-info-card .map-card-title'),
-        label: await box(page, '.ws-info-card .map-card-label'),
+        label: await box(page, '.ws-info-card .map-card-label:first-of-type'),
       });
       await card.locator('.window-close').click();
       await context.close();

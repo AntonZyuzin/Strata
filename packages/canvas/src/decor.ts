@@ -1,4 +1,4 @@
-import type { Flag, GraphNode } from '@strata/backend';
+import type { GraphNode } from '@strata/backend';
 import { fog, type GlyphName, hex, palette, people } from '@strata/design-tokens';
 import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
@@ -534,19 +534,12 @@ export class Decor {
       if (now - ring.since < RING_DELAY_MS) {
         animating = true;
       } else {
-        const on: Record<Flag, boolean> = {
-          key: ringAt.n.key,
-          pause: ringAt.n.pause,
-          template: ringAt.n.template,
-          hideAi: false,
-          lock: false,
-        };
         // A 16u slot: the 8u glyph with a 4u margin; a flag that is on inverts it.
         const pad = (SLOT_U - 8) / 2;
         for (const slot of ringSlots(ringAt.x, ringAt.y, ringAt.R, U)) {
           const name = slot.slot;
-          // `i` is a button, not a flag: never inverted.
-          const lit = name !== 'info' && on[name];
+          // The palettes and `i` are buttons, not flags: never inverted.
+          const lit = name === 'template' && ringAt.n.template;
           this.badge(RING_GLYPH[name], lit ? 'paper' : 'ink', slot.x, slot.y, 1, 1, !lit, pad);
           if (ring.slot === name) {
             const half = (SLOT_U / 2 + 1) * U;
@@ -785,10 +778,10 @@ function onRim(s: { x: number; y: number }, R: number, angle: number): [number, 
   return [s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r];
 }
 
-/** The ring's slots (07 §4.8): ★ key, ‖ pause, the stencil of a template, `i` the info card. */
+/** The ring's slots (07 §4.8): a hexagon's icon, a drop of colour, the stencil of a template, `i`. */
 const RING_GLYPH: Record<RingSlotName, GlyphName> = {
-  key: 'star',
-  pause: 'pause',
+  icons: 'iconSize',
+  colors: 'colour',
   template: 'template',
   info: 'info',
 };

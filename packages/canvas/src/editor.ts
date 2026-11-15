@@ -28,6 +28,7 @@ import {
   type RingSlot,
   type RingSlotName,
   ringSlots,
+  SLOT_U,
   slotAt,
 } from './flagring';
 import { takenByFocus } from './focus';
@@ -1225,16 +1226,24 @@ export class Editor {
       return;
     }
     if (e.button !== 0) return;
-    // A slot of the flag ring switches its flag (06 §8), on the selection
-    // when the bubble is in it; no press, no drag.
+    // A slot of the flag ring (06 §8): a palette opens, a flag switches, on
+    // the selection when the bubble is in it; no press, no drag.
     const slot = this.slotUnder(sx, sy);
     if (slot && this.ring) {
-      // `i`: the bubble's info card kept, as `Shift+I` (06 §4.4).
+      const targets = this.flagTargets(this.ring.id);
       if (slot.slot === 'info') {
+        // `i`: the bubble's info card kept, as `Shift+I` (06 §4.4).
         this.endHoverCard();
         this.showCard(this.ring.id, 'kept');
+      } else if (slot.slot === 'icons' || slot.slot === 'colors') {
+        // What `Z` and `C` open, under the slot; ghosts take neither.
+        const ids = targets.filter((id) => !this.graph.nodes.get(id)?.ghostOf);
+        const open = slot.slot === 'icons' ? this.events.icons : this.events.colors;
+        // No mousedown after it: the palette keeps the focus it takes.
+        e.preventDefault();
+        if (ids.length > 0) open?.({ ids, sx: slot.x, sy: slot.y + (SLOT_U / 2) * this.view.unit });
       } else {
-        this.switchFlag(slot.slot, this.flagTargets(this.ring.id));
+        this.switchFlag(slot.slot, targets);
       }
       return;
     }

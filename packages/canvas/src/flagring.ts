@@ -2,24 +2,26 @@ import type { Flag } from '@strata/backend';
 
 /**
  * The flag ring (06 §8, 07 §4.8): over a bubble the cursor rests on, a row
- * of a fixed screen size — 28 px from its centre at least — with a slot per
- * flag on an ink plate; a flag that is on inverts its slot. A click on a
- * slot switches the flag, on the selection when the bubble is in it. Holding
- * `Ctrl` hides the ring when it covers a neighbour. After the flags, a gap
- * apart, `i` keeps the bubble's info card, as `Shift+I` does (06 §4.4).
+ * of a fixed screen size — 28 px from its centre at least — with a slot each
+ * on an ink plate: «Иконка и размер» and «Цвет» open the palettes `Z` and `C`
+ * open (owner 2026-11-15: they took the place of «Ключевая» and «Пауза»,
+ * which stay on `R` and `Q` and in the menu), «Шаблон» switches its flag and
+ * inverts its slot while on. A click goes to the selection when the bubble is
+ * in it. Holding `Ctrl` hides the ring when it covers a neighbour. Last, a
+ * gap apart, `i` keeps the bubble's info card, as `Shift+I` does (06 §4.4).
  * «Скрыть от AI» joins the slots with MCP (16 §4.5).
  */
 
 /** The ring's flags, left to right. */
-export const RING_FLAGS = ['key', 'pause', 'template'] as const satisfies readonly Flag[];
+export const RING_FLAGS = ['template'] as const satisfies readonly Flag[];
 
 /** A flag of the ring. */
 export type RingFlag = (typeof RING_FLAGS)[number];
 
-/** The ring's slots, left to right: the flags, then `i` (06 §8). */
-export const RING_SLOTS = [...RING_FLAGS, 'info'] as const;
+/** The ring's slots, left to right: the palettes, the flags, then `i` (06 §8). */
+export const RING_SLOTS = ['icons', 'colors', ...RING_FLAGS, 'info'] as const;
 
-/** A slot of the ring: a flag, or `info` — the info card kept. */
+/** A slot of the ring: a palette, a flag, or `info` — the info card kept. */
 export type RingSlotName = (typeof RING_SLOTS)[number];
 
 /** The ring shows after the cursor has rested this long (07 §4.5 «Наведение»). */

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { FRAME_U, onTheWay, RING_SLOTS, ringSlots, SLOT_U, slotAt } from './flagring';
 
 describe('the flag ring (06 §8, 07 §4.8)', () => {
-  it('is a row over the bubble, 28 px up at least, a slot per flag from the left, then i', () => {
+  it('is a row over the bubble, 28 px up at least: Z, C, the template, then i', () => {
     const slots = ringSlots(100, 100, 1, 1);
     expect(slots.map((s) => s.slot)).toEqual([...RING_SLOTS]);
+    // «Иконка и размер» and «Цвет» took the place of «Ключевая» and «Пауза» (owner 2026-11-15).
+    expect([...RING_SLOTS]).toEqual(['icons', 'colors', 'template', 'info']);
     expect(RING_SLOTS.at(-1)).toBe('info');
     for (const s of slots) expect(s.y).toBeCloseTo(100 - 28, 5);
     // The row centred on the bubble.
@@ -52,7 +54,7 @@ describe('the flag ring (06 §8, 07 §4.8)', () => {
     const slots = ringSlots(0, 0, 4, 1);
     const [first] = slots;
     if (!first) throw new Error('no slot');
-    expect(slotAt(slots, first.x + 11, first.y, 1)?.slot).toBe('key');
+    expect(slotAt(slots, first.x + 11, first.y, 1)?.slot).toBe('icons');
     const info = slots.at(-1);
     if (!info) throw new Error('no i');
     expect(slotAt(slots, info.x, info.y, 1)?.slot).toBe('info');

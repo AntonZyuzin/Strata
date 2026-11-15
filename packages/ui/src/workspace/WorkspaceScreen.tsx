@@ -1712,8 +1712,11 @@ export function WorkspaceScreen(props: {
         // The flag ring's slots: their names and keys, as the menu has them (06 §8).
         v.flagWord = (slot) =>
           t(localeRef.current, 'canvas.slot', {
-            name: t(localeRef.current, slot === 'info' ? 'canvas.slot.info' : `flag.${slot}`),
-            key: { key: 'R', pause: 'Q', template: 'E', info: 'Shift+I' }[slot],
+            name: t(
+              localeRef.current,
+              slot === 'template' ? 'flag.template' : (`canvas.slot.${slot}` as const),
+            ),
+            key: { icons: 'Z', colors: 'C', template: 'E', info: 'Shift+I' }[slot],
           });
         // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
         v.markWord = (mark, n) =>

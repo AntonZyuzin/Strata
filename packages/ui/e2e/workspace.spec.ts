@@ -3932,7 +3932,7 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
   });
 
-  test('the flag ring: rest on a bubble, click a slot, i keeps the card; Ctrl hides it (06 §8)', async ({
+  test('the flag ring: rest on a bubble, Z and C open their palettes, the template switches, i keeps the card; Ctrl hides it (06 §8)', async ({
     page,
   }) => {
     await page.goto('/?plain');
@@ -3955,17 +3955,47 @@ test.describe('a workspace on the core', () => {
       });
     const p = await at(page, 'Узел');
     await page.mouse.move(p.x, p.y);
-    // It comes after the cursor has rested (07 §4.5): ★ ‖ the stencil, then i.
+    // It comes after the cursor has rested (07 §4.5): the icon and size, the
+    // colour (owner 2026-11-15: in the place of «Ключевая» and «Пауза»), the
+    // template's stencil, then i.
     await expect
       .poll(async () => (await slots()).map((s) => s.slot))
-      .toEqual(['key', 'pause', 'template', 'info']);
-    const pause = (await slots()).find((s) => s.slot === 'pause');
-    if (!pause) throw new Error('no pause slot');
-    await page.mouse.move(pause.x, pause.y, { steps: 4 });
-    await page.mouse.click(pause.x, pause.y);
-    expect(await look()).toBe('010');
-    // The ring stays on its way back to the bubble; a second click clears it.
-    await page.mouse.click(pause.x, pause.y);
+      .toEqual(['icons', 'colors', 'template', 'info']);
+    // A slot once the ring is up again: it comes after a rest (07 §4.5).
+    const slot = async (name: string) => {
+      await expect.poll(async () => (await slots()).length).toBe(4);
+      const s = (await slots()).find((x) => x.slot === name);
+      if (!s) throw new Error(`no ${name} slot`);
+      return s;
+    };
+    // The palettes `Z` and `C` open, under their slots.
+    const icons = await slot('icons');
+    await page.mouse.move(icons.x, icons.y, { steps: 4 });
+    await page.mouse.click(icons.x, icons.y);
+    await expect(page.locator('.icon-palette')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('.icon-palette')).toHaveCount(0);
+    await page.mouse.move(p.x, p.y, { steps: 4 });
+    const colors = await slot('colors');
+    await page.mouse.move(colors.x, colors.y, { steps: 4 });
+    await page.mouse.click(colors.x, colors.y);
+    const palette = page.locator('.color-palette');
+    await expect(palette).toBeVisible();
+    await page.keyboard.press('3');
+    await expect(palette).toHaveCount(0);
+    await expect
+      .poll(() =>
+        page.evaluate(() => [...(window.__strataWs?.graph()?.nodes.values() ?? [])][0]?.color),
+      )
+      .toBe(2);
+    // The template's slot switches its flag; the ring stays on its way back
+    // to the bubble; a second click clears it.
+    await page.mouse.move(p.x, p.y, { steps: 4 });
+    const template = await slot('template');
+    await page.mouse.move(template.x, template.y, { steps: 4 });
+    await page.mouse.click(template.x, template.y);
+    expect(await look()).toBe('001');
+    await page.mouse.click(template.x, template.y);
     expect(await look()).toBe('000');
     await page.keyboard.down('Control');
     await expect.poll(async () => (await slots()).length).toBe(0);

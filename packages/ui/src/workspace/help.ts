@@ -123,6 +123,8 @@ export const FIRST_STEPS: readonly MessageKey[] = [
   'help.tab',
   'help.connect',
   'help.arrows',
+  // Asked for as a new key (owner 2026-11-15): it was there, unseen.
+  'help.frame',
   'help.dive',
   'help.up',
   'help.icon',

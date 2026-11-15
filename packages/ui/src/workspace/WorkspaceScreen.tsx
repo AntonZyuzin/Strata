@@ -144,6 +144,7 @@ import {
   parseOwnIcon,
 } from './ownIcons';
 import { PathBar, type PathChildren } from './PathBar';
+import { pastedNote } from './pasted';
 import {
   alsoIn,
   appearsIn,
@@ -2702,8 +2703,9 @@ export function WorkspaceScreen(props: {
 
   /**
    * The clipboard on the canvas (06 §12.1, 13 §3.9): pictures and files are
-   * assets, a link is a link asset, other text a note — its first line the
-   * name, the rest the body, where `[[links]]` become wires as in any note.
+   * assets, a link is a link asset, other text a note — the text its body as
+   * it came, where `[[links]]` become wires as in any note, the start of its
+   * first line the name (`pastedNote`).
    */
   const paste = async (files: File[], text: string, w: { x: number; y: number }) => {
     const link = files.length === 0 && /^(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+$/i.test(text);
@@ -2714,9 +2716,7 @@ export function WorkspaceScreen(props: {
     const g = graph.current;
     const v = viewRef.current;
     if (!g || !v) return;
-    const [first = '', ...rest] = text.split(/\r?\n/);
-    const name = first.replace(/^#+\s+/, '').trim() || t(locale, 'note.untitled');
-    const body = rest.join('\n').replace(/^(?:[ \t]*\n)+/, '');
+    const { name, body } = pastedNote(text, t(locale, 'note.untitled'));
     const id = newId();
     g.transaction({ key: 'proto.change.create', params: { name } }, (tx) => {
       tx.add(newNode({ id, name, kind: 'note', icon: v.iconFor('note'), x: w.x, y: w.y }));

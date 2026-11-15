@@ -3546,10 +3546,16 @@ test.describe('a workspace on the core', () => {
         ),
       );
     expect(await attr('example.org', 'url')).toBe('https://example.org/a?b=1');
-    // Text: the first line names a note, the rest is its body with its links.
+    // Text: a note with the text inside as it came (owner 2026-11-15), named
+    // by the start of its first line; its links become wires.
     await page.mouse.move(400, 300);
     await paste('Хлеб');
     await expect.poll(async () => (await graphNow(page)).names).toContain('Хлеб');
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.note-window .cm-content')).toHaveText('Хлеб');
+    await page.locator('.note-window .window-close').click();
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
     await page.mouse.move(800, 300);
     await paste('# Покупки\n\nкупить [[Хлеб]]\nи молоко');
     await expect.poll(async () => (await graphNow(page)).names).toContain('Покупки');
@@ -3557,8 +3563,9 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Покупки');
     await page.evaluate(() => window.__strataWs?.view.canvas.focus());
     await page.keyboard.press('Enter');
+    // The live preview hides the marks off the caret's line: the words, in order.
     await expect(page.locator('.note-window .cm-content')).toHaveText(
-      /купить \[\[Хлеб\]\]\s*и молоко/,
+      /Покупки.*купить.*Хлеб.*и молоко/,
     );
     await page.locator('.note-window .window-close').click();
     // A picture: an asset with the picture in its body; one step of undo.

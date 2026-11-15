@@ -118,6 +118,7 @@ describe('the command palette (09 §3.5)', () => {
       home: () => done.push('home'),
       settings: () => done.push('settings'),
       welcome: () => done.push('welcome'),
+      vault: () => done.push('vault'),
     };
     const run = (id: string, c: CommandContext) => {
       const command = COMMANDS.find((x) => x.id === id);
@@ -127,17 +128,27 @@ describe('the command palette (09 §3.5)', () => {
     };
     expect(run('app.open', ctx())).toBe('cmd.why.app');
     expect(run('app.save', ctx({ app }))).toBe('cmd.why.unsaved');
-    for (const id of ['app.open', 'app.new', 'app.home', 'app.settings', 'app.welcome']) {
+    for (const id of [
+      'app.open',
+      'app.new',
+      'app.home',
+      'app.settings',
+      'app.welcome',
+      'app.vault',
+    ]) {
       expect(run(id, ctx({ app }))).toBeNull();
     }
     expect(run('app.save', ctx({ app: { ...app, save: () => done.push('save') } }))).toBeNull();
-    expect(done).toEqual(['open', 'create', 'home', 'settings', 'welcome', 'save']);
+    expect(done).toEqual(['open', 'create', 'home', 'settings', 'welcome', 'vault', 'save']);
     // On the star map too: the bar is there.
     expect(run('app.settings', ctx({ app, view: '3d' }))).toBeNull();
     expect(find('export')[0]).toBe('app.save');
     expect(find('настройки')[0]).toBe('app.settings');
     expect(find('приветствие')[0]).toBe('app.welcome');
     expect(find('welcome')[0]).toBe('app.welcome');
+    // «Импорт из Obsidian…» (owner 2026-11-15: the import was not found).
+    expect(find('obsidian')[0]).toBe('app.vault');
+    expect(find('хранилище')[0]).toBe('app.vault');
   });
 
   it('finds the moves of 06 §12.1 and the wrap of §13.3 in both languages', () => {

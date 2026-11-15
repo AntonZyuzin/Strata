@@ -8,7 +8,9 @@ import { FIRST_STEPS, helpRows, keysText, onMac } from './workspace/help';
  * with — what a workspace is, in two lines, and the first steps with their
  * keys, the rows of «Клавиши» picked out; «Все клавиши…» opens the whole
  * table. «Показывать при запуске», as Windows 98's welcome had it, keeps
- * the answer on the device. `Esc`, × or «Начать» closes it.
+ * the answer on the device. «Импорт из Obsidian…» picks a vault for a new
+ * workspace, as the home's icon does (owner 2026-11-15: the import was not
+ * found). `Esc`, × or «Начать» closes it.
  */
 export function WelcomeWindow(props: {
   locale: Locale;
@@ -17,6 +19,8 @@ export function WelcomeWindow(props: {
   onAtStart: (show: boolean) => void;
   /** «Клавиши»: the whole table. */
   onKeys: () => void;
+  /** «Импорт из Obsidian…»: a vault's folder becomes a new workspace (13 §3). */
+  onVault: () => void;
   onClose: () => void;
 }) {
   const { locale } = props;
@@ -74,15 +78,23 @@ export function WelcomeWindow(props: {
               })}
             </dl>
           </section>
+          <label className="check welcome-again">
+            <input
+              type="checkbox"
+              checked={props.atStart}
+              onChange={(e) => props.onAtStart(e.currentTarget.checked)}
+            />
+            <span>{t(locale, 'welcome.atStart')}</span>
+          </label>
           <div className="dialog-actions welcome-actions">
-            <label className="check welcome-again">
-              <input
-                type="checkbox"
-                checked={props.atStart}
-                onChange={(e) => props.onAtStart(e.currentTarget.checked)}
-              />
-              <span>{t(locale, 'welcome.atStart')}</span>
-            </label>
+            <button
+              type="button"
+              className="welcome-vault"
+              title={t(locale, 'home.vaultHint')}
+              onClick={props.onVault}
+            >
+              {t(locale, 'home.vault')}
+            </button>
             <button type="button" onClick={props.onKeys}>
               {t(locale, 'welcome.keys')}
             </button>

@@ -84,6 +84,10 @@ export function Shell(props: {
   const [homeKey, setHomeKey] = useState(0);
   const bridge = useRef<WorkspaceBridge | null>(null);
   const importInput = useRef<HTMLInputElement>(null);
+  /** The home's «Импорт из Obsidian…» while the home is shown; asked for before, it waits for the home. */
+  const homeVault = useRef<(() => void) | null>(null);
+  const [vaultNext, setVaultNext] = useState(false);
+  const vaultTaken = useCallback(() => setVaultNext(false), []);
   const busyRef = useRef(false);
   /** The last left workspace's picture, still being written. */
   const picture = useRef<Promise<void>>(Promise.resolve());
@@ -224,6 +228,17 @@ export function Shell(props: {
       await away();
       await toHome();
     });
+  /** «Импорт из Obsidian…» of the welcome and the palette: the home's picker, the home first. */
+  const vault = () => {
+    behind();
+    setWelcome(false);
+    if (!opened && homeVault.current) {
+      homeVault.current();
+      return;
+    }
+    setVaultNext(true);
+    goHome();
+  };
   const openArchive = () => {
     if (home.where === 'browser') {
       importInput.current?.click();
@@ -351,6 +366,7 @@ export function Shell(props: {
               home: goHome,
               settings: () => setSettings(true),
               welcome: () => setWelcome(true),
+              vault,
             }}
             bridge={bridge}
             onUndoState={setUndo}
@@ -369,6 +385,9 @@ export function Shell(props: {
               setTabs((ts) => ts.map((x) => (x.id === id ? { id, name } : x)))
             }
             onRemoved={(id) => setTabs((ts) => ts.filter((x) => x.id !== id))}
+            vault={homeVault}
+            vaultNow={vaultNext}
+            onVaultTaken={vaultTaken}
           />
         )}
         {settings ? (
@@ -389,6 +408,7 @@ export function Shell(props: {
           atStart={prefs.welcome === 'show'}
           onAtStart={(show) => props.onPrefs({ ...prefs, welcome: show ? 'show' : 'hide' })}
           onKeys={() => setKeys(true)}
+          onVault={vault}
           onClose={() => setWelcome(false)}
         />
       ) : asking ? (

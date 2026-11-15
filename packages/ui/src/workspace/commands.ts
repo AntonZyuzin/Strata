@@ -25,6 +25,8 @@ export interface AppActions {
   settings(): void;
   /** «Добро пожаловать» (06 §17.2). */
   welcome(): void;
+  /** «Импорт из Obsidian…»: a vault's folder as a new workspace, from the home (13 §3). */
+  vault(): void;
 }
 
 /** What a command may do and know: the workspace screen gives it. */
@@ -344,7 +346,7 @@ export const COMMANDS: readonly Command[] = [
   {
     id: 'nav.importReport',
     title: 'cmd.nav.importReport',
-    aliases: ['импорт', 'obsidian', 'отчёт', 'import', 'report', 'vault'],
+    aliases: ['импорт', 'отчёт', 'import', 'report'],
     group: 'nav',
     why: (c) => (c.importReport ? null : 'cmd.why.report'),
     run: (c) => c.importReport?.(),
@@ -371,6 +373,14 @@ export const COMMANDS: readonly Command[] = [
     group: 'app',
     why: bar,
     run: (c) => c.app?.open(),
+  },
+  {
+    id: 'app.vault',
+    title: 'cmd.app.vault',
+    aliases: ['импорт', 'obsidian', 'хранилище', 'обсидиан', 'import', 'vault', 'markdown'],
+    group: 'app',
+    why: bar,
+    run: (c) => c.app?.vault(),
   },
   {
     id: 'app.new',

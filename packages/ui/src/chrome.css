@@ -2466,7 +2466,15 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   margin-top: calc(10 * var(--u));
 }
 
+/* The answer on a row of its own, above the actions: the vault's button
+   leads them on the left, the window's own on the right. */
 .welcome-again {
+  display: flex;
+  width: fit-content;
+  margin-top: calc(10 * var(--u));
+}
+
+.welcome-vault {
   margin-right: auto;
 }
 

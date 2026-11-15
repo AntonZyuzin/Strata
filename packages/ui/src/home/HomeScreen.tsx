@@ -70,6 +70,14 @@ export function HomeScreen(props: {
   onOpen: (opened: Opened) => void;
   onRenamed: (id: string, name: string) => void;
   onRemoved: (id: string) => void;
+  /**
+   * «Импорт из Obsidian…» from outside the home — the welcome, the palette:
+   * set to what the home's icon does while the home is shown.
+   */
+  vault?: { current: (() => void) | null };
+  /** The import was asked for before the home was shown: the picker opens at once. */
+  vaultNow?: boolean;
+  onVaultTaken?: () => void;
 }) {
   const { locale, home, onOpen } = props;
   const [state, setState] = useState<HomeState | null>(null);
@@ -196,6 +204,33 @@ export function HomeScreen(props: {
       return { workspace: r.workspace, root: r.root };
     });
 
+  /** The vault's folder: the system's picker on the desktop, `<input webkitdirectory>` in the browser. */
+  const pickVault = () => {
+    if (home.where === 'desktop') {
+      void pickFolder().then((path) => {
+        if (path) void importVault(path);
+      });
+    } else {
+      vaultInput.current?.click();
+    }
+  };
+  const pickRef = useRef(pickVault);
+  pickRef.current = pickVault;
+  const { vault, vaultNow, onVaultTaken } = props;
+  useEffect(() => {
+    if (!vault) return;
+    const pick = () => pickRef.current();
+    vault.current = pick;
+    return () => {
+      if (vault.current === pick) vault.current = null;
+    };
+  }, [vault]);
+  useEffect(() => {
+    if (!vaultNow) return;
+    onVaultTaken?.();
+    pickRef.current();
+  }, [vaultNow, onVaultTaken]);
+
   const rename = (w: WorkspaceEntry, name: string) =>
     run(async () => {
       const s = await home.rename(w.id, name);
@@ -290,15 +325,7 @@ export function HomeScreen(props: {
             className="home-vault"
             label={t(locale, 'home.vaultHint')}
             disabled={busy}
-            onClick={() => {
-              if (home.where === 'desktop') {
-                void pickFolder().then((path) => {
-                  if (path) void importVault(path);
-                });
-              } else {
-                vaultInput.current?.click();
-              }
-            }}
+            onClick={pickVault}
           />
           <input
             ref={vaultInput}

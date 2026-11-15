@@ -46,6 +46,42 @@ async function importVault(page: Page) {
   );
 }
 
+test.describe('«Импорт из Obsidian…» outside the home (owner 2026-11-15)', () => {
+  // A first start: the welcome greets it.
+  test.use({ storageState: { cookies: [], origins: [] } });
+
+  test('the welcome and the palette pick a vault as the home does', async ({ page }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    const welcome = page.locator('.welcome-window');
+    await expect(welcome).toBeVisible();
+    // The welcome's button: the welcome goes, the vault's picker opens.
+    const chosen = page.waitForEvent('filechooser');
+    await welcome.getByRole('button', { name: 'Импорт из Obsidian…' }).click();
+    const picker = await chosen;
+    await expect(welcome).toHaveCount(0);
+    expect(await picker.element().evaluate((el) => el.classList.contains('home-vault-input'))).toBe(
+      true,
+    );
+    await picker.setFiles(vaultDir());
+    await expect(page.locator('.import-report')).toBeVisible({ timeout: 30_000 });
+    await expect(page.locator('.tab', { hasText: 'V-synth' })).toBeVisible();
+    await page.locator('.import-report .window-close').click();
+    // In a workspace, the palette: the home first, then the picker.
+    await page.evaluate(() =>
+      (
+        window as unknown as { __strataWs?: { view: { canvas: HTMLElement } } }
+      ).__strataWs?.view.canvas.focus(),
+    );
+    await page.keyboard.press('Control+p');
+    await page.locator('.command-palette .palette-query').fill('obsidian');
+    const again = page.waitForEvent('filechooser');
+    await page.keyboard.press('Enter');
+    await again;
+    await expect(page.locator('.home-vault')).toBeVisible();
+  });
+});
+
 test('a vault comes in from the home screen and goes back with one undo', async ({ page }) => {
   test.setTimeout(90_000);
   await importVault(page);

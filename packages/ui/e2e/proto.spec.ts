@@ -43,6 +43,8 @@ interface Hook {
     dotAt(id: string): { x: number; y: number } | null;
     /** The camera is flying to a frame (09 §3.4). */
     flying: boolean;
+    /** The selection the canvas draws, as the editor holds it. */
+    interaction(): { selection: Set<string> };
     invalidate(): void;
   };
   graph: {
@@ -1262,6 +1264,54 @@ test.describe('gestures', () => {
       (p, q) => p - q,
     );
     expect(xs[1]).toBeCloseTo(((xs[0] ?? 0) + (xs[2] ?? 0)) / 2, 6);
+  });
+
+  test('a bubble an undo glides back is hit where it comes to rest, the cursor moving on the way (15 §4.1)', async ({
+    page,
+  }) => {
+    // The page's clock is the test's: the glide goes on only as it is let.
+    await page.clock.install();
+    await open(page);
+    const spot = await emptySpot(page, 120, 110);
+    const id = await createNote(page, spot.x, spot.y, 'Возврат');
+    // Close up: the bubble big and its name under it — far off, the name
+    // covers the bubble's middle, and a click there finds it by the name.
+    await page.keyboard.press('g');
+    await expect
+      .poll(() => page.evaluate(() => (window.__strataProto as Hook).view.flying))
+      .toBe(false);
+    await page.keyboard.press('Escape');
+    const p = await screenOf(page, id);
+    // Eight radii aside, one step; the undo glides it back for 200 ms (06 §1.4).
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await glide(page, p, { x: p.x + 8 * p.r, y: p.y });
+    await page.mouse.up();
+    await page.clock.pauseAt(Date.now() + 1000);
+    await page.keyboard.press('Control+z');
+    // The cursor moves on over the empty canvas before the glide has drawn a
+    // frame: each move asks the hit test what lies under it.
+    for (let i = 0; i < 3; i++) await page.mouse.move(p.x - 3 * p.r, p.y + 3 * p.r + 4 * i);
+    await page.clock.runFor(400);
+    await page.clock.resume();
+    await expect
+      .poll(() =>
+        page.evaluate((id) => {
+          const { view, graph } = window.__strataProto as Hook;
+          const v = view.nodeAt(id);
+          const n = graph.nodes.get(id) as { x: number; y: number } | undefined;
+          return !!v && !!n && v.x === n.x && v.y === n.y;
+        }, id),
+      )
+      .toBe(true);
+    // At rest, a click on it picks it — before, it hit the empty canvas: the
+    // index kept the bubble where it was on the way, and the click cleared
+    // the selection.
+    await page.keyboard.press('Escape');
+    await page.mouse.click(p.x, p.y);
+    expect(
+      await page.evaluate(() => [...(window.__strataProto as Hook).view.interaction().selection]),
+    ).toEqual([id]);
   });
 
   test('Shift+S: straight, Bézier, kinetic wires, one step each; the hit test follows (06 §6.2)', async ({

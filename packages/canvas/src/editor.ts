@@ -612,6 +612,8 @@ export class Editor {
   private nodeIndex = new RBush<NodeBox>();
   private wireIndex = new RBush<WireBox>();
   private indexDirty = true;
+  /** The view's `moves` the index was built at. */
+  private indexedMoves = -1;
   private readonly detach: (() => void)[] = [];
   private overlayOpen = false;
 
@@ -1911,7 +1913,7 @@ export class Editor {
   /** The bubble under a screen point, `except` those (the dragged ones). */
   private bubbleUnder(sx: number, sy: number, except: readonly string[]): string | null {
     // The bubbles that stay put are where the index has them; the dragged ones are left out.
-    if (this.indexDirty) this.refreshIndex();
+    this.refreshIndex();
     const zoom = this.view.camera.zoom;
     const w = this.view.camera.toWorld(sx, sy);
     const reach = MIN_HIT_PX / zoom;
@@ -3076,7 +3078,6 @@ export class Editor {
     return { x, y };
   }
 
-  /** Moves the camera only if the node left the screen, with a 48 px margin (06 §3). */
   /** A key's step to node `id`: it alone is chosen, the camera keeps it in view. */
   private step(id: string | null) {
     if (!id || this.mode.t !== 'idle') return;
@@ -3085,6 +3086,7 @@ export class Editor {
     this.follow(id);
   }
 
+  /** Moves the camera only if the node left the screen, with a 48 px margin (06 §3). */
   private follow(id: string) {
     const n = this.graph.nodes.get(id);
     if (!n) return;
@@ -3139,8 +3141,15 @@ export class Editor {
   // ── Hit test (15 §4.1 rule 5) ─────────────────────────────────────
 
   private refreshIndex() {
-    if (!this.indexDirty && this.mode.t !== 'drag') return;
+    // Built from where bubbles are drawn: again when the graph changed and
+    // when anything drawn moved since — a drag, and a glide too, which goes
+    // on for frames after its step. Before, a pointer move during the glide
+    // of an undo left the bubble indexed half way, and a click where it
+    // came to rest fell on the empty canvas and cleared the selection.
+    const moves = this.view.moves;
+    if (!this.indexDirty && moves === this.indexedMoves) return;
     this.indexDirty = false;
+    this.indexedMoves = moves;
     const nodes: NodeBox[] = [];
     for (const [id, p] of this.view.eachNode()) {
       nodes.push({ id, minX: p.x - p.r, minY: p.y - p.r, maxX: p.x + p.r, maxY: p.y + p.r });

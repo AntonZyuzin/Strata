@@ -112,6 +112,8 @@ export class CanvasView {
   private kinetic = false;
   private jittered = new Set<string>();
   private tweens: Tween[] = [];
+  /** The count behind `moves`. */
+  private drawnMoves = 0;
   private scheduled = false;
   private graph: Graph | null = null;
   private lastZoom = Number.NaN;
@@ -617,7 +619,18 @@ export class CanvasView {
   /** Draws dot `id` at (x, y) without touching the graph (a drag); null — where the graph has it. */
   dragDot(id: string, at: { x: number; y: number } | null): void {
     this.dotDrag = at ? { id, x: at.x, y: at.y } : null;
+    this.drawnMoves++;
     this.invalidate();
+  }
+
+  /**
+   * How many times a bubble or a dot has moved where it is drawn — a drag,
+   * a glide of undo or of `L`, a sync. What is built from the drawing, as
+   * the editor's hit-test index (15 §4.1 rule 5), knows by it that it is
+   * behind: a glide moves bubbles for frames after the graph changed.
+   */
+  get moves(): number {
+    return this.drawnMoves;
   }
 
   /** Moves a node's rendering without touching the graph (a drag in progress). */
@@ -908,6 +921,7 @@ export class CanvasView {
   }
 
   private setPosition(v: NodeView, x: number, y: number) {
+    if (v.x !== x || v.y !== y) this.drawnMoves++;
     v.x = x;
     v.y = y;
     v.body.position.set(x, y);

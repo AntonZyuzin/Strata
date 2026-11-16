@@ -41,6 +41,8 @@ interface Hook {
     eachNode(): Iterable<[string, Pt]>;
     /** Where a dot on a wire is drawn (06 §6.6), world units. */
     dotAt(id: string): { x: number; y: number } | null;
+    /** The camera is flying to a frame (09 §3.4). */
+    flying: boolean;
     invalidate(): void;
   };
   graph: {
@@ -1180,18 +1182,20 @@ test.describe('gestures', () => {
         const n = (window.__strataProto as Hook).graph.nodes.get(id);
         return n ? { x: n.x as number, y: n.y as number } : null;
       }, id);
-    // Where a bubble stands once the camera or an undo has stopped moving it.
+    // Where a bubble stands once nothing moves it: drawn where the graph
+    // has it — an undo's glide over — and the camera's flight landed.
     const still = async (id: string) => {
-      let last = await screenOf(page, id);
       await expect
-        .poll(async () => {
-          const now = await screenOf(page, id);
-          const same = Math.hypot(now.x - last.x, now.y - last.y) < 0.01;
-          last = now;
-          return same;
-        })
+        .poll(() =>
+          page.evaluate((id) => {
+            const { view, graph } = window.__strataProto as Hook;
+            const v = view.nodeAt(id);
+            const n = graph.nodes.get(id) as { x: number; y: number } | undefined;
+            return !!v && !!n && !view.flying && v.x === n.x && v.y === n.y;
+          }, id),
+        )
         .toBe(true);
-      return last;
+      return screenOf(page, id);
     };
     const select = async (ids: string[]) => {
       await page.keyboard.press('Escape');
@@ -1222,10 +1226,14 @@ test.describe('gestures', () => {
     await drag(b, { x: pa.x + 3, y: pb.y });
     expect((await world(b))?.x).toBe((await world(a))?.x);
     await page.keyboard.press('Control+z');
-    // `X` held: no snapping, it lands where it was let go.
+    // `X` held: no snapping, it lands where it was let go — moved, off A's column.
+    const was = await world(b);
     await drag(b, { x: pa.x + 3, y: pb.y }, ['x']);
-    expect((await world(b))?.x).not.toBe((await world(a))?.x);
+    const off = await world(b);
+    expect(off?.x).not.toBe(was?.x);
+    expect(off?.x).not.toBe((await world(a))?.x);
     await page.keyboard.press('Control+z');
+    expect(await world(b)).toEqual(was);
     // `Shift+A` and a drag sideways on A: the selection in A's row, one step.
     await select([a, b, c]);
     const before = { b: await world(b), c: await world(c) };

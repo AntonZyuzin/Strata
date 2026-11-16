@@ -1,0 +1,388 @@
+{
+  "content/01M7JN6Q01EW1TWSTQA3GWDJV0": {
+    "node": "Пробелы",
+    "text": "Пробелы по краям имени.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q04ET3R0CQE34PJQESS": {
+    "node": "JSON",
+    "text": "JSON-свойства.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1,
+      "frontmatter": "---\n{\"rating\": 3, \"tags\": [\"json\"]}\n---\n"
+    }
+  },
+  "content/01M7JN6Q07ETQRHXBXHJDAZYXX": {
+    "node": "Kanban",
+    "text": "\n## Todo\n\n- [ ] Карточка\n\n%% kanban:settings\n```\n{\"kanban-plugin\":\"board\"}\n```\n%%\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1,
+      "frontmatter": "---\nkanban-plugin: board\n---\n"
+    }
+  },
+  "content/01M7JN6Q07ETQRHXBXHTE68CKX": {
+    "node": "Без сжатия",
+    "elements": [
+      {
+        "id": "txt1",
+        "type": "text",
+        "text": "См. [[Проекты/Дела]]"
+      }
+    ]
+  },
+  "content/01M7JN6Q08ENGTB1R2TNAJEYVN": {
+    "node": "Битый",
+    "text": "---\ntitle: [unclosed\n---\nТекст.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q09ERVA8B4BCTG46ZT7": {
+    "node": "Заметка",
+    "text": "Внутри вложенного vault.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q09ERVA8B4BCYYYEPA7": {
+    "node": "Входящие дела",
+    "text": "# Входящие\n\nПуть: [[Проекты/Игра/Диздок]], имя дважды: [[Диздок]].\nНет такой: [[Несуществующая]]. Алиас: [[Сценарий]].\nВстраивание ![[схема.png]] и Markdown: [Диздок](Проекты/Игра/Диздок.md#Цели).\nКанвас [[План.canvas]] и рисунок [[Рисунок.excalidraw]].\nИмя из NFD: [[Идей]]. Тег #входящие.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0AEPQT95SVR5DWASDP": {
+    "node": "note-0",
+    "text": "## Второй — с [[Ссылкой]] и **жирным**\nХвостовые пробелы   \n| A | B |\n|---|:-:|\n| [[X]] | ==y== |\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0AEPQT95SVR9DHX4Y5": {
+    "node": "note-1",
+    "text": "Ссылка с заголовком [[Проект#Цели]] и блоком [[Проект#^abc123]], псевдоним [[Длинное имя|кратко]].\nСтрока с якорем блока ^block-1\n# Заголовок первого уровня\n",
+    "meta": {
+      "bom": false,
+      "eol": "crlf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0AEPQT95SVRF6JDE4Z": {
+    "node": "note-2",
+    "text": "> [!note] Выноска\n> Текст выноски с [[ссылкой]].\n\nСтрока с якорем блока ^block-1\n\nНеразрывный пробел, эмодзи 👩‍💻 и й из двух знаков: й.\n\n```js\nconst link = \"[[не ссылка]]\";\n```\n\nХвостовые пробелы   \n\n- [ ] задача\n- [x] сделано ✅ 2026-10-20\n  - вложенный пункт\n\nСтрока с якорем блока ^block-1\n",
+    "meta": {
+      "bom": true,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0BE5YB3TERVF6BTPVV": {
+    "node": "note-3",
+    "text": "<div class=\"custom\">HTML</div>\r\n# Заголовок первого уровня\n> [!note] Выноска\n> Текст выноски с [[ссылкой]].\nТеги #проект, #idea/2026 и не тег #123.\nСноска[^1].\n\n[^1]: Текст сноски.\nВстраивание ![[Схема.png]] и ![[Заметка#Раздел]].\n1. первый\n2. второй\nСсылка с заголовком [[Проект#Цели]] и блоком [[Проект#^abc123]], псевдоним [[Длинное имя|кратко]].\nСноска[^1].\n\n[^1]: Текст сноски.\n<div class=\"custom\">HTML</div>\nНеразрывный пробел, эмодзи 👩‍💻 и й из двух знаков: й.\n## Второй — с [[Ссылкой]] и **жирным**",
+    "meta": {
+      "bom": false,
+      "eol": "raw",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0BE5YB3TERVJG4QTTJ": {
+    "node": "note-4",
+    "text": "| A | B |\n|---|:-:|\n| [[X]] | ==y== |\n\n- [ ] задача\n- [x] сделано ✅ 2026-10-20\n  - вложенный пункт\n\n> Обычная цитата\n\n| A | B |\n|---|:-:|\n| [[X]] | ==y== |\n\nСноска[^1].\n\n[^1]: Текст сноски.\n\nСтрока с якорем блока ^block-1\n\nСноска[^1].\n\n[^1]: Текст сноски.\n\n- [ ] задача\n- [x] сделано ✅ 2026-10-20\n  - вложенный пункт\n\n[Внешняя](https://example.com) и <https://example.org>.\n",
+    "meta": {
+      "bom": true,
+      "eol": "crlf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0BE5YB3TERVM9WVJ75": {
+    "node": "note-5",
+    "text": "> [!note] Выноска\n> Текст выноски с [[ссылкой]].\n\n1. первый\n2. второй\n\n> [!note] Выноска\n> Текст выноски с [[ссылкой]].\n\n- [ ] задача\n- [x] сделано ✅ 2026-10-20\n  - вложенный пункт\n\n```js\nconst link = \"[[не ссылка]]\";\n```\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0BE5YB3TERVSYT8AFM": {
+    "node": "note-6",
+    "text": "# Заголовок первого уровня\n| A | B |\n|---|:-:|\n| [[X]] | ==y== |\n```js\nconst link = \"[[не ссылка]]\";\n```\n```js\nconst link = \"[[не ссылка]]\";\n```\n",
+    "meta": {
+      "bom": false,
+      "eol": "crlf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0BE5YB3TERVZEJ0Z5Z": {
+    "node": "note-7",
+    "text": "Неразрывный пробел, эмодзи 👩‍💻 и й из двух знаков: й.\n> [!note] Выноска\n> Текст выноски с [[ссылкой]].\n[Внешняя](https://example.com) и <https://example.org>.\n",
+    "meta": {
+      "bom": true,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0BE5YB3TERW137HR9K": {
+    "node": "note-8",
+    "text": "Встраивание ![[Схема.png]] и ![[Заметка#Раздел]].\r\n# Заголовок первого уровня\n```js\nconst link = \"[[не ссылка]]\";\n```\n---\ntitle: \"Заметка\"\ntags: [проект, idea/2026]\naliases:\n  - Другое имя\n---\n## Второй — с [[Ссылкой]] и **жирным**\nКомментарий %%не для чтения%% в строке.\n- [ ] задача\n- [x] сделано ✅ 2026-10-20\n  - вложенный пункт\nСноска[^1].\n\n[^1]: Текст сноски.\nФормула $e^{i\\pi} + 1 = 0$ и блок:\n\n$$\n\\int_0^1 x\\,dx\n$$\n<div class=\"custom\">HTML</div>\n",
+    "meta": {
+      "bom": false,
+      "eol": "raw",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0CEWQRKF4P5F9MWSR4": {
+    "text": "> [!note] Выноска\n> Текст выноски с [[ссылкой]].\nАбзац с *курсивом*, ~~зачёркнутым~~, `кодом` и ==выделением==.\nНеразрывный пробел, эмодзи 👩‍💻 и й из двух знаков: й.\n## Второй — с [[Ссылкой]] и **жирным**\n",
+    "meta": {
+      "bom": true,
+      "eol": "crlf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0CEWQRKF4P5KM80HAH": {
+    "node": "Запросы",
+    "text": "```dataview\nTABLE file.name\n```\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0CEWQRKF4P5MQGQ0FW": {
+    "node": "Идей",
+    "text": "Имя пришло в NFD.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0CEWQRKF4P5R9NRENG": {
+    "node": "Нельзя#ссылаться",
+    "text": "Решётка в имени.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0DE8NBWGMJZ9K4R4YJ": {
+    "node": "Дела",
+    "text": "## Дела\n\n- [ ] Позвонить 📅 2026-11-01 🆔 call1\n- [x] Сделано 📅 2026-10-01 ✅ 2026-10-02\n- [ ] Письмо [due:: 2026-10-30]\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0DE8NBWGMJZCEDDRY0": {
+    "node": "Диздок",
+    "text": "## Цели\n\n![[фото.jpg]]\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1,
+      "frontmatter": "---\naliases: [Сценарий]\ntags: [игра, \"#idea/2026\"]\ntag: Игра\nrating: 5\nreviewed: yes\nwhen: 2026-10-28\nsource: \"[[Входящие]]\"\nnested:\n  a: 1\n# a comment\ncssclasses: [wide]\ncreated: 2024-03-01\n---\n"
+    }
+  },
+  "content/01M7JN6Q0EERATP29P34NTWRGP": {
+    "node": "Задача сборки",
+    "text": "Собрать билд.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1,
+      "frontmatter": "---\nstatus: in progress\ndue: 2026-11-15\npriority: high\nassignees:\n  - \"[[Анна]]\"\n  - Борис\n---\n"
+    }
+  },
+  "content/01M7JN6Q0EERATP29P39RQN5SH": {
+    "node": "Диздок",
+    "text": "Второй диздок.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0EERATP29P3E63CP1B": {
+    "node": "Покупки",
+    "meta": {
+      "bom": false,
+      "done": "x",
+      "eol": "lf",
+      "indent": "  ",
+      "marker": "-",
+      "schema": 1
+    },
+    "items": [
+      {
+        "text": "Хлеб",
+        "done": false,
+        "items": [
+          {
+            "text": "Белый",
+            "done": true,
+            "items": []
+          }
+        ]
+      },
+      {
+        "text": "Молоко",
+        "done": false,
+        "items": []
+      }
+    ]
+  },
+  "content/01M7JN6Q0EERATP29P3NXRCB58": {
+    "node": "Связи",
+    "text": "## После звонка\n\n- [ ] Ответить ⛔ call1\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0EERATP29P3RVNVHX3": {
+    "node": "Note",
+    "text": "Upper.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0EERATP29P3XW6G4BX": {
+    "node": "note",
+    "text": "lower.\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0EERATP29P40082C5G": {
+    "node": "Рисунок",
+    "elements": [
+      {
+        "id": "txt1",
+        "type": "text",
+        "text": "См. [[Входящие дела]]"
+      },
+      {
+        "id": "img1",
+        "type": "image"
+      }
+    ],
+    "files": [
+      {
+        "id": "f00d1",
+        "mimeType": "image/png"
+      }
+    ]
+  },
+  "content/01M7JN6Q0EERATP29P44QYYJFM": {
+    "node": "Старый",
+    "elements": [
+      {
+        "id": "txt1",
+        "type": "text",
+        "text": "См. [[Нигде]]"
+      }
+    ]
+  },
+  "content/01M7JN6Q0EERATP29P4EQ6S1BS": {
+    "node": "Templater",
+    "text": "Сегодня <% tp.date.now() %>\n",
+    "meta": {
+      "bom": false,
+      "eol": "lf",
+      "schema": 1
+    }
+  },
+  "content/01M7JN6Q0GEM0TWG5MH5XA3TTY": {
+    "node": "Идея",
+    "text": "# Идея\nТекст карточки со ссылкой на [[Входящие дела]]."
+  },
+  "content/01M7JN6Q0GEM0TWG5MHEP861PH": {
+    "node": "Короткая",
+    "text": "Короткая"
+  },
+  "content/01M7JN6Q0HE6RA8EH1CNR8JYVV": {
+    "node": "Рисунок — текст",
+    "text": "Подпись к рисунку."
+  },
+  "content/01M7JN6Q2M002H6NF3EC3FJAAH": {
+    "node": "Проверить корпус",
+    "text": "Открыть корпус **каждой** версией.\n"
+  },
+  "content/01M7JN6Q2P00X3VKTHWFNDR7GC": {
+    "node": "Сборы",
+    "items": [
+      {
+        "text": "Палатка",
+        "done": true,
+        "items": []
+      },
+      {
+        "text": "Еда",
+        "done": false,
+        "items": [
+          {
+            "text": "Хлеб",
+            "done": false,
+            "items": []
+          },
+          {
+            "text": "Сыр",
+            "done": false,
+            "items": []
+          }
+        ]
+      }
+    ]
+  },
+  "content/01M7JN6Q2Q00YCMSBS9BGKHXS5": {
+    "node": "Виджеты",
+    "widgets": [
+      {
+        "id": "note1",
+        "kind": "note",
+        "text": "Заметка на доске"
+      },
+      {
+        "id": "todo1",
+        "kind": "todo",
+        "text": "- [x] Купить плёнку\n- [ ] Проявить",
+        "todo": [
+          {
+            "text": "Купить плёнку",
+            "done": true
+          },
+          {
+            "text": "Проявить",
+            "done": false
+          }
+        ]
+      }
+    ]
+  },
+  "content/01M7JN6Q2R00F1YZKV1ZM8JNAR": {
+    "node": "Свежая",
+    "text": "# Свежая\n\nСо ссылкой на [[Входящие дела]] и на [[Нет такой]].\n"
+  }
+}

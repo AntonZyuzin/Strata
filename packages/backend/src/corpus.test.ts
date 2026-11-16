@@ -158,7 +158,8 @@ async function edit(core: Core, id: string, change: (doc: LoroDoc) => void): Pro
  * makes on top — every kind, the attributes of 05 §4, people, flags,
  * sizes, a wire style, backgrounds, a kind's icon, wires, an appearance,
  * the trash, a note's text with `[[links]]` and a ghost, a list, board
- * widgets, a rename that rewrites links, undo, redo and a revert (10 §9.3).
+ * widgets, a rename that rewrites links, undo, redo and a revert (10 §9.3);
+ * since 2026-11-16 dots on wires and the routes through them (05 §9.2).
  */
 async function makeWorkspace(core: Core, root: string): Promise<void> {
   const step = (ops: CoreOp[], key: string, params?: ChangeLabel['params']) =>
@@ -268,6 +269,20 @@ async function makeWorkspace(core: Core, root: string): Promise<void> {
   await step([{ op: 'connect', from: release, to: archive }], 'proto.change.connect', {
     name: 'Архив',
   });
+  // Dots on wires (05 §9.2, 06 §6.6): a branch through a dot, and a pinned dot no wire takes.
+  const dot = newId();
+  const pin = newId();
+  await step(
+    [
+      { op: 'putDot', net: root, id: dot, x: 1200, y: 950, pinned: false },
+      { op: 'setRoute', net: root, from: fresh, to: list, dots: [dot] },
+      { op: 'connect', from: fresh, to: board },
+      { op: 'setRoute', net: root, from: fresh, to: board, dots: [dot] },
+      { op: 'putDot', net: root, id: pin, x: 1300, y: 1100, pinned: true },
+    ],
+    'proto.change.connect',
+    { name: 'Виджеты' },
+  );
   await step([{ op: 'place', id: fresh, net: release, x: 300, y: 0 }], 'ws.change.place', {
     name: 'Свежая',
   });

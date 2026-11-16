@@ -642,14 +642,20 @@ export class CanvasView {
     this.invalidate();
   }
 
-  /** Animates nodes from where they are drawn to where the graph has them (06 §1.4). */
+  /**
+   * Animates nodes from where they are drawn to where the graph has them
+   * (06 §1.4). A glide still on its way elsewhere stops, even when the node
+   * is drawn there already: a step and its undo within one frame left the
+   * bubble gliding to the place undone.
+   */
   settle(ids: Iterable<string>): void {
     const now = performance.now();
     for (const id of ids) {
       const v = this.views.get(id);
       const node = this.graph?.nodes.get(id);
-      if (!v || !node || (v.x === node.x && v.y === node.y)) continue;
+      if (!v || !node) continue;
       this.tweens = this.tweens.filter((t) => t.id !== id);
+      if (v.x === node.x && v.y === node.y) continue;
       if (this.reducedMotion) this.setPosition(v, node.x, node.y);
       else this.tweens.push({ id, fromX: v.x, fromY: v.y, toX: node.x, toY: node.y, start: now });
     }
@@ -972,6 +978,9 @@ export class CanvasView {
       seen.set(to, (seen.get(to) ?? 0) + 1);
     }
     const moved: string[] = [];
+    // Where each glide under way is headed: one headed elsewhere than the
+    // graph now says is moved too, though the bubble be drawn in place.
+    const heading = new Map(this.tweens.map((t) => [t.id, t]));
     for (const node of graph.nodes.values()) {
       const r = radiusOf(node, seen.get(node.id) ?? 0);
       const v = this.views.get(node.id);
@@ -995,7 +1004,10 @@ export class CanvasView {
         this.applyPicture(v);
         this.applyLevel(v);
       }
-      if (v.x !== node.x || v.y !== node.y) moved.push(node.id);
+      const t = heading.get(node.id);
+      if (v.x !== node.x || v.y !== node.y || (t && (t.toX !== node.x || t.toY !== node.y))) {
+        moved.push(node.id);
+      }
     }
     // The dots' ends (05 §9.2): one object per dot, placed every frame.
     for (const id of this.dotEnds.keys()) if (!graph.dots.has(id)) this.dotEnds.delete(id);

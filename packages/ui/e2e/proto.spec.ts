@@ -1314,6 +1314,39 @@ test.describe('gestures', () => {
     ).toEqual([id]);
   });
 
+  test('an undo and a redo before the glide draws a frame leave the bubble where the graph has it (06 §1.4)', async ({
+    page,
+  }) => {
+    await page.clock.install();
+    await open(page);
+    const spot = await emptySpot(page, 120, 110);
+    const id = await createNote(page, spot.x, spot.y, 'Туда и обратно');
+    await page.keyboard.press('Escape');
+    const p = await screenOf(page, id);
+    await page.mouse.move(p.x, p.y);
+    await page.mouse.down();
+    await glide(page, p, { x: p.x + 80, y: p.y });
+    await page.mouse.up();
+    const place = () =>
+      page.evaluate((id) => {
+        const { view, graph } = window.__strataProto as Hook;
+        const v = view.nodeAt(id);
+        const n = graph.nodes.get(id) as { x: number; y: number } | undefined;
+        return { drawn: v && { x: v.x, y: v.y }, graph: n && { x: n.x, y: n.y } };
+      }, id);
+    const moved = (await place()).graph;
+    // The clock stands: the undo's glide home draws no frame before the
+    // redo puts the bubble back where it is still drawn.
+    await page.clock.pauseAt(Date.now() + 1000);
+    await page.keyboard.press('Control+z');
+    await page.keyboard.press('Control+Shift+z');
+    await page.clock.runFor(400);
+    await page.clock.resume();
+    // Before, the undo's glide went on and drew the bubble at home, the
+    // graph having it moved.
+    expect(await place()).toEqual({ drawn: moved, graph: moved });
+  });
+
   test('Shift+S: straight, Bézier, kinetic wires, one step each; the hit test follows (06 §6.2)', async ({
     page,
   }) => {

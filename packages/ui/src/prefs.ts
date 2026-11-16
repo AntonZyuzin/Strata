@@ -1,3 +1,4 @@
+import type { SnapMode } from '@strata/canvas';
 import type { Locale } from '@strata/i18n';
 
 /**
@@ -18,6 +19,9 @@ export const CLOCKS: readonly Clock[] = ['24', '12'];
 /** When the flag ring shows (06 §8): always, on bubbles seen from afar, never. */
 export type RingMode = 'always' | 'far' | 'never';
 export const RING_MODES: readonly RingMode[] = ['always', 'far', 'never'];
+
+/** What a dragged bubble snaps to (06 §3): its neighbours' centres, the grid, nothing. */
+export const SNAP_MODES: readonly SnapMode[] = ['nodes', 'grid', 'off'];
 
 /** When the info card shows (06 §4.4): on 600 ms of hover too, or only for the middle button and `Shift+I`. */
 export type CardMode = 'hover' | 'hold';
@@ -57,6 +61,8 @@ export interface Prefs {
   clock: Clock | 'auto';
   /** The flag ring (06 §8): «Всегда» by default. */
   ring: RingMode;
+  /** Snapping on a drag (06 §3): to the neighbours by default. */
+  snap: SnapMode;
   /** The info card (06 §4.4): on hover too by default. */
   card: CardMode;
   /** Gesture hints (06 §2.1): shown by default. */
@@ -96,6 +102,7 @@ export function loadPrefs(fallback: Locale): Prefs {
       date: DATE_FORMATS.includes(v?.date as DateFormat) ? (v?.date as DateFormat) : 'auto',
       clock: CLOCKS.includes(v?.clock as Clock) ? (v?.clock as Clock) : 'auto',
       ring: RING_MODES.includes(v?.ring as RingMode) ? (v?.ring as RingMode) : 'always',
+      snap: SNAP_MODES.includes(v?.snap as SnapMode) ? (v?.snap as SnapMode) : 'nodes',
       card: CARD_MODES.includes(v?.card as CardMode) ? (v?.card as CardMode) : 'hover',
       hints: HINT_MODES.includes(v?.hints as HintMode) ? (v?.hints as HintMode) : 'show',
       updates: UPDATE_MODES.includes(v?.updates as UpdateMode) ? (v?.updates as UpdateMode) : 'ask',
@@ -112,6 +119,7 @@ export function loadPrefs(fallback: Locale): Prefs {
       date: 'auto',
       clock: 'auto',
       ring: 'always',
+      snap: 'nodes',
       card: 'hover',
       hints: 'show',
       updates: 'ask',

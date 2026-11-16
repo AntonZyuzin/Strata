@@ -1,3 +1,4 @@
+export { GRID_STEP, type SnapMode } from './align';
 export {
   BACKDROP_SIDE,
   type ContrastRow,

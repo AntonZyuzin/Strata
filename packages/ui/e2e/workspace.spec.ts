@@ -7259,6 +7259,55 @@ test.describe('a workspace on the core', () => {
     await expect(win).toHaveCount(0);
   });
 
+  test('«Привязка» in «Настройки»: to the neighbours, to the grid, or none (06 §3)', async ({
+    page,
+  }) => {
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Привязка');
+    const c = await box(page, '.proto-canvas');
+    await createNode(page, c.x + 200, c.y + 200, 'Опора');
+    await createNode(page, c.x + 420, c.y + 330, 'Тянем');
+    const ids = { anchor: await idOf(page, 'Опора'), moved: await idOf(page, 'Тянем') };
+    const world = (id: string) =>
+      page.evaluate((id) => {
+        const n = window.__strataWs?.graph()?.nodes.get(id);
+        return n ? { x: n.x, y: n.y } : null;
+      }, id);
+    const dragTo = async (to: { x: number; y: number }) => {
+      const p = await at(page, 'Тянем');
+      await page.mouse.move(p.x, p.y);
+      await page.mouse.down();
+      for (let i = 1; i <= 10; i++) {
+        await page.mouse.move(p.x + ((to.x - p.x) * i) / 10, p.y + ((to.y - p.y) * i) / 10);
+      }
+      await page.mouse.up();
+      await settled(page);
+    };
+    const choose = async (mode: string) => {
+      await page.locator('.tabbar-settings').click();
+      await page.getByRole('combobox', { name: 'Привязка' }).selectOption({ label: mode });
+      await page.keyboard.press('Escape');
+    };
+    const a = await at(page, 'Опора');
+    // By default: to the neighbours — let go 4 px off its column, it takes it.
+    await expect(page.locator('.tabbar-settings')).toBeVisible();
+    await dragTo({ x: a.x + 4, y: a.y + 160 });
+    expect((await world(ids.moved))?.x).toBe((await world(ids.anchor))?.x);
+    // «Нет»: where it was let go.
+    await choose('Нет');
+    await dragTo({ x: a.x + 4, y: a.y + 100 });
+    expect((await world(ids.moved))?.x).not.toBe((await world(ids.anchor))?.x);
+    // «К сетке»: its centre on the grid of 24.
+    await choose('К сетке');
+    await dragTo({ x: a.x + 57, y: a.y + 133 });
+    const p = await world(ids.moved);
+    expect(
+      [(p?.x ?? 0) % 24, (p?.y ?? 0) % 24].map(
+        (v) => Math.abs(v) < 1e-9 || Math.abs(Math.abs(v) - 24) < 1e-9,
+      ),
+    ).toEqual([true, true]);
+  });
+
   test('the profile and the language are kept on this device, in «Настройки»', async ({ page }) => {
     await page.goto('/?plain');
     await expect(page.locator('.home-empty')).toBeVisible();

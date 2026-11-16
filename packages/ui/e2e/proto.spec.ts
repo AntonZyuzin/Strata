@@ -1162,6 +1162,88 @@ test.describe('gestures', () => {
     ).toBe(1);
   });
 
+  test('a dragged bubble snaps to a neighbour’s centre, X held — not; Shift+A and Alt+A align and spread (06 §3, §9.1)', async ({
+    page,
+  }) => {
+    await open(page);
+    const spot = await emptySpot(page, 160);
+    // Nothing selected before each: a note where the menu opened, no wire
+    // (06 §5.4); all within the spot's clearance, inside the canvas.
+    const a = await createNote(page, spot.x - 50, spot.y, 'Образец');
+    await page.keyboard.press('Escape');
+    const b = await createNote(page, spot.x + 45, spot.y + 45, 'Ведомый');
+    await page.keyboard.press('Escape');
+    const c = await createNote(page, spot.x + 10, spot.y - 50, 'Третий');
+    await page.keyboard.press('Escape');
+    const world = (id: string) =>
+      page.evaluate((id) => {
+        const n = (window.__strataProto as Hook).graph.nodes.get(id);
+        return n ? { x: n.x as number, y: n.y as number } : null;
+      }, id);
+    // Where a bubble stands once the camera or an undo has stopped moving it.
+    const still = async (id: string) => {
+      let last = await screenOf(page, id);
+      await expect
+        .poll(async () => {
+          const now = await screenOf(page, id);
+          const same = Math.hypot(now.x - last.x, now.y - last.y) < 0.01;
+          last = now;
+          return same;
+        })
+        .toBe(true);
+      return last;
+    };
+    const select = async (ids: string[]) => {
+      await page.keyboard.press('Escape');
+      for (const [i, id] of ids.entries()) {
+        const p = await still(id);
+        if (i > 0) await page.keyboard.down('Shift');
+        await page.mouse.click(p.x, p.y);
+        if (i > 0) await page.keyboard.up('Shift');
+      }
+    };
+    // The three framed, big enough to grab.
+    await select([a, b, c]);
+    await page.keyboard.press('g');
+    await still(a);
+    await page.keyboard.press('Escape');
+    const drag = async (id: string, to: { x: number; y: number }, keys: string[] = []) => {
+      const p = await still(id);
+      await page.mouse.move(p.x, p.y);
+      for (const k of keys) await page.keyboard.down(k);
+      await page.mouse.down();
+      await glide(page, p, to);
+      await page.mouse.up();
+      for (const k of keys) await page.keyboard.up(k);
+    };
+    // B let go 3 px from A's column: its centre takes A's x exactly.
+    const pa = await still(a);
+    const pb = await still(b);
+    await drag(b, { x: pa.x + 3, y: pb.y });
+    expect((await world(b))?.x).toBe((await world(a))?.x);
+    await page.keyboard.press('Control+z');
+    // `X` held: no snapping, it lands where it was let go.
+    await drag(b, { x: pa.x + 3, y: pb.y }, ['x']);
+    expect((await world(b))?.x).not.toBe((await world(a))?.x);
+    await page.keyboard.press('Control+z');
+    // `Shift+A` and a drag sideways on A: the selection in A's row, one step.
+    await select([a, b, c]);
+    const before = { b: await world(b), c: await world(c) };
+    const from = await still(a);
+    await drag(a, { x: from.x + 60, y: from.y + 4 }, ['Shift', 'a']);
+    const ay = (await world(a))?.y;
+    expect([(await world(b))?.y, (await world(c))?.y]).toEqual([ay, ay]);
+    await expect(page.locator('.proto-status .last-step')).toContainText('Выровнять в строку 3');
+    await page.keyboard.press('Control+z');
+    expect({ b: await world(b), c: await world(c) }).toEqual(before);
+    // `Alt+A` and a drag sideways: the middle one halfway between the others along x.
+    await drag(a, { x: from.x + 60, y: from.y + 4 }, ['Alt', 'a']);
+    const xs = [(await world(a))?.x ?? 0, (await world(b))?.x ?? 0, (await world(c))?.x ?? 0].sort(
+      (p, q) => p - q,
+    );
+    expect(xs[1]).toBeCloseTo(((xs[0] ?? 0) + (xs[2] ?? 0)) / 2, 6);
+  });
+
   test('Shift+S: straight, Bézier, kinetic wires, one step each; the hit test follows (06 §6.2)', async ({
     page,
   }) => {

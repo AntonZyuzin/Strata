@@ -114,7 +114,13 @@ export const HELP: readonly HelpGroup[] = [
   },
   {
     title: 'help.g.layout',
-    rows: [row('help.layout', ['L']), row('help.arrange', ['A', '@drag'])],
+    rows: [
+      row('help.layout', ['L']),
+      row('help.arrange', ['A', '@drag']),
+      row('help.align', ['Shift', 'A', '@drag']),
+      row('help.distribute', ['Alt', 'A', '@drag']),
+      row('help.noSnap', ['X', '@drag']),
+    ],
   },
 ];
 

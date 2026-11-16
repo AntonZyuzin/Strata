@@ -93,6 +93,7 @@ type Why = (c: CommandContext) => MessageKey | null;
 const flat: Why = (c) => (c.view === '2d' ? null : 'cmd.why.canvas');
 const spatial: Why = (c) => (c.view === '3d' ? null : 'cmd.why.map');
 const chosen: Why = (c) => flat(c) ?? (c.selected > 0 ? null : 'cmd.why.selection');
+const several: Why = (c) => flat(c) ?? (c.selected > 1 ? null : 'cmd.why.several');
 const one: Why = (c) => flat(c) ?? (c.current !== null ? null : 'cmd.why.node');
 const clipped: Why = (c) => flat(c) ?? (c.clip ? null : 'cmd.why.clip');
 const always: Why = () => null;
@@ -145,6 +146,39 @@ const preset = (q: Quality | 'auto', aliases: readonly string[]): Command => ({
 export const COMMANDS: readonly Command[] = [
   canvas('create', 'create', 'Tab', ['нода', 'новая', 'node', 'new', 'add']),
   canvas('layout', 'layout', 'L', ['раскладка', 'разложить', 'layout', 'arrange', 'tidy']),
+  // The gestures are `Shift+A` and `Alt+A` with a drag (06 §9.1): no key of their own.
+  canvas(
+    'alignRow',
+    'alignRow',
+    '',
+    ['выровнять', 'строка', 'ряд', 'align', 'row', 'horizontal'],
+    several,
+    'node',
+  ),
+  canvas(
+    'alignColumn',
+    'alignColumn',
+    '',
+    ['выровнять', 'столбец', 'колонка', 'align', 'column', 'vertical'],
+    several,
+    'node',
+  ),
+  canvas(
+    'distributeX',
+    'distributeX',
+    '',
+    ['распределить', 'равномерно', 'distribute', 'space', 'horizontal'],
+    several,
+    'node',
+  ),
+  canvas(
+    'distributeY',
+    'distributeY',
+    '',
+    ['распределить', 'равномерно', 'distribute', 'space', 'vertical'],
+    several,
+    'node',
+  ),
   canvas('fitAll', 'fitAll', 'H', ['всё', 'обзор', 'home', 'all', 'overview']),
   canvas('frame', 'frame', 'G', ['кадр', 'выделенное', 'focus', 'selection']),
   canvas('selectAll', 'selectAll', 'Ctrl+A', ['выделить', 'select']),

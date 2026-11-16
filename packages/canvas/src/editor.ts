@@ -20,6 +20,15 @@ import {
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
+import {
+  alignTo,
+  distribute,
+  GRID_STEP,
+  SNAP_PX,
+  type SnapMode,
+  snapToGrid,
+  snapToNodes,
+} from './align';
 import { Camera } from './camera';
 import { chainWires, touchAt } from './chain';
 import { controls, pointAt, type WireEnds } from './curve';
@@ -314,7 +323,12 @@ export type CanvasAction =
   | 'wrap'
   | 'icons'
   | 'colors'
-  | 'panel';
+  | 'panel'
+  /** The selection in the current node's row or column, spread along x or y (06 §9.1). */
+  | 'alignRow'
+  | 'alignColumn'
+  | 'distributeX'
+  | 'distributeY';
 
 /** What the right button was pressed on. */
 export type MenuTarget =
@@ -351,7 +365,8 @@ const INFO_HOVER_MS = 600;
 const INFO_GAP_PX = 8;
 
 /** `Ctrl`+arrows move the selection a grid step (06 §3: 24 world units), `Ctrl+Shift` — four (06 §17). */
-const NUDGE_GRID = 24;
+/** `Ctrl`+arrows step by the grid (06 §17), the one snapping and the dot grid use. */
+const NUDGE_GRID = GRID_STEP;
 const NUDGE_FINE = 4;
 const NUDGE_DIRS: Partial<Record<string, readonly [number, number]>> = {
   ArrowLeft: [-1, 0],
@@ -437,6 +452,28 @@ type Mode =
       how: DropHow;
       /** The folder's or project's bubble under the cursor, since when (06 §12.1). */
       into: { id: string; since: number } | null;
+      /** The bubble grabbed: the one that snaps (06 §3). */
+      lead: string;
+      /** The neighbours' lines the lead snapped to, world units; null — none. */
+      guides: { x: number | null; y: number | null };
+    }
+  | {
+      /**
+       * «Выровнять» `Shift+A` and «Распределить» `Alt+A` + a drag on a
+       * sample (06 §9.1): the selection in the sample's row or column, or
+       * evenly along the axis of the drag. Shown as it goes, one step at the
+       * release.
+       */
+      t: 'align';
+      how: 'align' | 'distribute';
+      sample: string;
+      sx: number;
+      sy: number;
+      /** What moves: the selection without ghosts, the sample among it. */
+      ids: string[];
+      /** The axis the drag chose; null — not yet. */
+      axis: 'x' | 'y' | null;
+      shown: Map<string, { x: number; y: number }> | null;
     }
   | {
       t: 'wire';
@@ -523,6 +560,8 @@ export class Editor {
   readonly minimap: Minimap;
   current: string | null = null;
   wheelMode: WheelMode = /Mac/.test(navigator.platform) ? 'trackpad' : 'mouse';
+  /** What a dragged bubble snaps to (06 §3), as «Настройки» say: its neighbours by default. */
+  snap: SnapMode = 'nodes';
   /** Swing of the shake in screen px; 0 turns the gesture off (05 §8.4). */
   shakePx = SHAKE_SWING_PX;
   /**
@@ -931,6 +970,19 @@ export class Editor {
       case 'panel':
         this.togglePanel();
         return;
+      case 'alignRow':
+      case 'alignColumn':
+      case 'distributeX':
+      case 'distributeY': {
+        // The selection to the current node's row or column, or spread (06 §9.1).
+        const ids = [...this.selection].filter((id) => !this.graph.nodes.get(id)?.ghostOf);
+        const sample = this.current && ids.includes(this.current) ? this.current : ids[0];
+        if (ids.length < 2 || sample === undefined) return;
+        const how = action.startsWith('align') ? 'align' : 'distribute';
+        const axis = action === 'alignRow' || action === 'distributeX' ? 'x' : 'y';
+        this.commitLine(this.lined(ids, sample, how, axis), how, axis);
+        return;
+      }
     }
   }
 
@@ -1400,6 +1452,9 @@ export class Editor {
       case 'arrange':
         this.arrangeTo(m, sx, sy);
         return;
+      case 'align':
+        this.alignToHand(m, sx, sy);
+        return;
       default:
         return;
     }
@@ -1440,6 +1495,9 @@ export class Editor {
         return;
       case 'arrange':
         this.finishArrange(m);
+        return;
+      case 'align':
+        this.finishAlign(m);
         return;
       default:
         return;
@@ -1574,6 +1632,25 @@ export class Editor {
     // `S` held: only a selection, whatever the press began on (06 §11).
     if (m.overNodes) {
       this.startMarquee(m, sx, sy, e);
+      return;
+    }
+    // `Shift+A` / `Alt+A` on a bubble: the selection aligned to it or spread (06 §9.1).
+    if (hit.t === 'node' && this.held.has('KeyA') && (m.shift || m.alt)) {
+      const ids = [...new Set([...this.selection, hit.id])].filter(
+        (id) => !this.graph.nodes.get(id)?.ghostOf,
+      );
+      const a: Extract<Mode, { t: 'align' }> = {
+        t: 'align',
+        how: m.shift ? 'align' : 'distribute',
+        sample: hit.id,
+        sx: m.sx,
+        sy: m.sy,
+        ids,
+        axis: null,
+        shown: null,
+      };
+      this.mode = a;
+      this.alignToHand(a, sx, sy);
       return;
     }
     // `A` held on a bubble: its branch is laid out as the drag goes (06 §9.1).
@@ -1713,6 +1790,8 @@ export class Editor {
         candidate: null,
         how: appear ? 'appear' : m.alt ? 'copy' : 'move',
         into: null,
+        lead: ids.includes(hit.id) ? hit.id : (ids[0] ?? hit.id),
+        guides: { x: null, y: null },
       };
       this.events.hint('proto.hint.drag');
       this.dragTo(this.mode, sx, sy, e);
@@ -1738,8 +1817,30 @@ export class Editor {
 
   private dragTo(m: Extract<Mode, { t: 'drag' }>, sx: number, sy: number, e: PointerEvent) {
     const w = this.view.camera.toWorld(sx, sy);
-    const dx = w.x - m.grabX;
-    const dy = w.y - m.grabY;
+    let dx = w.x - m.grabX;
+    let dy = w.y - m.grabY;
+    // The grabbed bubble snaps (06 §3): to its neighbours' centres or the
+    // grid, as «Настройки» say; `X` held — not now.
+    m.guides = { x: null, y: null };
+    const lead = m.origin.get(m.lead);
+    if (lead && this.snap !== 'off' && !this.held.has('KeyX')) {
+      const at = { x: lead.x + dx, y: lead.y + dy };
+      if (this.snap === 'grid') {
+        const g = snapToGrid(at);
+        dx += g.x - at.x;
+        dy += g.y - at.y;
+      } else {
+        const moved = new Set(m.ids);
+        const others: { x: number; y: number }[] = [];
+        for (const [id, p] of this.view.eachNode()) {
+          if (!moved.has(id) && !this.graph.nodes.get(id)?.ghostOf) others.push(p);
+        }
+        const g = snapToNodes(at, others, SNAP_PX / this.view.camera.zoom);
+        dx += g.x - at.x;
+        dy += g.y - at.y;
+        m.guides = { x: g.gx, y: g.gy };
+      }
+    }
     for (const [id, o] of m.origin) {
       this.view.place(id, o.x + dx, o.y + dy);
       // Its ghosts stand beside it on the way (06 §14).
@@ -2238,6 +2339,72 @@ export class Editor {
     });
   }
 
+  /**
+   * `Shift+A` / `Alt+A` and a drag (06 §9.1): past the drag threshold the
+   * larger motion picks the axis — sideways a row or a spread along x, up
+   * or down a column or a spread along y — and the bubbles go there.
+   */
+  private alignToHand(m: Extract<Mode, { t: 'align' }>, sx: number, sy: number) {
+    const dx = sx - m.sx;
+    const dy = sy - m.sy;
+    if (Math.hypot(dx, dy) < DRAG_PX) return;
+    const axis = Math.abs(dx) >= Math.abs(dy) ? 'x' : 'y';
+    if (axis === m.axis) return;
+    m.axis = axis;
+    m.shown = this.lined(m.ids, m.sample, m.how, axis);
+    this.view.settle(m.ids);
+    for (const [id, p] of m.shown) this.view.place(id, p.x, p.y);
+    this.view.invalidate();
+  }
+
+  /** Where `ids` go: in the sample's row or column, or spread along the axis (06 §9.1). */
+  private lined(
+    ids: readonly string[],
+    sample: string,
+    how: 'align' | 'distribute',
+    axis: 'x' | 'y',
+  ): Map<string, { x: number; y: number }> {
+    const points = new Map<string, { x: number; y: number }>();
+    for (const id of ids) {
+      const n = this.graph.nodes.get(id);
+      if (n) points.set(id, { x: n.x, y: n.y });
+    }
+    const s = this.graph.nodes.get(sample);
+    if (how === 'distribute') return distribute(points, axis);
+    return s ? alignTo(points, s, axis === 'x' ? 'row' : 'column') : points;
+  }
+
+  /** The release: what was shown, one step of undo. */
+  private finishAlign(m: Extract<Mode, { t: 'align' }>) {
+    this.mode = { t: 'idle' };
+    if (m.shown && m.axis) this.commitLine(m.shown, m.how, m.axis);
+    this.afterGesture();
+  }
+
+  private commitLine(
+    shown: Map<string, { x: number; y: number }>,
+    how: 'align' | 'distribute',
+    axis: 'x' | 'y',
+  ) {
+    const moved = [...shown].filter(([id, p]) => {
+      const n = this.graph.nodes.get(id);
+      return n && (n.x !== p.x || n.y !== p.y);
+    });
+    if (moved.length === 0) {
+      this.view.settle(shown.keys());
+      return;
+    }
+    const key =
+      how === 'distribute'
+        ? 'proto.change.distribute'
+        : axis === 'x'
+          ? 'proto.change.alignRow'
+          : 'proto.change.alignColumn';
+    this.graph.transaction({ key, params: { n: shown.size } }, (tx) => {
+      for (const [id, p] of moved) tx.move(id, p.x, p.y);
+    });
+  }
+
   /** A cross-hair while `Y` or `J` is held over the canvas: the left button strokes now. */
   private strokeCursor() {
     this.view.canvas.style.cursor =
@@ -2590,6 +2757,8 @@ export class Editor {
     }
     // Esc during a dot's drag: it stays where it stood.
     if (m.t === 'dot') this.view.dragDot(m.id, null);
+    // Esc while aligning: the bubbles back where they stood.
+    if (m.t === 'align') this.view.settle(m.ids);
     this.view.invalidate();
   }
 
@@ -3250,6 +3419,42 @@ export class Editor {
       } else {
         // Keep drawing until the 200 ms hold turns the candidate yellow.
         this.view.invalidate();
+      }
+    }
+    // The lines the dragged bubble snapped to (06 §3): thin, in the accent,
+    // through it and the neighbours on the line.
+    if (m.t === 'drag' && (m.guides.x !== null || m.guides.y !== null)) {
+      const lead = this.view.nodeAt(m.lead);
+      if (lead) {
+        const moved = new Set(m.ids);
+        const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
+        // The vertical line runs from top to bottom, the horizontal from left to right.
+        let top = lead.y;
+        let bottom = lead.y;
+        let left = lead.x;
+        let right = lead.x;
+        for (const [id, p] of this.view.eachNode()) {
+          if (moved.has(id)) continue;
+          if (m.guides.x !== null && near(p.x, m.guides.x)) {
+            top = Math.min(top, p.y);
+            bottom = Math.max(bottom, p.y);
+          }
+          if (m.guides.y !== null && near(p.y, m.guides.y)) {
+            left = Math.min(left, p.x);
+            right = Math.max(right, p.x);
+          }
+        }
+        if (m.guides.x !== null) {
+          const a = cam.toScreen(m.guides.x, top);
+          const b = cam.toScreen(m.guides.x, bottom);
+          g.moveTo(Math.round(a.x) + 0.5, a.y).lineTo(Math.round(b.x) + 0.5, b.y);
+        }
+        if (m.guides.y !== null) {
+          const a = cam.toScreen(left, m.guides.y);
+          const b = cam.toScreen(right, m.guides.y);
+          g.moveTo(a.x, Math.round(a.y) + 0.5).lineTo(b.x, Math.round(b.y) + 0.5);
+        }
+        g.stroke({ color: ACCENT, width: 1 });
       }
     }
   }

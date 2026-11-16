@@ -12,6 +12,7 @@ import {
   type Prefs,
   READABLE_MODES,
   RING_MODES,
+  SNAP_MODES,
   UPDATE_ANSWERS,
   WELCOME_MODES,
 } from '../prefs';
@@ -207,6 +208,24 @@ export function SettingsScreen(props: {
                 {RING_MODES.map((m) => (
                   <option key={m} value={m}>
                     {t(locale, `settings.ring.${m}` as MessageKey)}
+                  </option>
+                ))}
+              </select>
+            </dd>
+            <dt className="ins-label">{t(locale, 'settings.snap')}</dt>
+            <dd className="ins-value">
+              <select
+                className="field"
+                aria-label={t(locale, 'settings.snap')}
+                title={t(locale, 'settings.snapHint')}
+                value={prefs.snap}
+                onChange={(e) =>
+                  onPrefs({ ...prefs, snap: e.currentTarget.value as Prefs['snap'] })
+                }
+              >
+                {SNAP_MODES.map((m) => (
+                  <option key={m} value={m}>
+                    {t(locale, `settings.snap.${m}` as MessageKey)}
                   </option>
                 ))}
               </select>

@@ -376,6 +376,8 @@ export function WorkspaceScreen(props: {
   const textWires = useRef(new Set<string>());
   /** When the flag ring shows (06 §8): «Настройки» set it, every new canvas takes it. */
   const ringModeRef = useRef(props.prefs.ring);
+  /** What a dragged bubble snaps to (06 §3): «Настройки» set it, every new canvas takes it. */
+  const snapRef = useRef(props.prefs.snap);
   /** The info card on hover (06 §4.4): «Настройки» set it, every new canvas takes it. */
   const hoverCardRef = useRef(props.prefs.card === 'hover');
   /** The readable mode in force (07 §11.4): every new canvas takes it, the shown one follows. */
@@ -1244,6 +1246,7 @@ export function WorkspaceScreen(props: {
         return panel + docked;
       };
       ed.ringMode = ringModeRef.current;
+      ed.snap = snapRef.current;
       ed.hoverCard = hoverCardRef.current;
       ed.minimap.open = minimapRef.current;
       editor.current = ed;
@@ -1856,6 +1859,11 @@ export function WorkspaceScreen(props: {
     ringModeRef.current = props.prefs.ring;
     if (editor.current) editor.current.ringMode = props.prefs.ring;
   }, [props.prefs.ring]);
+
+  useEffect(() => {
+    snapRef.current = props.prefs.snap;
+    if (editor.current) editor.current.snap = props.prefs.snap;
+  }, [props.prefs.snap]);
 
   useEffect(() => {
     hoverCardRef.current = props.prefs.card === 'hover';

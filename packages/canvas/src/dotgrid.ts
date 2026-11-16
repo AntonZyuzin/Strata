@@ -1,4 +1,5 @@
 import { Geometry, Mesh, Shader, UniformGroup } from 'pixi.js';
+import { GRID_STEP } from './align';
 
 /**
  * The dots over the background that move with the canvas (07 §7.2, owner
@@ -11,8 +12,8 @@ import { Geometry, Mesh, Shader, UniformGroup } from 'pixi.js';
  * points fading out first, so it never grows denser than `MIN_PX`.
  */
 
-/** The grid's step in world units: the nudge's (06 §17 «Сдвинуть выделенное»). */
-export const DOT_STEP = 24;
+/** The grid's step in world units: the nudge's and the snapping's (06 §17, §3). */
+export const DOT_STEP = GRID_STEP;
 /** The densest the dots go on the screen, CSS px. */
 export const MIN_PX = 12;
 /** A dot's side in pixel units (07 §2.3): one unit is lost in the grain. */

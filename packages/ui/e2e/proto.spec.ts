@@ -169,24 +169,31 @@ async function installProbe(page: Page) {
   });
 }
 
-/** A screen point at least `clear` px from every bubble, on the bare canvas. */
-function emptySpot(page: Page, clear: number): Promise<{ x: number; y: number }> {
-  return page.evaluate((clear) => {
-    const e = window.__e2e as Probe;
-    const pts = e.bubbles();
-    let best = { x: 0, y: 0, d: -1 };
-    // 60 px inside the canvas: a node near its edge would move the camera (06 §3).
-    const rect = (window.__strataProto as Hook).view.canvas.getBoundingClientRect();
-    for (let y = rect.top + 60; y < rect.bottom - 60; y += 10) {
-      for (let x = rect.left + 60; x < rect.right - 60; x += 10) {
-        if (!e.free(x, y, 30)) continue;
-        const d = Math.min(...pts.map((p) => Math.hypot(p.x - x, p.y - y) - p.r));
-        if (d > best.d) best = { x, y, d };
+/**
+ * A screen point at least `clear` px from every bubble, on the bare canvas,
+ * `inset` px inside it at least: a node made within 48 px of its edge moves
+ * the camera (06 §3), so a test that makes nodes around the point asks for
+ * their reach on top.
+ */
+function emptySpot(page: Page, clear: number, inset = 60): Promise<{ x: number; y: number }> {
+  return page.evaluate(
+    ({ clear, inset }) => {
+      const e = window.__e2e as Probe;
+      const pts = e.bubbles();
+      let best = { x: 0, y: 0, d: -1 };
+      const rect = (window.__strataProto as Hook).view.canvas.getBoundingClientRect();
+      for (let y = rect.top + inset; y < rect.bottom - inset; y += 10) {
+        for (let x = rect.left + inset; x < rect.right - inset; x += 10) {
+          if (!e.free(x, y, 30)) continue;
+          const d = Math.min(...pts.map((p) => Math.hypot(p.x - x, p.y - y) - p.r));
+          if (d > best.d) best = { x, y, d };
+        }
       }
-    }
-    if (best.d < clear) throw new Error(`no empty spot, best ${best.d}`);
-    return { x: best.x, y: best.y };
-  }, clear);
+      if (best.d < clear) throw new Error(`no empty spot, best ${best.d}`);
+      return { x: best.x, y: best.y };
+    },
+    { clear, inset },
+  );
 }
 
 /**
@@ -1168,9 +1175,14 @@ test.describe('gestures', () => {
     page,
   }) => {
     await open(page);
-    const spot = await emptySpot(page, 160);
+    // The notes go up to 50 px from the spot each way; 110 px inside keeps
+    // them 60 px from the edge, past the 48 px where a new node moves the
+    // camera (06 §3). At DPR 2 the emptiest place was the canvas's corner:
+    // the camera followed the notes, the third landed far from the others,
+    // and the clicks meant to select them fell off the canvas.
+    const spot = await emptySpot(page, 120, 110);
     // Nothing selected before each: a note where the menu opened, no wire
-    // (06 §5.4); all within the spot's clearance, inside the canvas.
+    // (06 §5.4); all within the spot's clearance.
     const a = await createNote(page, spot.x - 50, spot.y, 'Образец');
     await page.keyboard.press('Escape');
     const b = await createNote(page, spot.x + 45, spot.y + 45, 'Ведомый');

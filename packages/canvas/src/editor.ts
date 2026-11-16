@@ -24,6 +24,7 @@ import {
   alignTo,
   distribute,
   GRID_STEP,
+  inSight,
   SNAP_PX,
   type SnapMode,
   snapToGrid,
@@ -1833,11 +1834,17 @@ export class Editor {
         dy += g.y - at.y;
       } else {
         const moved = new Set(m.ids);
+        const cam = this.view.camera;
+        const tl = cam.toWorld(0, 0);
+        const br = cam.toWorld(this.seen(), this.view.height);
+        const seen = { minX: tl.x, minY: tl.y, maxX: br.x, maxY: br.y };
         const others: { x: number; y: number }[] = [];
         for (const [id, p] of this.view.eachNode()) {
-          if (!moved.has(id) && !this.graph.nodes.get(id)?.ghostOf) others.push(p);
+          if (moved.has(id) || this.graph.nodes.get(id)?.ghostOf) continue;
+          // What is in sight pulls; a bubble off the screen does not (06 §3).
+          if (inSight(p, seen)) others.push(p);
         }
-        const g = snapToNodes(at, others, SNAP_PX / this.view.camera.zoom);
+        const g = snapToNodes(at, others, SNAP_PX / cam.zoom);
         dx += g.x - at.x;
         dy += g.y - at.y;
         m.guides = { x: g.gx, y: g.gy };

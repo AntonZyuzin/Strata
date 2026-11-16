@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { alignTo, distribute, GRID_STEP, snapToGrid, snapToNodes } from './align';
+import { alignTo, distribute, GRID_STEP, inSight, snapToGrid, snapToNodes } from './align';
 
 describe('snapping a dragged bubble (06 §3)', () => {
   it("snaps x and y each to the nearest neighbour's centre within reach", () => {
@@ -24,6 +24,17 @@ describe('snapping a dragged bubble (06 §3)', () => {
       gy: 52,
     });
     expect(snapToNodes({ x: 50, y: 50 }, [], 6)).toEqual({ x: 50, y: 50, gx: null, gy: null });
+  });
+
+  it('is pulled by bubbles in sight only, any part of them', () => {
+    const seen = { minX: 0, minY: 0, maxX: 100, maxY: 50 };
+    expect(inSight({ x: 50, y: 25, r: 5 }, seen)).toBe(true);
+    // Its rim in the picture, its centre out of it.
+    expect(inSight({ x: 104, y: 25, r: 5 }, seen)).toBe(true);
+    expect(inSight({ x: 50, y: -4, r: 5 }, seen)).toBe(true);
+    // Wholly off the screen: on a line with the dragged one or not, no pull.
+    expect(inSight({ x: 106, y: 25, r: 5 }, seen)).toBe(false);
+    expect(inSight({ x: 50, y: 56, r: 5 }, seen)).toBe(false);
   });
 
   it('snaps to the grid of the nudge and the dot grid', () => {

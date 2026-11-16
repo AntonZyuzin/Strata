@@ -41,6 +41,29 @@ export function snapToNodes(
   return { x: gx ?? p.x, y: gy ?? p.y, gx, gy };
 }
 
+/** What the canvas shows, world units. */
+export interface Seen {
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}
+
+/**
+ * Whether any part of a bubble — its centre and radius — is in sight: only
+ * those pull a dragged one (06 §3). A line to a bubble off the screen would
+ * be a jump with nothing in view to explain it, and in a big network all
+ * but the closest zoom would stick somewhere at every step.
+ */
+export function inSight(p: { x: number; y: number; r: number }, seen: Seen): boolean {
+  return (
+    p.x + p.r >= seen.minX &&
+    p.x - p.r <= seen.maxX &&
+    p.y + p.r >= seen.minY &&
+    p.y - p.r <= seen.maxY
+  );
+}
+
 /** The point `p` snapped to the grid of `step`. */
 export function snapToGrid(
   p: { x: number; y: number },

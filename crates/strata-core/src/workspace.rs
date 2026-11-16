@@ -24,6 +24,7 @@ use strata_model::{
     ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
 };
 
+mod dots;
 mod import;
 mod importing;
 mod journal;
@@ -35,6 +36,7 @@ mod reconcile;
 mod refs;
 mod structure;
 
+pub use dots::ViewDot;
 #[cfg(test)]
 pub(crate) use import::TEST_BATCH;
 pub use import::{ImportCounts, ImportItem, ImportOptions, ImportReport};
@@ -568,6 +570,9 @@ pub struct ViewEdge {
     pub text: bool,
     /// It was drawn by hand or imported.
     pub manual: bool,
+    /// The dots it goes through in this network, in order (05 §9.2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dots: Vec<String>,
 }
 
 /// A ghost (05 §8.5): the wire of a note's `[[X]]` to no node.
@@ -596,6 +601,10 @@ pub struct NetworkView {
     /// Roll-up wires to and from the networks placed here (06 §13.3).
     #[serde(default)]
     pub rollups: Vec<ViewRollup>,
+    /// The dots of the network's wires (05 §9.2, 06 §6.6): those a wire
+    /// shown here goes through, and the pinned ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dots: Vec<ViewDot>,
     /// The network's wire style (05 §9.2); none — Bézier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wire_style: Option<WireStyle>,
@@ -1241,7 +1250,10 @@ impl<S: Store> Workspace<S> {
                 | Op::Place { net, .. }
                 | Op::SetSize { net, .. }
                 | Op::SetWireStyle { net, .. }
-                | Op::SetBackground { net, .. } => {
+                | Op::SetBackground { net, .. }
+                | Op::PutDot { net, .. }
+                | Op::RemoveDot { net, .. }
+                | Op::SetRoute { net, .. } => {
                     self.ensure_doc(&format!("net/{net}"))?;
                 }
                 Op::Relocate { from, to, .. } => {
@@ -1255,7 +1267,8 @@ impl<S: Store> Workspace<S> {
                 _ => {}
             }
         }
-        let plan = self.plan(ops)?;
+        let mut plan = self.plan(ops)?;
+        self.follow_dots(&mut plan)?;
         self.write(origin, label, |tx| {
             for (doc, map, key, value) in plan {
                 tx.set(&doc, &map, &key, value)?;
@@ -1282,6 +1295,8 @@ impl<S: Store> Workspace<S> {
             |n: NodeId, made: &HashMap<NodeId, NodeKind>| made.contains_key(&n) || self.alive(n);
         // Placements as the ops so far leave them (05 §5).
         let mut ov = places::Overlay::default();
+        // Dots, routes and wires as the ops so far leave them (05 §9.2).
+        let mut dov = dots::DotOverlay::default();
         let at_xy = |x: f64, y: f64| Some(Val::List(vec![Val::Float(x), Val::Float(y)]));
         for op in ops {
             match op {
@@ -1566,6 +1581,8 @@ impl<S: Store> Workspace<S> {
                     }
                     let edge = EdgeKey::between(a, b).to_text();
                     let index = self.index_doc(a);
+                    dov.gone.remove(&edge);
+                    dov.made.insert(edge.clone(), (a, b));
                     put(
                         &index,
                         "edge",
@@ -1595,6 +1612,8 @@ impl<S: Store> Workspace<S> {
                     // The wire lives while it has an origin (10 §2.3).
                     if read(doc, "edgeOrigin", &format!("{edge}|text")).is_none() {
                         put(&index, "edge", &edge, None);
+                        dov.made.remove(&edge);
+                        dov.gone.insert(edge);
                     }
                 }
                 Op::Trash { ids } => {
@@ -1913,6 +1932,35 @@ impl<S: Store> Workspace<S> {
                         kind.as_str(),
                         icon.as_deref().map(Val::str),
                     );
+                }
+                Op::PutDot {
+                    net,
+                    id,
+                    x,
+                    y,
+                    pinned,
+                } => {
+                    self.network(net)?;
+                    self.plan_put_dot(&mut dov, net, id, (*x, *y, *pinned), &mut put)?;
+                }
+                Op::RemoveDot { net, id } => {
+                    self.network(net)?;
+                    self.plan_remove_dot(&mut dov, net, id, &mut put)?;
+                }
+                Op::SetRoute {
+                    net,
+                    from,
+                    to,
+                    dots,
+                } => {
+                    let parent = self.network(net)?;
+                    let (a, b) = (self.parse(from)?, self.parse(to)?);
+                    let seen = |n: NodeId| {
+                        made.contains_key(&n) || self.placed_now(&ov, parent, n).is_some()
+                    };
+                    let placed = seen(a) && seen(b);
+                    let edge = EdgeKey::between(a, b).to_text();
+                    self.plan_route(&mut dov, net, (a, b), &edge, placed, dots, &mut put)?;
                 }
             }
         }
@@ -3321,14 +3369,28 @@ impl<S: Store> Workspace<S> {
                     continue;
                 }
                 let has = |o: &str| origins.contains_key(&format!("{key}|{o}"));
-                edges.push(ViewEdge {
-                    from: from.to_owned(),
-                    to: to.to_owned(),
-                    text: has("text"),
-                    manual: has("manual") || has("import"),
-                });
+                edges.push((
+                    key.clone(),
+                    ViewEdge {
+                        from: from.to_owned(),
+                        to: to.to_owned(),
+                        text: has("text"),
+                        manual: has("manual") || has("import"),
+                        dots: Vec::new(),
+                    },
+                ));
             }
         }
+        // The dots the shown wires go through, and the pinned ones (05 §9.2).
+        let keys: HashSet<&str> = edges.iter().map(|(k, _)| k.as_str()).collect();
+        let (mut routes, dots) = self.view_dots(&doc, &keys);
+        let mut edges: Vec<ViewEdge> = edges
+            .into_iter()
+            .map(|(k, mut e)| {
+                e.dots = routes.remove(&k).unwrap_or_default();
+                e
+            })
+            .collect();
         edges.sort_by(|a, b| (&a.from, &a.to).cmp(&(&b.from, &b.to)));
         ghosts.sort_by(|a, b| (&a.from, &a.name, &a.edge).cmp(&(&b.from, &b.name, &b.edge)));
         let mut path: Vec<(String, String)> = self
@@ -3356,6 +3418,7 @@ impl<S: Store> Workspace<S> {
             edges,
             ghosts,
             rollups,
+            dots,
             wire_style,
             background,
             workspace_background,

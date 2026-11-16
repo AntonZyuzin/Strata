@@ -88,6 +88,9 @@ export function graphOf(
       tx.add(node);
     }
     for (const e of view.edges) tx.connect(e.from, e.to);
+    // The dots and the routes through them (05 §9.2).
+    for (const d of view.dots ?? []) tx.putDot({ ...d });
+    for (const e of view.edges) if (e.dots?.length) tx.route(e.from, e.to, e.dots);
     for (const ghost of view.ghosts) addGhost(g, tx, ghost, icon('note'));
     tx.wireShape(view.wire_style ?? null);
   });
@@ -168,8 +171,10 @@ function touchesGhost(op: Op): boolean {
       return isGhostId(op.node.id);
     case 'connect':
     case 'disconnect':
+    case 'route':
       return isGhostId(op.from) || isGhostId(op.to);
     case 'wireShape':
+    case 'dot':
       return false;
     default:
       return isGhostId(op.id);
@@ -213,6 +218,16 @@ function opOf(op: Op, net: string, removed: Set<string>): CoreOp | null {
       return { op: 'setFlag', id: op.id, flag: op.flag, on: op.on };
     case 'wireShape':
       return { op: 'setWireStyle', net, style: op.value };
+    case 'dot':
+      // A dot no wire goes through any more: the core's own sweep (06 §6.6).
+      if (op.swept) return null;
+      return op.dot
+        ? { op: 'putDot', net, id: op.id, x: op.dot.x, y: op.dot.y, pinned: op.dot.pinned }
+        : { op: 'removeDot', net, id: op.id };
+    case 'route':
+      // The route of a wire that goes with its node goes in the core too.
+      if (removed.has(op.from) || removed.has(op.to)) return null;
+      return { op: 'setRoute', net, from: op.from, to: op.to, dots: op.dots };
   }
 }
 

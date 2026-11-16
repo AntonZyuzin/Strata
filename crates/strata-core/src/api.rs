@@ -191,8 +191,9 @@ pub enum Response {
         id: String,
         root: String,
     },
+    /// Boxed: a network's view is many times the size of the other answers.
     View {
-        view: NetworkView,
+        view: Box<NetworkView>,
     },
     /// The step was taken; the undo and redo steps after it. No changeset
     /// when an amend only renamed the step.
@@ -307,7 +308,9 @@ pub fn handle<S: Store>(ws: &mut Workspace<S>, request: Request) -> Response {
             id: ws.id().to_owned(),
             root: ws.root(),
         }),
-        Request::View { net } => ws.network_view(&net).map(|view| Response::View { view }),
+        Request::View { net } => ws.network_view(&net).map(|view| Response::View {
+            view: Box::new(view),
+        }),
         Request::Apply { ops, label, amend } => {
             let done = if amend {
                 ws.amend(&ops, label)

@@ -44,6 +44,29 @@ export interface Interaction {
   ring?: { id: string; since: number; slot: RingSlotName | null } | null;
   /** The rim mark under the cursor: its words show over it (06 §12.2, §14). */
   mark?: { id: string; mark: RimTarget } | null;
+  /** The dot on a wire under the cursor and the one selected (06 §6.6). */
+  dotHover?: string | null;
+  dotSelected?: string | null;
+}
+
+/**
+ * The far end of a wire's piece at a bubble (05 §9.2): the bubble at the
+ * other end, or the dot the wire goes through next — `dot`, radius 0.
+ */
+export interface WireEnd {
+  id: string;
+  x: number;
+  y: number;
+  r: number;
+  dot?: boolean;
+}
+
+/** A dot on a wire (06 §6.6), world units. */
+export interface DecorDot {
+  id: string;
+  x: number;
+  y: number;
+  pinned: boolean;
 }
 
 export interface DecorNode {
@@ -53,10 +76,10 @@ export interface DecorNode {
   x: number;
   y: number;
   r: number;
-  /** Sources of the wires drawn into this node. */
-  inputs: readonly DecorNode[];
-  /** Targets of the wires drawn out of this node. */
-  outputs: readonly DecorNode[];
+  /** Where the wires drawn into this node come from: a bubble or their last dot. */
+  inputs: readonly WireEnd[];
+  /** Where the wires drawn out of this node go: a bubble or their first dot. */
+  outputs: readonly WireEnd[];
 }
 
 /** Clock hours of the rim (06 §4.1, 07 §4.1) as angles from 3 o'clock, clockwise. */
@@ -168,8 +191,17 @@ export class Decor {
    * World control points of the wire `a → b` as the wire layer draws it, a
    * kinetic wire's lag included (06 §6.8): arrowheads ride the drawn curve.
    */
-  curveOf: (a: DecorNode, b: DecorNode) => readonly number[] = (a, b) =>
-    controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r });
+  curveOf: (a: WireEnd, b: WireEnd) => readonly number[] = (a, b) =>
+    controls({
+      ax: a.x,
+      ay: a.y,
+      bx: b.x,
+      by: b.y,
+      ra: a.r,
+      rb: b.r,
+      dotA: a.dot === true,
+      dotB: b.dot === true,
+    });
 
   /**
    * @param u pixel unit, device px (07 §2.3)
@@ -229,6 +261,8 @@ export class Decor {
     now: number,
     /** The «×N» of the roll-up wires at their middles, world units (06 §13.3). */
     counts: readonly { x: number; y: number; text: string }[] = [],
+    /** The dots on the wires (06 §6.6). */
+    dots: readonly DecorDot[] = [],
   ): boolean {
     const g = this.g;
     this.marks.clear();
@@ -250,6 +284,19 @@ export class Decor {
     if (ia.current !== this.antsFor) {
       this.antsFor = ia.current;
       this.antsStart = now;
+    }
+    // Dots on the wires (06 §6.6, 07 §5), under the bubbles' marks: a paper
+    // disc in an ink ring, a socket's size; pinned — a paper ring around it;
+    // hover and selection — the accent's ring, as a bubble's.
+    for (const d of dots) {
+      const s = cam.toScreen(d.x, d.y);
+      if (s.x < -20 * U || s.x > w + 20 * U || s.y < -20 * U || s.y > h + 20 * U) continue;
+      const hot = ia.dotHover === d.id;
+      rings.dot(s.x, s.y, (hot ? 5 : 4) * U, INK);
+      rings.dot(s.x, s.y, (hot ? 4 : 3) * U, PAPER);
+      if (d.pinned) rings.add(s.x, s.y, 6.5 * U, U, { color: PAPER });
+      if (ia.dotSelected === d.id) rings.add(s.x, s.y, 9.5 * U, 2 * U, { color: ACCENT });
+      else if (hot) rings.add(s.x, s.y, 9.5 * U, U, { color: ACCENT });
     }
     let ringAt: { x: number; y: number; R: number; n: GraphNode } | null = null;
     // The node whose rim mark the cursor is on, for that mark's words.

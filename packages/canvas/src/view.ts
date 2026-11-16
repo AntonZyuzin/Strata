@@ -7,7 +7,14 @@ import type { Pixels } from './backdrop';
 import { BackgroundLayer, type BackgroundLook } from './background';
 import { between, Camera, FLIGHT_MS, type View } from './camera';
 import { controls, pointAt } from './curve';
-import { Decor, type DecorNode, type Interaction, type RimTarget } from './decor';
+import {
+  Decor,
+  type DecorDot,
+  type DecorNode,
+  type Interaction,
+  type RimTarget,
+  type WireEnd,
+} from './decor';
 import type { RingSlotName } from './flagring';
 import { hexPath } from './hex';
 import {
@@ -30,6 +37,7 @@ import {
   radiusOf,
   type WireEndStyle,
 } from './looks';
+import { dotKey, dotOfKey, type PieceKeys, pieceKeys } from './route';
 import { BODY_DIAMETER, createBodyTextures, SIZE } from './textures';
 import { WireLayer, type WireStyle } from './wires';
 
@@ -44,8 +52,8 @@ interface NodeView extends DecorNode {
   body: Sprite;
   icon: Sprite;
   halo: Sprite | null;
-  inputs: NodeView[];
-  outputs: NodeView[];
+  inputs: WireEnd[];
+  outputs: WireEnd[];
 }
 
 interface Tween {
@@ -92,7 +100,13 @@ export class CanvasView {
   };
   private readonly decor: Decor;
   private readonly views = new Map<string, NodeView>();
-  private wireList: [string, string][] = [];
+  /** What the wires draw, piece by piece: a trunk wires share through a dot once (05 §9.2). */
+  private pieces: PieceKeys[] = [];
+  /** The dots' ends of the wires' pieces, by dot id, at their places this frame. */
+  private readonly dotEnds = new Map<string, WireEnd>();
+  /** A dot being dragged: drawn there, the graph untouched until the drop (06 §6.6). */
+  private dotDrag: { id: string; x: number; y: number } | null = null;
+  private readonly dotList: DecorDot[] = [];
   /** Kinetic wires' lag and jitter (06 §6.8); the ends selected last frame start the jitter. */
   private readonly kinetics = new Kinetics();
   private kinetic = false;
@@ -105,6 +119,11 @@ export class CanvasView {
   onFrame: ((now: number) => void) | null = null;
   /** Style of a wire, asked every frame; the editor highlights active wires. */
   wireStyle: (from: string, to: string) => WireStyle = () => NORMAL_WIRE;
+  /**
+   * How strongly a style stands out: a piece several wires share through a
+   * dot is drawn in the strongest of theirs. The editor knows its styles.
+   */
+  wireRank: (style: WireStyle) => number = () => 0;
   /** Hover and selection, asked every frame; set by the editor. */
   interaction: () => Interaction = () => ({ hover: null, selection: new Set(), current: null });
   private motionReduced = false;
@@ -588,6 +607,19 @@ export class CanvasView {
     for (const [id, v] of this.views) yield [id, v];
   }
 
+  /** Where dot `id` is drawn (06 §6.6): a dragged one where the hand has it. */
+  dotAt(id: string): { x: number; y: number } | null {
+    if (this.dotDrag?.id === id) return this.dotDrag;
+    const d = this.graph?.dots.get(id);
+    return d ? { x: d.x, y: d.y } : null;
+  }
+
+  /** Draws dot `id` at (x, y) without touching the graph (a drag); null — where the graph has it. */
+  dragDot(id: string, at: { x: number; y: number } | null): void {
+    this.dotDrag = at ? { id, x: at.x, y: at.y } : null;
+    this.invalidate();
+  }
+
   /** Moves a node's rendering without touching the graph (a drag in progress). */
   place(id: string, x: number, y: number): void {
     const v = this.views.get(id);
@@ -679,6 +711,7 @@ export class CanvasView {
     if (this.background.step(now)) moving = true;
     this.wires.setZoom(cam.zoom);
     this.wires.setTime(now / 1000);
+    this.placeDots();
     const swaying = this.writeWires(now);
     this.overlay.clear();
     this.onFrame?.(now);
@@ -690,14 +723,35 @@ export class CanvasView {
       { ...this.interaction(), lens: this.lensIds },
       now,
       this.counts,
+      this.dotList,
     );
     this.app.render();
     if (moving || animating || swaying) this.invalidate();
   }
 
+  /** The dots' ends at the dots' places this frame, and the dots the decor draws (06 §6.6). */
+  private placeDots(): void {
+    const list = this.dotList;
+    list.length = 0;
+    for (const [id, end] of this.dotEnds) {
+      const d = this.graph?.dots.get(id);
+      if (!d) continue;
+      const at = this.dotDrag?.id === id ? this.dotDrag : d;
+      end.x = at.x;
+      end.y = at.y;
+      list.push({ id, x: at.x, y: at.y, pinned: d.pinned });
+    }
+  }
+
+  /** A piece's end this frame: a bubble, or a dot the wire goes through. */
+  private endOf(key: string): WireEnd | undefined {
+    const dot = dotOfKey(key);
+    return dot === null ? this.views.get(key) : this.dotEnds.get(dot);
+  }
+
   /** Writes the wires for this frame; true while kinetic wires still move. */
   private writeWires(now: number): boolean {
-    const list = this.wireList;
+    const list = this.pieces;
     // Far zoom: wires become texture, 1 px at 40 % (07 §4.9), unless highlighted.
     const far = SIZE.m * this.camera.zoom < 12;
     const shape = this.graph?.wireShape ?? 'bezier';
@@ -715,12 +769,26 @@ export class CanvasView {
     const rollups = this.graph?.rollups ?? [];
     this.wires.setCount(list.length + rollups.length);
     for (let i = 0; i < list.length; i++) {
-      const [from, to] = list[i] as [string, string];
-      const a = this.views.get(from);
-      const b = this.views.get(to);
-      if (!a || !b) continue;
-      // Both ends sit on their corners (ADR-0011); the same curve as editor.wireEnds.
-      const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight });
+      const piece = list[i] as PieceKeys;
+      const a = this.endOf(piece.a);
+      const b = this.endOf(piece.b);
+      if (!a || !b) {
+        this.wires.setStyle(i, HIDDEN_WIRE);
+        continue;
+      }
+      // Bubble ends sit on their corners (ADR-0011), dot ends meet the dot
+      // along the chord (05 §9.2); the same curve as the editor's pieces.
+      const c = controls({
+        ax: a.x,
+        ay: a.y,
+        bx: b.x,
+        by: b.y,
+        ra: a.r,
+        rb: b.r,
+        straight,
+        dotA: a.dot === true,
+        dotB: b.dot === true,
+      });
       const k = kinetic ? this.kinetics.follow(i, c, zoom) : null;
       if (k) {
         c[2] += k[0] ?? 0;
@@ -729,12 +797,24 @@ export class CanvasView {
         c[5] += k[3] ?? 0;
       }
       this.wires.set(i, c);
-      const style = this.wireStyle(from, to);
+      // A piece wires share takes the strongest style of theirs.
+      let style = NORMAL_WIRE;
+      let rank = Number.NEGATIVE_INFINITY;
+      let lit = false;
+      const lens = this.lensIds;
+      for (const [from, to] of piece.wires) {
+        const s = this.wireStyle(from, to);
+        const r = this.wireRank(s);
+        if (r > rank) {
+          rank = r;
+          style = s;
+        }
+        if (!lens || (lens.has(from) && lens.has(to))) lit = true;
+      }
       // The readable mode draws the wires at full alpha (07 §11.4).
       const shown =
         style === NORMAL_WIRE ? (this.readableOn ? READABLE_WIRE : far ? FAR_WIRE : style) : style;
-      const lens = this.lensIds;
-      this.wires.setStyle(i, lens && !(lens.has(from) && lens.has(to)) ? this.dim(shown) : shown);
+      this.wires.setStyle(i, lit ? shown : this.dim(shown));
     }
     this.writeRollups(list.length, rollups, straight);
     this.wires.upload();
@@ -804,9 +884,19 @@ export class CanvasView {
   }
 
   /** World control points of a wire as drawn this frame, a kinetic one's lag included. */
-  private curveOf(a: DecorNode, b: DecorNode): readonly number[] {
+  private curveOf(a: WireEnd, b: WireEnd): readonly number[] {
     const straight = this.graph?.wireShape === 'straight';
-    const c = controls({ ax: a.x, ay: a.y, bx: b.x, by: b.y, ra: a.r, rb: b.r, straight });
+    const c = controls({
+      ax: a.x,
+      ay: a.y,
+      bx: b.x,
+      by: b.y,
+      ra: a.r,
+      rb: b.r,
+      straight,
+      dotA: a.dot === true,
+      dotB: b.dot === true,
+    });
     const k = this.kinetic ? this.kinetics.kickOf(wireKey(a.id, b.id)) : null;
     if (k) {
       c[2] += k[0] ?? 0;
@@ -893,18 +983,30 @@ export class CanvasView {
       }
       if (v.x !== node.x || v.y !== node.y) moved.push(node.id);
     }
-    this.wireList = edges;
-    this.kinetics.bind(this.wireList.map(([from, to]) => wireKey(from, to)));
+    // The dots' ends (05 §9.2): one object per dot, placed every frame.
+    for (const id of this.dotEnds.keys()) if (!graph.dots.has(id)) this.dotEnds.delete(id);
+    for (const d of graph.dots.values()) {
+      if (!this.dotEnds.has(d.id)) {
+        this.dotEnds.set(d.id, { id: dotKey(d.id), x: d.x, y: d.y, r: 0, dot: true });
+      }
+    }
+    if (this.dotDrag && !graph.dots.has(this.dotDrag.id)) this.dotDrag = null;
+    this.pieces = pieceKeys(graph, edges, (id) => this.dotEnds.has(id));
+    this.kinetics.bind(this.pieces.map((p) => p.key));
     for (const v of this.views.values()) {
       v.inputs.length = 0;
       v.outputs.length = 0;
     }
-    for (const [from, to] of this.wireList) {
+    // A bubble's sockets face where its wires go next: a bubble or a dot.
+    for (const [from, to] of edges) {
       const a = this.views.get(from);
       const b = this.views.get(to);
       if (!a || !b) continue;
-      a.outputs.push(b);
-      b.inputs.push(a);
+      const route = graph.route(from, to).filter((id) => this.dotEnds.has(id));
+      const first = route.length > 0 ? this.dotEnds.get(route[0] as string) : b;
+      const last = route.length > 0 ? this.dotEnds.get(route.at(-1) as string) : a;
+      if (first && !a.outputs.includes(first)) a.outputs.push(first);
+      if (last && !b.inputs.includes(last)) b.inputs.push(last);
     }
     if (jump) {
       for (const id of moved) {

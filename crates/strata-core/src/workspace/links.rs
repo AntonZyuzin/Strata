@@ -710,10 +710,12 @@ impl<S: Store> Workspace<S> {
             }
         }
         let pairs: Vec<(NodeId, &str)> = texts.iter().map(|(n, t)| (*n, t.as_str())).collect();
-        let (plan, _) = self.links_plan(&pairs, now_ms());
+        let (mut plan, _) = self.links_plan(&pairs, now_ms());
         if plan.is_empty() {
             return Ok(None);
         }
+        // A text wire that goes takes its route along (05 §9.2).
+        self.follow_dots(&mut plan)?;
         self.write(
             ChangesetOrigin::System,
             Label::new("core.change.links"),

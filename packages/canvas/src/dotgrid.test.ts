@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DOT_STEP, dotLevel, MIN_PX } from './dots';
+import { DOT_STEP, dotLevel, MIN_PX } from './dotgrid';
 
 describe('the dots that move with the canvas (07 §7.2)', () => {
   it('stand on the nudge grid, all of them while it is roomy', () => {

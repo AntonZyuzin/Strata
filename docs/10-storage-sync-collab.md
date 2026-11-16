@@ -145,6 +145,7 @@ collapsed: LoroMap<NodeId, boolean>                   // ☑ Q-05-10: без и�
 pinned:    LoroMap<NodeId, boolean>                   // 05 §9.2: позиция закреплена; L, A+drag и раздвигание соседей её не трогают
 dot:       LoroMap<DotId, { x: number; y: number; pinned: boolean }>
 route:     LoroMap<EdgeId, { dots: DotId[]; style?: EdgeStyle; bend?: number }>   // bend — ручной изгиб нити (05 §9.2)
+                                                      // dot и route.dots пишутся с 2026-11-16 (06 §6.6); style и bend — ещё нет
 hidden:    LoroMap<EdgeId, 1>                         // «скрыта здесь» (05 §8.3)
 box:       LoroMap<BoxId, { rect: Rect; title: string; color: Color; collapsed: boolean }>
 boxMember: LoroMap<`${BoxId}|${NodeId}`, 1>

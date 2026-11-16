@@ -337,3 +337,131 @@ describe('an asset (05 §4.4)', () => {
     expect(linkOf('')).toBe('');
   });
 });
+
+describe('dots on wires (05 §9.2, 06 §6.6)', () => {
+  const dot = (id: string, pinned = false) => ({ id, x: 1, y: 2, pinned });
+  /** A → B and a branch A → C through dot d: one step (06 §6.5 «б»). */
+  function branched(): Graph {
+    const g = graph(['ab']);
+    g.transaction({ key: 't' }, (tx) => {
+      tx.putDot(dot('d'));
+      expect(tx.route('a', 'b', ['d'])).toBe(true);
+      tx.connect('a', 'c');
+      expect(tx.route('a', 'c', ['d'])).toBe(true);
+    });
+    return g;
+  }
+
+  it('routes wires through a dot in one step of undo', () => {
+    const g = branched();
+    expect(g.route('a', 'b')).toEqual(['d']);
+    expect(g.route('a', 'c')).toEqual(['d']);
+    expect(g.sourceOf('d')).toBe('a');
+    g.undo();
+    expect(wires(g)).toEqual(['ab']);
+    expect(g.route('a', 'b')).toEqual([]);
+    expect(g.dots.size).toBe(0);
+    g.redo();
+    expect(g.wiresThrough('d').length).toBe(2);
+  });
+
+  it('gives a dot one source', () => {
+    const g = branched();
+    g.transaction({ key: 't' }, (tx) => {
+      tx.connect('b', 'c');
+      expect(tx.route('b', 'c', ['d'])).toBe(false);
+    });
+    expect(g.route('b', 'c')).toEqual([]);
+  });
+
+  it('routes only a wire that is, through dots that are, each once', () => {
+    const g = branched();
+    g.transaction({ key: 't' }, (tx) => {
+      expect(tx.route('a', 'e', ['d'])).toBe(false);
+      expect(tx.route('a', 'b', ['x'])).toBe(false);
+      expect(tx.route('a', 'b', ['d', 'd'])).toBe(false);
+    });
+    expect(g.route('a', 'b')).toEqual(['d']);
+  });
+
+  it('lets an unpinned dot go with the last wire through it, and undo bring both', () => {
+    const g = branched();
+    g.transaction({ key: 't' }, (tx) => tx.disconnect('a', 'b'));
+    expect(g.dots.has('d')).toBe(true);
+    g.transaction({ key: 't' }, (tx) => tx.disconnect('a', 'c'));
+    expect(g.dots.has('d')).toBe(false);
+    g.undo();
+    expect(g.dots.has('d')).toBe(true);
+    expect(g.route('a', 'c')).toEqual(['d']);
+    // A node that goes takes its wires and the dot no wire goes through.
+    g.transaction({ key: 't' }, (tx) => tx.remove('a'));
+    expect(g.dots.size).toBe(0);
+    g.undo();
+    expect(g.route('a', 'c')).toEqual(['d']);
+  });
+
+  it('keeps a pinned dot with no wire', () => {
+    const g = graph(['ab']);
+    g.transaction({ key: 't' }, (tx) => {
+      tx.putDot(dot('p', true));
+      tx.route('a', 'b', ['p']);
+    });
+    g.transaction({ key: 't' }, (tx) => tx.disconnect('a', 'b'));
+    expect(g.dots.get('p')?.pinned).toBe(true);
+    // Unpinned with no wire through it, it goes in the same step.
+    g.transaction({ key: 't' }, (tx) => tx.putDot(dot('p')));
+    expect(g.dots.has('p')).toBe(false);
+  });
+
+  it('straightens the wires through a dot taken away and keeps the links', () => {
+    const g = branched();
+    g.transaction({ key: 't' }, (tx) => tx.removeDot('d'));
+    expect(wires(g)).toEqual(['ab', 'ac']);
+    expect(g.route('a', 'b')).toEqual([]);
+    expect(g.dots.size).toBe(0);
+    g.undo();
+    expect(g.route('a', 'b')).toEqual(['d']);
+  });
+
+  it('sends the core what the gesture did, not the sweep the core makes itself', () => {
+    const g = branched();
+    const cs = g.transaction({ key: 't' }, (tx) => {
+      tx.disconnect('a', 'b');
+      tx.disconnect('a', 'c');
+    });
+    const swept = cs?.ops.filter((op) => op.t === 'dot');
+    expect(swept).toEqual([{ t: 'dot', id: 'd', dot: null, swept: true }]);
+  });
+});
+
+describe('insert into a wire through dots (05 §8.4, §9.2)', () => {
+  it('keeps the dots before the piece on A → H and those after on H → B', () => {
+    const g = graph(['ab']);
+    g.transaction({ key: 't' }, (tx) => {
+      tx.putDot({ id: 'd', x: 0, y: 0, pinned: false });
+      tx.putDot({ id: 'e', x: 0, y: 0, pinned: false });
+      tx.route('a', 'b', ['d', 'e']);
+    });
+    // Piece 1 runs from d to e.
+    g.transaction({ key: 't' }, (tx) => expect(insertIntoWire(g, tx, 'h', 'a', 'b', 1)).toBe(true));
+    expect(wires(g)).toEqual(['ah', 'hb']);
+    expect(g.route('a', 'h')).toEqual(['d']);
+    expect(g.route('h', 'b')).toEqual(['e']);
+  });
+
+  it('takes H into every branch after a dot when dropped before it', () => {
+    const g = graph(['ab', 'ac']);
+    g.transaction({ key: 't' }, (tx) => {
+      tx.putDot({ id: 'd', x: 0, y: 0, pinned: false });
+      tx.route('a', 'b', ['d']);
+      tx.route('a', 'c', ['d']);
+    });
+    // Piece 0 runs from A to d: both wires share it.
+    g.transaction({ key: 't' }, (tx) => expect(insertIntoWire(g, tx, 'h', 'a', 'b', 0)).toBe(true));
+    expect(wires(g)).toEqual(['ah', 'hb', 'hc']);
+    expect(g.route('a', 'h')).toEqual([]);
+    expect(g.route('h', 'b')).toEqual(['d']);
+    expect(g.route('h', 'c')).toEqual(['d']);
+    expect(g.sourceOf('d')).toBe('h');
+  });
+});

@@ -26,6 +26,12 @@ export interface WireEnds {
   bend?: number;
   /** The network's style is «Прямая» (06 §6.2): a segment from corner to corner. */
   straight?: boolean;
+  /**
+   * An end on a dot of the wire's route (05 §9.2, 06 §6.6), not a bubble: no
+   * corner, the radius is not used, and the curve meets it along the chord.
+   */
+  dotA?: boolean;
+  dotB?: boolean;
 }
 
 /** The control points of a wire: [x0, y0, x1, y1, x2, y2, x3, y3], world units. */
@@ -41,12 +47,12 @@ export type Controls = [number, number, number, number, number, number, number, 
 export function controls(w: WireEnds): Controls {
   const dx = w.bx - w.ax;
   const dy = w.by - w.ay;
-  const ua = cornerToward(dx, dy);
-  const ub = cornerToward(-dx, -dy);
-  const a0 = w.ax + ua.x * w.ra;
-  const a1 = w.ay + ua.y * w.ra;
-  const b0 = w.bx + ub.x * w.rb;
-  const b1 = w.by + ub.y * w.rb;
+  const ua = w.dotA ? along(dx, dy) : cornerToward(dx, dy);
+  const ub = w.dotB ? along(-dx, -dy) : cornerToward(-dx, -dy);
+  const a0 = w.ax + (w.dotA ? 0 : ua.x * w.ra);
+  const a1 = w.ay + (w.dotA ? 0 : ua.y * w.ra);
+  const b0 = w.bx + (w.dotB ? 0 : ub.x * w.rb);
+  const b1 = w.by + (w.dotB ? 0 : ub.y * w.rb);
   if (w.straight) {
     const tx = (b0 - a0) / 3;
     const ty = (b1 - a1) / 3;
@@ -55,6 +61,12 @@ export function controls(w: WireEnds): Controls {
   const gap = Math.hypot(b0 - a0, b1 - a1);
   const h = Math.min(Math.max((w.bend ?? BEND) * gap, MIN_BEND), MAX_BEND);
   return [a0, a1, a0 + ua.x * h, a1 + ua.y * h, b0 + ub.x * h, b1 + ub.y * h, b0, b1];
+}
+
+/** The unit vector along (dx, dy); along +x when they are both 0. */
+function along(dx: number, dy: number): { x: number; y: number } {
+  const l = Math.hypot(dx, dy);
+  return l > 0 ? { x: dx / l, y: dy / l } : { x: 1, y: 0 };
 }
 
 /** Point of the cubic at t, written into `out`. */

@@ -2,7 +2,7 @@ import { fog, hex, palette } from '@strata/design-tokens';
 import { CanvasSource, Container, Sprite, Texture, TilingSprite } from 'pixi.js';
 import { luminanceQuantile, type Pixels } from './backdrop';
 import type { Camera } from './camera';
-import { DotGrid } from './dots';
+import { DotGrid } from './dotgrid';
 
 /**
  * The background of the Scene (07 §7.2): one «cover» sprite of a processed

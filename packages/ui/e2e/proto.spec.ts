@@ -13,6 +13,7 @@ const HINTS: MessageKey[] = [
   'proto.hint.node',
   'proto.hint.port',
   'proto.hint.wire',
+  'proto.hint.dot',
   'proto.hint.drag',
   'proto.hint.dragInsert',
   'proto.hint.wireDrag',
@@ -38,6 +39,8 @@ interface Hook {
     };
     nodeAt(id: string): Pt | null;
     eachNode(): Iterable<[string, Pt]>;
+    /** Where a dot on a wire is drawn (06 §6.6), world units. */
+    dotAt(id: string): { x: number; y: number } | null;
     invalidate(): void;
   };
   graph: {
@@ -47,6 +50,9 @@ interface Hook {
     inputs(id: string): Iterable<string>;
     outputs(id: string): Iterable<string>;
     hasEdge(a: string, b: string): boolean;
+    /** The dots on the wires (05 §9.2) and each wire's route through them. */
+    dots: Map<string, { id: string; x: number; y: number; pinned: boolean }>;
+    route(from: string, to: string): readonly string[];
   };
   /** Time of the last `L` in the worker, ms. */
   layoutMs(): number | null;
@@ -1030,7 +1036,7 @@ test.describe('gestures', () => {
     expect(await counts(page)).toEqual(start);
   });
 
-  test('Shift and a drag from the middle of a wire branch it from its source (06 §6.5)', async ({
+  test('Shift and a drag from the middle of a wire branch it through a dot there (06 §6.5 «б»)', async ({
     page,
   }) => {
     await open(page);
@@ -1050,16 +1056,110 @@ test.describe('gestures', () => {
     await input.press('Enter');
     await expect(input).toHaveCount(0);
     const after = await page.evaluate(({ from, to }) => {
-      const { graph } = window.__strataProto as Hook;
+      const { graph, view } = window.__strataProto as Hook;
+      const e = window.__e2e as Probe;
       const n = [...graph.nodes.values()].find((x) => x.name === 'Ветка');
       if (!n) return null;
-      return [graph.hasEdge(from, n.id), graph.hasEdge(from, to), graph.hasEdge(to, n.id)];
+      const [dot] = graph.route(from, to);
+      const at = dot ? view.dotAt(dot) : null;
+      return {
+        wires: [graph.hasEdge(from, n.id), graph.hasEdge(from, to), graph.hasEdge(to, n.id)],
+        dots: graph.dots.size,
+        // A → B and A → C both go through the dot.
+        through: dot !== undefined && graph.route(from, n.id).join() === dot,
+        at: at ? e.screen(at.x, at.y) : null,
+      };
     }, wire);
-    // A → C beside A → B, which stays.
-    expect(after).toEqual([true, true, false]);
+    // A → C beside A → B, which stays; one new dot where the wire was grabbed.
+    expect(after?.wires).toEqual([true, true, false]);
+    expect(after?.dots).toBe(1);
+    expect(after?.through).toBe(true);
+    expect(Math.hypot((after?.at?.x ?? 0) - wire.x, (after?.at?.y ?? 0) - wire.y)).toBeLessThan(4);
     expect(await counts(page)).toEqual({ nodes: start.nodes + 1, edges: start.edges + 1 });
+    // One step: undo takes the note, its wire and the dot.
     await page.keyboard.press('Control+z');
     expect(await counts(page)).toEqual(start);
+    expect(await page.evaluate(() => (window.__strataProto as Hook).graph.dots.size)).toBe(0);
+  });
+
+  test('dots on a wire: Alt+click or «.» puts one, a drag moves it, Alt+click pins, Delete takes it away (06 §6.6)', async ({
+    page,
+  }) => {
+    await open(page);
+    const start = await counts(page);
+    const wire = await freeWire(page);
+    const state = () =>
+      page.evaluate(({ from, to }) => {
+        const { graph, view } = window.__strataProto as Hook;
+        const e = window.__e2e as Probe;
+        const route = [...graph.route(from, to)];
+        const dots = [...graph.dots.values()].map((d) => {
+          const at = view.dotAt(d.id);
+          return { id: d.id, pinned: d.pinned, ...(at ? e.screen(at.x, at.y) : { x: 0, y: 0 }) };
+        });
+        return { route, dots, wire: graph.hasEdge(from, to) };
+      }, wire);
+    // `Alt`+click on the wire: a dot there, on its route.
+    await page.keyboard.down('Alt');
+    await page.mouse.click(wire.x, wire.y);
+    await page.keyboard.up('Alt');
+    let s = await state();
+    expect(s.dots.length).toBe(1);
+    const dot = s.dots[0] as (typeof s.dots)[number];
+    expect(s.route).toEqual([dot.id]);
+    expect(Math.hypot(dot.x - wire.x, dot.y - wire.y)).toBeLessThan(4);
+    await expect(page.locator('.proto-status .last-step')).toContainText('Точка на нити');
+    // A drag moves it, one step; the wire still goes through it.
+    const to = { x: dot.x + 40 * wire.uy, y: dot.y - 40 * wire.ux };
+    await page.mouse.move(dot.x, dot.y);
+    await page.mouse.down();
+    await glide(page, dot, to);
+    await page.mouse.up();
+    s = await state();
+    expect(Math.hypot((s.dots[0]?.x ?? 0) - to.x, (s.dots[0]?.y ?? 0) - to.y)).toBeLessThan(2);
+    expect(s.route).toEqual([dot.id]);
+    await expect(page.locator('.proto-status .last-step')).toContainText('Сдвинуть точку');
+    // `Alt`+click on it pins it.
+    await page.keyboard.down('Alt');
+    await page.mouse.click(to.x, to.y);
+    await page.keyboard.up('Alt');
+    expect((await state()).dots[0]?.pinned).toBe(true);
+    // Selected, `Delete`: it goes, the wire goes straight and stays.
+    await page.mouse.click(to.x, to.y);
+    await page.keyboard.press('Delete');
+    s = await state();
+    expect(s).toEqual({ route: [], dots: [], wire: true });
+    await page.keyboard.press('Control+z');
+    expect((await state()).dots.map((d) => d.pinned)).toEqual([true]);
+    // `Shift` and a drag from the dot: a new wire from the source through it.
+    const spot = await emptySpot(page, 50);
+    await page.mouse.move(to.x, to.y);
+    await page.keyboard.down('Shift');
+    await page.mouse.down();
+    await glide(page, to, spot);
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    const input = page.locator('.name-input');
+    await expect(input).toBeVisible();
+    await input.fill('От точки');
+    await input.press('Enter');
+    const branch = await page.evaluate(({ from }) => {
+      const { graph } = window.__strataProto as Hook;
+      const n = [...graph.nodes.values()].find((x) => x.name === 'От точки');
+      return n ? [...graph.route(from, n.id)] : null;
+    }, wire);
+    expect(branch).toEqual([dot.id]);
+    expect(await counts(page)).toEqual({ nodes: start.nodes + 1, edges: start.edges + 1 });
+    // «.» over another wire: a dot there too.
+    const other = await freeWire(page);
+    await page.mouse.move(other.x, other.y);
+    await page.keyboard.press('Period');
+    expect(
+      await page.evaluate(
+        ({ from, to }) => (window.__strataProto as Hook).graph.route(from, to).length,
+        other,
+      ),
+    ).toBe(1);
   });
 
   test('Shift+S: straight, Bézier, kinetic wires, one step each; the hit test follows (06 §6.2)', async ({

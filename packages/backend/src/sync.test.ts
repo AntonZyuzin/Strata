@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { browserHome, loadCore, memoryShelf, type Shelf } from './browser';
 import type { HomeBackend, NetworkView } from './core';
 import { dueOf, type Graph, ghostId, ghostSpot, newNode } from './graph';
+import { newId } from './ids';
 import {
   CoreSync,
   followExternal,
@@ -93,6 +94,56 @@ describe('the canvas and the core in step', () => {
     await sync.settled();
     expect(g.wireShape).toBe('straight');
     expect((await home.core.view(root)).wire_style).toBe('straight');
+    expect(errors).toEqual([]);
+  });
+
+  it('keeps the dots and the routes in the core: a branch is one step of undo (06 §6.5, §6.6)', async () => {
+    const { home, root, g, sync, errors } = await start();
+    const d = newId();
+    g.transaction({ key: 't.create' }, (tx) => {
+      tx.add(node(A, 'A', 0, 0));
+      tx.add(node(B, 'B', 300, 0));
+      tx.add(node(C, 'C', 300, 200));
+      tx.connect(A, B);
+    });
+    g.transaction({ key: 't.branch' }, (tx) => {
+      tx.putDot({ id: d, x: 150, y: 0, pinned: false });
+      tx.route(A, B, [d]);
+      tx.connect(A, C);
+      tx.route(A, C, [d]);
+    });
+    await sync.settled();
+    const view = await home.core.view(root);
+    expect(view.edges.map((e) => [e.to, e.dots ?? []]).sort()).toEqual(
+      [
+        [B, [d]],
+        [C, [d]],
+      ].sort(),
+    );
+    expect(view.dots).toEqual([{ id: d, x: 150, y: 0, pinned: false }]);
+    // The canvas reads them back as it drew them.
+    const again = graphOf(view, () => 0);
+    expect(again.route(A, C)).toEqual([d]);
+    expect(again.dots.get(d)?.x).toBe(150);
+    // Moved, then the branch undone: the dot goes with its wire.
+    g.transaction({ key: 't.dot' }, (tx) => tx.putDot({ id: d, x: 160, y: 10, pinned: false }));
+    await sync.settled();
+    expect((await home.core.view(root)).dots).toEqual([{ id: d, x: 160, y: 10, pinned: false }]);
+    g.undo();
+    g.undo();
+    await sync.settled();
+    const back = await home.core.view(root);
+    expect(back.edges.map((e) => [e.to, e.dots ?? []])).toEqual([[B, []]]);
+    expect(back.dots ?? []).toEqual([]);
+    // Redone, then both wires cut: the core sweeps the dot itself.
+    g.redo();
+    g.transaction({ key: 't.cut' }, (tx) => {
+      tx.disconnect(A, B);
+      tx.disconnect(A, C);
+    });
+    await sync.settled();
+    expect((await home.core.view(root)).dots ?? []).toEqual([]);
+    expect(g.dots.size).toBe(0);
     expect(errors).toEqual([]);
   });
 

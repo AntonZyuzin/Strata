@@ -114,6 +114,19 @@ export function ghostSpot(
   return { x: source.x + GHOST_DISTANCE * Math.cos(a), y: source.y + GHOST_DISTANCE * Math.sin(a) };
 }
 
+/**
+ * A dot on a wire (05 §9.2, 06 §6.6): a point of this network the routes of
+ * its wires go through. Every wire through a dot comes from one source; an
+ * unpinned dot no wire goes through goes, a pinned one stays.
+ */
+export interface Dot {
+  id: string;
+  /** World units of this network. */
+  x: number;
+  y: number;
+  pinned: boolean;
+}
+
 /** A plain node: open, no deadline, no flags. */
 export function newNode(
   base: Pick<GraphNode, 'id' | 'name' | 'kind' | 'icon' | 'x' | 'y'> & Partial<GraphNode>,
@@ -233,7 +246,15 @@ export type Op =
   /** A flag of 05 §7 set or cleared. */
   | { t: 'flag'; id: string; flag: Flag; on: boolean }
   /** The network's wire style (06 §6.2); null — Bézier. */
-  | { t: 'wireShape'; value: WireShape | null };
+  | { t: 'wireShape'; value: WireShape | null }
+  /**
+   * A dot put — made, moved, pinned — or, with null, taken away (06 §6.6).
+   * `swept`: it went because no wire goes through it any more, which the
+   * core finds itself — and a wire hidden in its trash still goes through it.
+   */
+  | { t: 'dot'; id: string; dot: Dot | null; swept?: boolean }
+  /** The dots wire `from → to` goes through here, in order (05 §9.2); none — straight. */
+  | { t: 'route'; from: string; to: string; dots: string[] };
 
 /** Human-readable changeset label: an i18n key and its parameters, translated by the UI. */
 export interface ChangeLabel {
@@ -307,10 +328,33 @@ export interface Tx {
   assign(id: string, person: string, on: boolean): void;
   flag(id: string, flag: Flag, on: boolean): void;
   wireShape(value: WireShape | null): void;
+  /** A dot made, moved, pinned or unpinned (06 §6.6). */
+  putDot(dot: Dot): void;
+  /** A dot taken away (06 §6.6): the wires through it go straight, the links stay. */
+  removeDot(id: string): void;
+  /**
+   * The dots wire `from → to` goes through here, in order (05 §9.2): dots
+   * that are, each once, every wire through a dot from one source (06 §6.6).
+   * False when refused.
+   */
+  route(from: string, to: string, dots: readonly string[]): boolean;
+}
+
+/** The key of wire `from → to` in this network's routes. */
+function routeKey(from: string, to: string): string {
+  return `${from}\u0000${to}`;
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i]);
 }
 
 export class Graph {
   readonly nodes = new Map<string, GraphNode>();
+  /** The dots of this network's wires (05 §9.2), by id. Changed through `Tx`. */
+  readonly dots = new Map<string, Dot>();
+  /** Routes through the dots, by `routeKey`; a straight wire has none. */
+  private readonly routes = new Map<string, string[]>();
   private readonly outs = new Map<string, Set<string>>();
   private readonly ins = new Map<string, Set<string>>();
   private undoStack: Changeset[] = [];
@@ -360,6 +404,24 @@ export class Graph {
 
   inputs(id: string): string[] {
     return [...(this.ins.get(id) ?? [])];
+  }
+
+  /** The dots wire `from → to` goes through here, in order (05 §9.2); none — straight. */
+  route(from: string, to: string): readonly string[] {
+    return this.routes.get(routeKey(from, to)) ?? [];
+  }
+
+  /** The wires through dot `id`, as [from, to]. */
+  wiresThrough(id: string): [string, string][] {
+    const out: [string, string][] = [];
+    for (const [from, to] of this.edges())
+      if (this.route(from, to).includes(id)) out.push([from, to]);
+    return out;
+  }
+
+  /** The source of the wires through dot `id` (06 §6.6: one); null — none goes through it. */
+  sourceOf(id: string): string | null {
+    return this.wiresThrough(id)[0]?.[0] ?? null;
   }
 
   /** All wires as [from, to]. */
@@ -454,9 +516,37 @@ export class Graph {
       wireShape: (value) => {
         run({ t: 'wireShape', value });
       },
+      putDot: (dot) => {
+        run({ t: 'dot', id: dot.id, dot: { ...dot } });
+      },
+      removeDot: (id) => {
+        if (!this.dots.has(id)) return;
+        // The wires through it go straight first, so undo brings the routes back.
+        for (const [from, to] of this.wiresThrough(id)) {
+          run({ t: 'route', from, to, dots: this.route(from, to).filter((d) => d !== id) });
+        }
+        run({ t: 'dot', id, dot: null });
+      },
+      route: (from, to, dots) => {
+        if (!this.hasEdge(from, to) || new Set(dots).size !== dots.length) return false;
+        for (const d of dots) {
+          if (!this.dots.has(d)) return false;
+          // One input (06 §6.6): every other wire through the dot comes from `from`.
+          const others = this.wiresThrough(d).filter(([f, t]) => f !== from || t !== to);
+          if (others.some(([f]) => f !== from)) return false;
+        }
+        run({ t: 'route', from, to, dots: [...dots] });
+        return true;
+      },
     };
     try {
       build(tx);
+      // An unpinned dot no wire goes through goes (06 §6.6), in the same step.
+      for (const dot of [...this.dots.values()]) {
+        if (!dot.pinned && this.wiresThrough(dot.id).length === 0) {
+          run({ t: 'dot', id: dot.id, dot: null, swept: true });
+        }
+      }
     } catch (e) {
       // A gesture that fails half-way leaves no trace.
       for (let i = inverse.length - 1; i >= 0; i--) this.applyOp(inverse[i] as Op);
@@ -615,12 +705,10 @@ export class Graph {
         // node when undo or redo removes it; its inverse brings them back.
         const back: Op[] = [];
         for (const to of [...(this.outs.get(op.id) ?? [])]) {
-          this.applyOp({ t: 'disconnect', from: op.id, to });
-          back.push({ t: 'connect', from: op.id, to });
+          back.push(...(this.applyOp({ t: 'disconnect', from: op.id, to }) ?? []));
         }
         for (const from of [...(this.ins.get(op.id) ?? [])]) {
-          this.applyOp({ t: 'disconnect', from, to: op.id });
-          back.push({ t: 'connect', from, to: op.id });
+          back.push(...(this.applyOp({ t: 'disconnect', from, to: op.id }) ?? []));
         }
         this.nodes.delete(op.id);
         // Undo applies inverses from the end: the node first, then its wires.
@@ -706,13 +794,43 @@ export class Graph {
         if (!this.hasEdge(op.from, op.to)) return null;
         this.outs.get(op.from)?.delete(op.to);
         this.ins.get(op.to)?.delete(op.from);
-        return [{ t: 'connect', from: op.from, to: op.to }];
+        const back: Op[] = [{ t: 'connect', from: op.from, to: op.to }];
+        // Its route goes with it (05 §9.2); undo brings both back.
+        const key = routeKey(op.from, op.to);
+        const dots = this.routes.get(key);
+        if (dots) {
+          this.routes.delete(key);
+          back.push({ t: 'route', from: op.from, to: op.to, dots });
+        }
+        return back;
       }
       case 'wireShape': {
         if (this.shape === op.value) return null;
         const back: Op = { t: 'wireShape', value: this.shape };
         this.shape = op.value;
         return [back];
+      }
+      case 'dot': {
+        const was = this.dots.get(op.id) ?? null;
+        const same =
+          was === op.dot ||
+          (was !== null &&
+            op.dot !== null &&
+            was.x === op.dot.x &&
+            was.y === op.dot.y &&
+            was.pinned === op.dot.pinned);
+        if (same) return null;
+        if (op.dot) this.dots.set(op.id, { ...op.dot, id: op.id });
+        else this.dots.delete(op.id);
+        return [{ t: 'dot', id: op.id, dot: was }];
+      }
+      case 'route': {
+        const key = routeKey(op.from, op.to);
+        const was = this.routes.get(key) ?? [];
+        if (sameList(was, op.dots)) return null;
+        if (op.dots.length > 0) this.routes.set(key, [...op.dots]);
+        else this.routes.delete(key);
+        return [{ t: 'route', from: op.from, to: op.to, dots: was }];
       }
     }
   }
@@ -730,12 +848,37 @@ function set(map: Map<string, Set<string>>, key: string): Set<string> {
 /**
  * Insert X into the wire A → B (05 §8.4): A → B goes, A → X and X → B come.
  * 💡 Precondition: X has no wires in this network. Returns false when not met.
+ *
+ * `piece` — which piece of a wire through dots X was dropped on (05 §9.2):
+ * piece i runs from the i-th point of A, its dots, B to the next; none —
+ * the last. A → X keeps the dots before the piece, X → B those after it. A
+ * piece that ends at a dot is every wire's that goes the same way to that
+ * dot: X goes into all of them, the branches after the dot (05 §8.4).
  */
-export function insertIntoWire(graph: Graph, tx: Tx, x: string, from: string, to: string): boolean {
+export function insertIntoWire(
+  graph: Graph,
+  tx: Tx,
+  x: string,
+  from: string,
+  to: string,
+  piece?: number,
+): boolean {
   if (!canInsert(graph, x) || !graph.hasEdge(from, to) || x === from || x === to) return false;
-  tx.disconnect(from, to);
+  const route = graph.route(from, to);
+  const i = Math.max(0, Math.min(piece ?? route.length, route.length));
+  const head = route.slice(0, i + 1);
+  const along =
+    i < route.length
+      ? graph.outputs(from).filter((t) => sameList(graph.route(from, t).slice(0, i + 1), head))
+      : [to];
+  const tails = along.map((t) => [t, graph.route(from, t).slice(i)] as const);
+  for (const t of along) tx.disconnect(from, t);
   tx.connect(from, x);
-  tx.connect(x, to);
+  tx.route(from, x, route.slice(0, i));
+  for (const [t, rest] of tails) {
+    tx.connect(x, t);
+    tx.route(x, t, rest);
+  }
   return true;
 }
 

@@ -1,5 +1,6 @@
 import {
   canInsert,
+  type Dot,
   downstream,
   extract,
   type Flag,
@@ -14,13 +15,14 @@ import {
   newNode,
   shake,
   switchFlag,
+  type Tx,
   type WireShape,
 } from '@strata/backend';
 import { fog } from '@strata/design-tokens';
 import RBush from 'rbush';
 import { Camera } from './camera';
 import { chainWires, touchAt } from './chain';
-import { closest, controls, crossing, pointAt, type WireEnds, bounds as wireBounds } from './curve';
+import { controls, pointAt, type WireEnds } from './curve';
 import type { RimTarget } from './decor';
 import {
   onTheWay,
@@ -35,6 +37,7 @@ import { takenByFocus } from './focus';
 import { HEX_IN, hexCorners, hexDist, rimAt } from './hex';
 import { radiusOf } from './looks';
 import { Minimap } from './minimap';
+import { boundsOn, closestOn, crossingOn, type Places, wirePieces } from './route';
 import { SHAKE_SWING_PX, ShakeDetector } from './shake';
 import {
   arrowStep,
@@ -59,6 +62,8 @@ import type { WireStyle } from './wires';
 const DRAG_PX = 4;
 const MIN_HIT_PX = 12; // a 24 × 24 target at least (07 §4.10, NFR-99)
 const WIRE_HIT_PX = 6;
+/** Screen px around a dot on a wire that pick it (06 §6.6): its drawn 4u and a margin. */
+const DOT_HIT_PX = 8;
 const DROP_PX = 6;
 const DROP_HOLD_MS = 200;
 /** A drag resting on the bubble of a folder or project this long goes inside (06 §12.1). */
@@ -110,6 +115,17 @@ const GHOST_WIRE: WireStyle = {
   dot: false,
   dash: 4,
 };
+/**
+ * How strongly a wire's style stands out: a piece wires share through a dot
+ * (05 §9.2) is drawn in the strongest of theirs. The rest — 0.
+ */
+const WIRE_RANK = new Map<WireStyle, number>([
+  [CUT_WIRE, 5],
+  [CANDIDATE_WIRE, 4],
+  [RUNNING_WIRE, 3],
+  [ACTIVE_WIRE, 2],
+  [GHOST_WIRE, 1],
+]);
 
 export type WheelMode = 'mouse' | 'trackpad';
 
@@ -132,6 +148,7 @@ export type HintKey =
   | 'proto.hint.node'
   | 'proto.hint.port'
   | 'proto.hint.wire'
+  | 'proto.hint.dot'
   | 'proto.hint.drag'
   | 'proto.hint.dragInsert'
   | 'proto.hint.wireDrag'
@@ -355,12 +372,29 @@ type Hit =
   /** A ghost (05 §8.5): no ports, no drag; a click makes its node. */
   | { t: 'ghost'; id: string }
   | { t: 'port'; id: string; angle: number }
-  | { t: 'wire'; from: string; to: string }
+  /** `piece`: which piece of a wire through dots (05 §9.2), from its source. */
+  | { t: 'wire'; from: string; to: string; piece: number }
+  /** A dot on a wire (06 §6.6). */
+  | { t: 'dot'; id: string }
   | { t: 'empty' };
+
+/**
+ * A branch through a dot (06 §6.5 «б», §6.6): the new wire comes from the
+ * old one's source through the dot. `fresh` — a dot made where the wire was
+ * grabbed, put into its route at `at`; none — a dot that is.
+ */
+interface Via {
+  dot: Dot;
+  fresh: { wire: [string, string]; at: number } | null;
+  /** The dots the new wire goes through, the branch's dot last. */
+  route: string[];
+}
 
 interface Candidate {
   from: string;
   to: string;
+  /** The piece of a wire through dots the bubble is over (05 §9.2). */
+  piece: number;
   since: number;
   /** World point on the curve where the node will land. */
   x: number;
@@ -411,11 +445,15 @@ type Mode =
       ey: number;
       target: string | null;
       twoClick: boolean;
-      /**
-       * A branch (06 §6.5, «а»): where the wire was grabbed, world units. The
-       * new wire comes from the old one's source; the fork shows only now.
-       */
-      fork: { x: number; y: number } | null;
+      /** A branch through a dot (06 §6.5 «б»): the dot and the new wire's route. */
+      via: Via | null;
+    }
+  | {
+      t: 'dot';
+      id: string;
+      /** From the grab to the dot's centre, world units: the dot does not jump to the cursor. */
+      dx: number;
+      dy: number;
     }
   | {
       t: 'cut';
@@ -463,6 +501,8 @@ type Mode =
       atAnchor: boolean;
       /** The ghost the node made here resolves (06 §14). */
       ghost?: string;
+      /** A branch's dot (06 §6.5 «б»): the new node is wired through it. */
+      via?: Via | null;
     }
   | { t: 'name'; id: string; created: boolean };
 
@@ -515,6 +555,8 @@ export class Editor {
   /** The rim mark under the cursor (06 §12.2, §14): the decor says what it is. */
   private markHover: { id: string; mark: RimTarget } | null = null;
   private selectedWire: [string, string] | null = null;
+  /** The dot on a wire last clicked (06 §6.6): `Delete` takes it away. */
+  private selectedDot: string | null = null;
   private pointer = { sx: -1, sy: -1, inside: false };
   private readonly held = new Set<string>();
   /** The info card on hover (06 §4.4, «Настройки»): 600 ms of rest on a bubble. */
@@ -545,6 +587,7 @@ export class Editor {
       () => this.seen(),
     );
     view.wireStyle = (from, to) => this.styleOf(from, to);
+    view.wireRank = (style) => WIRE_RANK.get(style) ?? 0;
     view.onFrame = (now) => {
       this.drawOverlay(now);
       this.minimap.draw();
@@ -555,7 +598,17 @@ export class Editor {
       // The decor waits out the ring's delay itself, drawing frames until it shows.
       const ring = this.ringOn() && this.ring ? { ...this.ring, slot: this.ringSlot } : null;
       const mark = this.mode.t === 'idle' ? this.markHover : null;
-      return { hover, selection: this.selection, current: this.current, ring, mark };
+      const dotHover = this.mode.t === 'idle' && h.t === 'dot' ? h.id : null;
+      const dotSelected = this.selectedDot;
+      return {
+        hover,
+        selection: this.selection,
+        current: this.current,
+        ring,
+        mark,
+        dotHover,
+        dotSelected,
+      };
     };
     this.detach.push(
       view.setGraph(graph),
@@ -566,6 +619,7 @@ export class Editor {
         this.indexDirty = true;
         for (const id of this.selection) if (!graph.nodes.has(id)) this.selection.delete(id);
         if (this.current && !graph.nodes.has(this.current)) this.current = null;
+        if (this.selectedDot && !graph.dots.has(this.selectedDot)) this.selectedDot = null;
         this.events.change();
       }),
     );
@@ -919,11 +973,8 @@ export class Editor {
       }
       const sources = m.sources.filter((s) => s !== choice.id);
       if (sources.length > 0) {
-        this.graph.transaction(
-          { key: 'proto.change.connect', params: { name: node.name } },
-          (tx) => {
-            for (const s of sources) tx.connect(s, choice.id);
-          },
+        this.graph.transaction({ key: 'proto.change.connect', params: { name: node.name } }, (tx) =>
+          this.wireUp(tx, sources, choice.id, m.via),
         );
       } else {
         this.frameNodes([choice.id]);
@@ -945,7 +996,7 @@ export class Editor {
     const name = ghost ? ghost.name : choice.t === 'create' ? choice.name : '';
     // From a ghost with Shift: a kind for its name resolves it; another name does not.
     const asked = m.ghost && this.graph.nodes.get(m.ghost)?.name === name ? m.ghost : null;
-    const id = this.createNode(kind, name, place, inputs, ghost?.id ?? asked);
+    const id = this.createNode(kind, name, place, inputs, ghost?.id ?? asked, m.via);
     if (choice.t === 'create' && choice.rename) this.openName(id, true);
   }
 
@@ -961,6 +1012,7 @@ export class Editor {
     place: { x: number; y: number },
     inputs: readonly string[],
     ghost: string | null,
+    via: Via | null = null,
   ): string {
     const node = newNode({
       id: newId(),
@@ -973,7 +1025,7 @@ export class Editor {
     const from = ghost ? this.graph.nodes.get(ghost)?.ghostOf : null;
     this.graph.transaction({ key: 'proto.change.create', params: { name: node.name } }, (tx) => {
       tx.add(node);
-      for (const s of inputs) tx.connect(s, node.id);
+      this.wireUp(tx, inputs, node.id, via);
       if (ghost && from) tx.remove(ghost);
     });
     if (from) this.graph.derive({ key: 'core.change.links' }, (tx) => tx.connect(from, node.id));
@@ -1321,6 +1373,9 @@ export class Editor {
       case 'drag':
         this.dragTo(m, sx, sy, e);
         return;
+      case 'dot':
+        this.dotTo(m, sx, sy);
+        return;
       case 'wire': {
         const w = this.view.camera.toWorld(sx, sy);
         m.ex = w.x;
@@ -1365,6 +1420,9 @@ export class Editor {
         return;
       case 'drag':
         this.dropDrag(m);
+        return;
+      case 'dot':
+        this.dropDot(m);
         return;
       case 'wire':
         if (!m.twoClick) this.finishWire(sx, sy);
@@ -1435,7 +1493,7 @@ export class Editor {
         ey: w.y,
         target: null,
         twoClick: true,
-        fork: null,
+        via: null,
       };
       this.events.hint('proto.hint.wireDrag');
       this.view.invalidate();
@@ -1471,7 +1529,29 @@ export class Editor {
       return;
     }
     if (hit.t === 'wire') {
+      // `Alt`+click: a dot on the wire there (06 §6.6).
+      if (e.altKey) {
+        this.dotOnWire(hit.from, hit.to, sx, sy);
+        return;
+      }
       this.selectedWire = [hit.from, hit.to];
+      this.selectedDot = null;
+      this.selection.clear();
+      this.events.change();
+      this.view.invalidate();
+      return;
+    }
+    if (hit.t === 'dot') {
+      const dot = this.graph.dots.get(hit.id);
+      // `Alt`+click pins or unpins it (06 §6.6).
+      if (dot && e.altKey) {
+        this.graph.transaction(
+          { key: dot.pinned ? 'proto.change.dot.unpin' : 'proto.change.dot.pin' },
+          (tx) => tx.putDot({ ...dot, pinned: !dot.pinned }),
+        );
+      }
+      this.selectedDot = hit.id;
+      this.selectedWire = null;
       this.selection.clear();
       this.events.change();
       this.view.invalidate();
@@ -1480,6 +1560,7 @@ export class Editor {
     // Empty: the first click clears the selection, the second creates (06 §5.1).
     this.selection.clear();
     this.selectedWire = null;
+    this.selectedDot = null;
     this.events.change();
     this.view.invalidate();
     if (double) {
@@ -1525,15 +1606,19 @@ export class Editor {
         ey: w.y,
         target: null,
         twoClick: false,
-        fork: null,
+        via: null,
       };
       this.events.hint('proto.hint.wireDrag');
       return;
     }
     if (hit.t === 'wire' && m.shift) {
-      // A branch from the middle of A → B (06 §6.5, «а»): a new wire from A.
+      // A branch from the middle of A → B (06 §6.5 «б»): a dot where the
+      // wire was grabbed, on every wire that draws that piece, and the new
+      // wire from A through it.
       const grab = this.view.camera.toWorld(m.sx, m.sy);
-      const at = closest(this.wireEnds(hit.from, hit.to), grab.x, grab.y);
+      const at = closestOn(this.pieces(hit.from, hit.to), grab.x, grab.y);
+      const route = this.graph.route(hit.from, hit.to);
+      const dot: Dot = { id: newId(), x: at.x, y: at.y, pinned: false };
       const w = this.view.camera.toWorld(sx, sy);
       this.selectedWire = null;
       this.mode = {
@@ -1543,10 +1628,58 @@ export class Editor {
         ey: w.y,
         target: null,
         twoClick: false,
-        fork: { x: at.x, y: at.y },
+        via: {
+          dot,
+          fresh: { wire: [hit.from, hit.to], at: at.piece },
+          route: [...route.slice(0, at.piece), dot.id],
+        },
       };
       this.events.hint('proto.hint.wireDrag');
       this.view.invalidate();
+      return;
+    }
+    if (hit.t === 'dot') {
+      const dot = this.graph.dots.get(hit.id);
+      if (!dot) {
+        this.mode = { t: 'idle' };
+        return;
+      }
+      if (m.shift) {
+        // A new wire from a dot: from its source, through it (06 §6.6).
+        const [through] = this.graph.wiresThrough(hit.id);
+        if (!through) {
+          this.mode = { t: 'idle' };
+          return;
+        }
+        const route = this.graph.route(through[0], through[1]);
+        const w = this.view.camera.toWorld(sx, sy);
+        this.mode = {
+          t: 'wire',
+          sources: [through[0]],
+          ex: w.x,
+          ey: w.y,
+          target: null,
+          twoClick: false,
+          via: { dot, fresh: null, route: route.slice(0, route.indexOf(hit.id) + 1) },
+        };
+        this.events.hint('proto.hint.wireDrag');
+        this.view.invalidate();
+        return;
+      }
+      // The dot follows the hand; the graph takes its place at the drop.
+      const grab = this.view.camera.toWorld(m.sx, m.sy);
+      this.selection.clear();
+      this.selectedWire = null;
+      this.selectedDot = hit.id;
+      const d: Extract<Mode, { t: 'dot' }> = {
+        t: 'dot',
+        id: hit.id,
+        dx: dot.x - grab.x,
+        dy: dot.y - grab.y,
+      };
+      this.mode = d;
+      this.dotTo(d, sx, sy);
+      this.events.change();
       return;
     }
     if (hit.t === 'node') {
@@ -1722,7 +1855,14 @@ export class Editor {
       return;
     }
     const reach = p.r + DROP_PX / this.view.camera.zoom;
-    let best: { from: string; to: string; dist: number; x: number; y: number } | null = null;
+    let best: {
+      from: string;
+      to: string;
+      piece: number;
+      dist: number;
+      x: number;
+      y: number;
+    } | null = null;
     for (const b of this.wireIndex.search({
       minX: p.x - reach,
       minY: p.y - reach,
@@ -1730,28 +1870,30 @@ export class Editor {
       maxY: p.y + reach,
     })) {
       if (b.id === id || b.to === id) continue;
-      const c = closest(this.wireEnds(b.id, b.to), p.x, p.y);
+      const c = closestOn(this.pieces(b.id, b.to), p.x, p.y);
       if (c.dist <= reach && (!best || c.dist < best.dist)) best = { from: b.id, to: b.to, ...c };
     }
     if (!best) {
       m.candidate = null;
       return;
     }
-    if (!m.candidate || m.candidate.from !== best.from || m.candidate.to !== best.to) {
+    const was = m.candidate;
+    if (was && was.from === best.from && was.to === best.to && was.piece === best.piece) {
+      was.x = best.x;
+      was.y = best.y;
+    } else {
       const shifted = downstream(this.graph, best.to);
       shifted.delete(best.from);
       shifted.delete(id);
       m.candidate = {
         from: best.from,
         to: best.to,
+        piece: best.piece,
         since: performance.now(),
         x: best.x,
         y: best.y,
         shifted,
       };
-    } else {
-      m.candidate.x = best.x;
-      m.candidate.y = best.y;
     }
     this.view.invalidate();
   }
@@ -1794,7 +1936,7 @@ export class Editor {
             const n = this.graph.nodes.get(id);
             if (n) tx.move(id, n.x + ux, n.y + uy);
           }
-          insertIntoWire(this.graph, tx, single, c.from, c.to);
+          insertIntoWire(this.graph, tx, single, c.from, c.to, c.piece);
         };
         if (m.committed) this.graph.amend(step, label);
         else this.graph.transaction(label, step);
@@ -1825,12 +1967,14 @@ export class Editor {
     const target = hit.t === 'node' || hit.t === 'port' ? hit.id : null;
     if (target && !m.sources.includes(target)) {
       const name = this.graph.nodes.get(target)?.name ?? '';
-      const made = this.graph.transaction(
-        { key: 'proto.change.connect', params: { name } },
-        (tx) => {
-          for (const s of m.sources) tx.connect(s, target);
-        },
-      );
+      const via = m.via;
+      // A wire that is already there makes no dot either.
+      const made =
+        via && m.sources.every((s) => this.graph.hasEdge(s, target))
+          ? null
+          : this.graph.transaction({ key: 'proto.change.connect', params: { name } }, (tx) =>
+              this.wireUp(tx, m.sources, target, via),
+            );
       if (!made) this.events.toast({ key: 'proto.toast.exists' });
       this.afterGesture();
       return;
@@ -1851,10 +1995,88 @@ export class Editor {
     });
     this.graph.transaction({ key: 'proto.change.create', params: { name: '' } }, (tx) => {
       tx.add(node);
-      for (const s of m.sources) tx.connect(s, node.id);
+      this.wireUp(tx, m.sources, node.id, m.via);
     });
     this.select([node.id]);
     this.openName(node.id, true);
+  }
+
+  /**
+   * Wires from `sources` to `target` in step `tx`; through a branch's dot
+   * (06 §6.5 «б»): a new dot goes first onto every wire that draws the piece
+   * it was made on, then the new wire through it.
+   */
+  private wireUp(tx: Tx, sources: readonly string[], target: string, via: Via | null | undefined) {
+    if (!via) {
+      for (const s of sources) tx.connect(s, target);
+      return;
+    }
+    if (via.fresh) {
+      const [from, to] = via.fresh.wire;
+      const at = via.fresh.at;
+      tx.putDot(via.dot);
+      for (const [f, t] of this.alongPiece(from, to, at)) {
+        const route = this.graph.route(f, t);
+        tx.route(f, t, [...route.slice(0, at), via.dot.id, ...route.slice(at)]);
+      }
+    }
+    for (const s of sources) if (tx.connect(s, target)) tx.route(s, target, via.route);
+  }
+
+  /**
+   * The wires that draw piece `piece` of wire `from → to` (05 §9.2): a piece
+   * that ends at a dot is every wire's that goes the same way to that dot.
+   */
+  private alongPiece(from: string, to: string, piece: number): [string, string][] {
+    const route = this.graph.route(from, to);
+    if (piece >= route.length) return [[from, to]];
+    const head = route.slice(0, piece + 1);
+    return this.graph
+      .outputs(from)
+      .filter((t) => {
+        const r = this.graph.route(from, t);
+        return head.every((d, i) => r[i] === d);
+      })
+      .map((t): [string, string] => [from, t]);
+  }
+
+  /** A dot on wire `from → to` where (sx, sy) is closest (06 §6.6): `Alt`+click, `.`. */
+  private dotOnWire(from: string, to: string, sx: number, sy: number) {
+    const w = this.view.camera.toWorld(sx, sy);
+    const at = closestOn(this.pieces(from, to), w.x, w.y);
+    const dot: Dot = { id: newId(), x: at.x, y: at.y, pinned: false };
+    this.graph.transaction({ key: 'proto.change.dot.add' }, (tx) => {
+      tx.putDot(dot);
+      for (const [f, t] of this.alongPiece(from, to, at.piece)) {
+        const route = this.graph.route(f, t);
+        tx.route(f, t, [...route.slice(0, at.piece), dot.id, ...route.slice(at.piece)]);
+      }
+    });
+    this.selection.clear();
+    this.selectedWire = null;
+    this.selectedDot = this.graph.dots.has(dot.id) ? dot.id : null;
+    this.events.change();
+    this.view.invalidate();
+  }
+
+  /** A dragged dot under the hand (06 §6.6): drawn there, the graph untouched. */
+  private dotTo(m: Extract<Mode, { t: 'dot' }>, sx: number, sy: number) {
+    const w = this.view.camera.toWorld(sx, sy);
+    this.view.dragDot(m.id, { x: w.x + m.dx, y: w.y + m.dy });
+  }
+
+  /** The dot dropped: one step of undo, its new place. */
+  private dropDot(m: Extract<Mode, { t: 'dot' }>) {
+    this.mode = { t: 'idle' };
+    const dot = this.graph.dots.get(m.id);
+    const at = this.view.dotAt(m.id);
+    this.view.dragDot(m.id, null);
+    if (dot && at) {
+      this.graph.transaction({ key: 'proto.change.dot.move' }, (tx) =>
+        tx.putDot({ ...dot, x: at.x, y: at.y }),
+      );
+    }
+    this.afterGesture();
   }
 
   private finishMarquee(m: Extract<Mode, { t: 'marquee' }>) {
@@ -1891,7 +2113,7 @@ export class Editor {
     })) {
       const key = wireKey(b.id, b.to);
       if (m.crossed.has(key) || this.textWire(b.id, b.to)) continue;
-      if (crossing(this.wireEnds(b.id, b.to), p.x, p.y, q.x, q.y)) {
+      if (crossingOn(this.pieces(b.id, b.to), p.x, p.y, q.x, q.y)) {
         m.crossed.set(key, { from: b.id, to: b.to });
       }
     }
@@ -2066,10 +2288,19 @@ export class Editor {
           this.events.uncut?.();
           this.selection.clear();
           this.selectedWire = null;
+          this.selectedDot = null;
           this.events.change();
         }
         this.view.invalidate();
         return;
+      case 'Period': {
+        // `.` over a wire: a dot there (06 §6.6).
+        const h = this.hover;
+        if (mod || e.altKey || this.mode.t !== 'idle' || h.t !== 'wire') return;
+        e.preventDefault();
+        this.dotOnWire(h.from, h.to, this.pointer.sx, this.pointer.sy);
+        return;
+      }
       case 'KeyZ':
         // `Z` alone — the icon palette (06 §2, 07 §6.3); with `Ctrl` — undo.
         if (!mod) {
@@ -2276,6 +2507,7 @@ export class Editor {
         sources: m.sources,
         sibling: null,
         atAnchor: true,
+        via: m.via,
       });
       return;
     }
@@ -2356,6 +2588,8 @@ export class Editor {
       this.arrangeTicket++;
       this.view.settle(m.ids);
     }
+    // Esc during a dot's drag: it stays where it stood.
+    if (m.t === 'dot') this.view.dragDot(m.id, null);
     this.view.invalidate();
   }
 
@@ -2500,6 +2734,13 @@ export class Editor {
   /** `Delete` with healing (06 §6.7, §12.3): extract, then remove; undo brings it back. */
   private deleteSelection(everywhere: boolean) {
     const ids = [...this.selection];
+    const dot = this.selectedDot;
+    if (ids.length === 0 && dot) {
+      // A dot taken away: its wires go straight, the links stay (06 §6.6).
+      this.graph.transaction({ key: 'proto.change.dot.remove' }, (tx) => tx.removeDot(dot));
+      this.selectedDot = null;
+      return;
+    }
     if (ids.length === 0) {
       const w = this.selectedWire;
       if (!w) return;
@@ -2740,25 +2981,24 @@ export class Editor {
     for (const [from, to] of this.graph.edges()) {
       // A ghost's wire is its note's text: not picked, cut or branched.
       if (this.graph.nodes.get(to)?.ghostOf) continue;
-      const b = wireBounds(this.wireEnds(from, to));
+      const b = boundsOn(this.pieces(from, to));
       wires.push({ ...b, id: from, to });
     }
     this.wireIndex = new RBush<WireBox>().load(wires);
   }
 
-  private wireEnds(from: string, to: string): WireEnds {
-    const a = this.view.nodeAt(from);
-    const b = this.view.nodeAt(to);
-    return {
-      ax: a?.x ?? 0,
-      ay: a?.y ?? 0,
-      bx: b?.x ?? 0,
-      by: b?.y ?? 0,
-      // Both ends run into their sockets on the rim (07 §5).
-      ra: a?.r ?? 0,
-      rb: b?.r ?? 0,
-      straight: this.graph.wireShape === 'straight',
-    };
+  /** Where bubbles and dots are drawn now, for the wires' pieces. */
+  private readonly places: Places = {
+    node: (id) => this.view.nodeAt(id),
+    dot: (id) => this.view.dotAt(id),
+  };
+
+  /**
+   * Wire `from → to` as the curves of its pieces through its dots (05 §9.2),
+   * exactly as drawn: bubble ends run into their sockets on the rim (07 §5).
+   */
+  private pieces(from: string, to: string): WireEnds[] {
+    return wirePieces(this.graph, from, to, this.places, this.graph.wireShape === 'straight');
   }
 
   /**
@@ -2782,8 +3022,12 @@ export class Editor {
       const d = hexDist(w.x - p.x, w.y - p.y) * zoom;
       if (!best || d < best.d) best = { id: b.id, d, r: p.r };
     }
+    // A dot lies on its wires: it comes before them, and before a bubble's
+    // port ring and least hit area too — not before the body drawn (06 §6.6).
+    const dot = this.dotHit(w.x, w.y, zoom);
     if (best) {
       const rs = best.r * zoom;
+      if (dot && best.d > rs * HEX_IN) return dot;
       const hitR = Math.max(rs * HEX_IN, MIN_HIT_PX);
       // A ghost has no ports: nothing is wired to it by hand (05 §8.5).
       const ghost = !!this.graph.nodes.get(best.id)?.ghostOf;
@@ -2793,19 +3037,33 @@ export class Editor {
         return { t: 'port', id: best.id, angle: Math.atan2(w.y - (p?.y ?? 0), w.x - (p?.x ?? 0)) };
       }
     }
+    if (dot) return dot;
     const wr = WIRE_HIT_PX / zoom;
-    let wire: { from: string; to: string; dist: number } | null = null;
+    let wire: { from: string; to: string; piece: number; dist: number } | null = null;
     for (const b of this.wireIndex.search({
       minX: w.x - wr,
       minY: w.y - wr,
       maxX: w.x + wr,
       maxY: w.y + wr,
     })) {
-      const c = closest(this.wireEnds(b.id, b.to), w.x, w.y);
+      const c = closestOn(this.pieces(b.id, b.to), w.x, w.y);
       if (c.dist <= wr && (!wire || c.dist < wire.dist))
-        wire = { from: b.id, to: b.to, dist: c.dist };
+        wire = { from: b.id, to: b.to, piece: c.piece, dist: c.dist };
     }
-    return wire ? { t: 'wire', from: wire.from, to: wire.to } : { t: 'empty' };
+    return wire ? { t: 'wire', from: wire.from, to: wire.to, piece: wire.piece } : { t: 'empty' };
+  }
+
+  /** The dot on a wire within `DOT_HIT_PX` of world point (x, y), the nearest. */
+  private dotHit(x: number, y: number, zoom: number): Hit | null {
+    const reach = DOT_HIT_PX / zoom;
+    let near: { id: string; d: number } | null = null;
+    for (const id of this.graph.dots.keys()) {
+      const p = this.view.dotAt(id);
+      if (!p) continue;
+      const d = Math.hypot(p.x - x, p.y - y);
+      if (d <= reach && (!near || d < near.d)) near = { id, d };
+    }
+    return near ? { t: 'dot', id: near.id } : null;
   }
 
   // ── Drawing (07 §4.5, §5) ─────────────────────────────────────────
@@ -2821,6 +3079,10 @@ export class Editor {
     if (sw && sw[0] === from && sw[1] === to) return RUNNING_WIRE;
     const h = this.hover;
     if (h.t === 'wire' && h.from === from && h.to === to) return RUNNING_WIRE;
+    // The wires through a dot run when it is selected, light when it is hovered (06 §6.6).
+    const sd = this.selectedDot;
+    if (sd && this.graph.route(from, to).includes(sd)) return RUNNING_WIRE;
+    if (h.t === 'dot' && this.graph.route(from, to).includes(h.id)) return ACTIVE_WIRE;
     if (this.selection.has(from) || this.selection.has(to)) return RUNNING_WIRE;
     if ((h.t === 'node' || h.t === 'port') && (h.id === from || h.id === to)) return ACTIVE_WIRE;
     return NORMAL_WIRE;
@@ -2855,8 +3117,9 @@ export class Editor {
         const p = this.view.nodeAt(src);
         if (!p) continue;
         const tgt = m.target ? this.view.nodeAt(m.target) : null;
-        // A branch grows out of the fork on the old wire (06 §6.5).
-        const from = m.fork ? { x: m.fork.x, y: m.fork.y, r: -1 } : p;
+        // A branch grows out of its dot (06 §6.5 «б»).
+        const dot = m.via ? (m.via.fresh ? m.via.dot : this.view.dotAt(m.via.dot.id)) : null;
+        const from = dot ? { x: dot.x, y: dot.y, r: -1 } : p;
         const c = controls({
           ax: from.x,
           ay: from.y,
@@ -2875,8 +3138,9 @@ export class Editor {
         }
         g.stroke({ color: PAPER, width: 2 });
       }
-      if (m.fork) {
-        const f = cam.toScreen(m.fork.x, m.fork.y);
+      // A dot to be made shows where it will stand.
+      if (m.via?.fresh) {
+        const f = cam.toScreen(m.via.dot.x, m.via.dot.y);
         g.circle(f.x, f.y, 4).fill(PAPER).stroke({ color: INK, width: 1 });
       }
       if (m.target) {
@@ -3035,6 +3299,7 @@ function sameHit(a: Hit, b: Hit): boolean {
     return a.id === b.id;
   if (a.t === 'port' && b.t === 'port') return a.id === b.id && Math.abs(a.angle - b.angle) < 0.05;
   if (a.t === 'wire' && b.t === 'wire') return a.from === b.from && a.to === b.to;
+  if (a.t === 'dot' && b.t === 'dot') return a.id === b.id;
   return true;
 }
 
@@ -3046,6 +3311,8 @@ function hintOf(hit: Hit): HintKey {
       return 'proto.hint.port';
     case 'wire':
       return 'proto.hint.wire';
+    case 'dot':
+      return 'proto.hint.dot';
     case 'ghost':
       return 'proto.hint.ghost';
     default:

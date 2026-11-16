@@ -175,7 +175,16 @@ export type CoreOp =
    * The kind's icon of the workspace (05 §3, §4.1): what its nodes without
    * their own show; null — the built-in glyph. Not for assets.
    */
-  | { op: 'setKindIcon'; kind: NodeKind; icon: string | null };
+  | { op: 'setKindIcon'; kind: NodeKind; icon: string | null }
+  /**
+   * A dot on a wire in network `net` (05 §9.2, 06 §6.6): made, moved, pinned
+   * or unpinned. An unpinned dot no wire goes through goes at the step's end.
+   */
+  | { op: 'putDot'; net: string; id: string; x: number; y: number; pinned: boolean }
+  /** A dot taken away (06 §6.6): its wires go straight, the links stay. */
+  | { op: 'removeDot'; net: string; id: string }
+  /** The dots wire `from → to` goes through in `net`, in order; one source per dot (06 §6.6). */
+  | { op: 'setRoute'; net: string; from: string; to: string; dots: string[] };
 
 export type CoreRequest =
   | { call: 'workspace' }
@@ -543,6 +552,17 @@ export interface ViewEdge {
   text: boolean;
   /** Drawn by hand or imported. */
   manual: boolean;
+  /** The dots it goes through in this network, in order (05 §9.2); none — straight. */
+  dots?: string[];
+}
+
+/** A dot of a network (05 §9.2, 06 §6.6): a point its wires' routes go through. */
+export interface ViewDot {
+  id: string;
+  x: number;
+  y: number;
+  /** Stays when no wire goes through it. */
+  pinned: boolean;
 }
 
 /** How a network draws its wires (06 §6.2): a segment, an S-curve, an S-curve that follows the hand. */
@@ -604,6 +624,8 @@ export interface NetworkView {
   ghosts: ViewGhost[];
   /** Roll-up wires to and from the networks placed here (06 §13.3). */
   rollups: ViewRollup[];
+  /** The dots of its wires: those a wire here goes through, and the pinned ones (05 §9.2). */
+  dots?: ViewDot[];
   /** The network's wire style; none — Bézier. */
   wire_style?: WireShape;
   /** The network's own background (05 §9.2, 07 §7.4). */

@@ -53,6 +53,8 @@ interface WsHook {
     node(id: string): Promise<{ icon?: string; status?: string; color?: number }>;
     view(net: string): Promise<{
       nodes: { id: string; name: string; size?: string }[];
+      edges: { from: string; to: string; dots?: string[] }[];
+      dots?: { id: string; x: number; y: number; pinned: boolean }[];
       kind_icons?: Record<string, string>;
     }>;
     putAsset(bytes: Uint8Array): Promise<string>;
@@ -69,6 +71,9 @@ interface WsHook {
     rollups: readonly { a: string; b: string; count: number }[];
     edges(): [string, string][];
     transaction(label: { key: string }, build: (tx: unknown) => void): unknown;
+    /** The dots on the wires (05 §9.2) and each wire's route through them. */
+    dots: Map<string, { id: string; x: number; y: number; pinned: boolean }>;
+    route(from: string, to: string): readonly string[];
   } | null;
   net(): string;
   settled(): Promise<void>;
@@ -7061,6 +7066,85 @@ test.describe('a workspace on the core', () => {
     expect((await state()).dots).toBe(0);
     await open();
     await expect(palette.getByRole('radio', { name: 'Нет' })).toBeChecked();
+  });
+
+  test('a branch from a wire makes a dot the core keeps, there after a restart (06 §6.5 «б», 05 §9.2)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Ветки');
+    const c = await box(page, '.proto-canvas');
+    await createNode(page, c.x + 160, c.y + 160, 'Исток');
+    await createNode(page, c.x + 560, c.y + 160, 'Приёмник');
+    await connect(page, 'Исток', 'Приёмник');
+    await settled(page);
+    const a = await at(page, 'Исток');
+    const b = await at(page, 'Приёмник');
+    // `Shift` and a drag from the middle of the wire to the bare canvas.
+    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+    await page.mouse.move(mid.x, mid.y);
+    await page.keyboard.down('Shift');
+    await page.mouse.down();
+    for (let i = 1; i <= 12; i++) {
+      await page.mouse.move(mid.x, mid.y + (220 * i) / 12);
+    }
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    const input = page.locator('.name-input');
+    await expect(input).toBeVisible();
+    await input.fill('Ветка');
+    await input.press('Enter');
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '3');
+    await settled(page);
+    const ids = {
+      from: await idOf(page, 'Исток'),
+      to: await idOf(page, 'Приёмник'),
+      branch: await idOf(page, 'Ветка'),
+    };
+    const seen = () =>
+      page.evaluate(async ({ from, to, branch }) => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        const g = ws.graph();
+        const core = await ws.core.view(ws.net());
+        const route = (x: string, y: string) =>
+          core.edges.find((e) => e.from === x && e.to === y)?.dots ?? [];
+        return {
+          canvas: [g?.route(from, to) ?? [], g?.route(from, branch) ?? []],
+          core: [route(from, to), route(from, branch)],
+          dots: (core.dots ?? []).map((d) => d.id),
+        };
+      }, ids);
+    const now = await seen();
+    // One dot, where the wire was grabbed; both wires go through it.
+    expect(now.dots.length).toBe(1);
+    const dot = now.dots[0] as string;
+    expect(now).toEqual({ canvas: [[dot], [dot]], core: [[dot], [dot]], dots: [dot] });
+    const p = await page.evaluate((id) => {
+      const ws = window.__strataWs as WsHook;
+      const d = ws.graph()?.dots.get(id);
+      if (!d) return null;
+      const s = ws.view.camera.toScreen(d.x, d.y);
+      const r = ws.view.canvas.getBoundingClientRect();
+      return { x: r.left + s.x, y: r.top + s.y };
+    }, dot);
+    expect(Math.hypot((p?.x ?? 0) - mid.x, (p?.y ?? 0) - mid.y)).toBeLessThan(6);
+    // A restart: the dot and both routes come back from the core.
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction(() => window.__strataWs?.graph() != null);
+    await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '3');
+    expect(await seen()).toEqual(now);
+    // Undo of the branch is gone with the session; a dot taken away is one step.
+    await page.evaluate((id) => {
+      window.__strataWs
+        ?.graph()
+        ?.transaction({ key: 'proto.change.dot.remove' }, (tx) =>
+          (tx as { removeDot(id: string): void }).removeDot(id),
+        );
+    }, dot);
+    expect(await seen()).toEqual({ canvas: [[], []], core: [[], []], dots: [] });
   });
 
   test("a background: the workspace's on the root, a network's own, one's own picture; one step each (07 §7.4)", async ({

@@ -53,8 +53,8 @@ pub use workspace::{
     ImportItem, ImportOptions, ImportProgress, ImportReport, ImportShadow, Journal, JournalEntry,
     JournalKind, JournalRef, LinkTarget, LinkTargets, Linked, NetworkView, NodeDetails, PathHit,
     PathMissing, PathText, Person, Place, Placeable, PlannedImport, Prop, ReadyBatch, Resolved,
-    Staying, TrashItem, TrashPreview, TreeItem, ViewEdge, ViewGhost, ViewNode, WireEnds, Workspace,
-    escape_segment, parse_path, path_text,
+    Staying, TrashItem, TrashPreview, TreeItem, ViewDot, ViewEdge, ViewGhost, ViewNode, WireEnds,
+    Workspace, escape_segment, parse_path, path_text,
 };
 
 /// Version of the core, shared by every binary built from this workspace.

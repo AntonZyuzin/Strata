@@ -163,7 +163,8 @@ export function EngravingWindow(props: { locale: Locale; onBack: () => void }) {
       try {
         const { url, px } = await decode(file);
         urls.current.push(url);
-        const params = { ...DEFAULT_STYLE };
+        // The check of «Гравюра» (spike 9): its mode, whatever the default.
+        const params = { ...DEFAULT_STYLE, mode: 'engraving' as const };
         added.push({
           id: nextId.current++,
           name: file.name,

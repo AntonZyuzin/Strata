@@ -29,8 +29,13 @@ export interface StyleParams {
   background: StyleBackground;
 }
 
+/**
+ * A picture's style till one is chosen: «Как есть», its greys in ink with
+ * no threshold (☑ Q-07-24: the owner doubted the stylization; «Гравюра» and
+ * the rest are a choice in the dialog).
+ */
 export const DEFAULT_STYLE: StyleParams = {
-  mode: 'engraving',
+  mode: 'as-is',
   threshold: null,
   invert: false,
   background: 'auto',

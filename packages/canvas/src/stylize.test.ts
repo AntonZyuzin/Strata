@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Pixels } from './backdrop';
-import { cutout, foreground, inkShare, MASK_SIDE, otsu, stylize } from './stylize';
+import { cutout, DEFAULT_STYLE, foreground, inkShare, MASK_SIDE, otsu, stylize } from './stylize';
 
 /** A `size²` picture: `bg` everywhere, a dark disc of radius `r` in the middle. */
 function disc(size: number, r: number, bg: [number, number, number, number]): Pixels {
@@ -38,11 +38,21 @@ describe('«привести к стилю» (07 §6.4–6.5)', () => {
   });
 
   it('turns a dark figure on white into ink on the figure only («Гравюра»)', () => {
-    const r = stylize(disc(200, 50, [255, 255, 255, 255]));
+    const r = stylize(disc(200, 50, [255, 255, 255, 255]), { ...DEFAULT_STYLE, mode: 'engraving' });
     expect(at(r.mask, 64, 64)).toBe(255);
     expect(at(r.mask, 2, 2)).toBe(0);
     expect(inkShare(r.mask)).toBeGreaterThan(0.3);
     expect(inkShare(r.mask)).toBeLessThan(0.9);
+  });
+
+  it('keeps a picture’s greys by default, «Как есть» (☑ Q-07-24)', () => {
+    expect(DEFAULT_STYLE.mode).toBe('as-is');
+    const r = stylize(disc(200, 50, [255, 255, 255, 255]));
+    // The figure dark in ink, the white around it none, and greys between:
+    // no threshold makes it two-tone.
+    expect(at(r.mask, 64, 64)).toBeGreaterThan(200);
+    expect(at(r.mask, 2, 2)).toBe(0);
+    expect(r.mask.some((v) => v > 0 && v < 255)).toBe(true);
   });
 
   it('inverts on request and fills a silhouette', () => {

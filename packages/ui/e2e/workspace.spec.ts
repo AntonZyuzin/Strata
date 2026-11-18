@@ -2040,7 +2040,7 @@ for (const deviceScaleFactor of [1, 2]) {
       const sketch = await at(page, 'Эскиз');
       await page.mouse.click(sketch.x, sketch.y, { button: 'right' });
       const menu = page.locator('.context-menu');
-      await expect(menu.locator('.context-menu-row')).toHaveCount(17);
+      await expect(menu.locator('.context-menu-row')).toHaveCount(16);
       expect(await overflowing(page, '.context-menu'), `${locale} the menu must fit`).toEqual([]);
       expect((await box(page, '.context-menu')).width).toBeLessThanOrEqual(
         (await chWidth(page, 40)) + 2,
@@ -4957,7 +4957,7 @@ test.describe('a workspace on the core', () => {
     ).toBeVisible();
     const dialog = page.locator('.own-icon-dialog');
     await expect(dialog).toHaveCount(0);
-    // A picture: the dialog, «Гравюра» by default (☑ Q-05-7) with Otsu's threshold.
+    // A picture: the dialog, «Как есть» by default (☑ Q-07-24): no threshold of its own.
     await select(page, 'Карта');
     await page.keyboard.press('KeyZ');
     chooser = page.waitForEvent('filechooser');
@@ -4972,7 +4972,7 @@ test.describe('a workspace on the core', () => {
     const mode = (name: string) => dialog.getByRole('button', { name, exact: true });
     const auto = dialog.getByRole('checkbox', { name: 'Авто' });
     const slider = dialog.getByRole('slider', { name: 'Порог' });
-    await expect(mode('Гравюра')).toHaveAttribute('aria-pressed', 'true');
+    await expect(mode('Как есть')).toHaveAttribute('aria-pressed', 'true');
     await expect(auto).toBeChecked();
     await expect(slider).toBeDisabled();
     await expect(dialog.locator('.own-bubble')).toHaveCount(3);
@@ -4983,7 +4983,7 @@ test.describe('a workspace on the core', () => {
     await expect(dialog).toHaveCount(0);
     await expect.poll(async () => (await iconState(page, map)).shows).toBe('own');
     const first = (await iconState(page, map)).core ?? '';
-    expect(first).toMatch(/^asset\/[0-9a-f]{64}\/engraving$/);
+    expect(first).toMatch(/^asset\/[0-9a-f]{64}\/as-is$/);
     const sha = first.split('/')[1];
     // One step of undo, one of redo.
     await page.keyboard.press('Control+z');
@@ -5001,7 +5001,7 @@ test.describe('a workspace on the core', () => {
     await expect(dialog.locator('.own-original')).toBeVisible();
     await mode('Пиксель').click();
     await expect(mode('Пиксель')).toHaveAttribute('aria-pressed', 'true');
-    await expect(mode('Гравюра')).toHaveAttribute('aria-pressed', 'false');
+    await expect(mode('Как есть')).toHaveAttribute('aria-pressed', 'false');
     await auto.uncheck();
     await expect(slider).toBeEnabled();
     await slider.fill('90');
@@ -5076,7 +5076,7 @@ test.describe('a workspace on the core', () => {
     await background('alpha').click();
     await expect(background('alpha')).toHaveAttribute('aria-pressed', 'true');
     await dialog.getByRole('button', { name: 'Готово' }).click();
-    await expect.poll(async () => (await iconState(page, map)).core).toMatch(/\/engraving\/a$/);
+    await expect.poll(async () => (await iconState(page, map)).core).toMatch(/\/as-is\/a$/);
     const plain = (await iconState(page, map)).core ?? '';
     const sha = plain.split('/')[1] ?? '';
     // The node's own icon opens with its background; the eraser rubs a stroke out.
@@ -5104,7 +5104,7 @@ test.describe('a workspace on the core', () => {
     // The picture as the eraser left it is a picture of its own: a PNG, the background in its alpha.
     await expect.poll(async () => (await iconState(page, map)).core).not.toBe(plain);
     const rubbed = (await iconState(page, map)).core ?? '';
-    expect(rubbed).toMatch(/^asset\/[0-9a-f]{64}\/engraving\/a$/);
+    expect(rubbed).toMatch(/^asset\/[0-9a-f]{64}\/as-is\/a$/);
     const baked = rubbed.split('/')[1] ?? '';
     expect(baked).not.toBe(sha);
     const head = await page.evaluate(
@@ -5246,7 +5246,7 @@ test.describe('a workspace on the core', () => {
       });
     await expect
       .poll(async () => (await kinds()).note ?? '')
-      .toMatch(/^asset\/[0-9a-f]{64}\/engraving$/);
+      .toMatch(/^asset\/[0-9a-f]{64}\/as-is$/);
     const ref = (await kinds()).note ?? '';
     // Stored as a picture: a PNG, the same on every device.
     const head = await page.evaluate(
@@ -5294,7 +5294,7 @@ test.describe('a workspace on the core', () => {
       /--glyph: url\("data:image\/png/,
     );
     await expect(own).toHaveClass(/is-current/);
-    await expect(palette.locator('.icon-palette-by')).toHaveText('Своя иконка · Гравюра');
+    await expect(palette.locator('.icon-palette-by')).toHaveText('Своя иконка · Как есть');
     // The arrows go by rows across the groups: down to the first preset, up again.
     await page.keyboard.press('ArrowDown');
     await expect(palette.locator('.icon-cell').nth(1)).toHaveClass(/is-current/);

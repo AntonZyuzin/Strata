@@ -5294,7 +5294,8 @@ test.describe('a workspace on the core', () => {
       /--glyph: url\("data:image\/png/,
     );
     await expect(own).toHaveClass(/is-current/);
-    await expect(palette.locator('.icon-palette-by')).toHaveText('Своя иконка · Как есть');
+    // The icon came by `giveOwnIcon`, in «Гравюра» by name, whatever the default.
+    await expect(palette.locator('.icon-palette-by')).toHaveText('Своя иконка · Гравюра');
     // The arrows go by rows across the groups: down to the first preset, up again.
     await page.keyboard.press('ArrowDown');
     await expect(palette.locator('.icon-cell').nth(1)).toHaveClass(/is-current/);

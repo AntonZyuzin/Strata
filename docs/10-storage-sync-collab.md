@@ -479,7 +479,7 @@ CREATE TABLE closure (anc BLOB, node BLOB, depth INTEGER, PRIMARY KEY (anc, node
 CREATE TABLE paths (node BLOB PRIMARY KEY, canonical TEXT, ids BLOB);                -- 05 §9.3
 CREATE TABLE previews (node BLOB PRIMARY KEY, snippet TEXT, thumb TEXT, counters TEXT, content_ver TEXT);
 CREATE TABLE rollups (net BLOB PRIMARY KEY, total INTEGER, done INTEGER,
-  next_deadline TEXT, overdue INTEGER, by_kind TEXT);       -- 05 §6.4: вся глубина, без нод на паузе (☑ Q-05-2); у задачи — по подзадачам (✅ Q-05-1)
+  next_deadline TEXT, overdue INTEGER, by_kind TEXT);       -- 05 §6.4: вся глубина, без приостановленных (☑ Q-05-2, ADR-0014); у задачи — по подзадачам (✅ Q-05-1)
 CREATE TABLE asset_refs (sha TEXT, node BLOB, role TEXT, PRIMARY KEY (sha, node, role));
 CREATE TABLE changeset_nodes (changeset TEXT, node BLOB, ts INTEGER);  -- история ноды, AgentLog
 CREATE TABLE star_layout (…);                               -- кэш 3D, 08 §3.5

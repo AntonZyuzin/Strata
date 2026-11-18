@@ -263,7 +263,7 @@ interface SceneStore {
   count: number;                                  // размещения текущей сети
   id: Uint32Array;                                // слот → номер размещения в выписке
   x: Float32Array; y: Float32Array; r: Float32Array;
-  state: Uint32Array;                             // биты: выделено, текущая, ключевая, пауза, срок, появление…
+  state: Uint32Array;                             // биты: выделено, текущая, ключевая, приостановлено, срок, появление…
   icon: Uint32Array;                              // ячейка атласа
   edges: { from: Uint32Array; to: Uint32Array; style: Uint8Array; bend: Float32Array };
   dirty: DirtyRanges;                             // что перезалить в буферы GPU

@@ -51,7 +51,6 @@ fn kind_of(word: &str) -> Option<NodeKind> {
 fn flag_of(word: &str) -> Option<Flag> {
     Some(match norm(word).as_str() {
         "ключевая" | "key" => Flag::Key,
-        "пауза" | "pause" => Flag::Pause,
         "шаблон" | "template" => Flag::Template,
         "noai" => Flag::HideAi,
         "замок" | "lock" => Flag::Lock,
@@ -257,10 +256,10 @@ mod tests {
     fn sample() -> Vec<Item> {
         vec![
             item("Удар", NodeKind::Task, &[Flag::Key]),
-            item("Анимации удара", NodeKind::Task, &[Flag::Pause]),
+            item("Анимации удара", NodeKind::Task, &[Flag::Template]),
             item("Аниматик", NodeKind::Board, &[]),
             item("Спринт", NodeKind::Project, &[]),
-            item("Сплинт", NodeKind::Note, &[Flag::Pause]),
+            item("Сплинт", NodeKind::Note, &[Flag::Template]),
             item("Ёлка", NodeKind::Note, &[]),
         ]
     }
@@ -296,9 +295,9 @@ mod tests {
     fn kinds_and_flags_in_both_languages() {
         let s = sample();
         assert_eq!(hits("@задача", false, &s), vec!["Удар", "Анимации удара"]);
-        assert_eq!(hits("@task -+pause", false, &s), vec!["Удар"]);
+        assert_eq!(hits("@task -+template", false, &s), vec!["Удар"]);
         assert_eq!(hits("+ключевая", false, &s), vec!["Удар"]);
-        assert_eq!(hits("-пауза @заметка", false, &s), vec!["Ёлка"]);
+        assert_eq!(hits("-шаблон @заметка", false, &s), vec!["Ёлка"]);
         assert_eq!(
             hits("@сеть", false, &s),
             Vec::<&str>::new(),
@@ -306,7 +305,7 @@ mod tests {
         );
         assert_eq!(hits("аним -удара", false, &s), vec!["Аниматик"]);
         assert_eq!(
-            hits("-\"пауза\"", false, &s).len(),
+            hits("-\"шаблон\"", false, &s).len(),
             6,
             "quoted: a word, not the flag"
         );
@@ -316,6 +315,8 @@ mod tests {
     fn unknown_filters_are_left_out_and_told() {
         let f = Find::parse("@аня +нечто удар");
         assert_eq!(f.unknown, vec!["@аня".to_owned(), "+нечто".to_owned()]);
+        // «Пауза» is a task's status since ADR-0014, no flag: told, left out.
+        assert_eq!(Find::parse("+пауза").unknown, vec!["+пауза".to_owned()]);
         assert_eq!(
             hits("@аня удар", false, &sample()),
             vec!["Удар", "Анимации удара"]

@@ -21,6 +21,7 @@ export const KIND = {
 export function isCluster(kind: number): boolean {
   return kind === KIND.network || kind === KIND.project;
 }
+/** A star's bits: «Ключевая», «Приостановлено» (a status since ADR-0014), «Шаблон» (05 §7). */
 export const FLAG = { key: 1, pause: 2, template: 4 } as const;
 /** 08 §8.3: 0 plain, 1 soon, 2 today, 3 overdue, 4 final status. */
 export const STATE = { plain: 0, soon: 1, today: 2, overdue: 3, closed: 4 } as const;

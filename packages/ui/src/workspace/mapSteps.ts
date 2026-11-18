@@ -120,7 +120,8 @@ export function mapItems(tree: readonly TreeItem[], day?: string): MapItem[] {
   return tree.map((i) => {
     let flags = 0;
     if (i.flags?.includes('key')) flags |= FLAG.key;
-    if (i.flags?.includes('pause')) flags |= FLAG.pause;
+    // «Приостановлено» is a status (ADR-0014); the star's bit is its look.
+    if (i.status === 'paused') flags |= FLAG.pause;
     if (i.flags?.includes('template')) flags |= FLAG.template;
     // The same near or past deadline the canvas marks (07 §4.6, Q-07-22).
     const due = i.deadline ? (day ? nearDue(i.deadline, day) : nearDue(i.deadline)) : null;

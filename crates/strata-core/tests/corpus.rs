@@ -10,6 +10,7 @@
 //! writes `facts.json`. Every run checks every entry.
 
 use serde_json::{Map, Value, json};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use strata_core::doctor::{self, Verdict};
 use strata_core::sqlite::{self, SqliteStore};
@@ -158,6 +159,77 @@ fn holds(want: &Value, got: &Value, at: &str, out: &mut Vec<String>) {
     }
 }
 
+/// What an older version answered, read as this one reads it on purpose:
+/// a migration changes the reading code, not the corpus (corpus/README.md).
+/// ADR-0014 — «Пауза» is no flag: a task or project that had it and no
+/// final status reads «Приостановлено» wherever its status is told, in rows
+/// without its flags too; on other kinds the bit means nothing.
+fn migrated(facts: &Value) -> Value {
+    let mut paused = HashSet::new();
+    collect_paused(facts, &mut paused);
+    rewrite(facts, &paused)
+}
+
+/// The ids of tasks and projects not finished that an answer shows with
+/// the flag «Пауза».
+fn collect_paused(v: &Value, out: &mut HashSet<String>) {
+    match v {
+        Value::Object(m) => {
+            let flagged = m
+                .get("flags")
+                .and_then(Value::as_array)
+                .is_some_and(|f| f.iter().any(|x| x == "pause"));
+            let task = matches!(
+                m.get("kind").and_then(Value::as_str),
+                Some("task" | "project")
+            );
+            if flagged
+                && task
+                && !finished(m)
+                && let Some(id) = m.get("id").and_then(Value::as_str)
+            {
+                out.insert(id.to_owned());
+            }
+            m.values().for_each(|x| collect_paused(x, out));
+        }
+        Value::Array(a) => a.iter().for_each(|x| collect_paused(x, out)),
+        _ => {}
+    }
+}
+
+fn finished(m: &Map<String, Value>) -> bool {
+    matches!(
+        m.get("status").and_then(Value::as_str),
+        Some("done" | "cancelled")
+    )
+}
+
+fn rewrite(v: &Value, paused: &HashSet<String>) -> Value {
+    match v {
+        Value::Object(m) => {
+            let mut out: Map<String, Value> = m
+                .iter()
+                .map(|(k, x)| (k.clone(), rewrite(x, paused)))
+                .collect();
+            if let Some(flags) = out.get("flags").and_then(Value::as_array).cloned() {
+                let kept: Vec<Value> = flags.into_iter().filter(|x| x != "pause").collect();
+                if kept.is_empty() {
+                    out.remove("flags");
+                } else {
+                    out.insert("flags".to_owned(), Value::Array(kept));
+                }
+            }
+            let id = out.get("id").and_then(Value::as_str).unwrap_or_default();
+            if paused.contains(id) && out.contains_key("status") {
+                out.insert("status".to_owned(), json!("paused"));
+            }
+            Value::Object(out)
+        }
+        Value::Array(a) => Value::Array(a.iter().map(|x| rewrite(x, paused)).collect()),
+        x => x.clone(),
+    }
+}
+
 /// Where two values differ at all: a key on one side only, a list of
 /// another length, another value. A document is read exactly as it was.
 fn differs(want: &Value, got: &Value, at: &str, out: &mut Vec<String>) {
@@ -186,7 +258,8 @@ fn differs(want: &Value, got: &Value, at: &str, out: &mut Vec<String>) {
 /// A workspace of the corpus read by this version against what its version read.
 fn check<S: Store>(entry: &str, store: &str, ws: &mut Workspace<S>, want: &Value) {
     let mut wrong = Vec::new();
-    for pair in list(want, "requests") {
+    let want_now = migrated(want);
+    for pair in list(&want_now, "requests") {
         let request = &pair["request"];
         let got = ask(ws, request);
         holds(&pair["answer"], &got, &request.to_string(), &mut wrong);
@@ -355,4 +428,28 @@ fn a_difference_is_found() {
     wrong.clear();
     holds(&want, &json!({"items": [], "n": 2}), "", &mut wrong);
     assert_eq!(wrong.len(), 2, "{wrong:?}");
+}
+
+#[test]
+fn an_old_pause_reads_as_the_status() {
+    // ADR-0014 on an old answer: the flag goes, an open task reads «Приостановлено».
+    let old = json!({
+        "items": [
+            {"id": "t", "kind": "task", "status": "doing", "flags": ["pause"]},
+            {"id": "d", "kind": "task", "status": "done", "flags": ["pause", "key"]},
+            {"id": "n", "kind": "note", "flags": ["pause"]}
+        ],
+        "children": [{"id": "t", "name": "Т", "status": "doing"}]
+    });
+    assert_eq!(
+        migrated(&old),
+        json!({
+            "items": [
+                {"id": "t", "kind": "task", "status": "paused"},
+                {"id": "d", "kind": "task", "status": "done", "flags": ["key"]},
+                {"id": "n", "kind": "note"}
+            ],
+            "children": [{"id": "t", "name": "Т", "status": "paused"}]
+        })
+    );
 }

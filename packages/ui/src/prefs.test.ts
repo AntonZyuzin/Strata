@@ -24,13 +24,12 @@ describe('dates and times of the settings (✅ Q-06-23, 05 §6.1)', () => {
     });
   });
 
-  it('show the flag ring always, snap to the neighbours, the info card on hover too and the gesture hints until told otherwise, the readable mode as the system asks (06 §8, §3, §4.4, §2.1; 07 §11.4)', () => {
-    // No storage here: the defaults.
+  it('snap to the neighbours, the info card on hover too and the gesture hints until told otherwise, the readable mode as the system asks (06 §3, §4.4, §2.1; 07 §11.4)', () => {
+    // No storage here: the defaults. The flag ring's mode went with the ring (ADR-0014).
     expect(loadPrefs('ru')).toEqual({
       locale: 'ru',
       date: 'auto',
       clock: 'auto',
-      ring: 'always',
       snap: 'nodes',
       card: 'hover',
       hints: 'show',

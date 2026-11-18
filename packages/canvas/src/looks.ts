@@ -44,16 +44,20 @@ export function levelOf(d: number): Level {
   return d <= 96 ? 'icon' : 'full';
 }
 
+/** A final status: done or cancelled (05 §6.3); «Приостановлено» is not one. */
 export function isClosed(n: GraphNode): boolean {
-  return n.status !== 'open';
+  return n.status === 'done' || n.status === 'cancelled';
 }
 
-/** Lowest alpha of the node's states: done 40 %, ghost 50 %, pause 60 % (07 §4.7 rule 3). */
+/**
+ * Lowest alpha of the node's states: done 40 %, ghost 50 %, «Приостановлено»
+ * 60 % (07 §4.7 rule 3, ADR-0014).
+ */
 export function nodeAlpha(n: GraphNode): number {
   let a = 1;
   if (isClosed(n)) a = Math.min(a, fog.scene.doneAlpha);
   if (n.ghost) a = Math.min(a, fog.scene.ghostAlpha);
-  if (n.pause) a = Math.min(a, fog.scene.pauseAlpha);
+  if (n.status === 'paused') a = Math.min(a, fog.scene.pauseAlpha);
   return a;
 }
 

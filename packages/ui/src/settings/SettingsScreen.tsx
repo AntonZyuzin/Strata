@@ -11,7 +11,6 @@ import {
   HINT_MODES,
   type Prefs,
   READABLE_MODES,
-  RING_MODES,
   SNAP_MODES,
   UPDATE_ANSWERS,
   WELCOME_MODES,
@@ -195,23 +194,6 @@ export function SettingsScreen(props: {
         <section className="ins-section">
           <h3 className="ins-heading">{t(locale, 'settings.canvas')}</h3>
           <dl className="ins-fields">
-            <dt className="ins-label">{t(locale, 'settings.ring')}</dt>
-            <dd className="ins-value">
-              <select
-                className="field"
-                aria-label={t(locale, 'settings.ring')}
-                value={prefs.ring}
-                onChange={(e) =>
-                  onPrefs({ ...prefs, ring: e.currentTarget.value as Prefs['ring'] })
-                }
-              >
-                {RING_MODES.map((m) => (
-                  <option key={m} value={m}>
-                    {t(locale, `settings.ring.${m}` as MessageKey)}
-                  </option>
-                ))}
-              </select>
-            </dd>
             <dt className="ins-label">{t(locale, 'settings.snap')}</dt>
             <dd className="ins-value">
               <select

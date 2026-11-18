@@ -18,7 +18,7 @@ interface MapHook {
   placeOf(id: string): [number, number, number] | null;
   cards(): { brief: string[]; full: string | null; kept: boolean };
   pinnedIds(): string[];
-  flagsOf(id: string): { key: boolean; pause: boolean; template: boolean } | null;
+  flagsOf(id: string): { key: boolean; paused: boolean; template: boolean } | null;
   qualityNow(): { quality: string; bloom: boolean };
   feedFrames(ms: number[]): void;
   cameraNow(): { position: number[]; target: number[] } | null;
@@ -67,14 +67,14 @@ function ws<T>(page: Page, what: 'settled' | 'focus' | 'wires' | 'net' | 'flags'
         view: { canvas: HTMLCanvasElement };
         core: { wires(): Promise<{ from: string; to: string }[]> };
         net(): string;
-        graph(): { nodes: Map<string, { name: string; key: boolean; pause: boolean }> } | null;
+        graph(): { nodes: Map<string, { name: string; key: boolean; template: boolean }> } | null;
       };
       if (what === 'settled') return w.settled();
       if (what === 'focus') return w.view.canvas.focus();
       if (what === 'wires') return w.core.wires();
       if (what === 'net') return w.net();
       const n = [...(w.graph()?.nodes.values() ?? [])].find((x) => x.name === arg);
-      return n ? { key: n.key, pause: n.pause } : null;
+      return n ? { key: n.key, template: n.template } : null;
     },
     [what, arg] as const,
   ) as Promise<T>;
@@ -239,16 +239,17 @@ test.describe('the star map without 2D (04 S6, 08 §1.2)', () => {
     await toMap(page);
     const alpha = (await ask(page, 'idNamed', 'Альфа')) as string;
     const beta = (await ask(page, 'idNamed', 'Бета')) as string;
-    // R, Q, E on the star under the pointer (08 §6.7).
+    // R and E on the star under the pointer (08 §6.7); `Q` flags nothing since
+    // «Пауза» became a task's status (ADR-0014).
     await hover(page, alpha);
     await page.keyboard.press('KeyR');
     await expect.poll(async () => (await ask(page, 'flagsOf', alpha))?.key).toBe(true);
     await hover(page, alpha);
     await page.keyboard.press('KeyQ');
-    await expect.poll(async () => (await ask(page, 'flagsOf', alpha))?.pause).toBe(true);
     await hover(page, alpha);
     await page.keyboard.press('KeyE');
     await expect.poll(async () => (await ask(page, 'flagsOf', alpha))?.template).toBe(true);
+    expect((await ask(page, 'flagsOf', alpha))?.paused).toBe(false);
     // Ctrl+Z on the map takes the last flag back, the map stays.
     await page.keyboard.press('Control+z');
     await expect.poll(async () => (await ask(page, 'flagsOf', alpha))?.template).toBe(false);
@@ -287,7 +288,7 @@ test.describe('the star map without 2D (04 S6, 08 §1.2)', () => {
     await expect(page.locator('.workspace')).toHaveAttribute('data-view', '2d', {
       timeout: 30_000,
     });
-    await expect.poll(() => ws(page, 'flags', 'Альфа')).toEqual({ key: true, pause: true });
+    await expect.poll(() => ws(page, 'flags', 'Альфа')).toEqual({ key: true, template: false });
     await expect.poll(() => ws(page, 'flags', 'Бета')).toBeNull();
     // The pin outlives a reload: it is the device's (08 §3.5).
     await page.reload();

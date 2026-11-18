@@ -375,7 +375,6 @@ export function WorkspaceScreen(props: {
   const cameras = useRef(new Map<string, Camera>());
   const textWires = useRef(new Set<string>());
   /** When the flag ring shows (06 §8): «Настройки» set it, every new canvas takes it. */
-  const ringModeRef = useRef(props.prefs.ring);
   /** What a dragged bubble snaps to (06 §3): «Настройки» set it, every new canvas takes it. */
   const snapRef = useRef(props.prefs.snap);
   /** The info card on hover (06 §4.4): «Настройки» set it, every new canvas takes it. */
@@ -1245,7 +1244,6 @@ export function WorkspaceScreen(props: {
           screen?.querySelector<HTMLElement>('.window[data-mode="pinned"]')?.offsetWidth ?? 0;
         return panel + docked;
       };
-      ed.ringMode = ringModeRef.current;
       ed.snap = snapRef.current;
       ed.hoverCard = hoverCardRef.current;
       ed.minimap.open = minimapRef.current;
@@ -1723,15 +1721,6 @@ export function WorkspaceScreen(props: {
         v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
         // A near or past deadline in a word under the label (Q-07-22).
         v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
-        // The flag ring's slots: their names and keys, as the menu has them (06 §8).
-        v.flagWord = (slot) =>
-          t(localeRef.current, 'canvas.slot', {
-            name: t(
-              localeRef.current,
-              slot === 'template' ? 'flag.template' : (`canvas.slot.${slot}` as const),
-            ),
-            key: { icons: 'Z', colors: 'C', template: 'E', info: 'Shift+I' }[slot],
-          });
         // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
         v.markWord = (mark, n) =>
           mark === 'external'
@@ -1854,11 +1843,6 @@ export function WorkspaceScreen(props: {
     viewerFocus,
     covered,
   ]);
-
-  useEffect(() => {
-    ringModeRef.current = props.prefs.ring;
-    if (editor.current) editor.current.ringMode = props.prefs.ring;
-  }, [props.prefs.ring]);
 
   useEffect(() => {
     snapRef.current = props.prefs.snap;
@@ -3468,7 +3452,6 @@ export function WorkspaceScreen(props: {
       { label: t(locale, 'map.ctx.frame'), hint: 'F', onSelect: () => map.act('frame', id) },
       { label: t(locale, 'map.ctx.card'), hint: 'Shift+I', onSelect: () => map.act('card', id) },
       flag('key', 'R', true),
-      flag('pause', 'Q'),
       flag('template', 'E'),
       {
         label: t(locale, 'map.ctx.pin'),
@@ -3599,7 +3582,7 @@ export function WorkspaceScreen(props: {
       title: t(locale, `flag.${f}.what` as MessageKey),
       onSelect: () => ed.switchFlag(f, ed.flagTargets(n.id)),
     });
-    items.push(flag('key', 'R', true), flag('pause', 'Q'), flag('template', 'E'));
+    items.push(flag('key', 'R', true), flag('template', 'E'));
     // Moves of 06 §12.1 and the wrap of §13.3, on the selection.
     items.push(
       {

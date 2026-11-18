@@ -29,7 +29,8 @@ export function isTask(kind: NodeKind): boolean {
  * day (05 §6.3); the prototype stores the state to show every look.
  */
 export type Due = 'none' | 'far' | 'soon' | 'today' | 'overdue';
-export type Status = 'open' | 'done' | 'cancelled';
+/** A task's status as the canvas draws it (05 §4.3): «Приостановлено» stands apart (ADR-0014). */
+export type Status = 'open' | 'paused' | 'done' | 'cancelled';
 
 /** Roll-up of a network (05 §6.4): finished of all, and whether something inside burns. */
 export interface Fold {
@@ -51,8 +52,6 @@ export interface GraphNode {
   key: boolean;
   due: Due;
   status: Status;
-  /** Flag «Пауза» (05 §7). */
-  pause: boolean;
   /** Flag «Шаблон» (05 §7). */
   template: boolean;
   /** `[[X]]` without a node yet (05 §8.5). */
@@ -135,7 +134,6 @@ export function newNode(
     key: false,
     due: 'none',
     status: 'open',
-    pause: false,
     template: false,
     ghost: false,
     ghostOf: null,
@@ -203,14 +201,14 @@ export function lookOf(
   const a = node.attrs;
   const final = a.status === 'done' || a.status === 'cancelled';
   const look: Partial<GraphNode> = {
-    status: a.status === 'done' ? 'done' : a.status === 'cancelled' ? 'cancelled' : 'open',
+    status:
+      a.status === 'done' || a.status === 'cancelled' || a.status === 'paused' ? a.status : 'open',
     due: final ? 'none' : dueOf(a.deadline, day),
     color: a.color ?? KIND_COLOR[node.kind] ?? null,
     assignees: (a.assignees ?? []).map(personColor),
   };
   if (a.flags) {
     look.key = a.flags.includes('key');
-    look.pause = a.flags.includes('pause');
     look.template = a.flags.includes('template');
   }
   return look;
@@ -219,12 +217,7 @@ export function lookOf(
 /** The node's flags (05 §7): its fields', or, in the prototype's demo, its look's. */
 export function flagsOf(node: GraphNode): Flag[] {
   if (node.attrs.flags) return node.attrs.flags;
-  return FLAGS.filter(
-    (f) =>
-      (f === 'key' && node.key) ||
-      (f === 'pause' && node.pause) ||
-      (f === 'template' && node.template),
-  );
+  return FLAGS.filter((f) => (f === 'key' && node.key) || (f === 'template' && node.template));
 }
 
 export type Op =

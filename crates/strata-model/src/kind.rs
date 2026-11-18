@@ -62,39 +62,36 @@ impl NodeKind {
     }
 }
 
-/// The flags of 05 §7, Houdini's rethought: `R` key, `Q` pause, `E`
-/// template; «Скрыть от AI» and «Замок» are in the model from the MVP, their
-/// interface comes with MCP (16 §4.5).
+/// The flags of 05 §7, Houdini's rethought: `R` key, `E` template;
+/// «Скрыть от AI» and «Замок» are in the model from the MVP, their interface
+/// comes with MCP (16 §4.5). «Пауза» is no flag since ADR-0014: a task's
+/// status «Приостановлено»; its old bit is read by the core (`PAUSE_BIT`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Flag {
     Key,
-    Pause,
     Template,
     HideAi,
     Lock,
 }
 
 impl Flag {
-    pub const ALL: [Flag; 5] = [
-        Flag::Key,
-        Flag::Pause,
-        Flag::Template,
-        Flag::HideAi,
-        Flag::Lock,
-    ];
+    pub const ALL: [Flag; 4] = [Flag::Key, Flag::Template, Flag::HideAi, Flag::Lock];
 
     /// The name in the documents (10 §2.3, `flag` map).
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Key => "key",
-            Self::Pause => "pause",
             Self::Template => "template",
             Self::HideAi => "hideAi",
             Self::Lock => "lock",
         }
     }
 }
+
+/// The name the flag «Пауза» had in the `flag` map before ADR-0014: on a
+/// task or project not finished it reads as the status «Приостановлено».
+pub const PAUSE_BIT: &str = "pause";
 
 /// Where an edge came from (05 §8.1). An edge may have several origins.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]

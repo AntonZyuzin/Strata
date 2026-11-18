@@ -10,7 +10,7 @@ pub use id::{
     ChangesetId, DotId, Id, IdParseError, NetworkBoxId, NodeId, StickyNoteId, WorkspaceId,
 };
 pub use key::{EdgeKey, PlacementKey, shard_of};
-pub use kind::{ChangesetOrigin, EdgeOrigin, Flag, NodeKind};
+pub use kind::{ChangesetOrigin, EdgeOrigin, Flag, NodeKind, PAUSE_BIT};
 
 /// Milliseconds since the Unix epoch, the clock of UUIDv7 ids: it works in
 /// the browser build too, where `std::time::SystemTime` has no clock.

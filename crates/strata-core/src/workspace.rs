@@ -21,7 +21,8 @@ use loro::{ExportMode, LoroDoc, LoroValue, ValueOrContainer, VersionVector};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use strata_model::{
-    ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PlacementKey, now_ms, shard_of,
+    ChangesetId, ChangesetOrigin, EdgeKey, Flag, NodeId, NodeKind, PAUSE_BIT, PlacementKey, now_ms,
+    shard_of,
 };
 
 mod dots;
@@ -53,7 +54,19 @@ pub const SCHEMA: i64 = 1;
 pub const LIST_ITEMS: &str = "items";
 
 /// Statuses of a workspace (05 §6.1), in their order; the last two are final.
-pub const STATUSES: [&str; 6] = ["inbox", "todo", "doing", "review", "done", "cancelled"];
+/// «Приостановлено» stands beside the flow, after «В работе» (ADR-0014).
+pub const STATUSES: [&str; 7] = [
+    "inbox",
+    "todo",
+    "doing",
+    PAUSED,
+    "review",
+    "done",
+    "cancelled",
+];
+/// «Приостановлено» (ADR-0014): not final; out of roll-ups and their
+/// checklist as the flag «Пауза» was, a project with all inside it.
+pub const PAUSED: &str = "paused";
 /// Priorities (05 §6.1).
 pub const PRIORITIES: [&str; 4] = ["low", "medium", "high", "urgent"];
 /// Colours of the people palette (07 §2.2, ☑ Q-05-8).
@@ -1764,6 +1777,16 @@ impl<S: Store> Workspace<S> {
                     {
                         put(&index, "attr", &format!("{}|preview", n.to_text()), None);
                     }
+                    // A status written takes the old flag «Пауза» away: from
+                    // now on the status says it (ADR-0014).
+                    if key == "status" {
+                        put(
+                            &index,
+                            "flag",
+                            &format!("{}|{PAUSE_BIT}", n.to_text()),
+                            None,
+                        );
+                    }
                     match key.as_str() {
                         "status" | "priority" | "start" | "deadline" | "color" => {
                             put(&index, key, &n.to_text(), value.clone());
@@ -2260,7 +2283,7 @@ impl<S: Store> Workspace<S> {
             assignees.sort();
         }
         Attrs {
-            status: self.text_field(node, "status"),
+            status: self.status_of(node),
             start: self.text_field(node, "start"),
             deadline: self.text_field(node, "deadline"),
             priority: self.text_field(node, "priority"),
@@ -2300,14 +2323,33 @@ impl<S: Store> Workspace<S> {
     }
 
     fn flagged(&self, node: NodeId, flag: Flag) -> bool {
+        self.bit(node, flag.as_str())
+    }
+
+    /// Whether the `flag` map holds `name` for `node` (10 §2.3).
+    fn bit(&self, node: NodeId, name: &str) -> bool {
         self.docs.get(&self.index_doc(node)).is_some_and(|index| {
-            read(
-                index,
-                "flag",
-                &format!("{}|{}", node.to_text(), flag.as_str()),
-            )
-            .is_some()
+            read(index, "flag", &format!("{}|{name}", node.to_text())).is_some()
         })
+    }
+
+    /// A node's status as it reads (05 §4.3): the one stored, but a task or
+    /// project with the flag «Пауза» of the versions before ADR-0014 and no
+    /// final status reads «Приостановлено»; the bit means nothing on other
+    /// kinds, and a status written takes it away.
+    fn status_of(&self, node: NodeId) -> Option<String> {
+        let stored = self.text_field(node, "status");
+        let pausable = self.kind(node).is_some_and(NodeKind::is_task)
+            && stored.as_deref().is_none_or(|s| !is_final(s));
+        if pausable && self.bit(node, PAUSE_BIT) {
+            return Some(PAUSED.to_owned());
+        }
+        stored
+    }
+
+    /// «Приостановлено» (ADR-0014): out of roll-ups and their checklist.
+    fn paused(&self, node: NodeId) -> bool {
+        self.status_of(node).as_deref() == Some(PAUSED)
     }
 
     /// Every network's placed nodes: `net → nodes`, from the placements.
@@ -2375,8 +2417,9 @@ impl<S: Store> Workspace<S> {
             let mut stack = vec![node];
             while let Some(at) = stack.pop() {
                 for &n in children.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                    // A node on pause stays out of roll-ups, and what is inside it (05 §6.4).
-                    if !self.alive(n) || self.flagged(n, Flag::Pause) || !seen.insert(n) {
+                    // A paused task or project stays out of roll-ups, and what
+                    // is inside it (05 §6.4, ADR-0014).
+                    if !self.alive(n) || self.paused(n) || !seen.insert(n) {
                         continue;
                     }
                     let kind = self.kind(n);
@@ -2395,7 +2438,7 @@ impl<S: Store> Workspace<S> {
         }
         while let Some(at) = stack.pop() {
             for &n in wires.get(&at).map(Vec::as_slice).unwrap_or(&[]) {
-                if self.is_task(n) && !self.flagged(n, Flag::Pause) && seen.insert(n) {
+                if self.is_task(n) && !self.paused(n) && seen.insert(n) {
                     tasks.push(n);
                     stack.push(n);
                 }
@@ -2404,7 +2447,7 @@ impl<S: Store> Workspace<S> {
         let mut fold = Fold::default();
         for n in tasks {
             fold.total += 1;
-            match self.text_field(n, "status") {
+            match self.status_of(n) {
                 Some(status) if is_final(&status) => fold.done += 1,
                 _ => {
                     if let Some(d) = self.text_field(n, "deadline")
@@ -2557,7 +2600,7 @@ impl<S: Store> Workspace<S> {
         seen: &mut BTreeSet<NodeId>,
         depth: u32,
     ) -> Option<TaskRow> {
-        if self.flagged(n, Flag::Pause) || !seen.insert(n) {
+        if self.paused(n) || !seen.insert(n) {
             return None;
         }
         let rows = self.task_rows(n, children, wires, seen, depth + 1);
@@ -2570,7 +2613,7 @@ impl<S: Store> Workspace<S> {
             id: n.to_text(),
             kind,
             name: self.name(n),
-            status: self.text_field(n, "status"),
+            status: self.status_of(n),
             deadline: self.text_field(n, "deadline"),
             rows,
         })
@@ -2587,7 +2630,7 @@ impl<S: Store> Workspace<S> {
             id: n.to_text(),
             kind,
             name: self.name(n),
-            status: self.text_field(n, "status"),
+            status: self.status_of(n),
             asset: look.asset,
             mime: look.mime,
             url: look.url,
@@ -3179,7 +3222,7 @@ impl<S: Store> Workspace<S> {
                     id: id.clone(),
                     name: self.name(n),
                     kind,
-                    status: self.text_field(n, "status"),
+                    status: self.status_of(n),
                     deadline: self.text_field(n, "deadline"),
                     parent: primary.map(|p| p.to_text()),
                     asset: look.asset,

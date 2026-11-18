@@ -254,6 +254,14 @@ fn status_of(v: &str) -> Option<&'static str> {
         "inbox" | "backlog" | "входящие" | "new" => "inbox",
         "todo" | "to do" | "open" | "planned" | "к работе" | "сделать" => "todo",
         "doing" | "in progress" | "wip" | "active" | "started" | "в работе" => "doing",
+        "paused"
+        | "on hold"
+        | "hold"
+        | "suspended"
+        | "приостановлено"
+        | "приостановлена"
+        | "на паузе"
+        | "пауза" => "paused",
         "review" | "in review" | "на проверке" => "review",
         "done" | "complete" | "completed" | "closed" | "готово" | "сделано" => "done",
         "cancelled" | "canceled" | "dropped" | "отменено" => "cancelled",

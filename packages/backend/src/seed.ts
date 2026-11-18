@@ -70,7 +70,7 @@ function looks(rs: () => number, kind: NodeKind, hasDeadline: boolean): Partial<
   const status = rs();
   if (status < 0.08) out.status = 'done';
   else if (status < 0.1) out.status = 'cancelled';
-  if (rs() < 0.03) out.pause = true;
+  else if (status < 0.13) out.status = 'paused';
   if (rs() < 0.04) out.appearance = true;
   if (rs() < 0.04) out.external = 1 + Math.floor(rs() * 4);
   if (rs() < 0.06)
@@ -109,7 +109,12 @@ const GALLERY: {
     icon: 8,
     node: { kind: 'network', fold: { done: 1, total: 4, burning: 'overdue' } },
   },
-  { ru: 'Пауза', en: 'Paused', icon: 12, node: { kind: 'note', pause: true, due: 'soon' } },
+  {
+    ru: 'Приостановлено',
+    en: 'On hold',
+    icon: 12,
+    node: { kind: 'task', status: 'paused', due: 'soon' },
+  },
   { ru: 'Шаблон', en: 'Template', icon: 16, node: { kind: 'checklist', template: true } },
   { ru: 'Готово', en: 'Done', icon: 20, node: { kind: 'note', status: 'done' } },
   { ru: 'Отменено', en: 'Cancelled', icon: 24, node: { kind: 'note', status: 'cancelled' } },

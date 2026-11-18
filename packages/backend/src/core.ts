@@ -18,8 +18,19 @@ export interface CopyAt {
   copy?: string | undefined;
 }
 
-/** Statuses of a workspace (05 §6.1), in order; the last two are final. */
-export const STATUSES = ['inbox', 'todo', 'doing', 'review', 'done', 'cancelled'] as const;
+/**
+ * Statuses of a workspace (05 §6.1), in order; the last two are final.
+ * «Приостановлено» stands after «В работе», not final (ADR-0014).
+ */
+export const STATUSES = [
+  'inbox',
+  'todo',
+  'doing',
+  'paused',
+  'review',
+  'done',
+  'cancelled',
+] as const;
 export type StatusId = (typeof STATUSES)[number];
 /** Priorities (05 §6.1). */
 export const PRIORITIES = ['low', 'medium', 'high', 'urgent'] as const;
@@ -57,8 +68,11 @@ export interface NodeAttrs {
   flags?: Flag[];
 }
 
-/** The flags of 05 §7: `R`, `Q`, `E`; «Скрыть от AI» and «Замок» get their interface with MCP. */
-export const FLAGS = ['key', 'pause', 'template', 'hideAi', 'lock'] as const;
+/**
+ * The flags of 05 §7: `R`, `E`; «Скрыть от AI» and «Замок» get their
+ * interface with MCP. «Пауза» is the status «Приостановлено» (ADR-0014).
+ */
+export const FLAGS = ['key', 'template', 'hideAi', 'lock'] as const;
 export type Flag = (typeof FLAGS)[number];
 
 export type AttrKey =

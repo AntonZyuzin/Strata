@@ -35,8 +35,8 @@ describe('looks of bubbles (07 §4.5–4.9)', () => {
 
   it('takes the lowest alpha of the states (07 §4.7 rule 3)', () => {
     expect(nodeAlpha(node())).toBe(1);
-    expect(nodeAlpha(node({ pause: true }))).toBe(0.6);
-    expect(nodeAlpha(node({ ghost: true, pause: true }))).toBe(0.5);
+    expect(nodeAlpha(node({ status: 'paused' }))).toBe(0.6);
+    expect(nodeAlpha(node({ ghost: true, status: 'paused' }))).toBe(0.5);
     expect(nodeAlpha(node({ status: 'done', ghost: true }))).toBe(0.4);
   });
 

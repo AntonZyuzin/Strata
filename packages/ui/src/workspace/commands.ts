@@ -277,14 +277,6 @@ export const COMMANDS: readonly Command[] = [
   ),
   canvas('flag.key', 'flag:key', 'R', ['флаг', 'ключевая', 'flag', 'key', 'star'], chosen, 'node'),
   canvas(
-    'flag.pause',
-    'flag:pause',
-    'Q',
-    ['флаг', 'пауза', 'flag', 'pause', 'hold'],
-    chosen,
-    'node',
-  ),
-  canvas(
     'flag.template',
     'flag:template',
     'E',
@@ -457,7 +449,6 @@ export const COMMANDS: readonly Command[] = [
   mapped('card', 'card', 'Shift+I', ['справка', 'карточка', 'card', 'info']),
   mapped('pin', 'pin', 'B', ['закрепить', 'булавка', 'pin', 'fix']),
   mapped('flag.key', 'flag:key', 'R', ['флаг', 'ключевая', 'flag', 'key']),
-  mapped('flag.pause', 'flag:pause', 'Q', ['флаг', 'пауза', 'flag', 'pause']),
   mapped('flag.template', 'flag:template', 'E', ['флаг', 'шаблон', 'flag', 'template']),
   mapped('delete', 'delete', 'Del', ['убрать', 'удалить', 'remove', 'delete']),
   {

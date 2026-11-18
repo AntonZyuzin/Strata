@@ -10,7 +10,14 @@ const items = [
   { id: 'root', name: 'Корень', kind: 'network' },
   { id: 'game', name: 'Игра', kind: 'project', parent: 'root' },
   { id: 'fight', name: 'Боёвка', kind: 'task', parent: 'game', flags: ['key'] },
-  { id: 'anim', name: 'Анимации удара', kind: 'task', parent: 'game', flags: ['pause'] },
+  {
+    id: 'anim',
+    name: 'Анимации удара',
+    kind: 'task',
+    parent: 'game',
+    status: 'paused',
+    flags: ['template'],
+  },
   { id: 'shader', name: 'Шейдер', kind: 'note', parent: 'root' },
   { id: 'water', name: 'Шейдер воды', kind: 'note', parent: 'game' },
   { id: 'shader2', name: 'Шейдер', kind: 'board', parent: 'game' },
@@ -34,10 +41,12 @@ describe('strata-search in WASM (09 §2)', () => {
 
   it('finds by Houdini Find in a network (09 §3.3)', () => {
     const ix = new NameIndex(items);
-    expect(ix.find('@задача -+пауза', false, { t: 'in', net: 'game' }).ids).toEqual(['fight']);
+    expect(ix.find('@задача -+шаблон', false, { t: 'in', net: 'game' }).ids).toEqual(['fight']);
     const f = ix.find('уда* @аня', false, { t: 'under', net: 'root' });
     expect(f).toEqual({ ids: [], unknown: ['@аня'], text: 'уда' });
     expect(ix.find('*удара', false, { t: 'all' }).ids).toEqual(['anim']);
+    // «Пауза» is a status since ADR-0014, not a flag: the word is told unknown.
+    expect(ix.find('+пауза', false, { t: 'all' }).unknown).toEqual(['+пауза']);
     ix.free();
   });
 

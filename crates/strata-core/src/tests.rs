@@ -1973,16 +1973,16 @@ fn a_flag_is_set_and_cleared_in_one_step_each() {
 }
 
 #[test]
-fn a_node_on_pause_stays_out_of_roll_ups() {
-    use crate::Flag;
+fn a_paused_task_stays_out_of_roll_ups() {
+    // ADR-0014: «Приостановлено» does what the flag «Пауза» did (05 §7).
     use crate::value::Val;
     let mut w = ws();
     let root = w.root();
     let project = create(&mut w, &root, NodeKind::Project, "Срез");
     let a = create(&mut w, &project, NodeKind::Task, "Боёвка");
     let b = create(&mut w, &project, NodeKind::Task, "Анимации");
-    let folder = create(&mut w, &project, NodeKind::Network, "Арт");
-    create(&mut w, &folder, NodeKind::Task, "Свет");
+    let art = create(&mut w, &project, NodeKind::Project, "Арт");
+    create(&mut w, &art, NodeKind::Task, "Свет");
     let far = create(&mut w, &root, NodeKind::Task, "Снаружи");
     w.apply(
         &[Op::Connect {
@@ -2005,26 +2005,89 @@ fn a_node_on_pause_stays_out_of_roll_ups() {
         let d = w.node_details(&project).expect("details");
         d.subtasks.iter().map(|r| r.name.clone()).collect()
     };
-    assert_eq!(fold(&w), (1, 4));
-    flag(&mut w, &b, Flag::Pause, true).expect("pause a task");
-    assert_eq!(fold(&w), (1, 3), "a task on pause is not counted (05 §7)");
+    let paused = Some(Val::str(crate::workspace::PAUSED));
+    assert_eq!(fold(&w), (1, 5));
+    set(&mut w, &b, "status", paused.clone()).expect("pause a task");
+    assert_eq!(fold(&w), (1, 4), "a paused task is not counted (05 §7)");
     assert_eq!(rows(&w), vec!["Боёвка", "Арт"], "nor shown in the preview");
-    flag(&mut w, &folder, Flag::Pause, true).expect("pause a folder");
-    assert_eq!(fold(&w), (1, 2), "what is inside a paused folder neither");
-    flag(&mut w, &far, Flag::Pause, true).expect("pause a subtask");
+    set(&mut w, &art, "status", paused.clone()).expect("pause a project");
+    assert_eq!(
+        fold(&w),
+        (1, 2),
+        "a paused project and what is inside neither"
+    );
+    set(&mut w, &far, "status", paused).expect("pause a subtask");
     assert_eq!(fold(&w), (1, 1), "a paused subtask by a wire neither");
-    let own = w
-        .node_details(&folder)
-        .expect("details")
-        .fold
-        .expect("fold");
+    let own = w.node_details(&art).expect("details").fold.expect("fold");
     assert_eq!(
         (own.done, own.total),
         (0, 1),
-        "a paused folder still rolls up its own tasks"
+        "a paused project still rolls up its own tasks"
     );
     w.undo().expect("undo");
     assert_eq!(fold(&w), (1, 2));
+}
+
+#[test]
+fn the_old_pause_flag_reads_as_paused_on_a_task_not_finished() {
+    // ADR-0014: the bit `pause` of the versions before is not rewritten.
+    use crate::value::Val;
+    let mut w = ws();
+    let root = w.root();
+    let doing = create(&mut w, &root, NodeKind::Task, "Мультиплеер");
+    let done = create(&mut w, &root, NodeKind::Task, "Готовое");
+    let project = create(&mut w, &root, NodeKind::Project, "Порт");
+    let note = create(&mut w, &root, NodeKind::Note, "Заметка");
+    set(&mut w, &doing, "status", Some(Val::str("doing"))).expect("doing");
+    set(&mut w, &done, "status", Some(Val::str("done"))).expect("done");
+    for id in [&doing, &done, &project, &note] {
+        w.set_raw(
+            id,
+            "flag",
+            &format!("{id}|{}", strata_model::PAUSE_BIT),
+            Some(Val::Int(1)),
+        )
+        .expect("the old bit");
+    }
+    let status = |w: &Workspace<MemoryStore>, id: &str| -> Option<String> {
+        w.node_details(id).expect("details").attrs.status
+    };
+    assert_eq!(status(&w, &doing).as_deref(), Some("paused"));
+    assert_eq!(
+        status(&w, &project).as_deref(),
+        Some("paused"),
+        "no status: open, so paused"
+    );
+    assert_eq!(
+        status(&w, &done).as_deref(),
+        Some("done"),
+        "a finished one stays finished"
+    );
+    assert_eq!(status(&w, &note), None, "on a note the bit means nothing");
+    // No flag «Пауза» is shown any more, and none can be set (the op has no such flag).
+    assert!(
+        w.node_details(&doing)
+            .expect("details")
+            .attrs
+            .flags
+            .is_empty()
+    );
+    assert!(
+        serde_json::from_value::<Op>(serde_json::json!({
+            "op": "setFlag", "id": doing, "flag": "pause", "on": true
+        }))
+        .is_err()
+    );
+    // A status written takes the bit away: «В работе» is no longer paused.
+    set(&mut w, &doing, "status", Some(Val::str("doing"))).expect("doing again");
+    assert_eq!(status(&w, &doing).as_deref(), Some("doing"));
+    assert!(w.raw(&doing, "flag", &format!("{doing}|pause")).is_none());
+    w.undo().expect("undo");
+    assert_eq!(
+        status(&w, &doing).as_deref(),
+        Some("paused"),
+        "undo brings the bit back"
+    );
 }
 
 #[test]

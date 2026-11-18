@@ -15,7 +15,7 @@ export interface SpaceItem {
   /** The network of its primary placement; none for the root. */
   parent?: string | undefined;
   status?: string | undefined;
-  /** Its flags' bits, `FLAG` (05 §7): key, pause, template. */
+  /** Its flags' bits, `FLAG` (05 §7): key, «Приостановлено» (its status, ADR-0014), template. */
   flags?: number | undefined;
   /** A near or past deadline (07 §4.6): the star's yellow or red (08 §4.3). */
   due?: 'soon' | 'today' | 'overdue' | undefined;

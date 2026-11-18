@@ -7,6 +7,7 @@ import {
   Graph,
   type GraphNode,
   insertIntoWire,
+  lookOf,
   newNode,
   shake,
   switchFlag,
@@ -150,25 +151,34 @@ describe('flags (05 §7, 06 §8)', () => {
     expect([g.nodes.get('a')?.key, g.nodes.get('b')?.key]).toEqual([true, true]);
   });
 
-  it('keeps the flags in their order and draws pause and template from them', () => {
+  it('keeps the flags in their order and draws key and template from them', () => {
     const g = graph([]);
     g.transaction({ key: 'flags' }, (tx) => {
       tx.flag('a', 'template', true);
-      tx.flag('a', 'pause', true);
+      tx.flag('a', 'key', true);
     });
     expect(g.nodes.get('a')).toMatchObject({
-      pause: true,
+      key: true,
       template: true,
-      attrs: { flags: ['pause', 'template'] },
+      attrs: { flags: ['key', 'template'] },
     });
-    expect(g.transaction({ key: 'again' }, (tx) => tx.flag('a', 'pause', true))).toBeNull();
+    expect(g.transaction({ key: 'again' }, (tx) => tx.flag('a', 'key', true))).toBeNull();
   });
 
   it("switches a prototype node's flags from its look", () => {
     const g = new Graph();
-    g.transaction({ key: 't' }, (tx) => tx.add(newNode({ ...node('p'), pause: true })));
-    g.transaction({ key: 'pause' }, (tx) => expect(switchFlag(g, tx, ['p'], 'pause')).toBe(false));
-    expect(g.nodes.get('p')?.pause).toBe(false);
+    g.transaction({ key: 't' }, (tx) => tx.add(newNode({ ...node('p'), template: true })));
+    g.transaction({ key: 'off' }, (tx) => expect(switchFlag(g, tx, ['p'], 'template')).toBe(false));
+    expect(g.nodes.get('p')?.template).toBe(false);
+  });
+
+  it('draws «Приостановлено» from the status, not from a flag (ADR-0014)', () => {
+    const n = newNode({ ...node('t'), kind: 'task', attrs: { status: 'paused' } });
+    expect(lookOf(n, '2026-11-18', () => 0).status).toBe('paused');
+    const done = newNode({ ...node('d'), kind: 'task', attrs: { status: 'done' } });
+    expect(lookOf(done, '2026-11-18', () => 0).status).toBe('done');
+    const doing = newNode({ ...node('w'), kind: 'task', attrs: { status: 'doing' } });
+    expect(lookOf(doing, '2026-11-18', () => 0).status).toBe('open');
   });
 });
 

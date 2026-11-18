@@ -4,7 +4,6 @@ import { BitmapText, Container, Graphics, Sprite, Texture } from 'pixi.js';
 import { ArrowLayer } from './arrows';
 import type { Camera } from './camera';
 import { controls } from './curve';
-import { FRAME_U, RING_DELAY_MS, type RingSlotName, ringSlots, SLOT_U } from './flagring';
 import { chordOf, HEX_IN, hexDist, perimeterAngle, rimAt } from './hex';
 import {
   arrowOn,
@@ -27,7 +26,7 @@ import { GlyphTextures, labelFont, type Plate } from './textures';
  * are the pixel font at its exact device size on a plate (07 §3.4). Bodies and
  * icons scale with the world and live in the world's render group (view.ts).
  * Rings are one instanced draw (rings.ts); glyphs and labels are pooled
- * sprites; only selection corners and pause hatching are Graphics. Redrawn for
+ * sprites; only selection corners and the hatching of «Приостановлено» are Graphics. Redrawn for
  * the nodes on screen in every rendered frame; idle costs nothing.
  */
 
@@ -37,11 +36,6 @@ export interface Interaction {
   current: string | null;
   /** The nodes a search matched; the rest are dimmed (07 §4.5). */
   lens?: ReadonlySet<string> | null;
-  /**
-   * The flag ring (06 §8): the bubble the cursor rests on since `since`, and
-   * the slot under it; hidden while `Ctrl` is held.
-   */
-  ring?: { id: string; since: number; slot: RingSlotName | null } | null;
   /** The rim mark under the cursor: its words show over it (06 §12.2, §14). */
   mark?: { id: string; mark: RimTarget } | null;
   /** The dot on a wire under the cursor and the one selected (06 §6.6). */
@@ -99,6 +93,9 @@ const PULSES = 3;
 /** Marching ants of the current node run 3 s, then stand (07 §2.8). */
 const ANTS_MS = 3000;
 const LABEL_MAX = 160;
+/** The selection's corners around a bubble, R + this many pixel units from its centre each way (07 §4.5). */
+const FRAME_U = 12;
+
 /** Wire ends (07 §5): sockets of radius 4u with a ring 1u, arrowheads in u. */
 /** A wire end's socket radius, u (owner, 2026-10-24: bigger, on both ends). */
 const SOCKET = 6;
@@ -181,9 +178,6 @@ export class Decor {
    * «сегодня», «−3 дн.»; 07 §4.6, Q-07-22); none for the rest.
    */
   dueWord: (n: GraphNode) => string | null = () => null;
-
-  /** A slot's name and key for the flag ring (06 §8), in the viewer's language. */
-  flagWord: (slot: RingSlotName) => string | null = () => null;
 
   /** What a rim mark says, in the viewer's language: the canvas has no titles. */
   markWord: (mark: RimTarget, n: GraphNode) => string | null = () => null;
@@ -298,13 +292,11 @@ export class Decor {
       if (ia.dotSelected === d.id) rings.add(s.x, s.y, 9.5 * U, 2 * U, { color: ACCENT });
       else if (hot) rings.add(s.x, s.y, 9.5 * U, U, { color: ACCENT });
     }
-    let ringAt: { x: number; y: number; R: number; n: GraphNode } | null = null;
     // The node whose rim mark the cursor is on, for that mark's words.
     let pointedNode: { n: GraphNode; x: number } | null = null;
     for (const v of nodes) {
       const s = cam.toScreen(v.x, v.y);
       const R = v.r * cam.zoom;
-      if (ia.ring?.id === v.id) ringAt = { x: s.x, y: s.y, R, n: v.node };
       if (ia.mark?.id === v.id) pointedNode = { n: v.node, x: s.x };
       // A node's rims and rings are hexagons (ADR-0011): offsets go square to the sides.
       const Rin = R * HEX_IN;
@@ -330,7 +322,7 @@ export class Decor {
       }
       if (n.ghost) {
         rim(-0.5 * U, U, { color: PAPER, alpha: a, dash: 3 * U, gap: 3 * U });
-      } else if (n.pause) {
+      } else if (n.status === 'paused') {
         rim(-0.5 * U, U, {
           color: INK,
           alpha: RIM * a,
@@ -391,8 +383,9 @@ export class Decor {
         }
       }
 
-      // Deadline or roll-up ring at r + 4u … r + 6u (07 §4.3); pause and final statuses drop it (07 §4.7).
-      const due = closed || n.pause ? 'none' : n.due;
+      // Deadline or roll-up ring at r + 4u … r + 6u (07 §4.3); «Приостановлено»
+      // and final statuses drop it (07 §4.7).
+      const due = closed || n.status === 'paused' ? 'none' : n.due;
       if (due === 'today') {
         let alpha = 1;
         if (!this.reducedMotion) {
@@ -490,7 +483,7 @@ export class Decor {
           a,
           n.ghost,
         );
-        const one = status ?? (n.pause ? (['pause', 'ink'] as const) : null);
+        const one = status ?? (n.status === 'paused' ? (['pause', 'ink'] as const) : null);
         if (one) this.badge(one[0], one[1], ...at(s, R, 4.5));
       } else {
         if (n.ghost) {
@@ -502,7 +495,7 @@ export class Decor {
         if (status) this.badge(status[0], status[1], ...slot(4.5));
         // One hour, one glyph: the second flag moves an hour clockwise (07 §4.7 rule 5).
         let flagHour = 10.5;
-        if (n.pause) {
+        if (n.status === 'paused') {
           this.badge('pause', 'ink', ...slot(flagHour));
           flagHour += 1;
         }
@@ -575,41 +568,12 @@ export class Decor {
         }
       }
     }
-    // The flag ring over everything of its bubble, once the cursor has rested (06 §8).
-    const ring = ia.ring;
-    if (ring && ringAt) {
-      if (now - ring.since < RING_DELAY_MS) {
-        animating = true;
-      } else {
-        // A 16u slot: the 8u glyph with a 4u margin; a flag that is on inverts it.
-        const pad = (SLOT_U - 8) / 2;
-        for (const slot of ringSlots(ringAt.x, ringAt.y, ringAt.R, U)) {
-          const name = slot.slot;
-          // The palettes and `i` are buttons, not flags: never inverted.
-          const lit = name === 'template' && ringAt.n.template;
-          this.badge(RING_GLYPH[name], lit ? 'paper' : 'ink', slot.x, slot.y, 1, 1, !lit, pad);
-          if (ring.slot === name) {
-            const half = (SLOT_U / 2 + 1) * U;
-            g.rect(slot.x - half, slot.y - half, 2 * half, 2 * half);
-            corners = true;
-            // The slot's name and key over it, as a title in the Chrome.
-            const word = this.flagWord(name);
-            if (word) {
-              const t = this.text(word, slot.x, slot.y - half - 4 * U - this.uiCss - U);
-              const left = this.snap(slot.x - t.width / 2);
-              t.position.x = left;
-              this.plate(left - 2 * U, t.position.y - U, t.width + 4 * U, this.uiCss + 2 * U);
-            }
-          }
-        }
-      }
-    }
     // The words of the rim mark under the cursor over it, as a title in the Chrome.
     const pointed = ia.mark ? this.marks.get(`${ia.mark.mark}:${ia.mark.id}`) : undefined;
     const said = pointed && pointedNode ? this.markWord(pointed.mark, pointedNode.n) : null;
     if (pointed && pointedNode && said) {
-      // Beside the mark on its outer side, level with it: the flag ring is
-      // above the bubble and the body behind the mark.
+      // Beside the mark on its outer side, level with it: the body is
+      // behind the mark.
       const cy = (pointed.y0 + pointed.y1) / 2;
       const t = this.text(said, 0, cy - this.uiCss / 2);
       const right = (pointed.x0 + pointed.x1) / 2 >= pointedNode.x;
@@ -825,19 +789,11 @@ function onRim(s: { x: number; y: number }, R: number, angle: number): [number, 
   return [s.x + Math.cos(angle) * r, s.y + Math.sin(angle) * r];
 }
 
-/** The ring's slots (07 §4.8): a hexagon's icon, a drop of colour, the stencil of a template, `i`. */
-const RING_GLYPH: Record<RingSlotName, GlyphName> = {
-  icons: 'iconSize',
-  colors: 'colour',
-  template: 'template',
-  info: 'info',
-};
-
 function kindGlyph(n: GraphNode, big: boolean): GlyphName {
   return big ? n.kind : `${n.kind}-8`;
 }
 
-/** 45° hatching inside the hexagon of inradius `rin`, lines `step` apart (07 §4.5, «Пауза»). */
+/** 45° hatching inside the hexagon of inradius `rin`, lines `step` apart (07 §4.5, «Приостановлено»). */
 function hatch(g: Graphics, cx: number, cy: number, rin: number, step: number): void {
   const k = Math.SQRT1_2;
   const r = rin / HEX_IN;

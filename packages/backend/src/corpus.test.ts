@@ -229,8 +229,10 @@ async function makeWorkspace(core: Core, root: string): Promise<void> {
   await step([{ op: 'setFlag', id: release, flag: 'key', on: true }], 'proto.change.flag.key.on', {
     n: 1,
   });
-  await step([{ op: 'setFlag', id: task, flag: 'pause', on: true }], 'proto.change.flag.pause.on', {
-    n: 1,
+  // «Приостановлено» (ADR-0014): what the flag «Пауза» was before.
+  await step([{ op: 'setAttr', id: task, key: 'status', value: 'paused' }], 'change.attr', {
+    name: 'Проверить корпус',
+    field: 'status',
   });
   await step([{ op: 'setSize', id: fresh, net: root, size: 'l' }], 'change.size', { n: 1 });
   // A network's look: its wires, the workspace's and a network's background, a kind's icon.

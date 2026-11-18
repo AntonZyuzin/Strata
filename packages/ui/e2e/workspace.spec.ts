@@ -17,7 +17,7 @@ interface Node {
   fold: { done: number; total: number } | null;
   /** The flags' looks (05 §7). */
   key: boolean;
-  pause: boolean;
+  status: 'open' | 'paused' | 'done' | 'cancelled';
   template: boolean;
   /** The note whose `[[X]]` this ghost is (05 §8.5); null for a node. */
   ghostOf: string | null;
@@ -38,7 +38,7 @@ interface WsHook {
     hasPicture(id: string): boolean;
     iconOf(id: string): 'picture' | 'own' | 'kind' | 'preset' | null;
     readable: boolean;
-    camera: { toScreen(x: number, y: number): { x: number; y: number } };
+    camera: { zoom: number; toScreen(x: number, y: number): { x: number; y: number } };
     nodeAt(id: string): { x: number; y: number; r: number } | null;
     markOf(id: string, mark: 'external' | 'places'): { x: number; y: number } | null;
     /** The middle of a node's label on screen, as drawn last. */
@@ -63,7 +63,6 @@ interface WsHook {
   };
   editor(): {
     selected: string[];
-    ringSlots(): { slot: string; x: number; y: number }[];
   } | null;
   graph(): {
     nodes: Map<string, Node>;
@@ -3876,7 +3875,7 @@ test.describe('a workspace on the core', () => {
     expect(await shape()).toBe('straight');
   });
 
-  test('R, Q, E flag the node under the cursor; a template is copied from Tab (05 §7, 06 §8)', async ({
+  test('R and E flag the node under the cursor, Q no longer; a template is copied from Tab (05 §7, 06 §8, ADR-0014)', async ({
     page,
   }) => {
     await page.goto('/?plain');
@@ -3887,29 +3886,29 @@ test.describe('a workspace on the core', () => {
       page.evaluate((name) => {
         const g = window.__strataWs?.graph();
         const all = [...(g?.nodes.values() ?? [])].filter((x) => x.name === name);
-        return all.map((n) => [n.key, n.pause, n.template].map((f) => (f ? 1 : 0)).join(''));
+        return all.map((n) => [n.key, n.template].map((f) => (f ? 1 : 0)).join(''));
       }, name);
     const bug = await at(page, 'Баг');
     await page.mouse.move(bug.x, bug.y);
     await page.keyboard.press('KeyR');
-    expect(await flags('Баг')).toEqual(['100']);
+    expect(await flags('Баг')).toEqual(['10']);
     await page.keyboard.press('KeyR');
-    expect(await flags('Баг')).toEqual(['000']);
+    expect(await flags('Баг')).toEqual(['00']);
     // Each switch is one step of undo.
     await page.keyboard.press('Control+z');
-    expect(await flags('Баг')).toEqual(['100']);
+    expect(await flags('Баг')).toEqual(['10']);
+    // «Пауза» is a task's status now (ADR-0014): `Q` sets nothing.
     await page.keyboard.press('KeyQ');
     await page.keyboard.press('KeyE');
-    expect(await flags('Баг')).toEqual(['111']);
-    await page.keyboard.press('KeyQ');
+    expect(await flags('Баг')).toEqual(['11']);
 
     // Nothing under the cursor: the selection; one lacks the flag — all get it.
     await page.keyboard.press('Control+a');
     await page.mouse.move(650, 600);
     await page.keyboard.press('KeyR');
-    expect([...(await flags('Баг')), ...(await flags('Шаги'))]).toEqual(['101', '100']);
+    expect([...(await flags('Баг')), ...(await flags('Шаги'))]).toEqual(['11', '10']);
 
-    // The right button's menu ticks the flags the node has.
+    // The right button's menu ticks the flags the node has; no «Пауза» in it.
     await page.keyboard.press('Escape');
     const steps = await at(page, 'Шаги');
     await page.mouse.click(steps.x, steps.y, { button: 'right' });
@@ -3917,12 +3916,12 @@ test.describe('a workspace on the core', () => {
       'aria-checked',
       'true',
     );
+    await expect(page.getByRole('menuitemcheckbox', { name: 'Пауза' })).toHaveCount(0);
     // What a flag does is in its tooltip (owner 2026-11-15 asked what E is).
     await expect(
       page.getByRole('menuitemcheckbox', { name: 'Шаблон' }).locator('.context-menu-label'),
     ).toHaveAttribute('title', /Tab-меню/);
-    await page.getByRole('menuitemcheckbox', { name: 'Пауза' }).click();
-    expect(await flags('Шаги')).toEqual(['110']);
+    await page.keyboard.press('Escape');
 
     // The template in the Tab menu: its copy keeps its flags but «Шаблон».
     await page.mouse.move(650, 600);
@@ -3931,104 +3930,71 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.type('Баг');
     await page.locator('.tab-menu-row', { hasText: 'Баг' }).first().click();
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '3');
-    expect((await flags('Баг')).sort()).toEqual(['100', '101']);
+    expect((await flags('Баг')).sort()).toEqual(['10', '11']);
     await settled(page);
     await page.keyboard.press('Control+z');
     await expect(page.locator('.workspace')).toHaveAttribute('data-nodes', '2');
   });
 
-  test('the flag ring: rest on a bubble, Z and C open their palettes, the template switches, i keeps the card; Ctrl hides it (06 §8)', async ({
+  test('«Приостановлено»: a task’s status in the panel dims its bubble and keeps it out of the roll-up; nothing shows over a bubble on hover (ADR-0014)', async ({
     page,
   }) => {
+    test.setTimeout(90_000);
     await page.goto('/?plain');
-    await createWorkspace(page, 'Кольцо');
-    await createNode(page, 600, 400, 'Узел');
-    const look = () =>
-      page.evaluate(() => {
-        const n = [...(window.__strataWs?.graph()?.nodes.values() ?? [])][0];
-        return n ? [n.key, n.pause, n.template].map((f) => (f ? 1 : 0)).join('') : '';
-      });
-    const slots = () =>
-      page.evaluate(() => {
-        const ws = window.__strataWs;
-        const r = ws?.view.canvas.getBoundingClientRect();
-        return (ws?.editor()?.ringSlots() ?? []).map((s) => ({
-          slot: s.slot,
-          x: s.x + (r?.left ?? 0),
-          y: s.y + (r?.top ?? 0),
-        }));
-      });
-    const p = await at(page, 'Узел');
+    await createWorkspace(page, 'Пауза');
+    // A task from the Tab menu, named at once.
+    await page.mouse.move(640, 400);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('задача');
+    await page.locator('.tab-menu-row', { hasText: 'Задача' }).first().click();
+    await expect(page.locator('.name-input')).toBeVisible();
+    await page.keyboard.type('Мультиплеер');
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await graphNow(page)).names).toEqual(['Мультиплеер']);
+    const id = await idOf(page, 'Мультиплеер');
+    await settled(page);
+    await select(page, 'Мультиплеер');
+    const panel = page.locator('.ws-inspector');
+    await expect(panel).toBeVisible();
+    // The status's list has it after «В работе», not final.
+    const status = panel.getByLabel('Статус');
+    const options = await status.locator('option').allTextContents();
+    expect(options.indexOf('Приостановлено')).toBe(options.indexOf('В работе') + 1);
+    await status.selectOption('paused');
+    const state = () =>
+      page.evaluate(async (id) => {
+        const ws = window.__strataWs as WsHook;
+        await ws.settled();
+        return {
+          canvas: ws.graph()?.nodes.get(id)?.status,
+          core: (await ws.core.node(id)).status,
+        };
+      }, id);
+    await expect.poll(state).toEqual({ canvas: 'paused', core: 'paused' });
+    // One step of undo, as any field.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+z');
+    await expect.poll(state).toEqual({ canvas: 'open', core: undefined });
+    await page.keyboard.press('Control+Shift+z');
+    await expect.poll(state).toEqual({ canvas: 'paused', core: 'paused' });
+    // Kept: the network read again from the core.
+    await page.reload();
+    await page.locator('.home-open').click();
+    await page.waitForFunction((id) => window.__strataWs?.graph()?.nodes.has(id) ?? false, id);
+    await expect.poll(state).toEqual({ canvas: 'paused', core: 'paused' });
+    // No buttons over a bubble the cursor rests on (the ring went, ADR-0014):
+    // a click just above it falls on the empty canvas and clears the selection.
+    const p = await at(page, 'Мультиплеер');
+    await select(page, 'Мультиплеер');
     await page.mouse.move(p.x, p.y);
-    // It comes after the cursor has rested (07 §4.5): the icon and size, the
-    // colour (owner 2026-11-15: in the place of «Ключевая» and «Пауза»), the
-    // template's stencil, then i.
-    await expect
-      .poll(async () => (await slots()).map((s) => s.slot))
-      .toEqual(['icons', 'colors', 'template', 'info']);
-    // A slot once the ring is up again: it comes after a rest (07 §4.5).
-    const slot = async (name: string) => {
-      await expect.poll(async () => (await slots()).length).toBe(4);
-      const s = (await slots()).find((x) => x.slot === name);
-      if (!s) throw new Error(`no ${name} slot`);
-      return s;
-    };
-    // The palettes `Z` and `C` open, under their slots.
-    const icons = await slot('icons');
-    await page.mouse.move(icons.x, icons.y, { steps: 4 });
-    await page.mouse.click(icons.x, icons.y);
-    await expect(page.locator('.icon-palette')).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(page.locator('.icon-palette')).toHaveCount(0);
-    await page.mouse.move(p.x, p.y, { steps: 4 });
-    const colors = await slot('colors');
-    await page.mouse.move(colors.x, colors.y, { steps: 4 });
-    await page.mouse.click(colors.x, colors.y);
-    const palette = page.locator('.color-palette');
-    await expect(palette).toBeVisible();
-    await page.keyboard.press('3');
-    await expect(palette).toHaveCount(0);
-    await expect
-      .poll(() =>
-        page.evaluate(() => [...(window.__strataWs?.graph()?.nodes.values() ?? [])][0]?.color),
-      )
-      .toBe(2);
-    // The template's slot switches its flag; the ring stays on its way back
-    // to the bubble; a second click clears it.
-    await page.mouse.move(p.x, p.y, { steps: 4 });
-    const template = await slot('template');
-    await page.mouse.move(template.x, template.y, { steps: 4 });
-    await page.mouse.click(template.x, template.y);
-    expect(await look()).toBe('001');
-    await page.mouse.click(template.x, template.y);
-    expect(await look()).toBe('000');
-    await page.keyboard.down('Control');
-    await expect.poll(async () => (await slots()).length).toBe(0);
-    await page.keyboard.up('Control');
-    await expect.poll(async () => (await slots()).length).toBe(4);
-    // i: the bubble's info card kept, as Shift+I (06 §4.4), till its ×.
-    const info = (await slots()).find((s) => s.slot === 'info');
-    if (!info) throw new Error('no i slot');
-    await page.mouse.move(info.x, info.y, { steps: 4 });
-    await page.mouse.click(info.x, info.y);
-    const card = page.locator('.ws-info-card');
-    await expect(card).toHaveClass(/is-kept/);
-    await expect(card.locator('.map-card-name')).toHaveText('Узел');
-    await card.locator('.window-close').click();
-    await expect(card).toHaveCount(0);
-    await page.mouse.move(p.x, p.y, { steps: 4 });
-    await expect.poll(async () => (await slots()).length).toBe(4);
-    // Away from the bubble and its ring: gone.
-    await page.mouse.move(p.x + 300, p.y + 200, { steps: 4 });
-    await expect.poll(async () => (await slots()).length).toBe(0);
-    // «Настройки»: never.
-    await page.locator('.tabbar-settings').click();
-    await page.locator('.settings').getByLabel('Кольцо флагов').selectOption('never');
-    await page.locator('.tabbar-settings').click();
-    await expect(page.locator('.settings')).toHaveCount(0);
-    await page.mouse.move(p.x, p.y, { steps: 4 });
     await page.waitForTimeout(400);
-    expect(await slots()).toEqual([]);
+    const r = await page.evaluate((id) => {
+      const ws = window.__strataWs as WsHook;
+      const n = ws.view.nodeAt(id);
+      return n ? n.r * ws.view.camera.zoom : 0;
+    }, id);
+    await page.mouse.click(p.x, p.y - r - 30);
+    expect(await page.evaluate(() => window.__strataWs?.editor()?.selected ?? [])).toEqual([]);
   });
 
   test('Ctrl+O goes to a node anywhere with a flight; Shift+Enter opens; the trash gives back (09 §3.4)', async ({
@@ -5897,7 +5863,7 @@ test.describe('a workspace on the core', () => {
     await page.locator('.icon-size').getByRole('button', { name: 'L', exact: true }).click();
     await expect.poll(() => sizeState(page, sketch)).toEqual({ r: 36, size: 'l', core: 'l' });
     await page.evaluate(() => window.__strataWs?.view.canvas.focus());
-    await page.keyboard.press('KeyQ');
+    await page.keyboard.press('KeyR');
     const ws = page.locator('.workspace');
     const altDrag = async () => {
       const from = await at(page, 'Эскиз');
@@ -5932,15 +5898,15 @@ test.describe('a workspace on the core', () => {
     }, sketch);
     if (!copy) throw new Error('no copy');
     await expect.poll(() => sizeState(page, copy)).toEqual({ r: 36, size: 'l', core: 'l' });
-    // The network read again from the core: the copy is still paused and large.
+    // The network read again from the core: the copy is still key and large.
     await page.reload();
     await expect(page.locator('.home-card')).toHaveCount(1);
     await page.locator('.home-open').click();
     await page.waitForFunction((id) => window.__strataWs?.graph()?.nodes.has(id) ?? false, copy);
     await expect.poll(() => sizeState(page, copy)).toEqual({ r: 36, size: 'l', core: 'l' });
-    expect(
-      await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.pause, copy),
-    ).toBe(true);
+    expect(await page.evaluate((id) => window.__strataWs?.graph()?.nodes.get(id)?.key, copy)).toBe(
+      true,
+    );
   });
 
   test('«Показать все здесь» asks first past ten nodes (06 §14)', async ({ page }) => {

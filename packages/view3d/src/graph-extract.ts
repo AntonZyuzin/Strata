@@ -45,7 +45,9 @@ export function mergeGraph(base: StarMapExtract, graph: Graph): MergedExtract {
     index.set(n.id, b);
     kind[b] = KIND[n.kind];
     flags[b] =
-      (n.key ? FLAG.key : 0) | (n.pause ? FLAG.pause : 0) | (n.template ? FLAG.template : 0);
+      (n.key ? FLAG.key : 0) |
+      (n.status === 'paused' ? FLAG.pause : 0) |
+      (n.template ? FLAG.template : 0);
     state[b] = stateOf(n);
     primaryNet[b] = network;
   });

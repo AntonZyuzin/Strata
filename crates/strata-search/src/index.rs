@@ -67,10 +67,12 @@ pub struct Item {
 }
 
 impl Item {
-    /// A final status or the flag «Пауза»: ranked lower (§2.5).
+    /// A final status or «Приостановлено» (ADR-0014): ranked lower (§2.5).
     fn inactive(&self) -> bool {
-        matches!(self.status.as_deref(), Some("done" | "cancelled"))
-            || self.flags.contains(&Flag::Pause)
+        matches!(
+            self.status.as_deref(),
+            Some("done" | "cancelled" | "paused")
+        )
     }
 }
 
@@ -684,7 +686,7 @@ mod tests {
     }
 
     #[test]
-    fn closeness_key_pause_and_visits_move_the_order() {
+    fn closeness_key_status_and_visits_move_the_order() {
         use NodeKind::*;
         let mut a = item("a", "Звук", Note, Some("far"));
         let b = item("b", "Звук", Note, Some("here"));
@@ -719,19 +721,22 @@ mod tests {
         );
         // Key +40, opened today +150 and three times +40: above all.
         assert_eq!(ids(&ix(a.clone()), "звук", &visited), vec!["a", "b", "c"]);
-        let mut done = item("b", "Звук", Note, Some("here"));
-        done.status = Some("done".to_owned());
-        let index = Index::new(vec![
-            item("root", "Корень", Network, None),
-            item("here", "Тут", Network, Some("root")),
-            done,
-            item("x", "Звук", Note, Some("root")),
-        ]);
-        assert_eq!(
-            ids(&index, "звук", &ctx),
-            vec!["x", "b"],
-            "a final status −60 outweighs being here (+80) and the parent's +50"
-        );
+        // A final status and «Приостановлено» (ADR-0014) alike.
+        for status in ["done", "paused"] {
+            let mut done = item("b", "Звук", Note, Some("here"));
+            done.status = Some(status.to_owned());
+            let index = Index::new(vec![
+                item("root", "Корень", Network, None),
+                item("here", "Тут", Network, Some("root")),
+                done,
+                item("x", "Звук", Note, Some("root")),
+            ]);
+            assert_eq!(
+                ids(&index, "звук", &ctx),
+                vec!["x", "b"],
+                "{status}: −60 outweighs being here (+80) and the parent's +50"
+            );
+        }
     }
 
     #[test]

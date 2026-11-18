@@ -468,7 +468,6 @@ test('wire ends: a socket at the source, an arrow or a socket at the target (07 
         n.color === null &&
         n.status === 'open' &&
         n.due === 'none' &&
-        !n.pause &&
         !n.ghost &&
         !n.key &&
         !n.template &&

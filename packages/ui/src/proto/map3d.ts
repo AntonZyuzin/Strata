@@ -131,7 +131,7 @@ export interface MapNav {
   open: (id: string, at: { x: number; y: number; r: number }) => boolean;
   /** `Tab` (08 §6.4): the Tab menu at a page point, for network `net`, wired from `from`. */
   create: (at: { x: number; y: number; net: string; from: string | null }) => void;
-  flag: (ids: string[], flag: 'key' | 'pause' | 'template') => void;
+  flag: (ids: string[], flag: 'key' | 'template') => void;
   /** `Delete` / `Shift+Delete` (08 §6.7) from the contextual network `net`. */
   remove: (id: string, net: string, everywhere: boolean) => void;
   /** The right button's menu at a page point: of a star, or of the map. */
@@ -507,14 +507,14 @@ export class Map3D {
     return [...this.pins.keys()];
   }
 
-  /** A node's flags as the map draws them (08 §4.3). */
-  flagsOf(id: string): { key: boolean; pause: boolean; template: boolean } | null {
+  /** A node's flags and «Приостановлено» as the map draws them (08 §4.3, ADR-0014). */
+  flagsOf(id: string): { key: boolean; paused: boolean; template: boolean } | null {
     const b = this.space?.body.get(id);
     const f = b === undefined ? undefined : this.space?.x.flags[b];
     if (f === undefined) return null;
     return {
       key: (f & FLAG.key) !== 0,
-      pause: (f & FLAG.pause) !== 0,
+      paused: (f & FLAG.pause) !== 0,
       template: (f & FLAG.template) !== 0,
     };
   }
@@ -609,10 +609,9 @@ export class Map3D {
         return true;
       }
       case 'KeyR':
-      case 'KeyQ':
       case 'KeyE': {
         if (aimed === null) return false;
-        const flag = e.code === 'KeyR' ? 'key' : e.code === 'KeyQ' ? 'pause' : 'template';
+        const flag = e.code === 'KeyR' ? 'key' : 'template';
         this.nav.flag([space.ids[aimed] ?? ''], flag);
         return true;
       }
@@ -675,7 +674,7 @@ export class Map3D {
       else if (action === 'delete' || action === 'deleteEverywhere') {
         nav.remove(node, this.contextNet(b), action === 'deleteEverywhere');
       } else {
-        nav.flag([node], action.slice(5) as 'key' | 'pause' | 'template');
+        nav.flag([node], action.slice(5) as 'key' | 'template');
       }
     }
   }
@@ -2508,7 +2507,6 @@ export type MapAction =
   | 'card'
   | 'pin'
   | 'flag:key'
-  | 'flag:pause'
   | 'flag:template'
   | 'delete'
   | 'deleteEverywhere'

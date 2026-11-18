@@ -15,7 +15,6 @@ import {
   type RimTarget,
   type WireEnd,
 } from './decor';
-import type { RingSlotName } from './flagring';
 import { hexPath } from './hex';
 import {
   createIconAtlas,
@@ -246,12 +245,6 @@ export class CanvasView {
   /** A near or past deadline in words under the label (Q-07-22); see `Decor.dueWord`. */
   set dueWord(word: (n: GraphNode) => string | null) {
     this.decor.dueWord = word;
-    this.invalidate();
-  }
-
-  /** A flag ring slot's name and key, shown over it on hover; see `Decor.flagWord`. */
-  set flagWord(word: (slot: RingSlotName) => string | null) {
-    this.decor.flagWord = word;
     this.invalidate();
   }
 
@@ -1056,7 +1049,7 @@ export class CanvasView {
     });
     icon.scale.set(iconScale(2 * r));
     // «Срок скоро»: a static yellow halo up to 1.5 r (07 §4.5), not on paused or closed nodes.
-    const soon = node.due === 'soon' && !node.pause && !isClosed(node);
+    const soon = node.due === 'soon' && node.status === 'open';
     const halo = soon
       ? new Sprite({
           texture: t.halo,

@@ -2590,7 +2590,7 @@ impl<S: Store> Workspace<S> {
     }
 
     /// A row of the preview with the rows under it; none for a node shown
-    /// already, a node on pause — the roll-up skips it (05 §7) — or a folder
+    /// already, a paused task or project — the roll-up skips it (05 §4.3) — or a folder
     /// with no tasks.
     fn task_row(
         &self,

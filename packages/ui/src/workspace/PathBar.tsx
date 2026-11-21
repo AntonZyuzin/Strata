@@ -6,7 +6,14 @@ import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { Icon, nodeIcon } from '../icons/Icon';
 import { Glyph } from '../TabBar';
 import { MENU_GAP, PathMenu, type PathRow, PathRows } from './PathMenu';
-import { escapeSegment, type NamedPath, pathLabel, pathText, samePath } from './paths';
+import {
+  escapeSegment,
+  type NamedPath,
+  pathLabel,
+  pathText,
+  samePath,
+  segmentSpans,
+} from './paths';
 
 /** The networks `▾` after a network lists (09 §4.3), in their order. */
 export interface PathChildren {
@@ -513,32 +520,4 @@ function PathEdit(props: {
       />
     </div>
   );
-}
-
-/**
- * Where each segment of a typed path stands (09 §4.2), as the core reads
- * them (`parse_path`): between `/`, `\/` and `\\` inside a name, the empty
- * ones skipped; each span without the spaces around it.
- */
-export function segmentSpans(text: string): { start: number; end: number }[] {
-  const out: { start: number; end: number }[] = [];
-  let start = 0;
-  const close = (end: number) => {
-    let a = start;
-    let b = end;
-    while (a < b && /\s/.test(text[a] ?? '')) a++;
-    while (b > a && /\s/.test(text[b - 1] ?? '')) b--;
-    if (b > a) out.push({ start: a, end: b });
-  };
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
-    if (c === '\\' && (text[i + 1] === '/' || text[i + 1] === '\\')) {
-      i++;
-    } else if (c === '/') {
-      close(i);
-      start = i + 1;
-    }
-  }
-  close(text.length);
-  return out;
 }

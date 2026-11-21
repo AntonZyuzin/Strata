@@ -400,7 +400,8 @@ export function Prototype(props: {
     (item: MenuItem) => {
       setMenu(null);
       editor.current?.setOverlayOpen(false);
-      editor.current?.menuChoose(item.choice);
+      // The prototype's menu has no trash: every row is the canvas's choice.
+      if (item.choice.t !== 'restore') editor.current?.menuChoose(item.choice);
       const next = remember(recent, item);
       setRecent(next);
       try {

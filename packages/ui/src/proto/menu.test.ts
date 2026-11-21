@@ -1,7 +1,15 @@
 import { readFileSync } from 'node:fs';
 import { loadSearch, NameIndex, rankByName } from '@strata/search';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { KINDS, type MenuNode, type MenuSearch, menuItems, rankMenu } from './menu';
+import {
+  type FindRows,
+  KINDS,
+  type MenuNode,
+  type MenuSearch,
+  menuItems,
+  rankMenu,
+  VISITED_ROWS,
+} from './menu';
 
 beforeAll(async () => {
   const wasm = new URL('../../../search/pkg/strata_search_bg.wasm', import.meta.url);
@@ -128,6 +136,68 @@ describe('Tab menu items (06 §5.2)', () => {
   it('finds a kind typed in the other layout, a little lower (09 §2.4)', async () => {
     const items = await rows('ljcrf', nodes);
     expect(items.find((i) => i.choice.t === 'create' && i.choice.kind === 'board')).toBeTruthy();
+  });
+});
+
+describe('«Найти или создать» (☑ Q-06-26)', () => {
+  // `a` lies on this canvas; `x` in another network.
+  const nodes = [{ id: 'a', name: 'Звук 3', kind: 'note' as const }];
+  const space: MenuNode[] = [
+    { id: 'a', name: 'Звук 3', kind: 'note', where: 'Игра' },
+    { id: 'x', name: 'Звуковой дизайн', kind: 'network', where: 'Игра / Аудио' },
+  ];
+  const find = (visited: MenuNode[] = [], trash: MenuNode[] = []): FindRows => ({
+    visited,
+    trash,
+  });
+  const empty = (rows: FindRows) => menuItems('ru', '', nodes, [], [], null, [], null, space, rows);
+
+  it('shows the nodes visited last with no query, the kinds while there are none (09 §3.4)', () => {
+    const more = Array.from({ length: 14 }, (_, i): MenuNode => {
+      return { id: `v${i}`, name: `Нода ${i}`, kind: 'note', where: 'Игра' };
+    });
+    const items = empty(find([space[1] as MenuNode, space[0] as MenuNode, ...more]));
+    expect(items).toHaveLength(VISITED_ROWS);
+    expect(items[0]).toMatchObject({
+      group: 'visited',
+      label: 'Звуковой дизайн',
+      detail: 'Игра / Аудио',
+      choice: { t: 'existing', id: 'x', kind: 'network' },
+    });
+    // One on this canvas says so instead of where it lies.
+    expect(items[1]).toMatchObject({ label: 'Звук 3', detail: 'уже здесь' });
+    expect(empty(find()).map((i) => [i.group, i.kind])).toEqual(
+      KINDS.map((k) => ['kinds', k.kind]),
+    );
+  });
+
+  it('puts the nodes first, then the trash, then «Создать»', async () => {
+    const trash: MenuNode[] = [{ id: 'g', name: 'Звуки старые', kind: 'note' }];
+    const ranking = await rankMenu(engine(space), 'звук', [], [], { trash });
+    const items = menuItems('ru', 'звук', nodes, [], [], ranking, [], null, space, find([], trash));
+    const groups = items.map((i) => i.group);
+    expect(groups.slice(0, 3)).toEqual(['insert', 'insert', 'trash']);
+    expect(groups.slice(3).every((g) => g === 'create')).toBe(true);
+    expect(items[2]).toMatchObject({ label: 'Звуки старые', choice: { t: 'restore', id: 'g' } });
+    expect(items[3]?.label).toBe('Заметка «звук»');
+    // The Tab menu keeps «Создать» first and has no trash.
+    const tab = menuItems('ru', 'звук', nodes, [], [], ranking, [], null, space);
+    expect(tab[0]?.group).toBe('create');
+    expect(tab.some((i) => i.group === 'trash')).toBe(false);
+  });
+
+  it("ranks the workspace's nodes by the network on the canvas and the visits (09 §2.5)", async () => {
+    const asked: [string, unknown][] = [];
+    const search: MenuSearch = {
+      rank: async (q, names, limit) => rankByName(q, names, limit),
+      query: async (collection, _q, ctx) => {
+        asked.push([collection, ctx]);
+        return [];
+      },
+    };
+    const visits = { a: { at: 1, count: 2 } };
+    await rankMenu(search, 'звук', [], [], { context: { here: 'n1', visits, now: 5 } });
+    expect(asked).toContainEqual(['space', { here: 'n1', visits, now: 5, limit: 12 }]);
   });
 });
 

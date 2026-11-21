@@ -5,7 +5,7 @@ export type NamedPath = readonly (readonly [string, string])[];
 
 /**
  * A network's path as a row shows it: the names under the root, as
- * «Перейти к ноде» shows them (09 §3.4); the root by its own name.
+ * «Найти или создать» shows them (09 §3.4); the root by its own name.
  */
 export function pathLabel(path: NamedPath): string {
   if (path.length <= 1) return path[0]?.[1] ?? '';
@@ -125,4 +125,32 @@ export function menuRows(
     .filter((i) => !top.has(i.id))
     .sort((a, b) => collator.compare(a.name, b.name) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   return { rows: [...recent, ...rest], recent: recent.length };
+}
+
+/**
+ * Where each segment of a typed path stands (09 §4.2), as the core reads
+ * them (`parse_path`): between `/`, `\/` and `\\` inside a name, the empty
+ * ones skipped; each span without the spaces around it.
+ */
+export function segmentSpans(text: string): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = [];
+  let start = 0;
+  const close = (end: number) => {
+    let a = start;
+    let b = end;
+    while (a < b && /\s/.test(text[a] ?? '')) a++;
+    while (b > a && /\s/.test(text[b - 1] ?? '')) b--;
+    if (b > a) out.push({ start: a, end: b });
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === '\\' && (text[i + 1] === '/' || text[i + 1] === '\\')) {
+      i++;
+    } else if (c === '/') {
+      close(i);
+      start = i + 1;
+    }
+  }
+  close(text.length);
+  return out;
 }

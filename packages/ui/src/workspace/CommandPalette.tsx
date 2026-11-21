@@ -12,7 +12,7 @@ import {
   titleOf,
   whyNot,
 } from './commands';
-import { pathQuery } from './NodeSearch';
+import { pathQuery } from './pathRows';
 
 const ROWS = 12;
 /** Recent commands on top of an empty query (09 §3.5). */

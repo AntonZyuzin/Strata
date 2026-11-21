@@ -59,7 +59,7 @@ import {
 import { noteText } from '@strata/editor';
 import { GeckoCompanion, type GeckoHandle, type GeckoNode } from '@strata/gecko';
 import { type Locale, type MessageKey, t } from '@strata/i18n';
-import type { Scope } from '@strata/search';
+import type { SearchContext } from '@strata/search';
 import { type Quality, qualityOf } from '@strata/view3d/map';
 import type { LoroDoc } from 'loro-crdt';
 import {
@@ -88,10 +88,16 @@ import {
   mapQuality,
   setMapQuality,
 } from '../proto/map3d';
-import { type MenuGhost, type MenuItem, type MenuNode, remember } from '../proto/menu';
+import {
+  type FindRows,
+  type MenuGhost,
+  type MenuItem,
+  type MenuNode,
+  remember,
+} from '../proto/menu';
 import { NameInput } from '../proto/NameInput';
 import { NoteWindow } from '../proto/NoteWindow';
-import { menuOpening, TabMenu } from '../proto/TabMenu';
+import { type MenuHow, menuOpening, TabMenu } from '../proto/TabMenu';
 import { useReadable } from '../readable';
 import { netItems, searchClient, visited, visits } from '../search';
 import { Glyph } from '../TabBar';
@@ -233,8 +239,6 @@ interface MapTarget {
 type MapCalls = Pick<MapNav, 'create' | 'flag' | 'remove' | 'menu' | 'undo' | 'open'>;
 
 const RECENT_KEY = 'strata.tabmenu.recent';
-/** «Перейти к ноде» ranks the whole workspace (09 §3.4). */
-const ALL: Scope = { t: 'all' };
 const TOAST_MS = 6_000;
 const TOAST_UNDO_MS = 10_000;
 
@@ -449,6 +453,8 @@ export function WorkspaceScreen(props: {
     seq: number;
     /** Opened on the star map (08 §6.4): where the node goes, and the header saying so. */
     map?: MapTarget;
+    /** Opened by `Ctrl+O`: «Найти или создать», the nodes first (☑ Q-06-26). */
+    find?: boolean;
   } | null>(null);
   const [name, setName] = useState<{
     id: string;
@@ -528,9 +534,11 @@ export function WorkspaceScreen(props: {
   const [boardFocus, setBoardFocus] = useState(false);
   const [viewerFocus, setViewerFocus] = useState(false);
   const [view3d, setView3d] = useState<MapState>('2d');
-  /** «Перейти к ноде» (09 §3.4): `Ctrl+O` on the canvas and on the star map (08 §10). */
-  /** «Перейти к ноде»: on the star map or the canvas, with the path the palette began. */
-  const [finder, setFinder] = useState<{ map: boolean; query?: string } | null>(null);
+  /**
+   * The star map's search (08 §6.1, §10), with the path the palette began;
+   * on the canvas `Ctrl+O` opens «Найти или создать» (☑ Q-06-26).
+   */
+  const [finder, setFinder] = useState<{ query?: string } | null>(null);
   /** `Ctrl+F` on the canvas (09 §3.3) and on the star map (08 §6.1). */
   const [finding, setFinding] = useState(false);
   /** The report of the import that made this workspace (13 §3.6, S1 step 7). */
@@ -793,6 +801,8 @@ export function WorkspaceScreen(props: {
         if (g) searchClient().set('net', netItems(g.nodes.values(), netRef.current));
         setMenu({ ...e, sx: e.sx + r.left, sy: e.sy + r.top, seq: menuOpening() });
       },
+      // A node chosen with nothing to wire it from (☑ Q-06-26).
+      go: (id, way) => goToRef.current(id, false, way),
       nameInput: (e) =>
         setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
       toast: (e) => toast(e.key, e.params, e.key !== 'proto.toast.exists'),
@@ -1872,6 +1882,12 @@ export function WorkspaceScreen(props: {
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
   useEffect(() => searchClient().set('space', tree), [tree]);
 
+  /** `Ctrl+O` on the canvas (☑ Q-06-26): «Найти или создать», with a path the palette began. */
+  const openFind = useCallback((query = '') => {
+    setFinding(false);
+    editor.current?.openFind(query);
+  }, []);
+
   // The keys are there as soon as the view is: a layout effect runs in the
   // commit that shows the star map, a passive one after paint, and a key
   // pressed between the two was lost (CI under load).
@@ -1914,12 +1930,8 @@ export function WorkspaceScreen(props: {
       if (view3d === '2d') {
         if (!search || typing || menu || name) return;
         e.preventDefault();
-        if (e.code === 'KeyO') {
-          setFinding(false);
-          setFinder({ map: false });
-        } else {
-          setFinding(true);
-        }
+        if (e.code === 'KeyO') openFind();
+        else setFinding(true);
         return;
       }
       if (typing || menu || name || mapCtx || removal) return;
@@ -1930,7 +1942,7 @@ export function WorkspaceScreen(props: {
           setFinding(true);
         } else {
           setFinding(false);
-          setFinder({ map: true });
+          setFinder({});
         }
         return;
       }
@@ -1942,7 +1954,7 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, finder, palette, covered, help, modal, menu, name, mapCtx, removal]);
+  }, [view3d, finder, palette, covered, help, modal, menu, name, mapCtx, removal, openFind]);
 
   // A window opened over the star map belongs to it (08 §6.3): back in 2D it
   // stays only for a node of the canvas's network.
@@ -1967,7 +1979,7 @@ export function WorkspaceScreen(props: {
   // A search of one view closes with it (2D ↔ 3D) — in the commit that
   // changes the view: after paint it would close a `Ctrl+F` typed at once.
   useLayoutEffect(() => {
-    setFinder((f) => (f && f.map !== (view3d === '3d') ? null : f));
+    if (view3d !== '3d') setFinder(null);
     setFinding(false);
   }, [view3d]);
 
@@ -2091,17 +2103,36 @@ export function WorkspaceScreen(props: {
     const covered = editor.current?.coveredRight() ?? 0;
     return new DOMRect(r.left, r.top, Math.max(0, r.width - covered), r.height);
   };
+  /** Where «Найти или создать» from `Ctrl+O` opens (☑ Q-06-26): over the canvas one sees, centred. */
+  const findAnchor = (): { x: number; y: number } => {
+    const r = seenBounds();
+    return { x: (r?.left ?? 0) + (r?.width ?? 0) / 2, y: (r?.top ?? 0) + 48 };
+  };
 
   const mapChooseRef = useRef<(item: MenuItem, m: MapTarget) => void>(() => undefined);
+  /** «Найти или создать» goes to a node (☑ Q-06-26); `open` — `Shift+Enter`. Set below. */
+  const goToRef = useRef<(id: string, open: boolean, way?: readonly string[]) => void>(
+    () => undefined,
+  );
+  /** «В корзине» of «Найти или создать» (09 §3.4): the node back, then gone to. Set below. */
+  const backToRef = useRef<(id: string) => void>(() => undefined);
   const choose = useCallback(
-    (item: MenuItem) => {
+    (item: MenuItem, how: MenuHow) => {
       const m = menu?.map;
+      const pick = item.choice;
       setMenu(null);
       if (m) {
         mapChooseRef.current(item, m);
+      } else if (pick.t === 'restore') {
+        editor.current?.menuCancel();
+        backToRef.current(pick.id);
+      } else if (pick.t === 'existing' && how.open) {
+        // A node opened is gone to first, whatever is selected (☑ Q-06-26).
+        editor.current?.menuCancel();
+        goToRef.current(pick.id, true, pick.way);
       } else {
         editor.current?.setOverlayOpen(false);
-        editor.current?.menuChoose(item.choice);
+        editor.current?.menuChoose(pick.t === 'existing' ? { ...pick, place: how.place } : pick);
       }
       const next = remember(recent, item);
       setRecent(next);
@@ -2988,8 +3019,14 @@ export function WorkspaceScreen(props: {
    * network; `go` — `Enter` of `Ctrl+O`: the node chosen in its network, a
    * network too; `open` — `Shift+Enter`: into a network, a node's content open.
    */
-  const goHit = (hit: PathHit, how: 'into' | 'go' | 'open') => {
-    const way = hit.path.map(([id]) => id);
+  const goHit = (hit: PathHit, how: 'into' | 'go' | 'open') =>
+    goWay(
+      hit.path.map(([id]) => id),
+      hit.kind,
+      how,
+    );
+  /** The node at the end of `way`, by the networks it names (09 §4.4); as `goHit`. */
+  const goWay = (way: readonly string[], kind: NodeKind, how: 'into' | 'go' | 'open') => {
     const id = way.at(-1);
     if (!id) return;
     const visit = () => visited(openedRef.current.workspace.id, id);
@@ -3000,8 +3037,8 @@ export function WorkspaceScreen(props: {
     }
     leaveRef.current();
     // A network entered is a visit of its own (`show`).
-    if (way.length === 1 || (hasCanvas(hit.kind) && how !== 'go')) {
-      void loadRef.current(id, way);
+    if (way.length === 1 || (hasCanvas(kind) && how !== 'go')) {
+      void loadRef.current(id, [...way]);
       return;
     }
     const parent = way.slice(0, -1);
@@ -3010,6 +3047,33 @@ export function WorkspaceScreen(props: {
       visit();
       if (how === 'open') eventsRef.current?.open?.(id);
     });
+  };
+  /**
+   * A node chosen in «Найти или создать» (☑ Q-06-26), a visit (09 §2.5): by
+   * the way a typed path went (09 §4.4); on this canvas — a flight to it;
+   * else the network of its primary placement (09 §3.4). `open` —
+   * `Shift+Enter`: into a network, a node's content open.
+   */
+  goToRef.current = (id, open, way) => {
+    const kind = treeById.get(id)?.kind ?? graph.current?.nodes.get(id)?.kind;
+    if (way && kind) {
+      goWay(way, kind, open ? 'open' : 'go');
+      return;
+    }
+    const visit = () => visited(openedRef.current.workspace.id, id);
+    const here = graph.current?.nodes.get(id);
+    if (here && !(open && hasCanvas(here.kind))) {
+      leaveRef.current();
+      editor.current?.flyTo([id]);
+      visit();
+      if (open) eventsRef.current?.open?.(id);
+      return;
+    }
+    void goNode(id, open).then(visit);
+  };
+  backToRef.current = (id) => {
+    const item = trash?.find((x) => x.id === id);
+    if (item) void restore(item).then(() => goToRef.current(id, false));
   };
   /**
    * What `Ctrl+F` searches (09 §3.3, 08 §6.1), made when the bar opens: it
@@ -3639,12 +3703,21 @@ export function WorkspaceScreen(props: {
     return items;
   };
 
-  // What «Перейти к ноде» ranks with, taken when it opens.
-  const finderScope = ALL;
+  // What the star map's search ranks with, taken when it opens.
   const finderVisits = useMemo(
     () => (finder ? visits(openedRef.current.workspace.id) : {}),
     [finder],
   );
+  // What «Найти или создать» ranks with and shows first (☑ Q-06-26), taken when it opens.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: taken once per opening
+  const menuContext = useMemo((): SearchContext | undefined => {
+    if (!menu || menu.map) return undefined;
+    return {
+      here: netRef.current,
+      visits: visits(openedRef.current.workspace.id),
+      now: Date.now(),
+    };
+  }, [menu?.seq]);
   // Templates of the whole workspace for the Tab menu (06 §5.2); what this
   // screen has not written yet is in the tree after its next refresh.
   const templates = useMemo(
@@ -3654,18 +3727,39 @@ export function WorkspaceScreen(props: {
         .map((i) => ({ id: i.id, name: i.name, kind: i.kind })),
     [tree],
   );
-  // The workspace's nodes for «Вставить здесь» (05 §5): each by the network it lies in.
+  // The workspace's nodes for «Ноды» (05 §5, ☑ Q-06-26): each by the path of
+  // the network it lies in, as `pathLabel` writes it (09 §3.4).
   const space = useMemo((): MenuNode[] => {
-    const name = new Map(tree.map((i) => [i.id, i.name]));
-    return tree
-      .filter((i) => i.parent)
-      .map((i) => ({
-        id: i.id,
-        name: i.name,
-        kind: i.kind,
-        where: name.get(i.parent ?? '') ?? '',
-      }));
+    const byId = new Map(tree.map((i) => [i.id, i]));
+    /** The names under the root down to a network, `/` between them. */
+    const under = new Map<string, string>();
+    const below = (net: string): string => {
+      const known = under.get(net);
+      if (known !== undefined) return known;
+      const item = byId.get(net);
+      const up = item?.parent ? below(item.parent) : null;
+      const names = up === null ? '' : up ? `${up} / ${item?.name ?? ''}` : (item?.name ?? '');
+      under.set(net, names);
+      return names;
+    };
+    // The root by its own name.
+    const where = (net: string) => below(net) || (byId.get(net)?.name ?? '');
+    return tree.flatMap((i) =>
+      i.parent ? [{ id: i.id, name: i.name, kind: i.kind, where: where(i.parent) }] : [],
+    );
   }, [tree]);
+  // «Найти или создать» from `Ctrl+O` (☑ Q-06-26): the nodes visited last, the trash.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: taken once per opening
+  const findRows = useMemo((): FindRows | undefined => {
+    if (!menu?.find) return undefined;
+    const byId = new Map(space.map((n) => [n.id, n]));
+    return {
+      visited: Object.entries(menuContext?.visits ?? {})
+        .sort(([, a], [, b]) => b.at - a.at)
+        .flatMap(([id]) => byId.get(id) ?? []),
+      trash: (trash ?? []).map((x) => ({ id: x.id, name: x.name, kind: x.kind })),
+    };
+  }, [menu?.seq]);
   const nodes: MenuNode[] = g
     ? [...g.nodes.values()]
         .filter((n) => !n.ghostOf)
@@ -3694,8 +3788,12 @@ export function WorkspaceScreen(props: {
     clip: clipped,
     act: (action) => editor.current?.act(action),
     goTo: () => {
+      if (view3d === '2d') {
+        openFind();
+        return;
+      }
       setFinding(false);
-      setFinder({ map: view3d !== '2d' });
+      setFinder({});
     },
     find: () => {
       setFinder(null);
@@ -3780,6 +3878,15 @@ export function WorkspaceScreen(props: {
       (id) => [id, treeById.get(id)?.name ?? (id === net.net ? net.name : '')] as const,
     );
   }, [net, view3d, tree, mapFocus, entry, treeById]);
+  /** What a typed path names, from the entry path (09 §4.4): the path field and the search windows. */
+  const resolvePath = useCallback(
+    (text: string) =>
+      core.resolve(
+        text,
+        barPath.map(([id]) => id),
+      ),
+    [core, barPath],
+  );
   // The canonical path, grey under the entry path when it is another (06 §10.2).
   const barCanonical = useMemo(() => {
     const canonical = net && view3d !== '3d' ? pathTo(tree, net.net) : [];
@@ -3888,12 +3995,7 @@ export function WorkspaceScreen(props: {
             if (view3d === '3d') map3d.current?.goPlace(id);
             else void loadRef.current(id, way);
           }}
-          resolve={(text) =>
-            core.resolve(
-              text,
-              barPath.map(([id]) => id),
-            )
-          }
+          resolve={resolvePath}
           onHit={(hit) => goHit(hit, 'into')}
           onCopy={copy}
           marks={marks.map((m) => (m ? (treeById.get(m.net)?.name ?? '') : null))}
@@ -4010,52 +4112,28 @@ export function WorkspaceScreen(props: {
           />
         ) : null}
       </ul>
-      {finder && (view3d === '3d') === finder.map ? (
+      {finder && view3d === '3d' ? (
         <NodeSearch
           locale={locale}
-          label={t(locale, finder.map ? 'map.find' : 'search.goTo')}
-          className={finder.map ? 'map-search' : 'goto'}
           search={searchClient()}
           items={tree}
-          scope={finderScope}
-          here={finder.map ? undefined : netRef.current}
           visits={finderVisits}
-          trash={finder.map ? undefined : (trash ?? undefined)}
-          // The path mode (09 §2.1, §4.4): from the entry path, as the path field.
-          resolve={(text) =>
-            core.resolve(
-              text,
-              barPath.map(([id]) => id),
-            )
-          }
-          onHit={(hit, open) => {
+          resolve={resolvePath}
+          onHit={(hit) => {
             setFinder(null);
             focusCanvas();
-            goHit(hit, open ? 'open' : 'go');
+            goHit(hit, 'go');
           }}
           initial={finder.query}
           left={
             (host.current?.getBoundingClientRect().left ?? 0) + (host.current?.clientWidth ?? 0) / 2
           }
           top={(host.current?.getBoundingClientRect().top ?? 0) + 48}
-          onChoose={(id, how) => {
-            const map = finder.map;
+          onChoose={(id) => {
             setFinder(null);
-            // The node chosen is the visit (09 §2.5): after the network its way
-            // went into, which is a visit too.
-            const visit = () => visited(openedRef.current.workspace.id, id);
-            if (map) {
-              visit();
-              map3d.current?.flyTo(id);
-              return;
-            }
-            focusCanvas();
-            if (how === 'restore') {
-              const item = trash?.find((x) => x.id === id);
-              if (item) void restore(item).then(() => goNode(id, false).then(visit));
-              return;
-            }
-            void goNode(id, how === 'open').then(visit);
+            // The star chosen is the visit (09 §2.5).
+            visited(openedRef.current.workspace.id, id);
+            map3d.current?.flyTo(id);
           }}
           onClose={() => {
             setFinder(null);
@@ -4154,8 +4232,12 @@ export function WorkspaceScreen(props: {
           // The prefixes (09 §3.5): a path goes on in `Ctrl+O`'s path mode, `?` — the keys.
           onPath={(query) => {
             setPalette(false);
+            if (view3d === '2d') {
+              openFind(query);
+              return;
+            }
             setFinding(false);
-            setFinder({ map: view3d !== '2d', query });
+            setFinder({ query });
           }}
           onHelp={() => {
             setPalette(false);
@@ -4381,8 +4463,10 @@ export function WorkspaceScreen(props: {
         <TabMenu
           key={menu.seq}
           locale={locale}
-          x={menu.sx}
-          y={menu.sy}
+          // `Ctrl+O` opens it over the top of the canvas one sees, centred (☑ Q-06-26).
+          x={menu.find ? findAnchor().x : menu.sx}
+          y={menu.find ? findAnchor().y : menu.sy}
+          centred={menu.find}
           bounds={host.current?.getBoundingClientRect()}
           initialQuery={menu.query}
           named={menu.named}
@@ -4393,6 +4477,10 @@ export function WorkspaceScreen(props: {
           templates={templates}
           space={space}
           search={searchClient()}
+          find={findRows}
+          context={menuContext}
+          resolve={menu.map ? undefined : resolvePath}
+          tree={tree}
           onChoose={choose}
           onCancel={() => {
             setMenu(null);

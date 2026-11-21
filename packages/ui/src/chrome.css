@@ -1444,13 +1444,16 @@ button:focus-visible {
   color: var(--st-color-text-muted);
 }
 
-/* «Перейти к ноде» on the canvas and the star map: the Tab menu's look,
-   centred over the canvas; the path takes more room than a kind. */
+/* The windows centred over the canvas: the command palette and the star
+   map's search. */
 .node-search {
   translate: -50% 0;
 }
 
-.node-search .tab-menu-row .tab-menu-detail {
+/* There and in «Найти или создать» (☑ Q-06-26) a network's path or a key in
+   the detail column takes more room than a kind. */
+.node-search .tab-menu-row .tab-menu-detail,
+.find-menu .tab-menu-row .tab-menu-detail {
   max-width: 22ch;
 }
 

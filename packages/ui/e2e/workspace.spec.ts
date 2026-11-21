@@ -63,6 +63,8 @@ interface WsHook {
   };
   editor(): {
     selected: string[];
+    /** The width the properties panel covers on the canvas's right. */
+    coveredRight(): number;
   } | null;
   graph(): {
     nodes: Map<string, Node>;
@@ -1624,7 +1626,7 @@ for (const deviceScaleFactor of [1, 2]) {
     }
   });
 
-  test(`«Перейти к ноде» and the find bar keep their size in RU and EN @${deviceScaleFactor}x (09 §3.3–3.4)`, async ({
+  test(`«Найти или создать» and the find bar keep their size in RU and EN @${deviceScaleFactor}x (09 §3.3–3.4, ☑ Q-06-26)`, async ({
     browser,
   }) => {
     test.setTimeout(90_000);
@@ -1645,12 +1647,14 @@ for (const deviceScaleFactor of [1, 2]) {
       await createNode(page, 640, 400, 'Мельница за туманным лесом у самой реки');
       await settled(page);
       await page.keyboard.press('Control+o');
-      const goto = page.locator('.goto');
+      const goto = page.locator('.find-menu');
       await goto.locator('input').fill('мельн');
-      await expect(goto.locator('.tab-menu-row')).toHaveCount(1);
-      expect(await overflowing(page, '.goto'), `${locale} «Перейти» must fit`).toEqual([]);
-      const gotoBox = await box(page, '.goto');
-      const row = await box(page, '.goto .tab-menu-row');
+      // The node, then the note one would make of the query.
+      await expect(goto.locator('.tab-menu-row')).toHaveCount(2);
+      await expect(goto.locator('.tab-menu-header')).toHaveCount(2);
+      expect(await overflowing(page, '.find-menu'), `${locale} the window must fit`).toEqual([]);
+      const gotoBox = await box(page, '.find-menu');
+      const row = await box(page, '.find-menu .tab-menu-row >> nth=0');
       await goto.locator('input').press('Escape');
       await page.keyboard.press('Control+f');
       const bar = page.locator('.find-bar');
@@ -2349,7 +2353,7 @@ test.describe('a workspace on the core', () => {
     await twoWays(page);
     // In «Игра», come to through «Фильм».
     await enter(page, 'Игра');
-    const goto = page.locator('.goto');
+    const goto = page.locator('.find-menu');
     const input = goto.locator('input');
     const rows = goto.locator('.tab-menu-label');
     const here = page.locator('.ws-path [aria-current="location"]');
@@ -4008,11 +4012,13 @@ test.describe('a workspace on the core', () => {
     await settled(page);
     await page.keyboard.press('KeyU');
     await expect(ws).toHaveAttribute('data-depth', '1');
-    const goto = page.locator('.goto');
+    const goto = page.locator('.find-menu');
+    const first = goto.locator('.tab-menu-row').first();
     await page.keyboard.press('Control+o');
     await goto.locator('input').fill('мельн');
-    await expect(goto.locator('.tab-menu-row')).toHaveCount(1);
-    await expect(goto.locator('.tab-menu-detail')).toHaveText('Уровни');
+    // The node first, where it lies on the right; «Создать» after it (☑ Q-06-26).
+    await expect(first.locator('.tab-menu-label')).toHaveText('Мельница');
+    await expect(first.locator('.tab-menu-detail')).toHaveText('Уровни');
     await goto.locator('input').press('Enter');
     await expect(goto).toHaveCount(0);
     // Its network on the canvas, the node selected at the flight's end.
@@ -4029,7 +4035,7 @@ test.describe('a workspace on the core', () => {
     await expect(page.locator('.layers-trash')).toBeVisible();
     await page.keyboard.press('Control+o');
     await goto.locator('input').fill('мельн');
-    await expect(goto.locator('.tab-menu-header')).toHaveText('В корзине');
+    await expect(goto.locator('.tab-menu-header')).toHaveText(['В корзине', 'Создать']);
     await goto.locator('input').press('Enter');
     await expect(ws).toHaveAttribute('data-nodes', '1');
     // Shift+Enter opens: into a folder.
@@ -4037,9 +4043,71 @@ test.describe('a workspace on the core', () => {
     await expect(ws).toHaveAttribute('data-depth', '1');
     await page.keyboard.press('Control+o');
     await goto.locator('input').fill('уровни');
-    await expect(goto.locator('.tab-menu-row')).toHaveCount(1);
+    await expect(first.locator('.tab-menu-label')).toHaveText('Уровни');
     await goto.locator('input').press('Shift+Enter');
     await expect(ws).toHaveAttribute('data-depth', '2');
+  });
+
+  test('Tab and Ctrl+O open one window «Найти или создать»: a node goes, or is wired from the selection; Ctrl+O puts the nodes first (☑ Q-06-26)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Одно окно');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 420, 300);
+    await enter(page, 'Архив');
+    await createNode(page, 560, 360, 'Мельница');
+    await leave(page);
+    await createNode(page, 820, 460, 'Дневник');
+    await settled(page);
+    const menu = page.locator('.find-menu');
+    const rows = menu.locator('.tab-menu-row');
+    const mill = rows.filter({ hasText: 'Мельница' });
+    // `Tab` at the cursor, nothing selected: «Создать» first, the node below,
+    // where it lies on its right.
+    await page.mouse.move(300, 600);
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('мельн');
+    await expect(rows.first()).toContainText('Заметка «мельн»');
+    await expect(mill.locator('.tab-menu-detail')).toHaveText('Архив');
+    // Nothing to wire it from: the node is gone to, as `Ctrl+O` does; nothing made.
+    await mill.click();
+    await expect(menu).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    await expect(page.locator('.ws-inspector .ins-title-name')).toHaveText('Мельница');
+    await expect(ws).toHaveAttribute('data-nodes', '1');
+    // A node selected: the same row is its appearance here, wired from it (05 §5, 06 §5.3).
+    await leave(page);
+    await select(page, 'Дневник');
+    await page.keyboard.press('Tab');
+    await page.keyboard.type('мельн');
+    await mill.click();
+    await expect(ws).toHaveAttribute('data-nodes', '3');
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Мельница']);
+    // `Ctrl+O`: over the canvas one sees, centred; the nodes first, «Создать» after them.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+o');
+    await expect(menu.locator('input')).toBeFocused();
+    await page.keyboard.type('мельн');
+    await expect(menu.locator('.tab-menu-header')).toHaveText(['Ноды', 'Создать']);
+    await expect(rows.first().locator('.tab-menu-label')).toHaveText('Мельница');
+    await expect(rows.first().locator('.tab-menu-detail')).toHaveText('уже здесь');
+    const frame = await box(page, '.find-menu');
+    const seen = await page.evaluate(() => {
+      const hook = window.__strataWs as WsHook;
+      const r = hook.view.canvas.getBoundingClientRect();
+      return { left: r.left, width: r.width - (hook.editor()?.coveredRight() ?? 0) };
+    });
+    expect(Math.abs(frame.x + frame.width / 2 - (seen.left + seen.width / 2))).toBeLessThanOrEqual(
+      1,
+    );
+    // A note made from it stands in the middle of the canvas, wired from nothing.
+    await menu.locator('input').fill('Идея');
+    await expect(rows.first()).toContainText('Заметка «Идея»');
+    await page.keyboard.press('Enter');
+    await expect(ws).toHaveAttribute('data-nodes', '4');
+    await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Мельница']);
   });
 
   test('Ctrl+F finds by Houdini Find: the rest dims, Enter selects, Esc gives back (09 §3.3)', async ({
@@ -4318,7 +4386,7 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Control+p');
     await page.keyboard.type('/');
     await expect(palette).toHaveCount(0);
-    const goto = page.locator('.node-search.goto');
+    const goto = page.locator('.find-menu');
     const query = goto.locator('input');
     await expect(query).toBeFocused();
     await expect(query).toHaveValue('/');
@@ -4454,8 +4522,8 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Escape');
     await expect(page.locator('.note-window')).toBeVisible();
     await page.keyboard.press('Control+o');
-    await page.locator('.goto input').fill('Цель');
-    await page.locator('.goto input').press('Enter');
+    await page.locator('.find-menu input').fill('Цель');
+    await page.locator('.find-menu input').press('Enter');
     const goal = await idOf(page, 'Цель');
     await expect
       .poll(() => page.evaluate(() => window.__strataWs?.editor()?.selected))

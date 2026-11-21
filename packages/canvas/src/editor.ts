@@ -165,9 +165,17 @@ export interface EditorEvents {
   /**
    * Open the Tab menu at a screen point; `query` pre-fills it (06 §5.5).
    * `named` — the menu offers the kinds for a node of this name: a ghost
-   * clicked with Shift (06 §14).
+   * clicked with Shift (06 §14). `find` — opened by `Ctrl+O`: «Найти или
+   * создать», the nodes first (☑ Q-06-26).
    */
-  tabMenu(e: { sx: number; sy: number; query: string; named?: string }): void;
+  tabMenu(e: { sx: number; sy: number; query: string; named?: string; find?: boolean }): void;
+  /**
+   * A node chosen in the menu with nothing to wire it from (☑ Q-06-26): the
+   * Chrome goes to it, as `Ctrl+O` does — a flight on this canvas, else to
+   * its network; `way` — the choice's (a typed path, 09 §4.4). None — the
+   * canvas frames a node of its own.
+   */
+  go?(id: string, way?: readonly string[]): void;
   /** Show or hide the inline name input over a node's label slot. */
   nameInput(e: { id: string; sx: number; sy: number; name: string } | null): void;
   toast(e: { key: string; params?: Record<string, string | number> }): void;
@@ -335,8 +343,14 @@ export type MenuChoice =
       /** Open the name input after creating (the kind's name was used as a placeholder). */
       rename: boolean;
     }
-  /** An existing node: on this canvas — wired or framed; elsewhere — its appearance here (05 §5). */
-  | { t: 'existing'; id: string; kind: NodeKind }
+  /**
+   * An existing node: wired from the selection or the wire drawn — on this
+   * canvas, or as its appearance here (05 §5); nothing to wire it from —
+   * gone to (☑ Q-06-26). `place` — `Alt+Enter`: another network's node
+   * appears here whatever else (06 §5.3). `way` — the networks a typed path
+   * went through to it (09 §4.4), for the Chrome to go by.
+   */
+  | { t: 'existing'; id: string; kind: NodeKind; place?: boolean; way?: readonly string[] }
   /** A node with the flag «Шаблон»: its copy (05 §7). */
   | { t: 'template'; id: string; kind: NodeKind; name: string }
   /** A ghost of this network: a note with its name, which resolves it (05 §8.5). */
@@ -530,6 +544,8 @@ type Mode =
       ghost?: string;
       /** A branch's dot (06 §6.5 «б»): the new node is wired through it. */
       via?: Via | null;
+      /** Opened by `Ctrl+O`: «Найти или создать», the nodes first (☑ Q-06-26). */
+      find?: boolean;
     }
   | { t: 'name'; id: string; created: boolean };
 
@@ -956,14 +972,25 @@ export class Editor {
     this.mode = { t: 'idle' };
     if (choice.t === 'existing') {
       const node = this.graph.nodes.get(choice.id);
+      // On this canvas a node is wired from the selection; another network's
+      // also from a sibling's parents, as a new node would be (06 §5.4).
+      const sources = node
+        ? m.sources.filter((s) => s !== choice.id)
+        : m.sibling
+          ? this.graph.inputs(m.sibling)
+          : m.sources;
+      // Nothing to wire it from: the Chrome goes to it, as `Ctrl+O` does
+      // (☑ Q-06-26); `Alt+Enter` places another network's node all the same.
+      if (sources.length === 0 && !(choice.place && !node) && this.events.go) {
+        this.events.go(choice.id, choice.way);
+        return;
+      }
       if (!node) {
         // Another network's node: «Разместить здесь» (05 §5), where a new one would go.
         const place = this.placeNew(m, radiusOf({ kind: choice.kind, key: false }));
-        const inputs = m.sibling ? this.graph.inputs(m.sibling) : m.sources;
-        this.events.place?.({ id: choice.id, x: place.x, y: place.y, inputs: [...inputs] });
+        this.events.place?.({ id: choice.id, x: place.x, y: place.y, inputs: [...sources] });
         return;
       }
-      const sources = m.sources.filter((s) => s !== choice.id);
       if (sources.length > 0) {
         this.graph.transaction({ key: 'proto.change.connect', params: { name: node.name } }, (tx) =>
           this.wireUp(tx, sources, choice.id, m.via),
@@ -2569,6 +2596,24 @@ export class Editor {
     }
   }
 
+  /**
+   * `Ctrl+O` (☑ Q-06-26): «Найти или создать» — the Tab menu with the nodes
+   * first and nothing wired from the selection; a node made from it goes to
+   * the middle of the canvas in sight.
+   */
+  openFind(query = ''): void {
+    if (this.mode.t !== 'idle') return;
+    const sx = this.seen() / 2;
+    const sy = this.view.height / 2;
+    const w = this.view.camera.toWorld(sx, sy);
+    this.openMenu(
+      sx,
+      sy,
+      { ax: w.x, ay: w.y, sources: [], sibling: null, atAnchor: true, find: true },
+      query,
+    );
+  }
+
   /** `Tab` (06 §5.1): at the free end of a wire being drawn, else at the cursor; `Shift+Tab` — a sibling. */
   private tabKey(shift: boolean) {
     const m = this.mode;
@@ -2626,7 +2671,13 @@ export class Editor {
     named?: string,
   ) {
     this.mode = { t: 'menu', ...m };
-    this.events.tabMenu(named === undefined ? { sx, sy, query } : { sx, sy, query, named });
+    this.events.tabMenu({
+      sx,
+      sy,
+      query,
+      ...(named === undefined ? {} : { named }),
+      ...(m.find ? { find: true } : {}),
+    });
     this.view.invalidate();
   }
 

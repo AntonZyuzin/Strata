@@ -51,6 +51,7 @@ export const HELP: readonly HelpGroup[] = [
       row('help.find', ['Mod', 'F']),
       row('help.palette', ['Mod', 'P']),
       row('help.areas', ['F6'], ['Shift', 'F6']),
+      row('help.split', ['Mod', '\\']),
       row('help.help', ['?']),
     ],
   },

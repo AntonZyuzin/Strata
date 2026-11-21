@@ -41,6 +41,7 @@ const ctx = (over: Partial<CommandContext> = {}): CommandContext => ({
   nextArea: () => undefined,
   copyPath: () => undefined,
   copyLink: () => undefined,
+  toggleSplit: () => undefined,
   ...over,
 });
 

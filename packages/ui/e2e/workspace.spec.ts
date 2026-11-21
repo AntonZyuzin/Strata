@@ -77,6 +77,12 @@ interface WsHook {
     route(from: string, to: string): readonly string[];
   } | null;
   net(): string;
+  /** The screen's canvases (ADR-0015): which is active, each one's parts. */
+  panes(): {
+    active: 'first' | 'second';
+    first: PaneHook | null;
+    second: PaneHook | null;
+  };
   settled(): Promise<void>;
   /** The next content window of this kind fails at its render (NFR-80). */
   faultWindow(kind: 'note' | 'board' | 'asset'): void;
@@ -95,11 +101,48 @@ interface WsHook {
   } | null;
 }
 
+/** A canvas of the screen, as the hook gives it (ADR-0015). */
+interface PaneHook {
+  view: WsHook['view'];
+  graph: NonNullable<ReturnType<WsHook['graph']>>;
+  editor: NonNullable<ReturnType<WsHook['editor']>>;
+  net: string;
+}
+
 declare global {
   interface Window {
     __strataWs?: WsHook;
   }
 }
+
+/** The names on each canvas of the screen and which one is active (ADR-0015). */
+const panesNow = (page: Page) =>
+  page.evaluate(() => {
+    const ps = (window.__strataWs as WsHook).panes();
+    const names = (p: PaneHook | null) =>
+      p ? [...p.graph.nodes.values()].map((n) => n.name).sort() : null;
+    return {
+      active: ps.active,
+      first: names(ps.first),
+      second: names(ps.second),
+      nets: [ps.first?.net ?? null, ps.second?.net ?? null],
+    };
+  });
+
+/** Where node `name` is drawn on canvas `which`, page points. */
+const atIn = (page: Page, which: 'first' | 'second', name: string) =>
+  page.evaluate(
+    ([which, name]) => {
+      const p = (window.__strataWs as WsHook).panes()[which];
+      const n = p ? [...p.graph.nodes.values()].find((x) => x.name === name) : undefined;
+      const at = n ? p?.view.nodeAt(n.id) : null;
+      if (!p || !at) throw new Error(`no ${name} on the ${which} canvas`);
+      const s = p.view.camera.toScreen(at.x, at.y);
+      const r = p.view.canvas.getBoundingClientRect();
+      return { x: r.left + s.x, y: r.top + s.y };
+    },
+    [which, name] as const,
+  );
 
 /** Creates a workspace from the home screen and waits for its canvas. */
 async function createWorkspace(page: Page, name: string) {
@@ -1692,6 +1735,57 @@ for (const deviceScaleFactor of [1, 2]) {
         expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
       }
     }
+  });
+}
+
+for (const deviceScaleFactor of [1, 2]) {
+  test(`two canvases keep their frames in RU and EN @${deviceScaleFactor}x (06 §10.4, ADR-0015)`, async ({
+    browser,
+  }) => {
+    test.setTimeout(90_000);
+    const boxes = [];
+    for (const [locale, folder] of [
+      ['ru-RU', 'Папка'],
+      ['en-US', 'Folder'],
+    ] as const) {
+      const context = await browser.newContext({
+        viewport: { width: 1280, height: 800 },
+        deviceScaleFactor,
+        locale,
+      });
+      const page = await context.newPage();
+      await page.goto('/?plain');
+      await createWorkspace(page, 'Два холста');
+      await diveInto(page, folder, 'Уровни, локации и всё, что между ними, до самого конца пути');
+      await settled(page);
+      await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+      await page.keyboard.press('Control+Backslash');
+      await expect(page.locator('.workspace')).toHaveAttribute('data-active', 'second');
+      // The active canvas's path in its corner, the other's way in words under its own.
+      await expect(page.locator('.ws-path[data-pane="second"]')).toBeVisible();
+      await expect(page.locator('.ws-path-beside[data-pane="first"]')).toBeVisible();
+      expect(
+        await overflowing(page, '.ws-path, .ws-path-beside'),
+        `${locale} the paths must fit`,
+      ).toEqual([]);
+      boxes.push({
+        first: await box(page, '.proto-canvas[data-pane="first"]'),
+        second: await box(page, '.proto-canvas[data-pane="second"]'),
+        bar: await box(page, '.ws-split'),
+        path: await box(page, '.ws-path[data-pane="second"]'),
+        beside: await box(page, '.ws-path-beside'),
+      });
+      await context.close();
+    }
+    const [ru, en] = boxes as [(typeof boxes)[number], (typeof boxes)[number]];
+    for (const part of ['first', 'second', 'bar', 'path', 'beside'] as const) {
+      for (const k of ['x', 'y', 'width', 'height'] as const) {
+        expect(Math.abs(en[part][k] - ru[part][k]), `${part} ${k}`).toBeLessThanOrEqual(0.5);
+      }
+    }
+    // Halves: the boundary between them, the beside label inside the first.
+    expect(Math.abs(ru.first.width - ru.second.width)).toBeLessThanOrEqual(1);
+    expect(ru.beside.x + ru.beside.width).toBeLessThanOrEqual(ru.first.x + ru.first.width);
   });
 }
 
@@ -4108,6 +4202,115 @@ test.describe('a workspace on the core', () => {
     await page.keyboard.press('Enter');
     await expect(ws).toHaveAttribute('data-nodes', '4');
     await expect.poll(async () => (await graphNow(page)).edges).toEqual(['Дневник→Мельница']);
+  });
+
+  test('Ctrl+\\ opens a second canvas beside the first: its own network, the active one framed; a bubble dropped on it moves there, Alt+Ctrl+Shift places an appearance, Ctrl+Z takes it back in both (☑ Q-06-27, ADR-0015)', async ({
+    page,
+  }) => {
+    test.setTimeout(120_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Два холста');
+    const ws = page.locator('.workspace');
+    await makeFolder(page, 'Архив', 420, 300);
+    await createNode(page, 700, 460, 'Мельница');
+    await createNode(page, 560, 560, 'Дневник');
+    await settled(page);
+    const root = (await panesNow(page)).nets[0];
+    // The second canvas: the same network, active, framed.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+Backslash');
+    await expect(ws).toHaveAttribute('data-split', 'on');
+    await expect(ws).toHaveAttribute('data-active', 'second');
+    await expect(page.locator('.proto-canvas[data-pane="second"]')).toHaveClass(/is-active/);
+    await expect.poll(async () => (await panesNow(page)).nets).toEqual([root, root]);
+    // Into «Архив» there; the first canvas stays at the root.
+    const archive = await atIn(page, 'second', 'Архив');
+    await page.mouse.click(archive.x, archive.y);
+    await page.keyboard.press('Enter');
+    await expect.poll(async () => (await panesNow(page)).second).toEqual([]);
+    expect((await panesNow(page)).first).toEqual(['Архив', 'Дневник', 'Мельница']);
+    await expect(ws).toHaveAttribute('data-depth', '2');
+    // The other canvas's way, in words, under its corner: a click makes it active.
+    await expect(page.locator('.ws-path-beside')).toHaveCount(0);
+    // A bubble of the first canvas dropped on the second: it moves into «Архив».
+    const mill = await atIn(page, 'first', 'Мельница');
+    const into = await page.locator('.proto-canvas[data-pane="second"]').boundingBox();
+    if (!into) throw new Error('no second canvas');
+    const drop = { x: into.x + into.width / 3, y: into.y + into.height / 2 };
+    await page.mouse.move(mill.x, mill.y);
+    await page.mouse.down();
+    await page.mouse.move(mill.x + 30, mill.y + 10, { steps: 4 });
+    await page.mouse.move(drop.x, drop.y, { steps: 12 });
+    await page.mouse.up();
+    await expect.poll(async () => (await panesNow(page)).second).toEqual(['Мельница']);
+    expect(await panesNow(page)).toMatchObject({
+      active: 'second',
+      first: ['Архив', 'Дневник'],
+    });
+    expect(await parentOf(page, 'Мельница')).toBe('Архив');
+    expect(await page.evaluate(() => window.__strataWs?.editor()?.selected.length)).toBe(1);
+    // One step: undo takes it back on both canvases.
+    await page.keyboard.press('Control+z');
+    await expect.poll(async () => (await panesNow(page)).second).toEqual([]);
+    await expect
+      .poll(async () => (await panesNow(page)).first)
+      .toEqual(['Архив', 'Дневник', 'Мельница']);
+    // `Alt+Ctrl+Shift`: an appearance there, the node stays here too (05 §5).
+    const diary = await atIn(page, 'first', 'Дневник');
+    await page.keyboard.down('Alt');
+    await page.keyboard.down('Control');
+    await page.keyboard.down('Shift');
+    await page.mouse.move(diary.x, diary.y);
+    await page.mouse.down();
+    await page.mouse.move(diary.x + 30, diary.y + 10, { steps: 4 });
+    await page.mouse.move(drop.x, drop.y, { steps: 12 });
+    await page.mouse.up();
+    await page.keyboard.up('Shift');
+    await page.keyboard.up('Control');
+    await page.keyboard.up('Alt');
+    await expect.poll(async () => (await panesNow(page)).second).toEqual(['Дневник']);
+    expect((await panesNow(page)).first).toEqual(['Архив', 'Дневник', 'Мельница']);
+    const diaryId = await idOf(page, 'Дневник');
+    await expect.poll(() => placement(page, diaryId)).toEqual({ appearance: true, places: 2 });
+    // A folder may not go into itself (05 §14 rule 5): «⊘» by the cursor, nothing moves.
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    const folder = await atIn(page, 'first', 'Архив');
+    await page.mouse.move(folder.x, folder.y);
+    await page.mouse.down();
+    await page.mouse.move(folder.x + 30, folder.y + 10, { steps: 4 });
+    await page.mouse.move(drop.x, drop.y, { steps: 12 });
+    await expect(page.locator('.ws-cursor-note')).toHaveText('Папка не ляжет сама в себя');
+    await page.mouse.up();
+    await expect(page.locator('.ws-cursor-note')).toHaveCount(0);
+    expect(await parentOf(page, 'Архив')).toBe('Два холста');
+    // The keys are the active canvas's: `U` there goes up there only. (The
+    // panel open for «Архив» covers the second canvas's right part.)
+    await page.mouse.click(into.x + 40, into.y + 40);
+    await expect(ws).toHaveAttribute('data-active', 'second');
+    await page.keyboard.press('KeyU');
+    await expect.poll(async () => (await panesNow(page)).nets).toEqual([root, root]);
+    // `Ctrl+\` closes it; it opens again where it was.
+    await page.keyboard.press('Control+Backslash');
+    await expect(ws).toHaveAttribute('data-split', 'off');
+    await expect(page.locator('.proto-canvas[data-pane="second"]')).toHaveCount(0);
+    await expect(ws).toHaveAttribute('data-active', 'first');
+  });
+
+  test('M on a split screen: the second canvas goes first, the star map opens from the first (ADR-0015)', async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+    await page.goto('/?plain');
+    await createWorkspace(page, 'Карта');
+    await createNode(page, 600, 400, 'Звезда');
+    await settled(page);
+    await page.evaluate(() => window.__strataWs?.view.canvas.focus());
+    await page.keyboard.press('Control+Backslash');
+    const ws = page.locator('.workspace');
+    await expect(ws).toHaveAttribute('data-active', 'second');
+    await page.keyboard.press('KeyM');
+    await expect(ws).toHaveAttribute('data-split', 'off');
+    await expect(ws).toHaveAttribute('data-view', '3d', { timeout: 30_000 });
   });
 
   test('Ctrl+F finds by Houdini Find: the rest dims, Enter selects, Esc gives back (09 §3.3)', async ({

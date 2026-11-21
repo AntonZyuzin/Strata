@@ -3671,6 +3671,100 @@ input[type="date"].field::-webkit-calendar-picker-indicator {
   );
 }
 
+/* Two canvases (ADR-0015, 06 §10.4): the first left of the boundary, the
+   second right of it; the boundary at the first one's share of the width
+   right of «Ноды». */
+.workspace[data-split="on"] {
+  --split-x: calc(var(--layers-w) + (100% - var(--layers-w)) * var(--split));
+}
+
+.workspace[data-split="on"] .proto-canvas[data-pane="first"] {
+  right: calc(100% - var(--split-x));
+}
+
+.workspace .proto-canvas[data-pane="second"] {
+  inset: 0 0 0 var(--split-x);
+}
+
+/* The active canvas of two is framed: the keys and the Chrome are its. */
+.workspace[data-split="on"] .proto-canvas.is-active::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 var(--u) var(--st-color-accent);
+}
+
+/* The boundary: a frame line, a wider strip to take it by. */
+.ws-split {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--split-x) - 2 * var(--u));
+  z-index: 3;
+  width: calc(5 * var(--u));
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.ws-split::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(2 * var(--u));
+  width: var(--u);
+  background: var(--st-color-frame);
+}
+
+.ws-split:focus-visible::before {
+  background: var(--st-color-focus);
+}
+
+/* The gecko lives in the first canvas's corner while there are two: the
+   second's is the panel's and the minimap's. */
+.workspace[data-split="on"] .ws-gecko,
+.workspace[data-split="on"] .ws-gecko[data-panel="open"] {
+  right: calc(100% - var(--split-x));
+}
+
+/* The path bars of two canvases, each in its canvas's corner; the inactive
+   one's way only, in words: a click makes that canvas active. */
+.workspace[data-split="on"] .ws-path[data-pane="first"],
+.ws-path-beside[data-pane="first"] {
+  max-width: min(64ch, calc(var(--split-x) - var(--layers-w) - 32 * var(--u) - var(--gecko-w)));
+}
+
+.ws-path[data-pane="second"],
+.ws-path-beside[data-pane="second"] {
+  left: calc(var(--split-x) + 16 * var(--u));
+  max-width: min(64ch, calc(100% - var(--split-x) - 32 * var(--u) - var(--minimap-w, 0px)));
+}
+
+.ws-path[data-pane="second"][data-panel="open"] {
+  max-width: min(
+    64ch,
+    calc(100% - var(--split-x) - var(--panel-w) - 32 * var(--u) - var(--minimap-w, 0px))
+  );
+}
+
+.ws-path-beside {
+  position: absolute;
+  left: calc(var(--layers-w) + 16 * var(--u));
+  bottom: calc(16 * var(--u));
+  z-index: 2;
+  min-height: var(--st-size-control);
+  color: var(--st-color-text-muted);
+}
+
+.ws-path-beside-text {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 /* The path's frame: the entry path, and under it the canonical one when it
    is another (06 §10.2); the field in its place while a path is typed. */
 .ws-path-box,

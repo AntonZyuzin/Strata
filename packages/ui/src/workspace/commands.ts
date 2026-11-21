@@ -72,6 +72,8 @@ export interface CommandContext {
   app?: AppActions | undefined;
   /** «Фон» of the network on the canvas (07 §7.4). */
   background?: (() => void) | undefined;
+  /** The second canvas beside the first, or one again (ADR-0015). */
+  toggleSplit(): void;
 }
 
 export interface Command {
@@ -184,6 +186,15 @@ export const COMMANDS: readonly Command[] = [
   canvas('selectAll', 'selectAll', 'Ctrl+A', ['выделить', 'select']),
   canvas('wireStyle', 'wireStyle', 'Shift+S', ['нити', 'кривые', 'wires', 'curves', 'straight']),
   canvas('minimap', 'minimap', 'O', ['мини-карта', 'обзор', 'minimap', 'overview']),
+  {
+    id: 'canvas.split',
+    title: 'cmd.canvas.split',
+    aliases: ['разделить', 'два холста', 'рядом', 'split', 'two canvases', 'side by side'],
+    group: 'canvas',
+    key: 'Ctrl+\\',
+    why: flat,
+    run: (c) => c.toggleSplit(),
+  },
   {
     id: 'canvas.background',
     title: 'cmd.canvas.background',

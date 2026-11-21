@@ -83,6 +83,8 @@ export function PathBar(props: {
   onClearMark: (slot: number) => void;
   /** Ask the path to become the field (the palette's «Ввести путь»): a new number each time. */
   editAsked?: number;
+  /** The canvas it is the path of, while there are two (ADR-0015): it stands in that one's corner. */
+  pane?: 'first' | 'second' | undefined;
 }) {
   const { path, locale } = props;
   const nav = useRef<HTMLElement>(null);
@@ -221,6 +223,7 @@ export function PathBar(props: {
       ref={nav}
       className="ws-path"
       data-panel={props.panel ? 'open' : 'closed'}
+      data-pane={props.pane}
       aria-label={t(locale, 'ws.path')}
     >
       {editing ? (

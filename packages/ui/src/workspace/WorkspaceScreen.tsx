@@ -63,6 +63,7 @@ import type { SearchContext } from '@strata/search';
 import { type Quality, qualityOf } from '@strata/view3d/map';
 import type { LoroDoc } from 'loro-crdt';
 import {
+  type CSSProperties,
   type Dispatch,
   type MutableRefObject,
   type SetStateAction,
@@ -73,6 +74,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import { flushSync } from 'react-dom';
 import { isTauri, linkPreview, pictureOf } from '../backend';
 import { ContextMenu, type MenuEntry } from '../ContextMenu';
 import { copyText } from '../clipboard';
@@ -159,6 +161,16 @@ import {
   parseOwnIcon,
 } from './ownIcons';
 import { PathBar, type PathChildren } from './PathBar';
+import {
+  activePane,
+  allPanes,
+  besidePane,
+  type Camera,
+  newPane,
+  type Pane,
+  type Panes,
+  usePaneField,
+} from './panes';
 import { pastedNote } from './pasted';
 import {
   alsoIn,
@@ -171,6 +183,7 @@ import {
   pathText,
   samePath,
 } from './paths';
+import { SplitBar } from './SplitBar';
 import { WindowGuard, windowFaults } from './WindowGuard';
 
 /**
@@ -209,12 +222,6 @@ interface Toast {
   undo: boolean;
   /** A step of its own offered by the toast, in place of the undo. */
   action?: { label: MessageKey; run: () => void };
-}
-
-interface Camera {
-  x: number;
-  y: number;
-  zoom: number;
 }
 
 /**
@@ -366,19 +373,23 @@ export function WorkspaceScreen(props: {
   const { locale, home, opened, covered } = props;
   const core = home.core;
   const host = useRef<HTMLDivElement>(null);
-  const viewRef = useRef<CanvasView | null>(null);
-  const editor = useRef<Editor | null>(null);
-  const graph = useRef<Graph | null>(null);
-  const sync = useRef<CoreSync | null>(null);
+  /**
+   * The screen's canvases (ADR-0015). The refs below are the active one's:
+   * the screen's code works with the canvas the keys work with.
+   */
+  const panes = useRef<Panes>({ first: newPane(opened.root), second: null, active: 'first' });
+  const viewRef = usePaneField(panes, 'view');
+  const editor = usePaneField(panes, 'editor');
+  const graph = usePaneField(panes, 'graph');
+  const sync = usePaneField(panes, 'sync');
   const docs = useRef<CoreDocs | null>(null);
   const map3d = useRef<Map3D | null>(null);
   const layouter = useRef<Layouter | null>(null);
-  const netRef = useRef(opened.root);
+  const netRef = usePaneField(panes, 'net');
   /** The open workspace; a tab switch changes it under the same canvas. */
   const openedRef = useRef(opened);
-  const cameras = useRef(new Map<string, Camera>());
-  const textWires = useRef(new Set<string>());
-  /** When the flag ring shows (06 §8): «Настройки» set it, every new canvas takes it. */
+  const cameras = usePaneField(panes, 'cameras');
+  const textWires = usePaneField(panes, 'textWires');
   /** What a dragged bubble snaps to (06 §3): «Настройки» set it, every new canvas takes it. */
   const snapRef = useRef(props.prefs.snap);
   /** The info card on hover (06 §4.4): «Настройки» set it, every new canvas takes it. */
@@ -396,7 +407,7 @@ export function WorkspaceScreen(props: {
    */
   const loadRef = useRef<(net?: string, way?: readonly string[]) => Promise<void>>(async () => {});
   /** The entry path of the network on the canvas (05 §9.3): `U` goes up it, the path shows it. */
-  const entryRef = useRef<string[]>([]);
+  const entryRef = usePaneField(panes, 'entry');
   const [entry, setEntry] = useState<string[]>([]);
   /** The palette's «Ввести путь»: the path becomes its field (09 §4.3). */
   const [pathAsk, setPathAsk] = useState(0);
@@ -621,8 +632,7 @@ export function WorkspaceScreen(props: {
   const peopleRef = useRef<Person[]>([]);
   const [tree, setTree] = useState<TreeItem[]>([]);
   const [ctx, setCtx] = useState<{ x: number; y: number; at: MenuTarget } | null>(null);
-  /** Pictures shown in bubbles: node → asset; and asset → object URL for the panel. */
-  const shown = useRef(new Map<string, string>());
+  /** Asset → object URL for the panel; the bubbles' pictures are each canvas's (`Pane.shown`). */
   const urls = useRef(new Map<string, string>());
   /** The file behind each object URL: pdf.js reads it, the CSP lets no fetch of `blob:` (ADR-0013). */
   const blobs = useRef(new Map<string, Blob>());
@@ -630,17 +640,39 @@ export function WorkspaceScreen(props: {
   const refreshRef = useRef<() => void>(() => undefined);
   /** Fetches the previews of these link assets (✅ Q-13-16); set with the canvas. */
   const previewRef = useRef<(ids: string[]) => Promise<void>>(async () => {});
-  /** The references of one's own icons whose masks the canvas was given (07 §6.6). */
-  const ownGiven = useRef(new Set<string>());
-  /** Gives the canvas the masks of the own icons its nodes have; set each render. */
-  const ownIconsRef = useRef<() => void>(() => undefined);
+  /** Gives a canvas — the active one by default — the masks of the own icons its nodes have; set each render. */
+  const ownIconsRef = useRef<(p?: Pane) => void>(() => undefined);
   /** The pictures «Своя иконка» was opened with, counted. */
   const ownSeq = useRef(0);
   /** The kinds' icons of the workspace (05 §3, §4.1), as the last view of the core gave them. */
   const kindIconsRef = useRef<Partial<Record<NodeKind, string>>>({});
   /** Link assets already asked for a preview this session. */
   const previewed = useRef(new Set<string>());
-  const eventsRef = useRef<EditorEvents | null>(null);
+  const eventsRef = usePaneField(panes, 'events');
+  /**
+   * The canvas beside `p` reads its network again after a step on `p`
+   * (ADR-0015), a moment later; `now` — at once, the core has it already.
+   */
+  const besideRef = useRef<(p: Pane, now?: boolean) => void>(() => undefined);
+  /** A canvas showed another network or the same one again: its path bar follows. */
+  const [, setPanesShown] = useState(0);
+  /**
+   * The second canvas beside the first (ADR-0015, ☑ Q-06-27): which one is
+   * active and the first one's share of the width; null — one canvas.
+   */
+  const [split, setSplit] = useState<{ active: 'first' | 'second'; at: number } | null>(null);
+  const host2 = useRef<HTMLDivElement>(null);
+  /** The second canvas's network, way and camera as it closed: `Ctrl+\` opens it there again. */
+  const lastSecond = useRef<{ net: string; entry: string[]; camera: Camera | null } | null>(null);
+  /** `activate` for the canvas's own callbacks, which are made once. */
+  const activateRef = useRef<(which: 'first' | 'second') => void>(() => undefined);
+  /** To the star map, set below. */
+  const toMapRef = useRef<() => void>(() => undefined);
+  /** Makes the second canvas in its element and lets it go; set with the first. */
+  const splitRef = useRef<{ open: (el: HTMLDivElement) => Promise<void>; close: () => void }>({
+    open: async () => undefined,
+    close: () => undefined,
+  });
   /** Where one has been, and the quick marks, on this device (09 §6.1–6.2). */
   const navRef = useRef(NavHistory.load(readLocal(navKey(opened.workspace.id))));
   const [marks, setMarks] = useState(() => loadMarks(readLocal(marksKey(opened.workspace.id))));
@@ -749,6 +781,7 @@ export function WorkspaceScreen(props: {
   useEffect(() => {
     const el = host.current;
     if (!el) return;
+    panes.current.first.host = el;
     let cancelled = false;
     let view: CanvasView | null = null;
     let trashTimer: ReturnType<typeof setTimeout> | null = null;
@@ -762,19 +795,23 @@ export function WorkspaceScreen(props: {
       void loadRef.current();
     };
 
-    const events: EditorEvents = {
+    /**
+     * What canvas `p`'s editor tells the Chrome (ADR-0015): its points are of
+     * its own element `hostEl`, which sits right of «Ноды».
+     */
+    const eventsFor = (pane: Pane, hostEl: HTMLDivElement): EditorEvents => ({
       // The editor speaks in points of the canvas, which sits right of «Слои»:
       // the Tab menu is fixed to the page, the name field lies in this screen.
       // `Z` (07 §6.3): the palette at the cursor; the presets load once.
       icons: (e) => {
-        const r = el.getBoundingClientRect();
+        const r = hostEl.getBoundingClientRect();
         setIconPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
         void iconPresets().then(setPresets, refused);
         void core.ownIcons().then(setOwnIcons, refused);
       },
       // `C` (06 §2.1): the colour palette at the cursor.
       colors: (e) => {
-        const r = el.getBoundingClientRect();
+        const r = hostEl.getBoundingClientRect();
         setColorPick({ ids: e.ids, x: e.sx + r.left, y: e.sy + r.top });
       },
       // The info card (06 §4.4): a held or hovered one gives way to none;
@@ -784,7 +821,7 @@ export function WorkspaceScreen(props: {
           setInfo((i) => (i?.kept ? i : null));
           return;
         }
-        const r = el.getBoundingClientRect();
+        const r = hostEl.getBoundingClientRect();
         const card = {
           id: e.id,
           x: e.sx + r.left,
@@ -795,7 +832,7 @@ export function WorkspaceScreen(props: {
         setInfo((i) => (i?.kept && !card.kept ? i : card));
       },
       tabMenu: (e) => {
-        const r = el.getBoundingClientRect();
+        const r = hostEl.getBoundingClientRect();
         // The menu ranks the canvas's nodes as they are now (09 §2.7).
         const g = graph.current;
         if (g) searchClient().set('net', netItems(g.nodes.values(), netRef.current));
@@ -804,7 +841,7 @@ export function WorkspaceScreen(props: {
       // A node chosen with nothing to wire it from (☑ Q-06-26).
       go: (id, way) => goToRef.current(id, false, way),
       nameInput: (e) =>
-        setName(e ? { ...e, sx: e.sx + el.offsetLeft, sy: e.sy + el.offsetTop } : null),
+        setName(e ? { ...e, sx: e.sx + hostEl.offsetLeft, sy: e.sy + hostEl.offsetTop } : null),
       toast: (e) => toast(e.key, e.params, e.key !== 'proto.toast.exists'),
       // No explaining lines on screen: a gesture's keys by the cursor while
       // it lasts; what lies under the cursor is in tooltips and «Клавиши».
@@ -819,7 +856,7 @@ export function WorkspaceScreen(props: {
         detailsTimer = setTimeout(() => refreshRef.current(), 120);
       },
       contextMenu: (e) => {
-        const r = viewRef.current?.canvas.getBoundingClientRect();
+        const r = pane.view?.canvas.getBoundingClientRect();
         setCtx({ x: e.sx + (r?.left ?? 0), y: e.sy + (r?.top ?? 0), at: e.at });
       },
       // «Разместить здесь» (05 §5): the core places it, the network is read again.
@@ -854,7 +891,7 @@ export function WorkspaceScreen(props: {
         if (nodes.length === 0) return;
         clipRef.current = { cut: e.cut, net: netRef.current, nodes };
         setClipped(true);
-        viewRef.current?.setCut(e.cut ? nodes.map((n) => n.id) : []);
+        pane.view?.setCut(e.cut ? nodes.map((n) => n.id) : []);
       },
       paste: (e) => {
         if (!clipRef.current) return false;
@@ -868,10 +905,12 @@ export function WorkspaceScreen(props: {
         if (!c?.cut || c.net !== netRef.current) return;
         clipRef.current = null;
         setClipped(false);
-        viewRef.current?.setCut([]);
+        pane.view?.setCut([]);
       },
       wrap: (e) => void wrap(e),
       into: (e) => void dropInto(e),
+      // Dropped on the other canvas (ADR-0015).
+      out: (e) => void dropOut(pane, e),
       // The word comes and goes with a render; it follows the cursor without
       // one. Until it is drawn each move goes into its state: the moves made
       // before that render would leave it where the drag first crossed.
@@ -880,7 +919,7 @@ export function WorkspaceScreen(props: {
           setCursorNote(null);
           return;
         }
-        const r = el.getBoundingClientRect();
+        const r = hostEl.getBoundingClientRect();
         const x = e.sx + r.left;
         const y = e.sy + r.top;
         const shown = noteEl.current;
@@ -893,9 +932,9 @@ export function WorkspaceScreen(props: {
       // «↗N» (06 §14): the list opens beside the mark at once, its top level
       // with it, clear of the label under the bubble; the rows come from the core.
       external: (e) => {
-        const r = el.getBoundingClientRect();
+        const r = hostEl.getBoundingClientRect();
         const net = netRef.current;
-        const v = viewRef.current;
+        const v = pane.view;
         const n = v?.nodeAt(e.id);
         const left = v && n ? v.camera.toScreen(n.x - n.r, n.y).x : e.sx;
         const at = {
@@ -921,7 +960,8 @@ export function WorkspaceScreen(props: {
       // The shortcut of an appearance (06 §12.2): the node is chosen, its
       // panel shows «Где размещена».
       places: (e) => setPlacesFocus(e.id),
-      map: () => map3d.current?.toggle(),
+      // The star map is the first canvas's view (ADR-0015): one canvas first.
+      map: () => toMapRef.current(),
       minimap: (open) => {
         minimapRef.current = open;
         setMinimap(open);
@@ -951,7 +991,7 @@ export function WorkspaceScreen(props: {
       },
       layout: (ids) => {
         const g = graph.current;
-        const v = viewRef.current;
+        const v = pane.view;
         if (!g || !v) return;
         // Ghosts stand by their notes (06 §14): `L` moves the notes.
         const chosen = ids ?? [...g.nodes.values()].filter((n) => !n.ghostOf).map((n) => n.id);
@@ -972,7 +1012,7 @@ export function WorkspaceScreen(props: {
       // `A` + drag (06 §9.1): the branch by `L`'s rule, the bubble grabbed staying put.
       arrange: (e) => {
         const g = graph.current;
-        const v = viewRef.current;
+        const v = pane.view;
         if (!g || !v) return;
         layouter.current ??= new Layouter();
         layouter.current
@@ -983,7 +1023,7 @@ export function WorkspaceScreen(props: {
           .catch((err: unknown) => console.error('layout', err));
       },
       open: (id, as = 'float') => {
-        const v = viewRef.current;
+        const v = pane.view;
         const n = graph.current?.nodes.get(id);
         const p = v?.nodeAt(id);
         const d = docs.current;
@@ -1012,12 +1052,12 @@ export function WorkspaceScreen(props: {
         // runs under the properties panel, which takes its right edge.
         const s = v.camera.toScreen(p.x, p.y);
         const r = p.r * v.camera.zoom;
-        const panel = el.parentElement?.querySelector<HTMLElement>('.ws-inspector');
+        const panel = hostEl.parentElement?.querySelector<HTMLElement>('.ws-inspector');
         const room = v.width - (panel?.offsetWidth ?? 0);
         const side = s.x < room / 2 ? 'right' : 'left';
         // In this screen's points: the canvas starts right of «Слои».
-        const x = el.offsetLeft + (side === 'right' ? s.x + r + 24 : s.x - r - 24);
-        const y = el.offsetTop + Math.max(8, Math.min(s.y - 120, v.height - 320));
+        const x = hostEl.offsetLeft + (side === 'right' ? s.x + r + 24 : s.x - r - 24);
+        const y = hostEl.offsetTop + Math.max(8, Math.min(s.y - 120, v.height - 320));
         const at = { side, x, y } as const;
         if (type !== null && viewable(type)) {
           const sha = n.attrs.asset;
@@ -1030,7 +1070,7 @@ export function WorkspaceScreen(props: {
         }
         d.doc(id).then((doc) => openWindowRef.current('note', { id, doc, at, ...mode }), refused);
       },
-    };
+    });
 
     /**
      * The star map works in the whole space from the core (08 §6, §10): its
@@ -1163,10 +1203,10 @@ export function WorkspaceScreen(props: {
     };
 
     /** The graph's text wires and ghosts as the core has them, outside undo (05 §8.2, §8.5). */
-    const followLinks = (g: Graph, nv: NetworkView) => {
-      textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
+    const followLinks = (p: Pane, g: Graph, nv: NetworkView) => {
+      p.textWires = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
       followWires(g, nv);
-      followGhosts(g, nv, viewRef.current?.iconFor('note') ?? 0);
+      followGhosts(g, nv, p.view?.iconFor('note') ?? 0);
       // A wire to a node elsewhere, by hand or from text: «↗N» and the roll-ups (05 §8.3).
       followExternal(g, nv);
     };
@@ -1178,14 +1218,54 @@ export function WorkspaceScreen(props: {
       return p;
     };
 
-    const show = async (id: string, way?: readonly string[]) => {
-      const v = viewRef.current;
-      if (!v || cancelled) return;
-      const was = netRef.current;
-      if (graph.current) {
-        cameras.current.set(was, { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom });
-      }
-      await sync.current?.settled();
+    /**
+     * How much of a canvas's right edge is covered: the properties panel
+     * while one node is chosen (review 2026-10-24), a window docked right
+     * (06 §2.2). Framing keeps clear of it; the canvas on the left of two is
+     * covered only where they reach over it (ADR-0015).
+     */
+    const coveredOf = (hostEl: HTMLDivElement): number => {
+      const screen = hostEl.closest<HTMLElement>('.workspace');
+      if (!screen) return 0;
+      const panel =
+        editor.current?.selection.size === 1
+          ? (screen.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
+          : 0;
+      const docked =
+        screen.querySelector<HTMLElement>('.window[data-mode="pinned"]')?.offsetWidth ?? 0;
+      const edge = screen.getBoundingClientRect().right - panel - docked;
+      return Math.max(0, hostEl.getBoundingClientRect().right - edge);
+    };
+
+    let besideTimer: ReturnType<typeof setTimeout> | null = null;
+    besideRef.current = (p, now = false) => {
+      if (besideTimer) clearTimeout(besideTimer);
+      const run = () => {
+        besideTimer = null;
+        const q = besidePane(panes.current, p);
+        if (!q || cancelled) return;
+        void (p.sync?.settled() ?? Promise.resolve())
+          .then(() => queue(() => showIn(q, q.net, q.entry, true)))
+          .catch(refused);
+      };
+      if (now) run();
+      else besideTimer = setTimeout(run, 150);
+    };
+
+    /**
+     * Shows network `id` on canvas `p` (ADR-0015): a fresh graph from the
+     * core, the camera it had there. `quiet` — the canvas beside the active
+     * one read again after a step there: its selection stays, the Chrome is
+     * left alone.
+     */
+    const showIn = async (p: Pane, id: string, way?: readonly string[], quiet = false) => {
+      const v = p.view;
+      const hostEl = p.host;
+      if (!v || !hostEl || cancelled) return;
+      const was = p.net;
+      if (p.graph) p.cameras.set(was, { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom });
+      const kept = quiet && id === was ? (p.editor?.selected ?? []) : [];
+      await p.sync?.settled();
       await docs.current?.flush();
       const [nv, h, ppl, items] = await Promise.all([
         core.view(id),
@@ -1194,33 +1274,37 @@ export function WorkspaceScreen(props: {
         core.tree(),
       ]);
       if (cancelled) return;
+      const active = activePane(panes.current) === p;
       setHistory(h);
       peopleRef.current = ppl;
       setPeople(ppl);
       setTree(items);
       v.clearPictures();
-      shown.current.clear();
+      p.shown.clear();
       // Content windows are bound to their nodes, not to the network: they
       // stay through a dive (06 §2.2).
-      editor.current?.destroy();
-      sync.current?.destroy();
-      // The star map asked for this network (08 §7.2): it stays and lands
-      // here; any other load ends it.
-      const keep = keepMap.current && map3d.current !== null && map3d.current.state !== '2d';
-      if (!keep) map3d.current?.destroy();
+      p.editor?.destroy();
+      p.sync?.destroy();
+      // The star map is the first canvas's (ADR-0015). It asked for this
+      // network (08 §7.2): it stays and lands here; any other load ends it.
+      const first = p === panes.current.first;
+      const keep =
+        first && keepMap.current && map3d.current !== null && map3d.current.state !== '2d';
+      if (first && !keep) map3d.current?.destroy();
       const g = graphOf(
         nv,
         (k) => v.iconFor(k),
-        (pid) => peopleRef.current.find((p) => p.id === pid)?.color ?? 0,
+        (pid) => peopleRef.current.find((x) => x.id === pid)?.color ?? 0,
       );
-      graph.current = g;
+      p.graph = g;
       kindIconsRef.current = nv.kind_icons ?? {};
       v.setKindDefaults(kindIconsRef.current);
-      ownIconsRef.current();
+      ownIconsRef.current(p);
       g.subscribe((e) => {
         for (const event of geckoEvents(e)) gecko.current?.react(event);
         // One's own icon chosen, undone or redone: its mask (07 §6.6).
-        ownIconsRef.current();
+        ownIconsRef.current(p);
+        if (e.type === 'look') return;
         // A link given by the user: its preview follows (✅ Q-13-16).
         if ((e.type === 'apply' || e.type === 'redo') && e.changeset.source === 'user') {
           const links = e.changeset.ops.flatMap((op) =>
@@ -1228,61 +1312,83 @@ export function WorkspaceScreen(props: {
           );
           if (links.length > 0) void previewRef.current(links);
         }
+        // A step here: the canvas beside reads its network again (ADR-0015).
+        if (e.changeset.source === 'user') besideRef.current(p);
       });
-      textWires.current = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
-      const ed = new Editor(v, g, events);
+      p.textWires = new Set(nv.edges.filter((e) => e.text).map((e) => pair(e.from, e.to)));
+      p.events ??= eventsFor(p, hostEl);
+      const ed = new Editor(v, g, p.events);
       // Scissors leave wires from text alone (06 §6.7).
-      ed.textWire = (a, b) => textWires.current.has(pair(a, b));
+      ed.textWire = (a, b) => p.textWires.has(pair(a, b));
       // A drag resting on a folder asks the core whether it may go in (06 §12.1).
       ed.placeable = (to, ids) => placeableRef.current(to, ids);
+      // A drag over the other canvas goes into its network (ADR-0015).
+      ed.elsewhere = (x, y) => {
+        const q = besidePane(panes.current, p);
+        const r = q?.host?.getBoundingClientRect();
+        return q && r && x >= r.left && x < r.right && y >= r.top && y < r.bottom ? q.net : null;
+      };
       verdicts.current = new Map();
-      setCursorNote(null);
-      setGestureHint(null);
+      if (!quiet) {
+        setCursorNote(null);
+        setGestureHint(null);
+      }
       // What was cut here stays half seen until the paste or `Esc` (☑ Q-06-17).
       const c = clipRef.current;
       v.setCut(c?.cut && c.net === id ? c.nodes.map((n) => n.id) : []);
-      // The properties panel covers the canvas's right edge while one node is
-      // chosen: framing keeps clear of it (review 2026-10-24).
-      ed.coveredRight = () => {
-        const screen = el.parentElement;
-        const panel =
-          ed.selection.size === 1
-            ? (screen?.querySelector<HTMLElement>('.ws-panel-probe')?.offsetWidth ?? 0)
-            : 0;
-        // A window docked right shares the screen with the canvas (06 §2.2).
-        const docked =
-          screen?.querySelector<HTMLElement>('.window[data-mode="pinned"]')?.offsetWidth ?? 0;
-        return panel + docked;
-      };
+      // What covers the canvas's right edge: framing keeps clear of it.
+      ed.coveredRight = () => coveredOf(hostEl);
       ed.snap = snapRef.current;
       ed.hoverCard = hoverCardRef.current;
       ed.minimap.open = minimapRef.current;
-      editor.current = ed;
-      sync.current = new CoreSync(core, g, id, refused, setHistory);
-      if (keep && map3d.current) {
-        map3d.current.adopt(g);
-      } else {
-        map3d.current = new Map3D(el, v, g, setView3d, mapNav);
-        // A network loads onto the canvas: the screen is in 2D with the new map,
-        // even when the old one was open (another tab under the star map).
-        setView3d('2d');
+      // The keys are the active canvas's (ADR-0015).
+      if (!active) ed.setOverlayOpen(true);
+      p.editor = ed;
+      p.sync = new CoreSync(core, g, id, refused, setHistory);
+      if (first) {
+        if (keep && map3d.current) {
+          map3d.current.adopt(g);
+        } else {
+          map3d.current = new Map3D(hostEl, v, g, setView3d, mapNav);
+          // A network loads onto the canvas: the screen is in 2D with the new map,
+          // even when the old one was open (another tab under the star map).
+          if (!quiet) setView3d('2d');
+        }
       }
-      netRef.current = id;
+      p.net = id;
       // The way one came (05 §9.3): given, kept while one stays, else the canonical path.
-      const kept = id === was && entryRef.current.at(-1) === id ? entryRef.current : null;
-      const nextWay = way && way.at(-1) === id ? [...way] : (kept ?? nv.path.map(([pid]) => pid));
-      entryRef.current = nextWay;
-      setEntry(nextWay);
-      // A network entered is a visit of this device's (09 §6.4): the ranking and `▾` read them.
-      if (id !== was) visited(openedRef.current.workspace.id, id);
-      setNet(nv);
-      setMenu(null);
-      setName(null);
-      setExternal(null);
-      setInfo(null);
+      const keptWay = id === was && p.entry.at(-1) === id ? p.entry : null;
+      const nextWay =
+        way && way.at(-1) === id ? [...way] : (keptWay ?? nv.path.map(([pid]) => pid));
+      p.entry = nextWay;
+      p.info = nv;
+      // The active canvas's ground follows `net` below; another's is its
+      // network's, painted here (07 §7.4, ADR-0015).
+      if (!active && v.background.container.visible) {
+        const ground = nv.background ?? nv.workspace_background ?? null;
+        v.setBackgroundDots(backgroundDots(ground));
+        backgroundPixels(ground, (sha) => core.asset(sha), readableRef.current).then(
+          (px) => {
+            if (p.view === v && p.info === nv) v.setBackground(px, backgroundLook(ground));
+          },
+          (e: unknown) => console.error('background', e),
+        );
+      }
+      if (active) {
+        setEntry(nextWay);
+        // A network entered is a visit of this device's (09 §6.4): the ranking and `▾` read them.
+        if (id !== was) visited(openedRef.current.workspace.id, id);
+        setNet(nv);
+      }
+      if (active && !quiet) {
+        setMenu(null);
+        setName(null);
+        setExternal(null);
+        setInfo(null);
+      }
       // A flight under way belongs to the network left (a paste framed there).
       v.stopFlight();
-      const cam = cameras.current.get(id);
+      const cam = p.cameras.get(id);
       if (cam) {
         v.camera.x = cam.x;
         v.camera.y = cam.y;
@@ -1291,10 +1397,24 @@ export function WorkspaceScreen(props: {
       } else {
         ed.fitAll();
       }
-      v.canvas.focus();
+      if (kept.length > 0) ed.selectNodes(kept);
+      if (active && !quiet) {
+        v.canvas.focus();
+        setDetails(null);
+      }
       refreshTrash();
-      setDetails(null);
-      void pictures();
+      setPanesShown((n) => n + 1);
+      void pictures(p);
+    };
+    /**
+     * Shows network `id` on the active canvas. The same network read again
+     * after a step of the core's: the canvas beside reads its own too.
+     */
+    const show = async (id: string, way?: readonly string[]) => {
+      const p = activePane(panes.current);
+      const again = id === p.net && p.graph !== null;
+      await showIn(p, id, way);
+      if (again) besideRef.current(p, true);
     };
 
     /** A node's or network's name, from the tree or the canvas. */
@@ -1478,6 +1598,76 @@ export function WorkspaceScreen(props: {
       }).catch(refused);
 
     /**
+     * Bubbles of canvas `from` dropped on the other one (ADR-0015): moved
+     * into its network (05 §5, «Перенести»), placed there as appearances, or
+     * the gesture's copies moved there — where they were dropped, as they
+     * stood to each other; one step. Both canvases read their networks
+     * again; the other one becomes active, the bubbles chosen there.
+     */
+    const dropOut = (
+      from: Pane,
+      e: {
+        ids: string[];
+        net: string;
+        how: DropHow;
+        amend: boolean;
+        clientX: number;
+        clientY: number;
+      },
+    ) =>
+      queue(async () => {
+        await from.sync?.settled();
+        const to = besidePane(panes.current, from);
+        if (!to?.view || !to.host || to.net !== e.net) return;
+        const g = from.graph;
+        const nodes = e.ids.flatMap((id) => {
+          const n = g?.nodes.get(id);
+          return n ? [{ id, name: n.name, x: n.x, y: n.y }] : [];
+        });
+        const p = await core.placeable(e.net, e.ids);
+        looped(nodes.filter((n) => p.cycle.includes(n.id)));
+        const go = nodes.filter(
+          (n) => !p.cycle.includes(n.id) && !(e.how === 'appear' && p.here.includes(n.id)),
+        );
+        if (go.length > 0) {
+          const r = to.host.getBoundingClientRect();
+          const at = to.view.camera.toWorld(e.clientX - r.left, e.clientY - r.top);
+          const cx = go.reduce((sum, n) => sum + n.x, 0) / go.length;
+          const cy = go.reduce((sum, n) => sum + n.y, 0) / go.length;
+          const ops = go.map((n): CoreOp => {
+            const x = at.x + n.x - cx;
+            const y = at.y + n.y - cy;
+            return e.how === 'appear'
+              ? { op: 'place', id: n.id, net: e.net, x, y }
+              : { op: 'relocate', id: n.id, from: from.net, to: e.net, x, y };
+          });
+          const params = { n: go.length, to: nameOf(e.net) };
+          const label =
+            e.how === 'appear'
+              ? { key: 'ws.change.placeIn', params }
+              : e.how === 'copy'
+                ? { key: 'proto.change.copy', params }
+                : { key: 'ws.change.relocate', params };
+          await core.apply(ops, label, e.amend);
+          if (e.how !== 'appear') {
+            wasHere(go.filter((n) => p.here.includes(n.id)).length);
+            leftClip(
+              from.net,
+              go.map((n) => n.id),
+            );
+          }
+        }
+        await showIn(from, from.net, from.entry, true);
+        await showIn(to, to.net, to.entry, true);
+        activateRef.current(to === panes.current.first ? 'first' : 'second');
+        to.editor?.selectNodes(go.map((n) => n.id));
+        // Clear of the panel that opens for them.
+        const last = go.at(-1);
+        if (last) to.editor?.bringIntoView(last.id);
+        to.view.canvas.focus();
+      }).catch(refused);
+
+    /**
      * «Обернуть в папку» (06 §13.3, 05 §4.2): a folder at the nodes' middle,
      * their placements inside as they stood, wires as they were; one step. One
      * node names it; for several the name is typed next, into the same step.
@@ -1599,26 +1789,26 @@ export function WorkspaceScreen(props: {
       }
     };
 
-    /** Pictures of photo assets and link previews into their bubbles (owner, 2026-10-24). */
-    const pictures = async () => {
-      const v = viewRef.current;
-      const g = graph.current;
+    /** Pictures of photo assets and link previews into a canvas's bubbles (owner, 2026-10-24). */
+    const pictures = async (p: Pane = activePane(panes.current)) => {
+      const v = p.view;
+      const g = p.graph;
       if (!v || !g) return;
       for (const n of g.nodes.values()) {
         // A picture by its type, as the panel and «Ноды» read it; a file shows its icon.
         const type = assetType(n.attrs);
         const sha = type === 'image' ? n.attrs.asset : type === 'url' ? n.attrs.preview : undefined;
-        if (shown.current.get(n.id) === sha) continue;
+        if (p.shown.get(n.id) === sha) continue;
         if (!sha) {
-          shown.current.delete(n.id);
+          p.shown.delete(n.id);
           v.setPicture(n.id, null);
           continue;
         }
-        shown.current.set(n.id, sha);
+        p.shown.set(n.id, sha);
         try {
           const bytes = await core.asset(sha);
           const bmp = await createImageBitmap(new Blob([new Uint8Array(bytes)]));
-          if (graph.current === g) v.setPicture(n.id, bmp);
+          if (p.graph === g) v.setPicture(n.id, bmp);
         } catch {
           // Not a picture the browser can draw: the bubble keeps its icon.
         }
@@ -1665,14 +1855,17 @@ export function WorkspaceScreen(props: {
           const kinds = nv.kind_icons ?? {};
           if (kindIconsKey(kinds) !== kindIconsKey(kindIconsRef.current)) {
             kindIconsRef.current = kinds;
-            viewRef.current?.setKindDefaults(kinds);
-            ownIconsRef.current();
+            // The workspace's kinds: every canvas draws them (ADR-0015).
+            for (const q of allPanes(panes.current)) {
+              q.view?.setKindDefaults(kinds);
+              ownIconsRef.current(q);
+            }
           }
           // A step made since the question is not in the answer yet; the
           // looks read back below move the version too, so it is asked first.
           const fresh = g.version === at;
           followFolds(g, nv);
-          if (fresh) followLinks(g, nv);
+          if (fresh) followLinks(activePane(panes.current), g, nv);
         })
         .catch(() => undefined);
       const ed = editor.current;
@@ -1702,7 +1895,6 @@ export function WorkspaceScreen(props: {
           toast('ws.unopened', { message: e instanceof Error ? e.message : String(e) });
       });
     loadRef.current = load;
-    eventsRef.current = events;
 
     makeDocs.current = () =>
       new CoreDocs(
@@ -1712,12 +1904,98 @@ export function WorkspaceScreen(props: {
           void core.view(netRef.current).then((nv) => {
             const g = graph.current;
             if (!g || cancelled || nv.net !== netRef.current) return;
-            followLinks(g, nv);
+            followLinks(activePane(panes.current), g, nv);
           });
         },
         refused,
       );
     docs.current = makeDocs.current();
+
+    /** A canvas's view as the screen draws it; the second one's as the first (ADR-0015). */
+    const dress = (v: CanvasView, icons: Awaited<ReturnType<typeof nodeIconImages>>) => {
+      // The Chrome's icons on the nodes too (owner, 2026-10-24); an asset's by its content.
+      v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
+      // A near or past deadline in a word under the label (Q-07-22).
+      v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
+      // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
+      v.markWord = (mark, n) =>
+        mark === 'external'
+          ? t(localeRef.current, 'canvas.mark.external', { n: n.external })
+          : t(localeRef.current, n.appearance ? 'canvas.mark.appearance' : 'canvas.mark.places', {
+              n: n.places,
+            });
+      v.setKindIcons(icons, readableRef.current);
+      v.setReadable(readableRef.current);
+      // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
+      v.wireEnds = 'sockets';
+      v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // `&plain`: no background, for e2e on software WebGL (see Prototype).
+      if (new URLSearchParams(window.location.search).has('plain')) {
+        v.background.container.visible = false;
+      } else {
+        // The readable mode's ground is plain (07 §11.4).
+        v.setBackground(readableRef.current ? plainBackdrop() : fog(), backgroundLook(null));
+        v.setBackgroundDots(dotsRef.current);
+      }
+    };
+
+    /**
+     * The second canvas (ADR-0015, ☑ Q-06-27): in `hostEl`, at the network,
+     * way and camera it had as it closed in this session, else at the active
+     * canvas's; it becomes the active one.
+     */
+    let opening = false;
+    splitRef.current.open = async (hostEl) => {
+      if (opening || panes.current.second || cancelled) return;
+      opening = true;
+      try {
+        const from = activePane(panes.current);
+        const last = lastSecond.current;
+        const [v, icons] = await Promise.all([
+          CanvasView.create(hostEl),
+          nodeIconImages(readableRef.current),
+        ]);
+        if (cancelled || panes.current.second || !hostEl.isConnected) {
+          v.destroy();
+          return;
+        }
+        dress(v, icons);
+        const p = newPane(last?.net ?? from.net);
+        p.host = hostEl;
+        p.view = v;
+        const camera =
+          last?.camera ??
+          (from.view
+            ? { x: from.view.camera.x, y: from.view.camera.y, zoom: from.view.camera.zoom }
+            : null);
+        if (camera) p.cameras.set(p.net, camera);
+        panes.current.second = p;
+        await queue(() => showIn(p, p.net, last?.entry ?? from.entry, true));
+        activateRef.current('second');
+        p.view?.canvas.focus();
+      } catch (e: unknown) {
+        toast('ws.noCanvas', { message: e instanceof Error ? e.message : String(e) });
+      } finally {
+        opening = false;
+      }
+    };
+    /** The second canvas goes; where it was is kept for the next opening. */
+    splitRef.current.close = () => {
+      const ps = panes.current;
+      const p = ps.second;
+      if (!p) return;
+      if (ps.active === 'second') activateRef.current('first');
+      const v = p.view;
+      lastSecond.current = {
+        net: p.net,
+        entry: p.entry,
+        camera: v ? { x: v.camera.x, y: v.camera.y, zoom: v.camera.zoom } : null,
+      };
+      p.editor?.destroy();
+      p.sync?.destroy();
+      v?.destroy();
+      ps.second = null;
+    };
 
     Promise.all([CanvasView.create(el), nodeIconImages(readableRef.current)])
       .then(([v, icons]) => {
@@ -1726,31 +2004,8 @@ export function WorkspaceScreen(props: {
           return;
         }
         view = v;
-        viewRef.current = v;
-        // The Chrome's icons on the nodes too (owner, 2026-10-24); an asset's by its content.
-        v.iconKey = (n) => nodeIconFile(n.kind, n.attrs);
-        // A near or past deadline in a word under the label (Q-07-22).
-        v.dueWord = (n) => dueWord(n.attrs.deadline, localeRef.current);
-        // The rim's marks in words (06 §12.2, §14): what ↳, «×N» and «↗N» mean.
-        v.markWord = (mark, n) =>
-          mark === 'external'
-            ? t(localeRef.current, 'canvas.mark.external', { n: n.external })
-            : t(localeRef.current, n.appearance ? 'canvas.mark.appearance' : 'canvas.mark.places', {
-                n: n.places,
-              });
-        v.setKindIcons(icons, readableRef.current);
-        v.setReadable(readableRef.current);
-        // Circles on both ends (✅ Q-07-20, owner, 2026-10-24).
-        v.wireEnds = 'sockets';
-        v.reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        // `&plain`: no background, for e2e on software WebGL (see Prototype).
-        if (new URLSearchParams(window.location.search).has('plain')) {
-          v.background.container.visible = false;
-        } else {
-          // The readable mode's ground is plain (07 §11.4).
-          v.setBackground(readableRef.current ? plainBackdrop() : fog(), backgroundLook(null));
-          v.setBackgroundDots(dotsRef.current);
-        }
+        panes.current.first.view = v;
+        dress(v, icons);
         // Test hook for e2e: the canvas, the graph and when the core has it all.
         (window as unknown as { __strataWs: unknown }).__strataWs = {
           view: v,
@@ -1760,6 +2015,13 @@ export function WorkspaceScreen(props: {
           faultWindow: (kind: string) => windowFaults.add(kind),
           core,
           net: () => netRef.current,
+          // The screen's canvases (ADR-0015): which is active, each one's parts.
+          panes: () => {
+            const ps = panes.current;
+            const of = (p: Pane | null) =>
+              p ? { view: p.view, graph: p.graph, editor: p.editor, net: p.net } : null;
+            return { active: ps.active, first: of(ps.first), second: of(ps.second) };
+          },
           map: () => map3d.current,
           settled: async () => {
             await busy.current;
@@ -1786,10 +2048,15 @@ export function WorkspaceScreen(props: {
       map3d.current = null;
       layouter.current?.destroy();
       layouter.current = null;
-      editor.current?.destroy();
-      editor.current = null;
-      sync.current?.destroy();
-      viewRef.current = null;
+      if (besideTimer) clearTimeout(besideTimer);
+      for (const p of allPanes(panes.current)) {
+        p.editor?.destroy();
+        p.editor = null;
+        p.sync?.destroy();
+        p.sync = null;
+        if (p !== panes.current.first) p.view?.destroy();
+        p.view = null;
+      }
       view?.destroy();
     };
   }, []);
@@ -1808,7 +2075,7 @@ export function WorkspaceScreen(props: {
 
   // The canvas's words follow the language: deadlines under labels (Q-07-22).
   useEffect(() => {
-    if (locale) viewRef.current?.invalidate();
+    if (locale) for (const p of allPanes(panes.current)) p.view?.invalidate();
   }, [locale]);
 
   // A list or a dialog over the screen behind its backdrop — «↗N», «Удалить
@@ -1854,29 +2121,33 @@ export function WorkspaceScreen(props: {
     covered,
   ]);
 
+  // «Настройки» reach every canvas's editor (ADR-0015).
   useEffect(() => {
     snapRef.current = props.prefs.snap;
-    if (editor.current) editor.current.snap = props.prefs.snap;
+    for (const p of allPanes(panes.current)) if (p.editor) p.editor.snap = props.prefs.snap;
   }, [props.prefs.snap]);
 
   useEffect(() => {
     hoverCardRef.current = props.prefs.card === 'hover';
-    if (editor.current) editor.current.hoverCard = hoverCardRef.current;
+    for (const p of allPanes(panes.current))
+      if (p.editor) p.editor.hoverCard = hoverCardRef.current;
   }, [props.prefs.card]);
 
-  // The readable mode (07 §11.4): the labels, the wires and the grain; the
-  // ground follows with the background below.
+  // The readable mode (07 §11.4) on every canvas: the labels, the wires and
+  // the grain; the ground follows with the background below.
   useEffect(() => {
-    const v = viewRef.current;
-    if (!v || v.readable === readable) return;
-    v.setReadable(readable);
-    // The nodes' icons: Phosphor's line drawings or SerenityOS's pictures.
-    nodeIconImages(readable).then(
-      (icons) => {
-        if (viewRef.current === v) v.setKindIcons(icons, readable);
-      },
-      (e: unknown) => console.error('icons', e),
-    );
+    for (const p of allPanes(panes.current)) {
+      const v = p.view;
+      if (!v || v.readable === readable) continue;
+      v.setReadable(readable);
+      // The nodes' icons: Phosphor's line drawings or SerenityOS's pictures.
+      nodeIconImages(readable).then(
+        (icons) => {
+          if (p.view === v) v.setKindIcons(icons, readable);
+        },
+        (e: unknown) => console.error('icons', e),
+      );
+    }
   }, [readable]);
 
   // The search knows the workspace's names (09 §2.7): the core's tree, as it changes.
@@ -1887,6 +2158,56 @@ export function WorkspaceScreen(props: {
     setFinding(false);
     editor.current?.openFind(query);
   }, []);
+
+  const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
+
+  /**
+   * Canvas `which` becomes the active one (ADR-0015): the keys, the Chrome
+   * and the undo go with it; the other's editor takes no keys.
+   */
+  const activate = useCallback((which: 'first' | 'second') => {
+    const ps = panes.current;
+    if (ps.active === which || (which === 'second' && !ps.second)) return;
+    const from = activePane(ps);
+    ps.active = which;
+    const to = activePane(ps);
+    from.editor?.setOverlayOpen(true);
+    to.editor?.setOverlayOpen(false);
+    setSplit((s) => (s ? { ...s, active: which } : s));
+    setNet(to.info);
+    setEntry(to.entry);
+    // The panel shows what is chosen on the canvas now active.
+    refreshRef.current();
+  }, []);
+
+  activateRef.current = activate;
+  /** `M` and the bar's «2D | 3D»: the star map, one canvas first (ADR-0015). */
+  toMapRef.current = () => {
+    if (panes.current.second) closeSplit();
+    map3d.current?.toggle();
+  };
+
+  /** One canvas again (ADR-0015): the second goes, its place kept for `Ctrl+\`. */
+  const closeSplit = useCallback(() => {
+    if (!panes.current.second) return;
+    splitRef.current.close();
+    // At once: the star map opened next measures the first canvas whole.
+    flushSync(() => setSplit(null));
+    focusCanvas();
+  }, [focusCanvas]);
+
+  /** `Ctrl+\`, «Разделить холст»: the second canvas, or one again (ADR-0015). */
+  const toggleSplit = useCallback(() => {
+    if (panes.current.second) closeSplit();
+    else setSplit((s) => s ?? { active: 'first', at: 0.5 });
+  }, [closeSplit]);
+
+  // The second canvas is made once its element is there.
+  useEffect(() => {
+    const el = host2.current;
+    if (!split || !el || panes.current.second) return;
+    void splitRef.current.open(el);
+  }, [split]);
 
   // The keys are there as soon as the view is: a layout effect runs in the
   // commit that shows the star map, a passive one after paint, and a key
@@ -1928,6 +2249,13 @@ export function WorkspaceScreen(props: {
         return;
       }
       if (view3d === '2d') {
+        // `Ctrl+\`: the second canvas, or one again (ADR-0015).
+        if (mod && !e.altKey && !e.shiftKey && e.code === 'Backslash') {
+          if (typing || menu || name) return;
+          e.preventDefault();
+          toggleSplit();
+          return;
+        }
         if (!search || typing || menu || name) return;
         e.preventDefault();
         if (e.code === 'KeyO') openFind();
@@ -1954,7 +2282,20 @@ export function WorkspaceScreen(props: {
     };
     window.addEventListener('keydown', key);
     return () => window.removeEventListener('keydown', key);
-  }, [view3d, finder, palette, covered, help, modal, menu, name, mapCtx, removal, openFind]);
+  }, [
+    view3d,
+    finder,
+    palette,
+    covered,
+    help,
+    modal,
+    menu,
+    name,
+    mapCtx,
+    removal,
+    openFind,
+    toggleSplit,
+  ]);
 
   // A window opened over the star map belongs to it (08 §6.3): back in 2D it
   // stays only for a node of the canvas's network.
@@ -2095,7 +2436,6 @@ export function WorkspaceScreen(props: {
     };
   }, [view3d, finder, palette, covered, modal, menu, name, walk, setMark, goMark]);
 
-  const focusCanvas = useCallback(() => viewRef.current?.canvas.focus(), []);
   /** The canvas one sees, page px: the properties panel covers its right (review 2026-10-24). */
   const seenBounds = (): DOMRect | undefined => {
     const r = host.current?.getBoundingClientRect();
@@ -2161,7 +2501,7 @@ export function WorkspaceScreen(props: {
         view3dRef.current === '3d' ? mapCalls.current?.undo(false) : editor.current?.undo(),
       redo: () =>
         view3dRef.current === '3d' ? mapCalls.current?.undo(true) : editor.current?.redo(),
-      map: () => map3d.current?.toggle(),
+      map: () => toMapRef.current(),
       back: () => walk('back'),
       forward: () => walk('forward'),
       canvas: () => {
@@ -2188,6 +2528,13 @@ export function WorkspaceScreen(props: {
   // Another tab: the same canvas, the other workspace's root network.
   useEffect(() => {
     if (openedRef.current.workspace.id === opened.workspace.id) return;
+    // Another workspace on the same canvas: one canvas, nothing of this
+    // one's second kept (ADR-0015).
+    if (panes.current.second) {
+      splitRef.current.close();
+      setSplit(null);
+    }
+    lastSecond.current = null;
     openedRef.current = opened;
     leaving.current = false;
     cameras.current.clear();
@@ -2506,12 +2853,12 @@ export function WorkspaceScreen(props: {
   );
 
   /**
-   * The masks of one's own icons on the canvas (07 §6.6): made for the
-   * references the network's nodes have, once each; the rest let go.
+   * The masks of one's own icons on a canvas (07 §6.6): made for the
+   * references its network's nodes have, once each; the rest let go.
    */
-  ownIconsRef.current = () => {
-    const v = viewRef.current;
-    const g = graph.current;
+  ownIconsRef.current = (p = activePane(panes.current)) => {
+    const v = p.view;
+    const g = p.graph;
     if (!v || !g) return;
     const used = new Set<string>();
     for (const n of g.nodes.values()) {
@@ -2519,7 +2866,7 @@ export function WorkspaceScreen(props: {
       const ref = n.attrs.icon ?? kindIconsRef.current[n.kind];
       if (ref?.startsWith(OWN_ICON)) used.add(ref);
     }
-    const given = ownGiven.current;
+    const given = p.ownIcons;
     for (const ref of given) {
       if (used.has(ref)) continue;
       given.delete(ref);
@@ -2530,7 +2877,7 @@ export function WorkspaceScreen(props: {
       given.add(ref);
       ownIconMask(ref, (sha) => core.asset(sha)).then(
         (mask) => {
-          if (given.has(ref) && viewRef.current === v) v.setOwnIcon(ref, mask, MASK_SIDE);
+          if (given.has(ref) && p.view === v) v.setOwnIcon(ref, mask, MASK_SIDE);
         },
         // Not a picture the browser can draw: the bubble keeps its kind's icon.
         (e: unknown) => console.error('own icon', e),
@@ -2756,6 +3103,27 @@ export function WorkspaceScreen(props: {
     if (!v) return Promise.resolve();
     const r = v.canvas.getBoundingClientRect();
     return addAssets(files, links, v.camera.toWorld(clientX - r.left, clientY - r.top));
+  };
+  /** Files and links may be dropped on a canvas (05 §4.4). */
+  const dragOver = (e: React.DragEvent) => {
+    const types = e.dataTransfer.types;
+    if (types.includes('Files') || types.includes('text/uri-list')) e.preventDefault();
+  };
+  /** Files or links dropped on canvas `which`: it becomes the active one, they its assets. */
+  const dropOn = (which: 'first' | 'second', e: React.DragEvent) => {
+    const files = [...e.dataTransfer.files];
+    const links =
+      files.length > 0
+        ? []
+        : e.dataTransfer
+            .getData('text/uri-list')
+            .split(/\r?\n/)
+            .map((l) => l.trim())
+            .filter((l) => l && !l.startsWith('#'));
+    if (files.length === 0 && links.length === 0) return;
+    e.preventDefault();
+    activate(which);
+    void dropFiles(files, links, e.clientX, e.clientY).catch(failed);
   };
 
   /**
@@ -3787,6 +4155,7 @@ export function WorkspaceScreen(props: {
     marks: marks.map((m) => m !== null),
     clip: clipped,
     act: (action) => editor.current?.act(action),
+    toggleSplit,
     goTo: () => {
       if (view3d === '2d') {
         openFind();
@@ -3878,6 +4247,17 @@ export function WorkspaceScreen(props: {
       (id) => [id, treeById.get(id)?.name ?? (id === net.net ? net.name : '')] as const,
     );
   }, [net, view3d, tree, mapFocus, entry, treeById]);
+  // The canvas beside the active one (ADR-0015): its way in names, under its corner.
+  const beside = split
+    ? split.active === 'first'
+      ? panes.current.second
+      : panes.current.first
+    : null;
+  // As the path bar: none at the root, which the tab names.
+  const besideLabel =
+    beside && beside.entry.length >= 2
+      ? pathLabel(beside.entry.map((id) => [id, treeById.get(id)?.name ?? ''] as const))
+      : null;
   /** What a typed path names, from the entry path (09 §4.4): the path field and the search windows. */
   const resolvePath = useCallback(
     (text: string) =>
@@ -3921,32 +4301,60 @@ export function WorkspaceScreen(props: {
       data-panel={details ? 'open' : 'closed'}
       data-minimap={minimap ? 'open' : 'closed'}
       data-background={shownBackground?.source ?? 'preset:fog'}
+      data-split={split ? 'on' : 'off'}
+      data-active={split?.active ?? 'first'}
+      style={split ? ({ '--split': split.at } as CSSProperties) : undefined}
     >
       <div className="ws-panel-probe" aria-hidden="true" />
       <div
         ref={host}
-        className="proto-canvas"
+        className={split?.active === 'first' ? 'proto-canvas is-active' : 'proto-canvas'}
+        data-pane="first"
         role="application"
-        aria-label={net?.name ?? ''}
-        onDragOver={(e) => {
-          const types = e.dataTransfer.types;
-          if (types.includes('Files') || types.includes('text/uri-list')) e.preventDefault();
-        }}
-        onDrop={(e) => {
-          const files = [...e.dataTransfer.files];
-          const links =
-            files.length > 0
-              ? []
-              : e.dataTransfer
-                  .getData('text/uri-list')
-                  .split(/\r?\n/)
-                  .map((l) => l.trim())
-                  .filter((l) => l && !l.startsWith('#'));
-          if (files.length === 0 && links.length === 0) return;
-          e.preventDefault();
-          void dropFiles(files, links, e.clientX, e.clientY).catch(failed);
-        }}
+        aria-label={panes.current.first.info?.name ?? ''}
+        // A press or the wheel on a canvas makes it the active one (ADR-0015).
+        onPointerDownCapture={() => activate('first')}
+        onWheelCapture={() => activate('first')}
+        onDragOver={dragOver}
+        onDrop={(e) => dropOn('first', e)}
       />
+      {split ? (
+        <>
+          <div
+            ref={host2}
+            className={split.active === 'second' ? 'proto-canvas is-active' : 'proto-canvas'}
+            data-pane="second"
+            role="application"
+            aria-label={panes.current.second?.info?.name ?? ''}
+            onPointerDownCapture={() => activate('second')}
+            onWheelCapture={() => activate('second')}
+            onDragOver={dragOver}
+            onDrop={(e) => dropOn('second', e)}
+          />
+          <SplitBar
+            label={t(locale, 'split.bar')}
+            hint={t(locale, 'split.barHint')}
+            at={split.at}
+            onMove={(at) => setSplit((s) => (s ? { ...s, at } : s))}
+          />
+          {besideLabel ? (
+            <button
+              type="button"
+              className="ws-path-beside"
+              data-pane={split.active === 'first' ? 'second' : 'first'}
+              aria-label={`${besideLabel} · ${t(locale, 'split.beside')}`}
+              onClick={() => {
+                activate(split.active === 'first' ? 'second' : 'first');
+                focusCanvas();
+              }}
+            >
+              <span className="ws-path-beside-text" title={besideLabel}>
+                {besideLabel}
+              </span>
+            </button>
+          ) : null}
+        </>
+      ) : null}
       {net ? (
         <Layers
           locale={locale}
@@ -4002,6 +4410,7 @@ export function WorkspaceScreen(props: {
           onMark={goMark}
           onClearMark={clearMark}
           editAsked={pathAsk}
+          pane={split?.active}
         />
       ) : null}
       <div ref={geckoHost} className="ws-gecko" data-panel={details ? 'open' : 'closed'}>

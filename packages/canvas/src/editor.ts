@@ -285,6 +285,19 @@ export interface EditorEvents {
    */
   into?(e: { ids: string[]; into: string; how: DropHow; amend: boolean }): void;
   /**
+   * A drag let go over another canvas of the screen (ADR-0015): into its
+   * network `net`, where the page point is; `how` and `amend` as for a
+   * folder (06 §12.1). The bubbles here go back to where they were.
+   */
+  out?(e: {
+    ids: string[];
+    net: string;
+    how: DropHow;
+    amend: boolean;
+    clientX: number;
+    clientY: number;
+  }): void;
+  /**
    * A word beside the cursor while the gesture cannot land (06 §12.1: «⊘
    * Нода уже здесь» for an appearance in its own network); null — none.
    */
@@ -456,6 +469,10 @@ type Mode =
       how: DropHow;
       /** The folder's or project's bubble under the cursor, since when (06 §12.1). */
       into: { id: string; since: number } | null;
+      /** Another canvas's network under the cursor (ADR-0015); null — none. */
+      out: string | null;
+      /** The cursor, page points: where a drop on another canvas lands. */
+      client: { x: number; y: number };
       /** The bubble grabbed: the one that snaps (06 §3). */
       lead: string;
       /** The neighbours' lines the lead snapped to, world units; null — none. */
@@ -585,6 +602,11 @@ export class Editor {
    * drag rests on its bubble: null until the core has answered.
    */
   placeable: (net: string, ids: readonly string[]) => Placeable | null = () => null;
+  /**
+   * The network of another canvas of the screen under a page point
+   * (ADR-0015): a drag let go there goes into it. Null — none.
+   */
+  elsewhere: (clientX: number, clientY: number) => string | null = () => null;
   private mode: Mode = { t: 'idle' };
   /** The cursor's word is up (`cursorNote`). */
   private noted = false;
@@ -1719,6 +1741,8 @@ export class Editor {
         candidate: null,
         how: appear ? 'appear' : m.alt ? 'copy' : 'move',
         into: null,
+        out: null,
+        client: { x: e.clientX, y: e.clientY },
         lead: ids.includes(hit.id) ? hit.id : (ids[0] ?? hit.id),
         guides: { x: null, y: null },
       };
@@ -1745,14 +1769,20 @@ export class Editor {
   }
 
   private dragTo(m: Extract<Mode, { t: 'drag' }>, sx: number, sy: number, e: PointerEvent) {
+    m.client = { x: e.clientX, y: e.clientY };
+    const out = this.events.out ? this.elsewhere(e.clientX, e.clientY) : null;
+    if (out !== m.out) {
+      m.out = out;
+      this.view.invalidate();
+    }
     const w = this.view.camera.toWorld(sx, sy);
     let dx = w.x - m.grabX;
     let dy = w.y - m.grabY;
     // The grabbed bubble snaps (06 §3): to its neighbours' centres or the
-    // grid, as «Настройки» say; `X` held — not now.
+    // grid, as «Настройки» say; `X` held — not now, nor over another canvas.
     m.guides = { x: null, y: null };
     const lead = m.origin.get(m.lead);
-    if (lead && this.snap !== 'off' && !this.held.has('KeyX')) {
+    if (lead && !m.out && this.snap !== 'off' && !this.held.has('KeyX')) {
       const at = { x: lead.x + dx, y: lead.y + dy };
       if (this.snap === 'grid') {
         const g = snapToGrid(at);
@@ -1795,8 +1825,8 @@ export class Editor {
       const p = this.local(s);
       if (m.shaker?.feed(p.sx, p.sy, s.timeStamp)) this.shakeOut(m, single);
     }
-    // Over a folder's bubble the drag goes inside, not into a wire.
-    if (m.into || m.how === 'appear') m.candidate = null;
+    // Over a folder's bubble or another canvas the drag goes there, not into a wire.
+    if (m.into || m.out || m.how === 'appear') m.candidate = null;
     else this.updateCandidate(m, single);
   }
 
@@ -1807,6 +1837,14 @@ export class Editor {
    * one where it lies already, the cursor says «⊘ Нода уже здесь».
    */
   private updateInto(m: Extract<Mode, { t: 'drag' }>, sx: number, sy: number) {
+    if (m.out) {
+      // Over another canvas (ADR-0015): what its network says to the drop.
+      if (m.into) m.into = null;
+      const v = this.verdict(m, m.out);
+      const key = v === 'cycle' ? 'canvas.inside' : v === 'here' ? 'canvas.isHere' : null;
+      this.noteAt(key ? { sx, sy, key } : null);
+      return;
+    }
     const id = this.events.into ? this.bubbleUnder(sx, sy, m.ids) : null;
     const n = id ? this.graph.nodes.get(id) : undefined;
     const target = n && !n.ghostOf && hasCanvas(n.kind) ? n.id : null;
@@ -1814,14 +1852,20 @@ export class Editor {
       m.into = target ? { id: target, since: performance.now() } : null;
       this.view.invalidate();
     }
-    const said = m.how === 'appear' && (!m.into || this.verdict(m) === 'here');
+    const said = m.how === 'appear' && (!m.into || this.verdict(m, m.into.id) === 'here');
     this.noteAt(said ? { sx, sy, key: 'canvas.isHere' } : null);
   }
 
-  /** What the bubble under a drag says to it (05 §5); null — the core has not answered yet. */
-  private verdict(m: Extract<Mode, { t: 'drag' }>): 'ok' | 'cycle' | 'here' | null {
-    if (!m.into) return null;
-    const p = this.placeable(m.into.id, m.ids);
+  /**
+   * What network `to` — the bubble under a drag, another canvas's — says to
+   * it (05 §5); null — the core has not answered yet.
+   */
+  private verdict(
+    m: Extract<Mode, { t: 'drag' }>,
+    to: string | null,
+  ): 'ok' | 'cycle' | 'here' | null {
+    if (!to) return null;
+    const p = this.placeable(to, m.ids);
     if (!p) return null;
     if (m.ids.some((id) => p.cycle.includes(id))) return 'cycle';
     if (m.how === 'appear' && m.ids.some((id) => p.here.includes(id))) return 'here';
@@ -1831,7 +1875,7 @@ export class Editor {
   /** The drag has rested on a bubble that takes it (06 §12.1). */
   private intoReady(m: Extract<Mode, { t: 'drag' }>, now: number): boolean {
     if (!m.into || now - m.into.since < INTO_HOLD_MS) return false;
-    const v = this.verdict(m);
+    const v = this.verdict(m, m.into.id);
     return v !== 'cycle' && v !== 'here';
   }
 
@@ -1943,6 +1987,18 @@ export class Editor {
   private dropDrag(m: Extract<Mode, { t: 'drag' }>) {
     this.mode = { t: 'idle' };
     this.noteAt(null);
+    if (m.out) {
+      // Another canvas takes them (ADR-0015): here they go back; the core
+      // moves them there, and both networks are read again.
+      this.view.settle(m.origin.keys());
+      const v = this.verdict(m, m.out);
+      if (v !== 'cycle' && v !== 'here') {
+        const { ids, out: net, how, committed: amend } = m;
+        this.events.out?.({ ids, net, how, amend, clientX: m.client.x, clientY: m.client.y });
+      }
+      this.afterGesture();
+      return;
+    }
     if (m.into && this.intoReady(m, performance.now())) {
       // An appearance leaves the nodes where they were; moved or copied, the
       // network read again takes them away.
@@ -3330,7 +3386,7 @@ export class Editor {
     }
     if (m.t === 'drag' && m.into) {
       const s = screen(m.into.id);
-      const v = this.verdict(m);
+      const v = this.verdict(m, m.into.id);
       const u = this.view.unit;
       if (s && (v === 'cycle' || v === 'here')) {
         // «⊘» (06 §12.1): this network may not take them.

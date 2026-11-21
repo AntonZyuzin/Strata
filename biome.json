@@ -16,7 +16,13 @@
   "javascript": { "formatter": { "quoteStyle": "single", "semicolons": "always" } },
   "linter": {
     "rules": {
-      "preset": "recommended"
+      "preset": "recommended",
+      "correctness": {
+        "useExhaustiveDependencies": {
+          "level": "error",
+          "options": { "hooks": [{ "name": "usePaneField", "stableResult": true }] }
+        }
+      }
     }
   },
   "overrides": [
